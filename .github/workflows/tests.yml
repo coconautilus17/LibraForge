@@ -10,8 +10,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,7 +17,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m unittest discover -s app/tests -p "test_*.py"
+      - run: python -m unittest discover -s app/tests -t . -p "test_*.py"
       - run: |
           python -m py_compile \
             app/main.py \
