@@ -210,8 +210,6 @@ The following local/private files are also excluded:
 
 - `.env`
 - `config/title-noise.local.json`
-- `HANDOFF.md`
-- `PROJECT_REFERENCE.md`
 - `archive/`
 - Python bytecode and tool caches
 
