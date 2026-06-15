@@ -46,6 +46,15 @@ report or move preview before enabling an apply option.
 - Shows provenance-based Folder Forge review reasons for inferred or
   conflicting destination identity.
 
+## Planned Updates
+
+- Add configurable concurrent workers for faster metadata lookup and review
+  processing.
+- Streamline Audible auth setup with a landing page flow that works before an
+  auth file exists.
+- Add a `metadata.json` export mode and a Folder Forge normalization step for
+  transfer-time filename cleanup.
+
 ## Requirements
 
 - Docker Engine with Docker Compose
