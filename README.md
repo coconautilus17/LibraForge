@@ -66,6 +66,7 @@ Key options:
 | Write Audiobookshelf metadata.json | Write a sidecar instead of embedding tags |
 
 **Manual Review** lets you load any book and search Audible manually. Requires an explicit `Full metadata` or `Series only` mode before applying.
+<img width="1215" height="1073" alt="image" src="https://github.com/user-attachments/assets/7702662c-d3d8-47cf-945d-777f86e4cbbd" />
 
 ### M4B Tool (`/m4b-tool`)
 
@@ -77,6 +78,7 @@ Converts or merges audio into a single M4B file.
 4. Set codec, bitrate, and jobs, then convert.
 
 `No conversion` is recommended only when all source streams are AAC with matching sample rate and channel layout.
+<img width="1201" height="1160" alt="image" src="https://github.com/user-attachments/assets/258208dc-0ddb-4642-9541-7c47378e24f8" />
 
 ### Folder Forge (`/organizer`)
 
@@ -88,6 +90,7 @@ Plans and applies `Author/Series/Book N - Title` destination moves.
 4. Enable **Apply** and run to execute moves.
 
 Run **Index library and exit** to rebuild the destination structure cache independently.
+<img width="1198" height="1197" alt="image" src="https://github.com/user-attachments/assets/024a57ca-333f-445a-bf33-4a5c512f3159" />
 
 ---
 
