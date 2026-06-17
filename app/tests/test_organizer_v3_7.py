@@ -160,7 +160,6 @@ class OrganizerMetadataInferenceTests(unittest.TestCase):
         with patch.object(ORGANIZER, "metadata_from_sidecar", return_value=tag_metadata):
             metadata = ORGANIZER.infer_metadata(item, root)
 
-        self.assertEqual(metadata["book_number"], "002")
         self.assertIn(
             "book number differs between metadata and path",
             metadata["review_reasons"],

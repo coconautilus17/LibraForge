@@ -164,20 +164,31 @@ def get_m4b_tool_metadata_path(source: Path, clues: dict | None = None) -> Path:
     return source.with_name(f"{source.name}{M4B_TOOL_METADATA_SUFFIX}")
 
 
-def write_original_metadata_backup(source: Path) -> Path:
+def write_original_metadata_backup(
+    source: Path,
+    tags: dict | None = None,
+    duration_minutes: float | None = None,
+) -> Path:
     """Store the original container-level metadata in a small JSON file.
 
     This is intentionally a metadata backup, not a media-file duplicate. The
     restore operation uses this file to clear current container metadata and
     write these tags back to the file with ffmpeg copy mode.
+
+    Pass tags and duration_minutes when the file has already been probed to
+    avoid a second ffprobe call.
     """
     backup_path = get_metadata_backup_path(source)
 
     if backup_path.exists():
         return backup_path
 
-    tags = read_file_tags(source)
-    duration_minutes = read_file_duration_minutes(source)
+    if tags is None or duration_minutes is None:
+        probed_tags, probed_duration = probe_file(source)
+        if tags is None:
+            tags = probed_tags
+        if duration_minutes is None:
+            duration_minutes = probed_duration
 
     payload = {
         "schema_version": 1,
@@ -1309,6 +1320,62 @@ def write_m4b_tool_metadata_sidecar(
     return sidecar_path
 
 
+def write_audiobookshelf_metadata_json(
+    source: Path,
+    metadata: dict,
+    clues: dict | None = None,
+) -> Path:
+    """Write an Audiobookshelf-compatible metadata.json to the book folder.
+
+    Audiobookshelf reads this file at the library item root and uses it to
+    populate all book fields without touching the embedded audio tags.
+    """
+    group_search = ((clues or {}).get("group_search") or {})
+    if group_search.get("applied"):
+        folder = source.parent
+    else:
+        folder = source.parent if source.is_file() else source
+    target = folder / "metadata.json"
+
+    authors = [
+        {"name": name.strip()}
+        for name in re.split(r"\s*,\s*", metadata.get("author", "") or "")
+        if name.strip()
+    ]
+    narrators = [
+        name.strip()
+        for name in re.split(r"\s*,\s*", metadata.get("narrator", "") or "")
+        if name.strip()
+    ]
+    series = []
+    if metadata.get("series"):
+        series.append({
+            "name": metadata["series"],
+            "sequence": metadata.get("sequence", "") or "",
+        })
+
+    payload = {
+        "title": metadata.get("title", "") or "",
+        "subtitle": metadata.get("subtitle", "") or "",
+        "authors": authors,
+        "narrators": narrators,
+        "series": series,
+        "genres": ["Audiobook"],
+        "publishedYear": str(metadata.get("year", "") or ""),
+        "description": metadata.get("summary", "") or "",
+        "isbn": None,
+        "asin": metadata.get("asin", "") or None,
+        "language": None,
+        "explicit": False,
+    }
+
+    target.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
 def refresh_multipart_sidecar_audio_profile(
     folder: Path,
     chapter_files: list[Path],
@@ -1514,6 +1581,12 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
     return ", ".join(people)
 
 
+_NAME_FUNCTION_WORDS = frozenset({
+    "a", "an", "the", "of", "in", "on", "at", "for",
+    "with", "by", "and", "or", "from", "to", "as",
+})
+
+
 def looks_like_person_name(value: str) -> bool:
     value = clean_text(value)
     if not value:
@@ -1531,8 +1604,16 @@ def looks_like_person_name(value: str) -> bool:
     if not 2 <= len(tokens) <= 5:
         return False
 
+    # A bare article as the first word ("The Name", "A Story") is a title, not
+    # a person name. Function words as non-terminal tokens have the same effect:
+    # "Age of Steel" fails while "Leigh de Paiva" passes ("de" not in the list).
+    if tokens[0].lower() in {"the", "a", "an"}:
+        return False
+    if any(token.lower() in _NAME_FUNCTION_WORDS for token in tokens[1:-1]):
+        return False
+
     cleaned_tokens = [
-        re.sub(r"[^A-Za-z.'’-]", "", token)
+        re.sub(r"[^A-Za-z.’’-]", "", token)
         for token in tokens
     ]
     if not all(cleaned_tokens):
@@ -1599,7 +1680,12 @@ def clean_series_value(value: str) -> str:
     return value
 
 
-def read_file_tags(file_path: Path) -> dict:
+def probe_file(file_path: Path) -> tuple[dict, float | None]:
+    """Single ffprobe -show_format call returning (tags_dict, duration_minutes).
+
+    -show_format already includes both the embedded tag block and the
+    container duration, so one subprocess call covers both needs.
+    """
     cmd = [
         "ffprobe",
         "-v",
@@ -1621,65 +1707,205 @@ def read_file_tags(file_path: Path) -> dict:
         )
     except subprocess.TimeoutExpired:
         print(f"  WARNING: ffprobe timed out for: {file_path}")
-        return {}
+        return {}, None
 
     if result.returncode != 0:
         print(f"  WARNING: ffprobe failed for: {file_path}")
-        return {}
+        return {}, None
 
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         print(f"  WARNING: ffprobe returned invalid JSON for: {file_path}")
-        return {}
+        return {}, None
 
-    tags = data.get("format", {}).get("tags", {}) or {}
-
-    return {
+    fmt = data.get("format", {}) or {}
+    tags = {
         str(key).lower(): str(value).strip()
-        for key, value in tags.items()
+        for key, value in (fmt.get("tags", {}) or {}).items()
         if str(value).strip()
     }
 
+    try:
+        seconds = float(fmt.get("duration") or 0)
+        duration_minutes = (seconds / 60) if seconds > 0 else None
+    except (TypeError, ValueError):
+        duration_minutes = None
+
+    return tags, duration_minutes
+
+
+def read_file_tags(file_path: Path) -> dict:
+    return probe_file(file_path)[0]
+
 
 def read_file_duration_minutes(file_path: Path) -> float | None:
-    """Return the local media duration in minutes using ffprobe."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(file_path),
-    ]
+    return probe_file(file_path)[1]
 
+
+def _synthesize_applied_tags(metadata: dict) -> dict:
+    """Build a probe-format tags dict from applied metadata for backup caching.
+
+    Stored as applied_tags in the backup so force re-runs can skip ffprobe
+    while still searching from the clean Audible-matched values.
+    """
+    tags: dict[str, str] = {}
+    for src_key, dst_key in (
+        ("title", "title"),
+        ("title", "album"),
+        ("author", "artist"),
+        ("author", "album_artist"),
+        ("series", "grouping"),
+        ("narrator", "composer"),
+        ("year", "date"),
+        ("asin", "asin"),
+    ):
+        val = str(metadata.get(src_key, "") or "").strip()
+        if val:
+            tags[dst_key] = val
+    seq = str(metadata.get("sequence", "") or "").strip()
+    if seq:
+        tags["track"] = seq
+    return tags
+
+
+def update_backup_with_applied_metadata(source: Path, metadata: dict) -> None:
+    """Append applied_tags to the backup so future runs skip probing the file."""
+    backup_path = get_metadata_backup_path(source)
+    if not backup_path.is_file():
+        return
     try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
+        payload = json.loads(backup_path.read_text(encoding="utf-8"))
+        payload["applied_tags"] = _synthesize_applied_tags(metadata)
+        payload["applied_at"] = datetime.now(timezone.utc).isoformat()
+        backup_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
-    except subprocess.TimeoutExpired:
-        print(f"  WARNING: ffprobe duration timed out for: {file_path}")
-        return None
+    except (OSError, json.JSONDecodeError):
+        pass
 
-    if result.returncode != 0:
-        return None
 
+def _save_group_file_cache(
+    file_paths: list[Path],
+    per_file: list[tuple[dict, float | None]],
+) -> None:
+    """Store per-chapter probe data in the group sidecar for future cache reads.
+
+    Only writes format_tags when an entry is new — never overwrites an
+    existing format_tags with post-apply synthesized data so the original
+    pre-apply tags are always preserved.
+    """
+    if not file_paths:
+        return
+    folder = file_paths[0].parent
+    sidecar_path = folder / f"{folder.name}{M4B_TOOL_METADATA_SUFFIX}"
+
+    payload: dict = {}
+    if sidecar_path.is_file():
+        try:
+            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+
+    if not payload:
+        payload = {
+            "schema_version": 1,
+            "tool": "audible-metadata-fixer",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    existing_cache: dict = payload.get("file_cache", {})
+    changed = False
+
+    for fp, (tags, duration) in zip(file_paths, per_file):
+        key = str(fp)
+        entry = dict(existing_cache.get(key, {}))
+        if not entry.get("format_tags") and isinstance(tags, dict):
+            entry["format_tags"] = tags
+            changed = True
+        if entry.get("duration_minutes") is None and duration is not None:
+            entry["duration_minutes"] = duration
+            changed = True
+        existing_cache[key] = entry
+
+    if not changed:
+        return
+
+    payload["file_cache"] = existing_cache
+    payload["file_cache_updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
-        seconds = float(result.stdout.strip())
-    except ValueError:
-        return None
+        sidecar_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
-    if seconds <= 0:
-        return None
 
-    return seconds / 60
+def read_tags_and_duration(
+    file_path: Path,
+    use_backup_tags: bool = False,
+    reprobe: bool = False,
+) -> tuple[dict, float | None]:
+    """Return (tags, duration_minutes) from backup when available, else probe.
+
+    reprobe=True (--reprobe): always probe the file, ignoring any backup.
+
+    use_backup_tags=True (--force-original): use the original pre-apply tags
+    from the backup (format_tags). Skips probing. Useful when the prior match
+    was wrong and you want to re-search from the original local metadata.
+
+    Default: prefer applied_tags from backup (the clean Audible values written
+    last time) then fall back to format_tags, then probe if no backup exists.
+    Duration always comes from the backup when available since it never changes
+    with tag-only writes.
+    """
+    if reprobe:
+        return probe_file(file_path)
+
+    # Per-file backup (single M4B/M4A files).
+    backup_path = get_metadata_backup_path(file_path)
+    if backup_path.is_file():
+        try:
+            payload = json.loads(backup_path.read_text(encoding="utf-8"))
+            duration = payload.get("duration_minutes")
+            if duration is not None:
+                if use_backup_tags:
+                    tags = payload.get("format_tags")
+                else:
+                    tags = payload.get("applied_tags") or payload.get("format_tags")
+                if isinstance(tags, dict):
+                    return tags, float(duration)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    # Group sidecar (multipart chapter files).
+    group_sidecar = file_path.parent / f"{file_path.parent.name}{M4B_TOOL_METADATA_SUFFIX}"
+    if group_sidecar.is_file():
+        try:
+            payload = json.loads(group_sidecar.read_text(encoding="utf-8"))
+            entry = (payload.get("file_cache") or {}).get(str(file_path))
+            if entry:
+                duration = entry.get("duration_minutes")
+                if duration is not None:
+                    if use_backup_tags:
+                        tags = entry.get("format_tags")
+                    else:
+                        # Prefer applied metadata from the sidecar's book section
+                        # (the clean Audible values written on the last apply).
+                        book = payload.get("book")
+                        tags = (
+                            _synthesize_applied_tags(book)
+                            if book
+                            else entry.get("format_tags")
+                        )
+                    if isinstance(tags, dict):
+                        return tags, float(duration)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    return probe_file(file_path)
 
 
 def get_audible_duration_minutes(product: dict) -> float | None:
@@ -2655,8 +2881,9 @@ def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
     return clues
 
 
-def build_search_clues_from_file(file_path: Path) -> dict:
-    tags = read_file_tags(file_path)
+def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> dict:
+    if tags is None:
+        tags = read_file_tags(file_path)
     clues = parse_title_series_number_from_metadata(tags)
 
     # If the folder/file path is clearly structured, trust it over stale embedded tags.
@@ -2850,8 +3077,8 @@ def strip_leading_sequence_from_title(value: str) -> str:
     return sanitize_book_title(cleaned)
 
 
-def build_search_queries_from_metadata(file_path: Path) -> tuple[list[str], dict]:
-    clues = build_search_clues_from_file(file_path)
+def build_search_queries_from_metadata(file_path: Path, tags: dict | None = None) -> tuple[list[str], dict]:
+    clues = build_search_clues_from_file(file_path, tags=tags)
     return build_search_queries_from_clues(clues), clues
 
 
@@ -2907,15 +3134,8 @@ def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[
     if folder_number:
         return folder_number, "path"
 
-    values = [
-        normalize_book_number(clues.get("book_number", ""))
-        for clues in clues_list
-        if clues.get("book_number_source") == "track" and clues.get("book_number")
-    ]
-    chosen = pick_most_common_value(values)
-    if chosen:
-        return chosen, "track"
-
+    # Track numbers on individual chapter files are chapter positions, not book
+    # numbers — do not use them as a sequence fallback for the group.
     return "", ""
 
 
@@ -2963,8 +3183,22 @@ def clean_group_folder_title(value: str, author: str) -> str:
     return sanitize_book_title(cleaned)
 
 
-def build_multi_file_search_context(file_paths: list[Path]) -> tuple[list[str], dict]:
-    clues_list = [build_search_clues_from_file(file_path) for file_path in file_paths]
+def build_multi_file_search_context(
+    file_paths: list[Path],
+    use_backup_tags: bool = False,
+    reprobe: bool = False,
+    save_probe_cache: bool = False,
+) -> tuple[list[str], dict]:
+    per_file = [
+        read_tags_and_duration(fp, use_backup_tags=use_backup_tags, reprobe=reprobe)
+        for fp in file_paths
+    ]
+    if save_probe_cache:
+        _save_group_file_cache(file_paths, per_file)
+    clues_list = [
+        build_search_clues_from_file(fp, tags=tags)
+        for fp, (tags, _) in zip(file_paths, per_file)
+    ]
     folder = file_paths[0].parent
     folder_name = sanitize_technical_labels(folder.name)
     folder_structured = parse_structured_book_text(folder_name)
@@ -3018,7 +3252,7 @@ def build_multi_file_search_context(file_paths: list[Path]) -> tuple[list[str], 
         book_number = folder_descriptive["book_number"]
         book_number_source = "path"
     local_duration_minutes = sum(
-        duration or 0.0 for duration in (read_file_duration_minutes(file) for file in file_paths)
+        (duration or 0.0) for _, duration in per_file
     ) or None
 
     validation = validate_multi_part_group_files(file_paths)
@@ -3123,17 +3357,29 @@ def get_processing_display_path(
 
 
 def build_search_context(
-    file_path: Path, multi_part_group_map: dict[Path, list[Path]]
+    file_path: Path,
+    multi_part_group_map: dict[Path, list[Path]],
+    use_backup_tags: bool = False,
+    reprobe: bool = False,
+    save_probe_cache: bool = False,
 ) -> tuple[list[str], dict, str]:
     group_files = multi_part_group_map.get(file_path.parent)
 
     if group_files and is_multi_part_audio_candidate(file_path):
-        queries, clues = build_multi_file_search_context(group_files)
+        queries, clues = build_multi_file_search_context(
+            group_files,
+            use_backup_tags=use_backup_tags,
+            reprobe=reprobe,
+            save_probe_cache=save_probe_cache,
+        )
         cache_key = f"group::{file_path.parent}"
         return queries, clues, cache_key
 
-    queries, clues = build_search_queries_from_metadata(file_path)
-    clues["local_duration_minutes"] = read_file_duration_minutes(file_path)
+    tags, duration = read_tags_and_duration(file_path, use_backup_tags=use_backup_tags, reprobe=reprobe)
+    if save_probe_cache and not should_write_json_sidecar(file_path, None):
+        write_original_metadata_backup(file_path, tags=tags, duration_minutes=duration)
+    queries, clues = build_search_queries_from_metadata(file_path, tags=tags)
+    clues["local_duration_minutes"] = duration
     cache_key = f"file::{file_path}"
     return queries, clues, cache_key
 
@@ -4958,6 +5204,27 @@ def main():
     )
 
     parser.add_argument(
+        "--force-original",
+        action="store_true",
+        help=(
+            "Use the original pre-apply tags from the metadata backup JSON as the "
+            "search context. Only meaningful when a backup exists from a prior "
+            "--backup apply. Use when the previous match was wrong and you want "
+            "to re-search from the original local metadata."
+        ),
+    )
+
+    parser.add_argument(
+        "--reprobe",
+        action="store_true",
+        help=(
+            "Always probe the audio file with ffprobe, ignoring any cached backup "
+            "data. Use when you suspect the backup is stale or the file has been "
+            "replaced since it was last backed up."
+        ),
+    )
+
+    parser.add_argument(
         "--skip-pattern",
         action="append",
         default=[],
@@ -4990,6 +5257,17 @@ def main():
         action="store_true",
         help="Replace existing embedded cover art with Audible cover art.",
     )
+
+    parser.add_argument(
+        "--metadata-json",
+        action="store_true",
+        help=(
+            "Write an Audiobookshelf-compatible metadata.json to the book folder "
+            "instead of embedding tags in the audio file. The file is placed at "
+            "<book-folder>/metadata.json and Audiobookshelf will pick it up automatically."
+        ),
+    )
+
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -5076,7 +5354,12 @@ def main():
         if match_cache_key in search_context_cache:
             queries, clues = search_context_cache[match_cache_key]
         else:
-            queries, clues, _ = build_search_context(file_path, multi_part_group_map)
+            queries, clues, _ = build_search_context(
+                file_path, multi_part_group_map,
+                use_backup_tags=args.force_original,
+                reprobe=args.reprobe,
+                save_probe_cache=args.backup,
+            )
             search_context_cache[match_cache_key] = (queries, clues)
         local_duration_minutes = clues.get("local_duration_minutes")
 
@@ -5345,6 +5628,20 @@ def main():
                         output_kind="json_sidecar",
                     )
                     print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
+                elif args.metadata_json:
+                    abs_path = write_audiobookshelf_metadata_json(
+                        file_path, metadata, clues
+                    )
+                    write_marker(
+                        source=file_path,
+                        metadata=metadata,
+                        clues=clues,
+                        score=score,
+                        mode=mode,
+                        aggressive=aggressive_edit,
+                        output_kind="metadata_json",
+                    )
+                    print(f"  APPLIED ({mode}, metadata_json={abs_path})")
                 else:
                     writer_used = write_tags(
                         file_path,
@@ -5354,6 +5651,7 @@ def main():
                         cover_if_missing=args.cover_if_missing,
                         replace_cover=args.replace_cover,
                     )
+                    update_backup_with_applied_metadata(file_path, metadata)
 
                     write_marker(
                         source=file_path,

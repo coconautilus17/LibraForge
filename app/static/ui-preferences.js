@@ -323,7 +323,7 @@
         const copy = document.createElement("span");
         copy.append(
           createTextElement("strong", item.label),
-          createTextElement("small", item.pattern, "mono"),
+          createTextElement("small", item.phrase || item.pattern, "mono"),
         );
         label.append(input, copy);
         const remove = createTextElement("button", "Remove", "secondary");
@@ -352,9 +352,9 @@
 
     addButton.addEventListener("click", () => {
       const label = labelInput.value.trim();
-      const pattern = patternInput.value.trim();
-      if (!label || !pattern) {
-        status.textContent = "Enter both a label and a regular expression.";
+      const phrase = patternInput.value.trim();
+      if (!label || !phrase) {
+        status.textContent = "Enter both a label and a noise phrase.";
         return;
       }
       policy ||= { patterns: [] };
@@ -362,7 +362,8 @@
         id: titleNoiseCustomId(label),
         label,
         description: "",
-        pattern,
+        phrase,
+        pattern: phrase,
         source: "custom",
         enabled: true,
       });

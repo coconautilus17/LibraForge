@@ -56,8 +56,8 @@
             <label>Custom pattern label
               <input id="titleNoiseLabel" placeholder="Generic academy LitRPG subtitle" />
             </label>
-            <label>Regular expression
-              <input id="titleNoisePattern" placeholder="(?:a|an)\s+.*\bacademy\s+litrpg\b" />
+            <label>Noise phrase
+              <input id="titleNoisePattern" placeholder="A Slice-of-Life LitRPG" />
             </label>
             <button id="titleNoiseAddBtn" class="secondary" type="button">Add pattern</button>
           </div>
@@ -129,10 +129,13 @@
 
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
-        <label><input id="backup" type="checkbox" /> Backup original metadata JSON <span class="info-tip" data-tooltip="Creates a small JSON backup of existing metadata before an apply. It does not copy the audio file."></span></label>
+        <label><input id="backup" type="checkbox" /> Backup and cache original metadata <span class="info-tip" data-tooltip="Creates a per-file JSON backup of original tags and caches the audio duration. Future runs use the cache to skip per-file ffprobe probes. Always recommended when applying."></span></label>
         <label><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
+        <label><input id="metadataJson" type="checkbox" /> Write Audiobookshelf metadata.json <span class="info-tip" data-tooltip="Writes a metadata.json sidecar to each book folder instead of embedding tags in the audio file. Audiobookshelf picks this up automatically. Cover art and audio are not modified."></span></label>
         <label><input id="aggressive" type="checkbox" /> Aggressive <span class="info-tip" data-tooltip="Allows reprocessing of items previously handled by a normal run while still respecting aggressive markers. Review results carefully."></span></label>
         <label><input id="force" type="checkbox" /> Force / ignore markers <span class="info-tip" data-tooltip="Processes items even when existing marker files would normally skip them. This can repeat prior work."></span></label>
+        <label><input id="forceOriginal" type="checkbox" /> Force original tags <span class="info-tip" data-tooltip="Uses the pre-apply tags from the backup JSON as the search context. Use when the previous match was wrong and you want to re-search from the original local metadata."></span></label>
+        <label><input id="reprobe" type="checkbox" /> Re-probe audio files <span class="info-tip" data-tooltip="Always runs ffprobe on each file, ignoring any cached backup data. Use when you suspect the backup is stale or the file has been replaced since it was last backed up."></span></label>
         <label><input id="showAsin" type="checkbox" /> Show ASIN report <span class="info-tip" data-tooltip="Adds duplicate-ASIN diagnostics to the output so repeated Audible product selections can be reviewed."></span></label>
         <label><input id="coverIfMissing" type="checkbox" /> Add cover only if missing <span class="info-tip" data-tooltip="Embeds the Audible cover only when the book does not already have cover art. Existing covers are preserved."></span></label>
         <label><input id="replaceCover" type="checkbox" /> Replace existing cover <span class="info-tip" data-tooltip="Replaces current cover art with the selected Audible cover during apply. This is intentionally more destructive."></span></label>

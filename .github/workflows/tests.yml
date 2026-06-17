@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SCRIPTS_DIR: ${{ github.workspace }}/scripts
-      REPORTS_DIR: ${{ runner.temp }}/libraforge-reports
+      REPORTS_DIR: /tmp/libraforge-reports
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,5 +30,4 @@ jobs:
             app/conversion_discovery.py \
             app/progress_phases.py \
             app/title_noise_policy.py
-          python -m py_compile scripts/audible-metadata-fixer-v4_16.py
-          python -m py_compile scripts/organize-audiobooks-by-metadata-v3_13.py
+          find scripts -name "*.py" -exec python -m py_compile {} +

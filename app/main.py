@@ -450,9 +450,12 @@ class RunRequest(BaseModel):
     restore_metadata: bool = False
     aggressive: bool = False
     force: bool = False
+    force_original: bool = False
+    reprobe: bool = False
     show_asin_report: bool = False
     cover_if_missing: bool = False
     replace_cover: bool = False
+    metadata_json: bool = False
 
     min_score: float | None = 0.70
     limit: int | None = 50
@@ -660,7 +663,15 @@ def derive_manual_review_items(
     for path in [item.get("path", "") for item in files_by_category.get("mode:none", []) if item.get("path")]:
         ensure(path)["reasons"].append("mode:none")
 
-    for path in [item.get("path", "") for item in files_by_category.get("status:skipped", []) if item.get("path")]:
+    for item in files_by_category.get("status:skipped", []):
+        path = item.get("path", "")
+        if not path:
+            continue
+        reason = item.get("title", "")
+        # Intentional skips (pattern matches and already-processed markers) are
+        # working as designed — they don't belong in manual review.
+        if reason.startswith("matched skip pattern:") or reason == "already processed":
+            continue
         ensure(path)["reasons"].append("status:skipped")
 
     for path in [item.get("path", "") for item in files_by_category.get("mode:series_only", []) if item.get("path")]:
@@ -942,12 +953,18 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         cmd.append("--aggressive")
     if req.force:
         cmd.append("--force")
+    if req.force_original:
+        cmd.append("--force-original")
+    if req.reprobe:
+        cmd.append("--reprobe")
     if req.show_asin_report:
         cmd.append("--show-asin-report")
     if req.cover_if_missing:
         cmd.append("--cover-if-missing")
     if req.replace_cover:
         cmd.append("--replace-cover")
+    if req.metadata_json:
+        cmd.append("--metadata-json")
     if req.min_score is not None:
         cmd += ["--min-score", str(req.min_score)]
     if req.limit is not None:
@@ -1351,14 +1368,25 @@ def discover_m4b_candidates(
             },
         )
 
+    # When there is no cache entry for this script version, look for per-file
+    # probe data from any cached entry for the same path. Chapter counts and
+    # audio stream properties are script-independent, so they can be safely
+    # reused across script upgrades.
+    probe_seed = cached_search
+    if probe_seed is None:
+        for entry in cache["searches"].values():
+            if entry.get("path") == str(target_path):
+                probe_seed = entry
+                break
+
     fixer_module = load_fixer_module(script_name)
     chapter_reader = CachedChapterCountReader(
         probe=fixer_module.read_file_chapter_count,
-        entries=(cached_search or {}).get("chapter_probes", {}),
+        entries=(probe_seed or {}).get("chapter_probes", {}),
     )
     audio_reader = CachedAudioProbeReader(
         probe=probe_audio_file,
-        entries=(cached_search or {}).get("audio_probes", {}),
+        entries=(probe_seed or {}).get("audio_probes", {}),
     )
     files, group_map, processing_items = fixer_processing_context(
         target_path=target_path,

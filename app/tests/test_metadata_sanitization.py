@@ -434,7 +434,7 @@ class MetadataTitleFallbackTests(unittest.TestCase):
                 "build_search_clues_from_file",
                 return_value=chapter_clues,
             ),
-            patch.object(FIXER, "read_file_duration_minutes", return_value=100.0),
+            patch.object(FIXER, "probe_file", return_value=({}, 100.0)),
             patch.object(FIXER, "validate_multi_part_group_files", return_value={}),
         ):
             queries, clues = FIXER.build_multi_file_search_context(files)
@@ -473,7 +473,7 @@ class MetadataTitleFallbackTests(unittest.TestCase):
                 "build_search_clues_from_file",
                 return_value=chapter_clues,
             ),
-            patch.object(FIXER, "read_file_duration_minutes", return_value=160.0),
+            patch.object(FIXER, "probe_file", return_value=({}, 160.0)),
             patch.object(FIXER, "validate_multi_part_group_files", return_value={}),
         ):
             queries, clues = FIXER.build_multi_file_search_context(files)
