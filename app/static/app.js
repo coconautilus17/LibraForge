@@ -120,16 +120,27 @@ function render(state) {
   $('tail').textContent = (state.tail || []).join('\n');
   $('tail').scrollTop = $('tail').scrollHeight;
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
-  renderStats(state.stats || {});
+  renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
 }
 
-function renderStats(stats) {
+function formatElapsed(startedAt, finishedAt) {
+  if (!startedAt) return null;
+  const seconds = Math.round(((finishedAt ? finishedAt * 1000 : Date.now()) - startedAt * 1000) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60), s = seconds % 60;
+  if (m < 60) return `${m}m ${s.toString().padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${(m % 60).toString().padStart(2, '0')}m`;
+}
+
+function renderStats(stats, startedAt, finishedAt) {
   const mode = stats.mode_breakdown || {};
   const duration = stats.duration_breakdown || {};
   const threshold = stats.large_duration_threshold || 10;
+  const elapsed = formatElapsed(startedAt, finishedAt);
   $('stats').innerHTML = [
+    elapsed ? stat('Run duration', elapsed, 'Total elapsed time for this run.') : '',
     stat('Found', stats.found, 'Supported files discovered before filtering.'),
     stat('Matched', stats.matched, 'Files where the script selected a usable match.'),
     stat('Skipped', stats.skipped, 'Files intentionally not processed.'),
