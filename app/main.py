@@ -51,8 +51,6 @@ AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_FIXER_SCRIPT = "audible-metadata-fixer-v4_15.py"
-DEFAULT_ORGANIZER_SCRIPT = "organize-audiobooks-by-metadata-v3_7.py"
 M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
 M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
@@ -98,6 +96,16 @@ def discover_scripts() -> tuple[list[str], list[str]]:
     organizer_scripts = [name for name in scripts if is_organizer_script(name)]
     fixer_scripts = [name for name in scripts if not is_organizer_script(name)]
     return fixer_scripts, organizer_scripts
+
+
+def default_fixer_script() -> str:
+    fixer_scripts, _ = discover_scripts()
+    return fixer_scripts[-1] if fixer_scripts else ""
+
+
+def default_organizer_script() -> str:
+    _, organizer_scripts = discover_scripts()
+    return organizer_scripts[-1] if organizer_scripts else ""
 
 
 def live_script_path(script_name: str, script_kind: str) -> Path:
@@ -269,7 +277,7 @@ def load_json(path: Path) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {path}: {exc}") from exc
 
 
-def load_fixer_module(script_name: str = DEFAULT_FIXER_SCRIPT):
+def load_fixer_module(script_name: str = ""):
     script_path = live_script_path(script_name, "fixer")
 
     module_name = f"audible_fixer_{re.sub(r'[^a-zA-Z0-9_]', '_', script_name)}"
@@ -313,9 +321,9 @@ def search_audible_candidates(
     auth_file: str,
     metadata: dict[str, Any] | None = None,
     limit: int = 10,
-    script_name: str = DEFAULT_FIXER_SCRIPT,
+    script_name: str = "",
 ) -> dict[str, Any]:
-    fixer_module = load_fixer_module(script_name)
+    fixer_module = load_fixer_module(script_name or default_fixer_script())
     clues = build_context_clues(fixer_module, metadata)
 
     direct_query = fixer_module.clean_text(query)
@@ -474,19 +482,19 @@ class M4BLoadRequest(BaseModel):
 class M4BDiscoverRequest(BaseModel):
     path: str = Field(default="/audiobooks")
     mode: str = Field(default="multipart")
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
     limit: int = Field(default=200, ge=1, le=500)
     cache_action: str = Field(default="refresh")
 
 
 class M4BDiscoveryCacheStatusRequest(BaseModel):
     path: str = Field(default="/audiobooks")
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
 
 
 class M4BRefreshAudioProfilesRequest(BaseModel):
     path: str = Field(default="/audiobooks")
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
 
 
 class M4BSaveRequest(BaseModel):
@@ -501,22 +509,22 @@ class AudibleSearchRequest(BaseModel):
     auth_file: str = Field(default="/auth/audible-metadata.json")
     metadata: M4BMetadataForm = Field(default_factory=M4BMetadataForm)
     limit: int = 10
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
 
 
 class ManualReviewLoadRequest(BaseModel):
     path: str
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
 
 
 class ManualReviewDiscoverRequest(BaseModel):
     path: str = Field(default="/audiobooks")
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
 
 
 class ManualReviewApplyRequest(BaseModel):
     path: str
-    script_name: str = DEFAULT_FIXER_SCRIPT
+    script_name: str = Field(default_factory=default_fixer_script)
     selected_result: dict[str, Any]
     edit_mode: str
     backup: bool = False
@@ -544,7 +552,7 @@ class M4BRunRequest(BaseModel):
 class OrganizerRunRequest(BaseModel):
     root_path: str = Field(default="/audiobooks/_unorganized")
     destination_root: str = Field(default="/audiobooks")
-    script_name: str = DEFAULT_ORGANIZER_SCRIPT
+    script_name: str = Field(default_factory=default_organizer_script)
     apply: bool = False
     m4b_only: bool = False
     include_existing_book_folders: bool = False
@@ -1098,7 +1106,7 @@ def natural_path_sort_key(path: Path) -> list[tuple[int, int | str]]:
 
 
 def normalize_m4b_metadata(metadata: M4BMetadataForm) -> M4BMetadataForm:
-    fixer_module = load_fixer_module(DEFAULT_FIXER_SCRIPT)
+    fixer_module = load_fixer_module(default_fixer_script())
     author = (
         fixer_module.canonicalize_author_credits(metadata.author)
         or fixer_module.clean_author_value(metadata.author)
@@ -1256,9 +1264,10 @@ def manual_review_sidecar_context(
 def discover_manual_review_targets(
     *,
     path: str,
-    script_name: str = DEFAULT_FIXER_SCRIPT,
+    script_name: str = "",
     limit: int = 30,
 ) -> dict[str, Any]:
+    script_name = script_name or default_fixer_script()
     target_path = validate_existing_path(path)
     fixer_module = load_fixer_module(script_name)
     _files, group_map, processing_items = fixer_processing_context(
@@ -1290,10 +1299,11 @@ def discover_m4b_candidates(
     *,
     path: str,
     mode: str,
-    script_name: str = DEFAULT_FIXER_SCRIPT,
+    script_name: str = "",
     limit: int = 200,
     cache_action: str = "refresh",
 ) -> dict[str, Any]:
+    script_name = script_name or default_fixer_script()
     supported_modes = ("multipart", "non_m4b")
     if mode not in {*supported_modes, "all"}:
         raise HTTPException(
@@ -1557,8 +1567,9 @@ def refresh_cached_multipart_audio_profiles(
 def inspect_manual_review_target(
     *,
     path: str,
-    script_name: str = DEFAULT_FIXER_SCRIPT,
+    script_name: str = "",
 ) -> dict[str, Any]:
+    script_name = script_name or default_fixer_script()
     target_path = validate_existing_path(path)
     fixer_module = load_fixer_module(script_name)
     sidecar_context = manual_review_sidecar_context(
@@ -1918,7 +1929,7 @@ def enforce_m4b_output_metadata(
     set_mp4_text(tags, "\xa9cmt", metadata.summary)
     tags["stik"] = [2]
 
-    fixer_module = load_fixer_module(DEFAULT_FIXER_SCRIPT)
+    fixer_module = load_fixer_module(default_fixer_script())
     track_sequence = fixer_module.clean_sequence(metadata.sequence)
     if track_sequence:
         tags["trkn"] = [(int(track_sequence), 0)]
@@ -2261,6 +2272,9 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
             write_final_report(state)
         except Exception:
             pass
+    finally:
+        with runs_lock:
+            runs.pop(run_id, None)
 
 
 def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
@@ -2356,6 +2370,8 @@ def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
                 temp_file.unlink(missing_ok=True)
             except OSError:
                 pass
+        with runs_lock:
+            runs.pop(run_id, None)
 
 
 def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
@@ -2392,6 +2408,9 @@ def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
             write_final_report(state)
         except Exception:
             pass
+    finally:
+        with runs_lock:
+            runs.pop(run_id, None)
 
 
 app = FastAPI(title="LibraForge")
@@ -2431,8 +2450,8 @@ def list_scripts() -> dict[str, Any]:
         "fixer_scripts": fixer_scripts,
         "organizer_scripts": organizer_scripts,
         "scripts_dir": str(SCRIPTS_DIR),
-        "default_script": DEFAULT_FIXER_SCRIPT,
-        "default_organizer_script": DEFAULT_ORGANIZER_SCRIPT,
+        "default_script": fixer_scripts[-1] if fixer_scripts else "",
+        "default_organizer_script": organizer_scripts[-1] if organizer_scripts else "",
     }
 
 
@@ -2573,9 +2592,9 @@ def load_manual_review_target(req: ManualReviewLoadRequest) -> dict[str, Any]:
 @app.get("/api/manual-review/current-cover")
 def current_manual_review_cover(
     path: str,
-    script_name: str = DEFAULT_FIXER_SCRIPT,
+    script_name: str = "",
 ) -> Response:
-    context = inspect_manual_review_target(path=path, script_name=script_name)
+    context = inspect_manual_review_target(path=path, script_name=script_name or default_fixer_script())
     cover_bytes, media_type = extract_current_cover(Path(context["source_path"]))
     return Response(
         content=cover_bytes,
@@ -2618,7 +2637,13 @@ def get_run(run_id: str) -> dict[str, Any]:
         report_path = safe_child(REPORTS_DIR, f"{run_id}.report.json")
         if report_path.exists():
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            return report_for_api(report)
+            result = report_for_api(report)
+            log_name = report.get("log_file")
+            result["downloads"] = {
+                "log": f"/api/runs/{run_id}/download/log" if log_name else None,
+                "report": f"/api/runs/{run_id}/download/report",
+            }
+            return result
         raise HTTPException(status_code=404, detail="Run not found")
 
     return {
