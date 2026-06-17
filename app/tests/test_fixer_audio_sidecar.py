@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 
 
 def load_fixer():
-    path = ROOT / "scripts/audible-metadata-fixer-v4_15.py"
+    path = ROOT / "scripts/audible-metadata-fixer-v4_16.py"
     spec = importlib.util.spec_from_file_location("fixer_audio_sidecar", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader

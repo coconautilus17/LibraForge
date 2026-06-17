@@ -87,6 +87,95 @@ def validate_pattern(pattern: str) -> str:
     return pattern
 
 
+
+
+def phrase_to_title_noise_pattern(value: str) -> str:
+    """Convert a plain user-entered noise phrase into a safe regex.
+
+    This lets the UI ask for normal text such as:
+        A Slice-of-Life LitRPG
+
+    and store a regex that tolerates common separators:
+        A Slice of Life LitRPG
+        A Slice-of-Life LitRPG
+        A Slice_of_Life LitRPG
+
+    Raw regex is still supported separately with mode="regex".
+    """
+    value = str(value or "").strip()
+    if not value:
+        raise ValueError("Pattern cannot be empty")
+    if len(value) > 500:
+        raise ValueError("Pattern cannot exceed 500 characters")
+
+    value = (
+        value.replace("：", ":")
+        .replace("꞉", ":")
+        .replace("’", "'")
+        .replace("‘", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+
+    tokens = [
+        token
+        for token in re.split(r"""[\s\-_:;,.!?'"()\[\]{}]+""", value)
+        if token
+    ]
+
+    if not tokens:
+        raise ValueError("Pattern cannot be empty")
+
+    # Keep this deliberately conservative: escape every user token, then allow
+    # common word separators between tokens. The regex is compiled with
+    # re.IGNORECASE by validate_pattern()/active_title_noise_patterns().
+    return r"[-_\s]+".join(re.escape(token) for token in tokens)
+
+
+def _looks_like_regex_pattern(value: str) -> bool:
+    """Best-effort legacy detection for custom patterns saved before phrase mode."""
+    value = str(value or "")
+    return bool(
+        re.search(
+            r"(?:\\[AbBdDsSwWZ]|\(\?|\[[^\]]+\]|\.\*|\.\+|\{\d|[|^$])",
+            value,
+        )
+    )
+
+
+def normalize_custom_title_noise_pattern(item: dict[str, Any]) -> tuple[str, str, str]:
+    """Return (mode, phrase, regex_pattern) for a custom policy entry.
+
+    Backward compatibility:
+      - Existing custom entries without a mode are treated as regex when they
+        look like regex.
+      - New UI entries should send mode="phrase" and phrase="<user text>".
+    """
+    raw_mode = str(item.get("mode") or "").strip().lower()
+    phrase = str(item.get("phrase") or "").strip()
+    raw_pattern = str(item.get("pattern") or "").strip()
+
+    if raw_mode not in {"phrase", "regex"}:
+        if phrase:
+            raw_mode = "phrase"
+        elif _looks_like_regex_pattern(raw_pattern):
+            raw_mode = "regex"
+        else:
+            # New simplified default: plain text in the old "pattern" field is
+            # treated as a phrase, not as raw regex.
+            raw_mode = "phrase"
+
+    if raw_mode == "regex":
+        pattern = validate_pattern(raw_pattern)
+        return "regex", phrase, pattern
+
+    phrase = phrase or raw_pattern
+    pattern = validate_pattern(phrase_to_title_noise_pattern(phrase))
+    return "phrase", phrase, pattern
+
+
 def save_title_noise_policy(
     *,
     disabled_defaults: list[str],
@@ -118,12 +207,15 @@ def save_title_noise_policy(
         if identifier in seen_ids:
             raise ValueError(f"Duplicate custom pattern id: {identifier}")
         seen_ids.add(identifier)
+        mode, phrase, pattern = normalize_custom_title_noise_pattern(item)
         normalized_custom.append(
             {
                 "id": identifier,
                 "label": str(item.get("label") or identifier).strip(),
                 "description": str(item.get("description") or "").strip(),
-                "pattern": validate_pattern(str(item.get("pattern") or "")),
+                "mode": mode,
+                "phrase": phrase,
+                "pattern": pattern,
                 "enabled": bool(item.get("enabled", True)),
             }
         )

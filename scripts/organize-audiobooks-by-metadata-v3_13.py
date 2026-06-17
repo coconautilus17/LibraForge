@@ -171,6 +171,9 @@ def utc_now() -> str:
 
 def clean_text(value: str) -> str:
     value = str(value or "")
+    # Normalize uncommon colon variants seen in some Audible/file metadata so
+    # title-noise and series/title cleanup rules can recognize subtitles.
+    value = value.replace("꞉", ":").replace("：", ":")
     value = re.sub(r"\s+", " ", value)
     return value.strip()
 
@@ -216,7 +219,10 @@ def title_is_bad_after_cleanup(value: str) -> bool:
     release_stripped = strip_edition_descriptors(release_stripped)
     if not release_stripped:
         return True
-    if normalize_for_compare(release_stripped) in ARTICLE_ONLY_TITLE_KEYS:
+    normalized_release = normalize_for_compare(release_stripped)
+    if normalized_release in ARTICLE_ONLY_TITLE_KEYS:
+        return True
+    if normalized_release in GENERIC_PLACEHOLDER_TITLE_KEYS:
         return True
     if re.fullmatch(r"[\W_]+", value):
         return True
@@ -278,6 +284,7 @@ TECHNICAL_QUALIFIER_RE = re.compile(
     re.IGNORECASE,
 )
 ARTICLE_ONLY_TITLE_KEYS = {"a", "an", "the"}
+GENERIC_PLACEHOLDER_TITLE_KEYS = {"unknown", "unknowntitle", "untitled", "notitle"}
 
 
 EDITION_DESCRIPTOR_RE = re.compile(
@@ -351,8 +358,48 @@ def strip_release_bracket_tokens(value: str) -> str:
     return value.strip(" -_.:,")
 
 
+GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
+    r"^\s*(?:a|an|the)?\s*"
+    r"(?:[a-z0-9'’]+[\s-]+){0,6}?"
+    r"(?:"
+    r"lit\s*rpg|litrpg|game\s*lit|gamelit|isekai|xianxia|wuxia|"
+    r"cultivation|progression\s+fantasy|slice[\s-]*of[\s-]*life|"
+    r"fantasy\s+adventure"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_leading_sequence_for_noise(value: str) -> str:
+    """Remove a leading sequence token only for descriptor/noise detection."""
+    value = clean_text(value)
+    return re.sub(
+        r"^\s*(?:(?:book|books|vol\.?|volume|volumes|v)\s*)?"
+        r"\d{1,4}(?:\.\d+)?\s*(?:[-–—:._]+\s*|\s+)",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip(" -_.:,")
+
+
 def is_marketing_descriptor(value: str) -> bool:
-    return is_title_noise(clean_text(value))
+    value = clean_text(value)
+    if not value:
+        return False
+    if is_title_noise(value):
+        return True
+
+    # Handles exposed leftovers such as "4 A Slice-of-Life LitRPG" after the
+    # series and sequence are stripped. These should collapse to the series-only
+    # title instead of becoming "Book 4 - 4 A Slice-of-Life LitRPG".
+    candidate = strip_leading_sequence_for_noise(value)
+    if candidate and candidate != value and is_title_noise(candidate):
+        return True
+
+    return bool(
+        GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(value)
+        or (candidate and candidate != value and GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(candidate))
+    )
 
 
 def remove_trailing_marketing_descriptor(value: str) -> str:
@@ -979,6 +1026,32 @@ def strip_series_sequence_parenthetical(title: str, series: str, book_number: st
     return title
 
 
+
+def title_fragment_is_incomplete(value: str) -> bool:
+    """Return True when a stripped title fragment is grammatically incomplete.
+
+    This prevents false series-suffix stripping such as:
+      Rise of the Shadow Rogue -> Rise of the
+
+    while still allowing real redundant suffix cleanup such as:
+      King of Shadows Shadow Rogue -> King of Shadows
+    """
+    value = clean_text(value).strip(" -_:,.")
+    if not value:
+        return True
+    tokens = re.findall(r"[A-Za-z0-9']+", value.lower())
+    if not tokens:
+        return True
+    if len(tokens) <= 2 and tokens[-1] in {"a", "an", "the"}:
+        return True
+    return tokens[-1] in {
+        "a", "an", "the",
+        "of", "to", "for", "from", "with", "without",
+        "in", "on", "at", "by", "into", "onto", "over", "under",
+        "and", "or", "but",
+    }
+
+
 def strip_trailing_series_from_title(title: str, series: str) -> str:
     """Remove a redundant trailing series name from a parsed title.
 
@@ -995,7 +1068,11 @@ def strip_trailing_series_from_title(title: str, series: str) -> str:
         return title
     pattern = re.compile(rf"(?:\s*[-_:,]\s*|\s+){re.escape(series)}\s*$", re.IGNORECASE)
     candidate = pattern.sub("", title).strip(" -_:,.")
-    if candidate and not title_is_bad_after_cleanup(candidate):
+    if (
+        candidate
+        and not title_is_bad_after_cleanup(candidate)
+        and not title_fragment_is_incomplete(candidate)
+    ):
         return sanitize_path_name(candidate, title)
     return title
 
@@ -1119,6 +1196,35 @@ def metadata_series_suffix_number(title: str, series: str) -> str:
     return normalize_book_number(remainder)
 
 
+
+def small_series_suffix_number_from_text(value: str, series: str) -> str:
+    """Recover a small bare suffix from text shaped like '<Series> 2'.
+
+    This is intentionally narrower than detect_number_from_text().
+    It exists for series where the title/path itself is the numbered title:
+      Returner's Defiance 2
+      Corruption Wielder 2
+      System Overclocked 3
+
+    It deliberately ignores 3+ digit suffixes so real titles/courses like:
+      Dungeon Diving 204
+      Dungeon Diving 301
+    do not become Book 204 / Book 301.
+    """
+    value = sanitize_path_name(cleanup_title_artifacts(value), "")
+    series = clean_series_name(series)
+    if not value or not series:
+        return ""
+
+    remainder = strip_series_prefix(value, series)
+    if normalize_for_compare(remainder) == normalize_for_compare(value):
+        return ""
+    if not re.fullmatch(r"\d{1,2}(?:\.\d+)?", remainder):
+        return ""
+    if re.fullmatch(r"(?:19|20)\d{2}", remainder):
+        return ""
+    return normalize_book_number(remainder)
+
 def has_distinct_book_title(title: str, series: str, book_number: str) -> bool:
     """Return True when title contains content beyond series/sequence text."""
     title = sanitize_path_name(cleanup_title_artifacts(title), "")
@@ -1240,6 +1346,19 @@ def strip_author_narrator_noise_from_title(title: str, author: str, narrator: st
         candidate = value[: by_match.start()].strip(" -")
         if candidate and not title_is_bad_after_cleanup(candidate):
             value = candidate
+
+    # Some sidecars/filenames append the author without a dash, e.g.
+    # "Feedback Dennis E. Taylor". If the suffix is an exact known person and
+    # removing it leaves a real title, strip it.
+    for person in sorted(people, key=len, reverse=True):
+        person = clean_text(person)
+        if not person:
+            continue
+        suffix_re = re.compile(rf"\s+{re.escape(person)}\s*$", re.IGNORECASE)
+        candidate = suffix_re.sub("", value).strip(" -_.:,")
+        if candidate != value and candidate and not title_is_bad_after_cleanup(candidate):
+            value = candidate
+            break
 
     return sanitize_path_name(value, title)
 
@@ -1815,12 +1934,36 @@ def parse_explicit_identity_folder_name(name: str) -> dict[str, str]:
         flags=re.IGNORECASE,
     )
     if match and plausible_author_credit(match.group("author")):
-        return result(
-            match.group("title"),
-            match.group("author"),
-            match.group("series"),
-            match.group("number"),
-        )
+        series_candidate = match.group("series")
+        number_candidate = match.group("number")
+
+        # Avoid false positives for co-author folders such as:
+        #   Sebastian Wilde, Jamie Hawke - Happy Hunting Planet Kill, Book 2
+        # and author/year folders such as:
+        #   TheFirstDefier, J.F.Brink - Book 14 - ... - 2024
+        #
+        # In those cases this loose "Title, Author - Series N" parser would
+        # treat the first author as a title and the last year as the sequence.
+        # Let the more conservative fallback/path parsing handle them instead.
+        if not (
+            re.fullmatch(r"(?:19|20)\d{2}", number_candidate)
+            or re.search(
+                r"\b(?:book|books|vol\.?|vols\.?|volume|volumes)\s*$",
+                series_candidate,
+                flags=re.IGNORECASE,
+            )
+            or re.search(
+                r"\b(?:book|books|vol\.?|vols\.?|volume|volumes)\s+\d{1,4}\b",
+                series_candidate,
+                flags=re.IGNORECASE,
+            )
+        ):
+            return result(
+                match.group("title"),
+                match.group("author"),
+                series_candidate,
+                number_candidate,
+            )
 
     return {}
 
@@ -2163,6 +2306,67 @@ def path_clues(item: BookItem, root: Path) -> dict[str, str]:
     return {key: value for key, value in clues.items() if value}
 
 
+def metadata_source_is_trusted(source: str) -> bool:
+    """Return True for metadata produced by the fixer/M4B sidecar workflow.
+
+    Organizer runs normally happen after Metadata Forge, so marker/sidecar
+    identity should be stronger than noisy folder names in _unorganized.
+    """
+    source = str(source or "")
+    return source.startswith("marker:") or source.startswith("sidecar:")
+
+
+def book_number_looks_like_year(value: str) -> bool:
+    return bool(re.fullmatch(r"(?:19|20)\d{2}", display_book_number(str(value or ""))))
+
+
+def title_conflict_should_trigger_review(
+    metadata_title: str,
+    path_title: str,
+    series: str,
+    book_number: str,
+    author: str = "",
+    narrator: str = "",
+) -> bool:
+    """Return True only for meaningful title identity conflicts.
+
+    Trusted marker/sidecar metadata often has a cleaner title than the path
+    because paths include authors, series names, ASINs, years, release tags, or
+    marketing subtitles. Those routine cleanups should not create review noise.
+    Review only when both sides still have distinct book-title content and the
+    cleaned values are genuinely different.
+    """
+    metadata_hint = strip_author_narrator_noise_from_title(
+        metadata_title,
+        author,
+        narrator,
+    )
+    path_hint = strip_author_narrator_noise_from_title(
+        path_title,
+        author,
+        narrator,
+    )
+    metadata_clean = clean_book_title(metadata_hint, series, book_number)
+    path_clean = clean_book_title(path_hint, series, book_number)
+
+    if not has_distinct_book_title(metadata_clean, series, book_number):
+        return False
+    if not has_distinct_book_title(path_clean, series, book_number):
+        return False
+
+    metadata_key = normalize_for_compare(metadata_clean)
+    path_key = normalize_for_compare(path_clean)
+    if not metadata_key or not path_key or metadata_key == path_key:
+        return False
+
+    # If one cleaned value simply contains the other, this is usually a path
+    # decoration issue, not a true identity conflict.
+    if metadata_key in path_key or path_key in metadata_key:
+        return False
+
+    return SequenceMatcher(None, metadata_key, path_key).ratio() < 0.72
+
+
 def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = False) -> dict[str, Any]:
     sidecar = metadata_from_sidecar(item)
     tag_meta = metadata_from_tags(item) if sidecar is None else sidecar
@@ -2177,41 +2381,128 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     title = metadata_title
     author = tag_meta.get("author") or clues.get("author") or "Unknown Author"
     series = tag_meta.get("series") or clues.get("series", "")
-    book_number = tag_meta.get("book_number") or ""
+    tag_book_number = tag_meta.get("book_number") or ""
+    book_number = tag_book_number
     narrator = tag_meta.get("narrator") or clues.get("narrator", "")
+    trusted_metadata = metadata_source_is_trusted(tag_meta.get("source", ""))
+
+    # Prefer the sequence label from fixer/sidecar metadata. Path labels are
+    # still useful when metadata has no sequence, but they should not turn
+    # marker-confirmed Book 2 into Vol. 2 just because the staging folder was
+    # named "v2".
     sequence_label = choose_sequence_label(
-        clues.get("sequence_label", ""),
         tag_meta.get("sequence_label", ""),
         title,
+        clues.get("sequence_label", ""),
         item.source_path.name,
         item.representative.stem,
     )
 
-    # Path folder number/title is stronger than stale track tags, especially for
-    # side stories such as Book 003.5 where track may be 4.  In full-library
-    # consolidation mode, a clear existing folder structure is also safer than
-    # stale/incorrect marker metadata.  This prevents a marker for another
-    # book with the same title, e.g. "Hell to Pay", from moving an already
-    # structured series entry into the wrong author/series.
-    if clues.get("book_number"):
-        if (
-            tag_meta.get("book_number")
-            and normalize_book_number(str(tag_meta["book_number"]))
-            != normalize_book_number(str(clues["book_number"]))
-        ):
-            add_review_reason("book number differs between metadata and path")
-        book_number = clues["book_number"]
+    # Prefer fixer/sidecar sequence metadata over folder-name numbers during
+    # _unorganized runs. Folder names often contain batch folders, years, or
+    # staging hints (for example "Dungeon Diving v2" or a trailing "2024").
+    #
+    # In full-library consolidation mode, path structure may still be safer
+    # than raw ffprobe tags, but marker/sidecar metadata remains authoritative
+    # unless the user explicitly corrects it.
+    path_book_number = clues.get("book_number", "")
+    metadata_title_number = metadata_series_suffix_number(metadata_title, series)
+
+    # Some folder/file names expose a bare series suffix without the word
+    # "Book", e.g. "Returner's Defiance 2". detect_number_from_text() is
+    # intentionally conservative and does not treat every trailing number as a
+    # sequence. Use this narrower check only when the text is literally shaped
+    # like "<series> <small-number>".
+    if not path_book_number and metadata_title_number:
+        for suffix_source in (item.source_path.name, item.representative.stem):
+            path_series_suffix_number = small_series_suffix_number_from_text(
+                suffix_source,
+                series,
+            )
+            if path_series_suffix_number == metadata_title_number:
+                path_book_number = path_series_suffix_number
+                break
+
+    # Some Audible/fixer marker payloads can carry a bad sequence even though
+    # the chosen title and path both clearly expose the real sequence, e.g.
+    # title="Corruption Wielder 2", path="Corruption Wielder Book 2",
+    # but marker sequence=1. When title+path agree, treat that as stronger
+    # evidence than the single bad sequence value.
+    if (
+        trusted_metadata
+        and tag_book_number
+        and metadata_title_number
+        and normalize_book_number(str(tag_book_number)) != metadata_title_number
+        and path_book_number
+        and normalize_book_number(str(path_book_number)) == metadata_title_number
+        and not book_number_looks_like_year(path_book_number)
+    ):
+        book_number = metadata_title_number
+        tag_book_number = metadata_title_number
+    elif (
+        trusted_metadata
+        and tag_book_number
+        and metadata_title_number
+        and normalize_book_number(str(tag_book_number)) != metadata_title_number
+        and not path_book_number
+    ):
+        add_review_reason("metadata title number differs from metadata sequence")
+
+    if path_book_number:
+        path_differs = (
+            tag_book_number
+            and normalize_book_number(str(tag_book_number))
+            != normalize_book_number(str(path_book_number))
+        )
+
+        if path_differs:
+            if book_number_looks_like_year(path_book_number):
+                # A trailing release year should not create a generic mismatch
+                # when metadata already has a real sequence. Keep a narrow
+                # review reason only for the year-looking clue.
+                add_review_reason("path book number looks like a year")
+            else:
+                add_review_reason("book number differs between metadata and path")
+            if prefer_path_structure and not trusted_metadata and not book_number_looks_like_year(path_book_number):
+                book_number = path_book_number
+        elif not tag_book_number:
+            if book_number_looks_like_year(path_book_number):
+                add_review_reason("path book number looks like a year")
+            else:
+                book_number = path_book_number
 
     if clues.get("title"):
         path_title = clues["title"]
-        if prefer_path_structure or item.kind == "folder" or is_generic_track_title(title) or normalize_for_compare(title) == normalize_for_compare(series):
-            if is_generic_track_title(title):
-                add_review_reason("title inferred from path")
-            elif (
-                prefer_path_structure
-                and normalize_for_compare(path_title) != normalize_for_compare(title)
-            ):
+        path_title_differs = normalize_for_compare(path_title) != normalize_for_compare(title)
+        use_path_title = False
+
+        if is_generic_track_title(title):
+            use_path_title = True
+            add_review_reason("title inferred from path")
+        elif prefer_path_structure and not trusted_metadata:
+            use_path_title = True
+            if path_title_differs:
                 add_review_reason("title differs between metadata and path")
+        elif (
+            not trusted_metadata
+            and normalize_for_compare(title) == normalize_for_compare(series)
+            and has_distinct_book_title(path_title, series, book_number)
+            and not is_marketing_descriptor(path_title)
+        ):
+            use_path_title = True
+            add_review_reason("title inferred from path")
+        elif trusted_metadata and path_title_differs:
+            if title_conflict_should_trigger_review(
+                metadata_title=metadata_title,
+                path_title=path_title,
+                series=series,
+                book_number=book_number,
+                author=author,
+                narrator=narrator,
+            ):
+                add_review_reason("title identity differs between metadata and path")
+
+        if use_path_title:
             title = path_title
 
     if prefer_path_structure and clues.get("parent_series") and not clues.get("book_folder_author_series") and not is_generic_structure_name(clues["parent_series"]):
@@ -2266,9 +2557,21 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         title = metadata_title
 
     if clues.get("sequence_label"):
-        # The path label is authoritative.  A trailing title phrase such as
-        # "Vol 1" must not override a leading folder prefix like "Book 004".
-        sequence_label = clues["sequence_label"]
+        path_sequence_label = clues["sequence_label"]
+        tag_sequence_label = tag_meta.get("sequence_label", "")
+        if (
+            tag_book_number
+            and tag_sequence_label
+            and normalize_sequence_label(path_sequence_label) != normalize_sequence_label(tag_sequence_label)
+        ):
+            add_review_reason("sequence label differs between metadata and path")
+        elif not tag_book_number or (prefer_path_structure and not trusted_metadata):
+            # The path label is authoritative only when there is no trusted
+            # metadata sequence. A trailing title phrase such as "Vol 1" must not
+            # override a leading folder prefix like "Book 004" during raw
+            # full-library cleanup, but marker/sidecar metadata wins for
+            # post-fixer _unorganized runs.
+            sequence_label = path_sequence_label
 
     if is_generic_structure_name(author) and clues.get("author") and not is_generic_structure_name(clues["author"]):
         author = clues["author"]
@@ -2316,8 +2619,15 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     if (
         not has_distinct_book_title(clean_title, clean_series, book_number)
         and has_distinct_book_title(path_clean_title, clean_series, book_number)
+        and (not trusted_metadata or is_generic_track_title(metadata_title))
     ):
         clean_title = path_clean_title
+
+    # Do not let placeholder values such as "Unknown Title" become real folder
+    # names.  When series + sequence are known, use the series title so
+    # build_book_folder_name() collapses the target to just "Book N"/"Vol. N".
+    if title_is_bad_after_cleanup(clean_title) and clean_series:
+        clean_title = clean_series
 
     return {
         "title": clean_title,
@@ -3042,6 +3352,43 @@ def count_audio_extension(root: Path, extension: str) -> int:
     return count
 
 
+
+def add_metadata_review_reason(metadata: dict[str, Any], reason: str) -> dict[str, Any]:
+    metadata = dict(metadata)
+    reasons = list(metadata.get("review_reasons", []))
+    if reason not in reasons:
+        reasons.append(reason)
+    metadata["review_reasons"] = reasons
+    return metadata
+
+
+def make_skipped_review_move(
+    *,
+    item: BookItem,
+    metadata: dict[str, Any],
+    target: Path,
+    reason: str,
+    structure: str,
+) -> dict[str, Any]:
+    return {
+        "kind": item.kind,
+        "source": item.source_path,
+        "target": target,
+        "metadata": add_metadata_review_reason(metadata, reason),
+        "companions": [],
+        "audio_count": len(item.audio_files),
+        "structure": structure,
+        "skipped": True,
+        "skip_reason": reason,
+    }
+
+
+def print_skipped_review(move: dict[str, Any]) -> None:
+    print_move(move)
+    print(f"  SKIPPED: {move.get('skip_reason', 'skipped')}")
+    print()
+
+
 def print_move(move: dict[str, Any]) -> None:
     metadata = move["metadata"]
     print("BOOK:")
@@ -3134,6 +3481,7 @@ def main() -> None:
         items = items[:args.max_items]
 
     planned_moves: list[dict[str, Any]] = []
+    skipped_reviews: list[dict[str, Any]] = []
     reserved_targets: set[Path] = set()
 
     skipped_unknown_author = 0
@@ -3161,6 +3509,15 @@ def main() -> None:
         metadata = normalize_metadata_title_for_target(metadata)
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
+            target_dir = build_default_target_dir(destination_root, metadata)
+            reason = "skipped unknown author"
+            skipped_reviews.append(make_skipped_review_move(
+                item=item,
+                metadata=metadata,
+                target=target_dir,
+                reason=reason,
+                structure="skipped_unknown_author",
+            ))
             print(f"SKIP: unknown author | {item.source_path}", file=sys.stderr)
             continue
 
@@ -3171,6 +3528,14 @@ def main() -> None:
         elif structure_status == "ambiguous":
             ambiguous_structure += 1
             skipped_ambiguous_structure += 1
+            reason = "skipped ambiguous structure match"
+            skipped_reviews.append(make_skipped_review_move(
+                item=item,
+                metadata=metadata,
+                target=target_dir,
+                reason=reason,
+                structure="skipped_ambiguous_structure",
+            ))
             print(f"SKIP: ambiguous structure | {item.source_path}", file=sys.stderr)
             continue
 
@@ -3181,6 +3546,13 @@ def main() -> None:
                     skipped_already_target += 1
                 else:
                     skipped_conflicts += 1
+                    skipped_reviews.append(make_skipped_review_move(
+                        item=item,
+                        metadata=metadata,
+                        target=target_dir,
+                        reason=f"skipped conflict: {reason}",
+                        structure="skipped_conflict",
+                    ))
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
             reserved_targets.add(target_dir)
@@ -3227,11 +3599,12 @@ def main() -> None:
     print(f"Matched existing structure: {matched_existing_structure}")
     print(f"Ambiguous structure matches: {ambiguous_structure}")
     print(f"Skipped ambiguous structure: {skipped_ambiguous_structure}")
+    print(f"Skipped review items: {len(skipped_reviews)}")
     print(f"Planned moves: {len(planned_moves)}")
     print(f"Mode: {mode}")
     print()
 
-    if not planned_moves:
+    if not planned_moves and not skipped_reviews:
         print("No moves needed.")
         return
 
@@ -3260,6 +3633,12 @@ def main() -> None:
 
         if args.remove_empty_dirs:
             remove_empty_parents(original_parent, root)
+
+    if skipped_reviews:
+        print("Skipped review items:")
+        print()
+        for move in skipped_reviews:
+            print_skipped_review(move)
 
     if args.apply and not args.no_structure_cache:
         # Rebuild after apply so future _unorganized runs do not need a full ffprobe scan.

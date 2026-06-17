@@ -27,12 +27,12 @@ def load_module(name: str, relative_path: str):
 
 
 FIXER = load_module(
-    "fixer_v4_15_sanitization",
-    "scripts/audible-metadata-fixer-v4_15.py",
+    "fixer_v4_16_sanitization",
+    "scripts/audible-metadata-fixer-v4_16.py",
 )
 ORGANIZER = load_module(
-    "organizer_v3_7_sanitization",
-    "scripts/organize-audiobooks-by-metadata-v3_7.py",
+    "organizer_v3_13_sanitization",
+    "scripts/organize-audiobooks-by-metadata-v3_13.py",
 )
 
 

@@ -957,7 +957,17 @@ def restore_metadata_backups(
             print()
             restored += 1
         except Exception as error:
+            reason = f"failed: {error}"
             print(f"  ERROR: {error}")
+            append_manual_review(
+                manual_review,
+                file_path,
+                [reason],
+                clues=locals().get("clues", {}),
+                score=locals().get("score", None),
+                query=locals().get("used_query", ""),
+                status="failed",
+            )
             print()
             failed += 1
 
@@ -4588,6 +4598,206 @@ def matches_skip_patterns(
     return False, ""
 
 
+
+def sequence_values_differ(left: str, right: str) -> bool:
+    """Return True when two non-empty book sequence values disagree."""
+    left = clean_sequence(str(left or ""))
+    right = clean_sequence(str(right or ""))
+    if not left or not right:
+        return False
+    try:
+        return float(left) != float(right)
+    except ValueError:
+        return left != right
+
+
+def append_unique_reason(reasons: list[str], reason: str) -> None:
+    reason = clean_text(reason)
+    if reason and reason not in reasons:
+        reasons.append(reason)
+
+
+def build_manual_review_item(
+    file_path: Path,
+    reasons: list[str] | tuple[str, ...],
+    *,
+    clues: dict | None = None,
+    metadata: dict | None = None,
+    score: float | None = None,
+    mode: str = "",
+    query: str = "",
+    status: str = "",
+) -> dict:
+    """Build one compact item for the final manual-review report.
+
+    These items are intentionally independent of whether metadata was applied.
+    They capture actionable risk: skipped/failed processing, unsafe matches, and
+    selected matches where Audible/local sequence evidence conflicts.
+    """
+    clues = clues or {}
+    metadata = metadata or {}
+    duration = metadata.get("duration", {}) if metadata else {}
+
+    return {
+        "path": str(file_path),
+        "file_type": get_file_type(file_path),
+        "reasons": list(reasons),
+        "status": status or ("selected" if metadata else "review"),
+        "mode": mode or metadata.get("edit_mode", ""),
+        "score": round(float(score), 4) if score is not None else None,
+        "query": query,
+        "local_title": clues.get("title") or clues.get("raw_title") or "",
+        "local_series": clues.get("series", ""),
+        "local_number": clues.get("book_number", ""),
+        "local_number_source": clues.get("book_number_source", ""),
+        "local_duration_minutes": clues.get("local_duration_minutes"),
+        "audible_title": metadata.get("audible_title", ""),
+        "audible_series": metadata.get("series", ""),
+        "audible_sequence": metadata.get("audible_sequence") or metadata.get("sequence", ""),
+        "audible_number_candidates": metadata.get("audible_number_candidates", []),
+        "asin": metadata.get("asin", ""),
+        "duration": duration,
+    }
+
+
+def append_manual_review(
+    manual_review: list[dict],
+    file_path: Path,
+    reasons: list[str] | tuple[str, ...],
+    *,
+    clues: dict | None = None,
+    metadata: dict | None = None,
+    score: float | None = None,
+    mode: str = "",
+    query: str = "",
+    status: str = "",
+) -> None:
+    reasons = [clean_text(reason) for reason in reasons if clean_text(reason)]
+    if not reasons:
+        return
+
+    path = str(file_path)
+    existing = next((item for item in manual_review if item.get("path") == path), None)
+    if existing:
+        for reason in reasons:
+            if reason not in existing.setdefault("reasons", []):
+                existing["reasons"].append(reason)
+        return
+
+    manual_review.append(
+        build_manual_review_item(
+            file_path,
+            reasons,
+            clues=clues,
+            metadata=metadata,
+            score=score,
+            mode=mode,
+            query=query,
+            status=status,
+        )
+    )
+
+
+def selected_match_review_reasons(
+    metadata: dict,
+    clues: dict,
+    score: float,
+    duration_review_threshold: float,
+) -> list[str]:
+    """Return review reasons for a selected Audible match."""
+    reasons: list[str] = []
+    edit_mode = metadata.get("edit_mode", "none") or "none"
+    duration = metadata.get("duration", {}) or {}
+
+    if edit_mode == "series_only":
+        append_unique_reason(
+            reasons,
+            "series-only match: full metadata rewrite not considered safe",
+        )
+    elif edit_mode == "none":
+        append_unique_reason(
+            reasons,
+            "unsafe match: no editable metadata action",
+        )
+
+    diff_percent = duration.get("diff_percent")
+    if diff_percent is not None and float(diff_percent) > duration_review_threshold:
+        append_unique_reason(
+            reasons,
+            f"duration differs by {diff_percent}% from Audible",
+        )
+
+    local_number = str(clues.get("book_number", "") or "").strip()
+    local_source = str(clues.get("book_number_source", "") or "").strip() or "-"
+    audible_sequence = str(
+        metadata.get("audible_sequence")
+        or metadata.get("sequence")
+        or ""
+    ).strip()
+
+    if sequence_values_differ(local_number, audible_sequence):
+        append_unique_reason(
+            reasons,
+            (
+                "local/Audible sequence conflict: "
+                f"local {local_number} ({local_source}) vs Audible {audible_sequence}"
+            ),
+        )
+
+    if score < AGGRESSIVE_SCORE_THRESHOLD:
+        append_unique_reason(
+            reasons,
+            f"low match score: {round(float(score), 4)}",
+        )
+
+    return reasons
+
+
+def print_manual_review_report(manual_review: list[dict]) -> None:
+    print("MANUAL REVIEW REPORT:")
+
+    if not manual_review:
+        print("  No items require manual review.")
+        print()
+        return
+
+    print(f"  Items: {len(manual_review)}")
+    print()
+
+    def sort_key(item: dict) -> tuple[str, str]:
+        reasons = " | ".join(item.get("reasons") or [])
+        return (reasons, item.get("path", ""))
+
+    for item in sorted(manual_review, key=sort_key):
+        print(f"  - {item.get('path', '-')}")
+        for reason in item.get("reasons") or []:
+            print(f"    reason: {reason}")
+
+        if item.get("status"):
+            print(f"    status: {item.get('status')}")
+        if item.get("mode"):
+            print(f"    mode:   {item.get('mode')}")
+        if item.get("score") is not None:
+            print(f"    score:  {item.get('score')}")
+        if item.get("local_title"):
+            print(f"    local:  {item.get('local_title')}")
+        if item.get("local_number"):
+            print(
+                f"    local number: {item.get('local_number')} "
+                f"({item.get('local_number_source') or '-'})"
+            )
+        if item.get("audible_title"):
+            print(f"    audible: {item.get('audible_title')}")
+        if item.get("audible_sequence"):
+            print(f"    audible sequence: {item.get('audible_sequence')}")
+        duration = item.get("duration") or {}
+        if duration.get("diff_percent") is not None:
+            print(
+                f"    duration diff: {duration.get('diff_percent')}% "
+                f"({duration.get('status') or '-'})"
+            )
+        print()
+
 def print_duration_review_report(duration_review: list[dict], threshold: float) -> None:
     print(f"DURATION REVIEW REPORT (> {threshold:g}% difference):")
 
@@ -4626,6 +4836,7 @@ def print_run_summary(
     file_type_counts: Counter,
     duration_review: list[dict],
     duration_review_threshold: float,
+    manual_review: list[dict],
 ) -> None:
     print("Summary:")
     print(f"  Found:   {found} files")
@@ -4659,6 +4870,7 @@ def print_run_summary(
     print()
 
     print_duration_review_report(duration_review, duration_review_threshold)
+    print_manual_review_report(manual_review)
 
 
 def main():
@@ -4825,6 +5037,7 @@ def main():
     mode_counts: Counter = Counter()
     duration_counts: Counter = Counter()
     duration_review: list[dict] = []
+    manual_review: list[dict] = []
     asin_matches: list[dict] = []
     search_cache: dict[tuple[str, int], list[dict]] = {}
     search_context_cache: dict[str, tuple[list[str], dict]] = {}
@@ -4853,6 +5066,9 @@ def main():
         if skip_due_to_marker:
             print(f"  SKIP: {marker_reason}")
             print()
+            # Already-processed marker skips are idempotent no-ops, not match
+            # discrepancies. Keep them out of Manual Review to avoid flooding
+            # normal reruns.
             skipped += 1
             continue
 
@@ -4871,13 +5087,29 @@ def main():
         )
 
         if skip_due_to_pattern:
+            reason = f"skipped: matched skip pattern: {skip_pattern}"
             print(f"  SKIP: matched skip pattern: {skip_pattern}")
+            append_manual_review(
+                manual_review,
+                file_path,
+                [reason],
+                clues=clues,
+                status="skipped",
+            )
             print()
             skipped += 1
             continue
 
         if not queries:
+            reason = "skipped: no useful embedded metadata to search from"
             print("  SKIP: no useful embedded metadata to search from")
+            append_manual_review(
+                manual_review,
+                file_path,
+                [reason],
+                clues=clues,
+                status="skipped",
+            )
             print()
             skipped += 1
             continue
@@ -4953,8 +5185,17 @@ def main():
                 }
 
             if not product:
+                reason = "skipped: no usable Audible match"
                 print("  SKIP: no usable Audible match")
                 print(f"  Tried queries: {queries}")
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    [reason],
+                    clues=clues,
+                    query=" | ".join(queries),
+                    status="skipped",
+                )
                 print()
                 skipped += 1
                 continue
@@ -4995,20 +5236,75 @@ def main():
                     }
                 )
 
+            review_reasons = selected_match_review_reasons(
+                metadata,
+                clues,
+                score,
+                args.duration_review_threshold,
+            )
+            if review_reasons:
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    review_reasons,
+                    clues=clues,
+                    metadata=metadata,
+                    score=score,
+                    mode=edit_mode,
+                    query=used_query,
+                    status="selected",
+                )
+
             if score < args.min_score:
+                reason = f"skipped: score below minimum: {score} < {args.min_score}"
                 print(f"  SKIP: score below minimum: {score} < {args.min_score}")
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    [reason],
+                    clues=clues,
+                    metadata=metadata,
+                    score=score,
+                    mode=edit_mode,
+                    query=used_query,
+                    status="skipped",
+                )
                 print()
                 skipped += 1
                 continue
 
             if not metadata["title"] or not metadata["author"]:
+                reason = "skipped: missing title or author from Audible result"
                 print("  SKIP: missing title or author from Audible result")
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    [reason],
+                    clues=clues,
+                    metadata=metadata,
+                    score=score,
+                    mode=edit_mode,
+                    query=used_query,
+                    status="skipped",
+                )
                 print()
                 skipped += 1
                 continue
 
             if metadata.get("edit_mode") == "none":
+                reason = "skipped: match marked unsafe / no editable metadata action"
                 print("  SKIP: match marked unsafe / no editable metadata action")
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    [reason],
+                    clues=clues,
+                    metadata=metadata,
+                    score=score,
+                    mode=edit_mode,
+                    query=used_query,
+                    status="skipped",
+                )
                 print()
                 skipped += 1
                 continue
@@ -5089,6 +5385,7 @@ def main():
         file_type_counts=file_type_counts,
         duration_review=duration_review,
         duration_review_threshold=args.duration_review_threshold,
+        manual_review=manual_review,
     )
 
     if args.show_asin_report:

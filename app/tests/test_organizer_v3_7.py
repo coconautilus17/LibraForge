@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_7.py"
-SPEC = importlib.util.spec_from_file_location("organizer_v3_7", SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
+SPEC = importlib.util.spec_from_file_location("organizer_v3_13", SCRIPT_PATH)
 ORGANIZER = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = ORGANIZER
