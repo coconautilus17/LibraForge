@@ -7,6 +7,16 @@ let manualCurrentCoverUrl = '';
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat } = window.UiCommon;
 
+function fixerMajorVersion(scriptName) {
+  const m = scriptName.match(/-v(\d+)/i);
+  return m ? parseInt(m[1]) : 0;
+}
+
+function updateV5Fields() {
+  const isV5 = fixerMajorVersion($('script').value) >= 5;
+  $('v5Fields').style.display = isV5 ? '' : 'none';
+}
+
 async function loadScripts() {
   const res = await fetch('/api/scripts');
   const data = await res.json();
@@ -19,6 +29,7 @@ async function loadScripts() {
     if (name === data.default_script) opt.selected = true;
     select.appendChild(opt);
   }
+  updateV5Fields();
 }
 
 function collectRequest() {
@@ -38,6 +49,8 @@ function collectRequest() {
     cover_if_missing: $('coverIfMissing').checked,
     replace_cover: $('replaceCover').checked,
     metadata_json: $('metadataJson').checked,
+    workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
+    api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     min_score: parseFloat($('minScore').value || '0.7'),
     limit: parseInt($('limit').value || '50', 10),
     max_files: parseInt($('maxFiles').value || '0', 10),
@@ -293,7 +306,7 @@ function renderManualReview(items) {
       <div class="file-item">
         <div>${escapeHtml(item.path)}</div>
         <div class="reason-badges">
-          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${reason.includes('skipped') || reason.includes('none') ? 'danger' : ''}">${escapeHtml(reason)}</span>`).join('')}
+          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none'].includes(reason) ? 'danger' : ''}">${escapeHtml(reason)}</span>`).join('')}
           ${item.diff_percent ? `<span class="reason-badge danger">${escapeHtml(String(item.diff_percent))}% diff</span>` : ''}
         </div>
         <button class="secondary" data-manual-load="${escapeHtml(item.path)}">Load target</button>
@@ -509,6 +522,7 @@ async function applyManualMatch(result, editMode, replaceCover = false) {
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
+$('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
 $('manualSearchBtn').addEventListener('click', searchManualTarget);
 $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());

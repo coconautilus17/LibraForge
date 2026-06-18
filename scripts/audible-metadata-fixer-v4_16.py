@@ -1325,17 +1325,18 @@ def write_audiobookshelf_metadata_json(
     metadata: dict,
     clues: dict | None = None,
 ) -> Path:
-    """Write an Audiobookshelf-compatible metadata.json to the book folder.
+    """Write an Audiobookshelf-compatible metadata sidecar next to the audio file.
 
-    Audiobookshelf reads this file at the library item root and uses it to
-    populate all book fields without touching the embedded audio tags.
+    Written as <source>.metadata.json (e.g. Book.m4b.metadata.json) so that
+    books not yet in their own folder do not collide with each other. The
+    organizer recognises this suffix as a companion file, moves it alongside the
+    audio file, and renames it to metadata.json post-move so Audiobookshelf
+    picks it up automatically.
     """
-    group_search = ((clues or {}).get("group_search") or {})
-    if group_search.get("applied"):
-        folder = source.parent
+    if source.is_file():
+        target = source.with_name(source.name + ".metadata.json")
     else:
-        folder = source.parent if source.is_file() else source
-    target = folder / "metadata.json"
+        target = source / "metadata.json"
 
     authors = [
         {"name": name.strip()}

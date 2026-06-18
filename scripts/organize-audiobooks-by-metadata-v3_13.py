@@ -108,6 +108,7 @@ COMPANION_SUFFIXES = (
     ".cover-backup.jpg",
     ".cover-backup.png",
     ".m4b-tool-metadata.json",
+    ".metadata.json",
 )
 
 # Optional ebook/sidecar companions when they clearly share the audio stem.
@@ -115,6 +116,13 @@ COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg",
 
 NON_AUTHOR_ROLE_RE = re.compile(
     r"\s+-\s+(?:translator|translations?|introduction|introductions?|editor|foreword|afterword|adapter|adapted by)\s*$",
+    re.IGNORECASE,
+)
+
+# Broadcaster/label prefixes that appear as "BBC - Author Name" in embedded tags.
+# Strip the prefix; keep the actual author.
+BROADCASTER_PREFIX_RE = re.compile(
+    r"^(?:BBC(?:\s+(?:Radio|Audio|Books|Worldwide))?)\s*[-–—]\s*",
     re.IGNORECASE,
 )
 
@@ -500,6 +508,7 @@ def clean_series_name(value: str) -> str:
 
 def clean_author_credit(value: str) -> str:
     value = clean_text(value)
+    value = BROADCASTER_PREFIX_RE.sub("", value).strip()
     value = NON_AUTHOR_ROLE_RE.sub("", value).strip()
     aliases = {
         "リュート": "Ryuto",
@@ -2136,6 +2145,11 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
             title = book.get("title", "")
             series = book.get("series", "")
             author = book.get("author", "")
+            # Skip sidecars with no useful book data — they were written without
+            # metadata and would shadow a better audible-fixer marker further
+            # down the paths list.
+            if not title and not author and not series:
+                continue
             filename_author = author_from_marker_filename(path.name, series)
             if filename_author and author_is_probably_bad_for_series(author, series):
                 author = filename_author
@@ -3416,9 +3430,20 @@ def print_move(move: dict[str, Any]) -> None:
         source = move["source"]
         target = move["target"]
         for companion in move["companions"]:
-            suffix = companion.name.removeprefix(source.name)
             print(f"    {companion}")
-            print(f"    -> {target.with_name(target.name + suffix)}")
+            if move["kind"] == "folder":
+                # Companion moves with the folder; only rename is needed.
+                if companion.name.endswith(".metadata.json"):
+                    print(f"    -> {target / 'metadata.json'} (renamed)")
+                else:
+                    print(f"    -> {target / companion.name}")
+            else:
+                suffix = companion.name.removeprefix(source.name)
+                companion_target = target.with_name(target.name + suffix)
+                if suffix == ".metadata.json":
+                    print(f"    -> {companion_target.parent / 'metadata.json'} (renamed)")
+                else:
+                    print(f"    -> {companion_target}")
     print()
 
 
@@ -3556,12 +3581,19 @@ def main() -> None:
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
             reserved_targets.add(target_dir)
+            folder_companions: list[Path] = []
+            if not args.no_companions:
+                meta_sidecar = item.representative.with_name(
+                    item.representative.name + ".metadata.json"
+                )
+                if meta_sidecar.exists():
+                    folder_companions.append(meta_sidecar)
             planned_moves.append({
                 "kind": item.kind,
                 "source": item.source_path,
                 "target": target_dir,
                 "metadata": metadata,
-                "companions": [],
+                "companions": folder_companions,
                 "audio_count": len(item.audio_files),
                 "structure": structure_status,
             })
@@ -3623,6 +3655,14 @@ def main() -> None:
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), str(target))
+            # Companions inside the folder moved with it; rename .metadata.json
+            # to metadata.json so Audiobookshelf picks it up.
+            for companion in move.get("companions", []):
+                if companion.name.endswith(".metadata.json"):
+                    moved = target / companion.name
+                    final_metadata = target / "metadata.json"
+                    if moved.exists() and not final_metadata.exists():
+                        moved.rename(final_metadata)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(target))
@@ -3630,6 +3670,10 @@ def main() -> None:
                 suffix = companion.name.removeprefix(source.name)
                 companion_target = target.with_name(target.name + suffix)
                 shutil.move(str(companion), str(companion_target))
+                if suffix == ".metadata.json":
+                    final_metadata = companion_target.parent / "metadata.json"
+                    if not final_metadata.exists():
+                        companion_target.rename(final_metadata)
 
         if args.remove_empty_dirs:
             remove_empty_parents(original_parent, root)

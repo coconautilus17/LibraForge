@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import getpass
 import html
+import io
 import json
 import re
 import subprocess
 import struct
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import Counter
 from difflib import SequenceMatcher
-from functools import lru_cache
 from pathlib import Path
 
 import audible
@@ -114,6 +118,30 @@ RESPONSE_GROUPS = ",".join(
         "series",
     ]
 )
+
+
+@dataclass
+class ItemResult:
+    index: int
+    file_path: Path
+    display_path: Path
+    log_lines: list[str] = field(default_factory=list)
+    status: str = ""  # "matched" | "skipped" | "failed"
+    skip_reason: str = ""
+    add_to_manual_review: bool = False
+    queries: list[str] = field(default_factory=list)
+    metadata: dict | None = None
+    score: float = 0.0
+    clues: dict | None = None
+    used_query: str = ""
+    edit_mode: str = ""
+    duration_status: str = ""
+    diff_percent: float | None = None
+    review_reasons: list[str] = field(default_factory=list)
+    duration_review_item: dict | None = None
+    write_done: bool = False
+    asin_conflict: bool = False
+    error: str = ""
 
 
 def get_marker_path(source: Path) -> Path:
@@ -416,9 +444,29 @@ def natural_audio_sort_key(file_path: Path) -> list[tuple[int, object]]:
     ]
 
 
-@lru_cache(maxsize=None)
+_chapter_count_cache: dict[str, int | None] = {}
+_chapter_count_cache_lock = threading.Lock()
+
+# redirect_stdout sets sys.stdout globally and is not thread-safe.
+# Serialise print_plan captures across workers with this lock.
+# print_plan is pure string formatting — contention is negligible.
+_print_plan_lock = threading.Lock()
+
+CHAPTER_COUNT_CACHE_SUFFIX = ".chapter-count-cache.json"
+
+
 def read_file_chapter_count(file_path: Path) -> int | None:
-    """Return embedded chapter count using ffprobe, or None when unreadable."""
+    """Return embedded chapter count using ffprobe, or None when unreadable.
+
+    Results are stored in _chapter_count_cache (thread-safe). The cache can be
+    pre-populated from disk by prefetch_chapter_counts so ffprobe is skipped on
+    recurring runs for files that have not changed since the last probe.
+    """
+    key = str(file_path)
+    with _chapter_count_cache_lock:
+        if key in _chapter_count_cache:
+            return _chapter_count_cache[key]
+
     cmd = [
         "ffprobe",
         "-v",
@@ -440,20 +488,54 @@ def read_file_chapter_count(file_path: Path) -> int | None:
         )
     except subprocess.TimeoutExpired:
         print(f"  WARNING: ffprobe chapter check timed out for: {file_path}")
-        return None
+        count = None
+    else:
+        if result.returncode != 0:
+            print(f"  WARNING: ffprobe chapter check failed for: {file_path}")
+            count = None
+        else:
+            try:
+                data = json.loads(result.stdout)
+                count = len(data.get("chapters", []) or [])
+            except json.JSONDecodeError:
+                print(f"  WARNING: ffprobe returned invalid chapter JSON for: {file_path}")
+                count = None
 
-    if result.returncode != 0:
-        print(f"  WARNING: ffprobe chapter check failed for: {file_path}")
-        return None
+    with _chapter_count_cache_lock:
+        _chapter_count_cache[key] = count
+    return count
 
+
+def _chapter_count_cache_path(folder: Path) -> Path:
+    return folder / f"{folder.name}{CHAPTER_COUNT_CACHE_SUFFIX}"
+
+
+def _load_chapter_count_persistent(folder: Path) -> dict[str, dict]:
+    cache_path = _chapter_count_cache_path(folder)
+    if not cache_path.exists():
+        return {}
     try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        print(f"  WARNING: ffprobe returned invalid chapter JSON for: {file_path}")
-        return None
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        return data.get("entries", {}) if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
 
-    chapters = data.get("chapters", []) or []
-    return len(chapters)
+
+def _save_chapter_count_persistent(folder: Path, entries: dict[str, dict]) -> None:
+    cache_path = _chapter_count_cache_path(folder)
+    try:
+        payload = {
+            "schema_version": 1,
+            "tool": "audible-metadata-fixer",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "entries": entries,
+        }
+        cache_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def normalize_part_filename(value: str) -> str:
@@ -1325,17 +1407,19 @@ def write_audiobookshelf_metadata_json(
     metadata: dict,
     clues: dict | None = None,
 ) -> Path:
-    """Write an Audiobookshelf-compatible metadata.json to the book folder.
+    """Write an Audiobookshelf-compatible metadata sidecar next to the audio file.
 
-    Audiobookshelf reads this file at the library item root and uses it to
-    populate all book fields without touching the embedded audio tags.
+    Written as <source>.metadata.json (e.g. Book.m4b.metadata.json) so that
+    books not yet in their own folder do not collide with each other. The
+    organizer recognises this suffix as a companion file, moves it alongside the
+    audio file, and renames it to metadata.json post-move so Audiobookshelf
+    picks it up automatically.
     """
-    group_search = ((clues or {}).get("group_search") or {})
-    if group_search.get("applied"):
-        folder = source.parent
+    if source.is_file():
+        target = source.with_name(source.name + ".metadata.json")
     else:
-        folder = source.parent if source.is_file() else source
-    target = folder / "metadata.json"
+        # Fallback for directory source — shouldn't happen in normal flow
+        target = source / "metadata.json"
 
     authors = [
         {"name": name.strip()}
@@ -3327,6 +3411,82 @@ def build_multi_part_group_map(
     return accepted
 
 
+def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
+    """Pre-warm read_file_chapter_count from disk cache, probing only new/changed files.
+
+    On recurring runs, chapter counts are read from per-folder JSON cache files
+    (<folder>/<folder>.chapter-count-cache.json) keyed by path + mtime. No
+    ffprobe is run for files whose mtime has not changed since the last probe.
+
+    On a clean run (or for files not yet cached), ffprobe calls are batched and
+    run concurrently with `workers` threads. Results are written back to disk so
+    the next run is instant.
+    """
+    grouped: dict[Path, list[Path]] = {}
+    for fp in files:
+        if is_multi_part_audio_candidate(fp):
+            grouped.setdefault(fp.parent, []).append(fp)
+
+    folder_persistent: dict[Path, dict[str, dict]] = {}
+    to_probe: list[Path] = []
+
+    for parent, group in sorted(grouped.items()):
+        if len(group) <= 1:
+            continue
+        candidates = [fp for fp in group if is_chapter_metadata_candidate(fp)]
+        if not candidates:
+            continue
+
+        persistent = _load_chapter_count_persistent(parent)
+        folder_persistent[parent] = persistent
+
+        for fp in candidates:
+            key = str(fp)
+            entry = persistent.get(key)
+            if entry is not None:
+                try:
+                    if entry.get("mtime") == fp.stat().st_mtime:
+                        with _chapter_count_cache_lock:
+                            _chapter_count_cache[key] = entry.get("chapter_count")
+                        continue
+                except OSError:
+                    pass
+            to_probe.append(fp)
+
+    if not to_probe:
+        return
+
+    if workers > 1:
+        print(
+            f"  Pre-checking {len(to_probe)} files for embedded chapters "
+            f"({workers} workers)...",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(read_file_chapter_count, to_probe))
+    else:
+        for fp in to_probe:
+            read_file_chapter_count(fp)
+
+    # Persist newly probed results per folder
+    for parent, persistent in folder_persistent.items():
+        changed = False
+        for fp in to_probe:
+            if fp.parent != parent:
+                continue
+            key = str(fp)
+            with _chapter_count_cache_lock:
+                count = _chapter_count_cache.get(key)
+            try:
+                mtime = fp.stat().st_mtime
+            except OSError:
+                mtime = None
+            persistent[key] = {"chapter_count": count, "mtime": mtime}
+            changed = True
+        if changed:
+            _save_chapter_count_persistent(parent, persistent)
+
+
 def build_processing_items(
     files: list[Path], multi_part_group_map: dict[Path, list[Path]]
 ) -> list[Path]:
@@ -3566,9 +3726,49 @@ def strong_identity_overrides_number_conflict(
     product: dict,
     local_duration_minutes: float | None,
 ) -> bool:
-    """Allow side-story numbering differences only with independent confirmation."""
+    """Allow side-story numbering differences only with independent confirmation.
+
+    This is designed for parallel-series cases where a book legitimately carries
+    different numbers in different numbering systems (e.g. Book 3 in the main
+    series is Book 2 in a sub-series). It must NOT fire when both the local title
+    and the Audible title explicitly encode different numbers — in that case the
+    numbers are the identity of two different books in the same series.
+    """
     if title_evidence_score(clues, product) < 0.85:
         return False
+
+    # If the local title and the Audible title both carry explicit trailing
+    # series numbers and those numbers differ, this is a wrong-book match
+    # within the same series, not a parallel-numbering difference.
+    # Example: local "Super Sales on Super Heroes 4" vs Audible
+    #          "Super Sales on Super Heroes 6" — high title similarity masks
+    #          the fact that these are different books.
+    # Note: Book 02 is NOT rejected here because both sides have title "Super
+    # Sales on Super Heroes 2" (same number) despite Audible sequence = 1.
+    local_title_number = extract_title_identity_number(
+        clues.get("title", "") or clues.get("raw_title", "")
+    )
+    audible_title_number = extract_title_identity_number(
+        product.get("title", "") or ""
+    )
+    if (
+        local_title_number
+        and audible_title_number
+        and local_title_number != audible_title_number
+    ):
+        # Both titles carry explicit series numbers and they disagree — not a
+        # parallel-series case (e.g. local "Series 4" vs Audible "Series 6").
+        return False
+
+    if local_title_number and not audible_title_number:
+        # Local title carries an explicit series number but the Audible title
+        # is the base series title with no number (e.g. local "Series 2" vs
+        # Audible "Series" sequence=1). If the local number and the Audible
+        # sequence disagree, the candidate is a different book.
+        _, audible_seq = get_primary_series(product)
+        audible_seq_norm = normalize_book_number(str(audible_seq or ""))
+        if audible_seq_norm and local_title_number != audible_seq_norm:
+            return False
 
     duration = compare_duration(
         local_minutes=local_duration_minutes,
@@ -3711,6 +3911,333 @@ def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]
     )
 
     return response.get("products", []) or []
+
+
+_thread_local = threading.local()
+
+
+def get_thread_client(auth_file: str, password: str | None = None) -> audible.Client:
+    if not hasattr(_thread_local, "client"):
+        kwargs = {"password": password} if password else {}
+        auth = audible.Authenticator.from_file(auth_file, **kwargs)
+        _thread_local.client = audible.Client(auth=auth)
+    return _thread_local.client
+
+
+def cached_audible_search(
+    client: audible.Client,
+    query: str,
+    limit: int,
+    api_delay_ms: int,
+    cache: dict,
+    cache_lock: threading.Lock,
+    in_flight: dict,
+) -> list[dict]:
+    key = (query.lower(), limit)
+    while True:
+        with cache_lock:
+            if key in cache:
+                return cache[key]
+            if key not in in_flight:
+                event = threading.Event()
+                in_flight[key] = event
+                break
+            event = in_flight[key]
+        event.wait(timeout=60)
+    try:
+        results = audible_search(client, query, limit)
+        if api_delay_ms > 0:
+            time.sleep(api_delay_ms / 1000)
+    except Exception:
+        results = []
+    finally:
+        with cache_lock:
+            cache[key] = results
+            in_flight.pop(key, None)
+        event.set()
+    return results
+
+
+def search_item(
+    index: int,
+    file_path: Path,
+    total: int,
+    multi_part_group_map: dict,
+    args,
+    auth_file: str,
+    auth_password: str | None,
+    search_context_cache: dict,
+    search_context_lock: threading.Lock,
+    match_cache: dict,
+    match_cache_lock: threading.Lock,
+    search_cache: dict,
+    search_cache_lock: threading.Lock,
+    search_in_flight: dict,
+) -> ItemResult:
+    log: list[str] = []
+    display_path = get_processing_display_path(file_path, multi_part_group_map)
+    log.append(f"[{index}/{total}] Processing: {display_path}")
+
+    result = ItemResult(
+        index=index,
+        file_path=file_path,
+        display_path=display_path,
+        log_lines=log,
+    )
+
+    try:
+        existing_marker = load_marker(file_path)
+        if existing_marker:
+            log.append(
+                f"  Marker: applied={existing_marker.get('applied')} "
+                f"aggressive={existing_marker.get('aggressive')} "
+                f"score={existing_marker.get('score')}"
+            )
+
+        skip_due_to_marker, marker_reason = should_skip_due_to_marker(
+            source=file_path,
+            aggressive_run=args.aggressive,
+            force=args.force,
+            minimum_score=args.min_score,
+        )
+        if skip_due_to_marker:
+            log.append(f"  SKIP: {marker_reason}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = marker_reason
+            return result
+
+        match_cache_key = get_search_context_cache_key(file_path, multi_part_group_map)
+        with search_context_lock:
+            cached_ctx = search_context_cache.get(match_cache_key)
+        if cached_ctx is not None:
+            queries, clues = cached_ctx
+        else:
+            queries, clues, _ = build_search_context(
+                file_path,
+                multi_part_group_map,
+                use_backup_tags=args.force_original,
+                reprobe=args.reprobe,
+                save_probe_cache=args.backup,
+            )
+            with search_context_lock:
+                search_context_cache.setdefault(match_cache_key, (queries, clues))
+                queries, clues = search_context_cache[match_cache_key]
+
+        local_duration_minutes = clues.get("local_duration_minutes")
+
+        result.queries = queries
+        result.clues = clues
+
+        skip_due_to_pattern, skip_pattern = matches_skip_patterns(
+            file_path=file_path,
+            clues=clues,
+            patterns=args.skip_pattern,
+        )
+        if skip_due_to_pattern:
+            reason = f"skipped: matched skip pattern: {skip_pattern}"
+            log.append(f"  SKIP: matched skip pattern: {skip_pattern}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
+        if not queries:
+            reason = "skipped: no useful embedded metadata to search from"
+            log.append("  SKIP: no useful embedded metadata to search from")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
+        # Check if match is already cached (e.g. another chapter of the same group)
+        with match_cache_lock:
+            cached_match = match_cache.get(match_cache_key)
+
+        if cached_match is not None:
+            product = cached_match["product"]
+            score = cached_match["score"]
+            used_query = cached_match["used_query"]
+            log.append("  Reusing cached match for shared search context")
+        else:
+            product = None
+            score = 0.0
+            used_query = ""
+            client = get_thread_client(auth_file, auth_password)
+
+            for query in queries:
+                log.append(f"  Trying query: {query}")
+                cache_key = (query.lower(), args.limit)
+                with search_cache_lock:
+                    already_cached = cache_key in search_cache
+                query_products = cached_audible_search(
+                    client,
+                    query,
+                    args.limit,
+                    args.api_delay_ms,
+                    search_cache,
+                    search_cache_lock,
+                    search_in_flight,
+                )
+                suffix = " (cached)" if already_cached else ""
+                log.append(f"  Results: {len(query_products)}{suffix}")
+
+                if not query_products:
+                    continue
+
+                candidate, candidate_score = pick_best_match_for_metadata(
+                    clues, query_products, local_duration_minutes,
+                )
+                if candidate:
+                    debug_metadata = metadata_from_product(candidate, clues, candidate_score)
+                    log.append(
+                        f"  Candidate: score={candidate_score} "
+                        f"title={debug_metadata.get('audible_title')} "
+                        f"sequence={debug_metadata.get('audible_sequence')} "
+                        f"duration={debug_metadata.get('audible_duration_minutes')} "
+                        f"mode={debug_metadata.get('edit_mode')} "
+                        f"asin={debug_metadata.get('asin')}"
+                    )
+
+                if not candidate:
+                    continue
+
+                if candidate_score > score:
+                    product = candidate
+                    score = candidate_score
+                    used_query = query
+
+                if candidate_score >= args.min_score:
+                    break
+
+            # Store in match_cache; if another thread beat us, use its result
+            with match_cache_lock:
+                match_cache.setdefault(match_cache_key, {
+                    "product": product,
+                    "score": score,
+                    "used_query": used_query,
+                })
+                stored = match_cache[match_cache_key]
+                product = stored["product"]
+                score = stored["score"]
+                used_query = stored["used_query"]
+
+        result.score = score
+        result.used_query = used_query
+
+        if not product:
+            log.append("  SKIP: no usable Audible match")
+            log.append(f"  Tried queries: {queries}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = "skipped: no usable Audible match"
+            result.add_to_manual_review = True
+            return result
+
+        metadata = metadata_from_product(product, clues, score)
+        metadata["file_type"] = get_file_type(file_path)
+
+        buf = io.StringIO()
+        with _print_plan_lock:
+            with contextlib.redirect_stdout(buf):
+                print_plan(file_path, used_query, score, metadata, clues)
+        for line in buf.getvalue().rstrip("\n").split("\n"):
+            log.append(line)
+
+        edit_mode = metadata.get("edit_mode", "none") or "none"
+        duration = metadata.get("duration", {}) or {}
+        duration_status = duration.get("status", "unknown") or "unknown"
+        diff_percent = duration.get("diff_percent")
+
+        result.metadata = metadata
+        result.edit_mode = edit_mode
+        result.duration_status = duration_status
+        result.diff_percent = diff_percent
+
+        if score < args.min_score:
+            reason = f"skipped: score below minimum: {score} < {args.min_score}"
+            log.append(f"  SKIP: score below minimum: {score} < {args.min_score}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
+        if not metadata["title"] or not metadata["author"]:
+            reason = "skipped: missing title or author from Audible result"
+            log.append("  SKIP: missing title or author from Audible result")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
+        if metadata.get("edit_mode") == "none":
+            reason = "skipped: match marked unsafe / no editable metadata action"
+            log.append("  SKIP: match marked unsafe / no editable metadata action")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
+        result.status = "matched"
+
+        # Pre-compute review data for the gather phase
+        review_reasons = selected_match_review_reasons(
+            metadata, clues, score, args.duration_review_threshold,
+        )
+        result.review_reasons = review_reasons
+
+        if (
+            diff_percent is not None
+            and float(diff_percent) > args.duration_review_threshold
+        ):
+            result.duration_review_item = {
+                "path": str(file_path),
+                "file_type": get_file_type(file_path),
+                "local_title": clues.get("title") or clues.get("raw_title") or "-",
+                "audible_title": metadata.get("audible_title") or metadata.get("title") or "-",
+                "mode": edit_mode,
+                "score": score,
+                "status": duration_status,
+                "diff_percent": diff_percent,
+                "local_minutes": duration.get("local_minutes"),
+                "audible_minutes": duration.get("audible_minutes"),
+            }
+
+        # In metadata_json mode with multiple workers, write inside the worker.
+        # Only for single-file books (no group_search): each has its own folder,
+        # so concurrent writes never touch the same path. Multipart group files
+        # share a folder — their write stays in the serial gather phase.
+        is_single_file = not (clues or {}).get("group_search", {}).get("applied")
+        if args.metadata_json and args.apply and args.workers > 1 and is_single_file:
+            aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
+            mode = "aggressive" if aggressive_edit else "normal"
+            abs_path = write_audiobookshelf_metadata_json(file_path, metadata, clues)
+            write_marker(
+                source=file_path,
+                metadata=metadata,
+                clues=clues,
+                score=score,
+                mode=mode,
+                aggressive=aggressive_edit,
+                output_kind="metadata_json",
+            )
+            log.append(f"  APPLIED ({mode}, metadata_json={abs_path})")
+            log.append("")
+            result.write_done = True
+
+        return result
+
+    except Exception as error:
+        log.append(f"  ERROR: {error}")
+        log.append("")
+        result.status = "failed"
+        result.error = str(error)
+        return result
 
 
 def title_evidence_score(clues: dict, product: dict) -> float:
@@ -5072,6 +5599,70 @@ def print_duration_review_report(duration_review: list[dict], threshold: float) 
     print()
 
 
+def detect_asin_conflicts(results: list["ItemResult"]) -> None:
+    """Flag matched items where the same Audible ASIN was selected for multiple
+    books in the same series with disagreeing local/Audible sequence numbers.
+
+    When a series has gaps in the Audible catalog, the fixer can match several
+    local books to the same ASIN (e.g. Books 4, 5, and 6 all matching the Book 6
+    listing). The item whose local sequence agrees with the Audible sequence is
+    likely correct; the others are flagged so their writes are suppressed and
+    they appear in the manual review report.
+    """
+    from collections import defaultdict
+
+    # Group matched items by (normalised series, asin)
+    series_asin_groups: dict[tuple[str, str], list[ItemResult]] = defaultdict(list)
+    for result in results:
+        if result.status != "matched" or not result.metadata:
+            continue
+        series = result.metadata.get("series", "") or ""
+        asin = result.metadata.get("asin", "") or ""
+        if not series or not asin:
+            continue
+        series_key = re.sub(r"[^a-z0-9]+", "", series.lower())
+        series_asin_groups[(series_key, asin)].append(result)
+
+    for (_, asin), group in series_asin_groups.items():
+        if len(group) <= 1:
+            continue
+        series_name = group[0].metadata.get("series", "") or ""
+        for result in group:
+            local_seq = str((result.clues or {}).get("book_number", "") or "")
+            audible_seq = str(
+                result.metadata.get("audible_sequence", "")
+                or result.metadata.get("sequence", "")
+                or ""
+            )
+
+            # Also derive the book number directly from the file path. This is
+            # the ground truth when applied tags have corrupted the clues — e.g.
+            # Book 3's folder is "Series 03" but its applied title says "Book 2"
+            # so clues.book_number was set to "2" via the title source and the
+            # path override was skipped. The folder name is unambiguous.
+            path_seq = normalize_book_number(
+                extract_book_number_from_path(result.file_path)
+            )
+
+            # An item is the correct match only when BOTH the clues sequence
+            # AND the path-derived sequence agree with the Audible sequence.
+            clues_agree = bool(local_seq and audible_seq and local_seq == audible_seq)
+            path_agrees = bool(path_seq and audible_seq and path_seq == audible_seq)
+
+            # If either source has a number and it disagrees with Audible, flag.
+            if clues_agree and (not path_seq or path_agrees):
+                continue
+
+            effective_local = path_seq or local_seq
+            result.asin_conflict = True
+            reason = (
+                f"duplicate Audible ASIN {asin} in series '{series_name}': "
+                f"local book {effective_local or '?'} matched to Audible sequence {audible_seq or '?'}"
+            )
+            if reason not in result.review_reasons:
+                result.review_reasons.append(reason)
+
+
 def print_run_summary(
     found: int,
     matched: int,
@@ -5268,7 +5859,29 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Parallel search workers. 1 = serial (current behavior). "
+            "Recommended 5; max 10 to avoid Audible rate limits. "
+            "Defaults to 5 when --metadata-json is set, otherwise 1."
+        ),
+    )
+
+    parser.add_argument(
+        "--api-delay-ms",
+        type=int,
+        default=0,
+        dest="api_delay_ms",
+        help="Milliseconds to sleep after each Audible API call per worker.",
+    )
+
     args = parser.parse_args()
+
+    if args.workers is None:
+        args.workers = 5 if args.metadata_json else 1
 
     root = Path(args.root).resolve()
 
@@ -5276,6 +5889,8 @@ def main():
         raise SystemExit(f"ERROR: path does not exist: {root}")
 
     files = collect_audio_files(root)
+    if not args.restore_metadata:
+        prefetch_chapter_counts(files, args.workers)
     multi_part_group_map = build_multi_part_group_map(files)
 
     if args.max_files > 0:
@@ -5293,16 +5908,14 @@ def main():
 
     if args.ask_password:
         password = getpass.getpass("Audible auth file password: ")
-        auth = audible.Authenticator.from_file(args.auth_file, password=password)
     else:
-        auth = audible.Authenticator.from_file(args.auth_file)
-
-    client = audible.Client(auth=auth)
+        password = None
 
     print(f"Found {len(processing_items)} supported files.")
     print(f"Mode: {'APPLY' if args.apply else 'DRY RUN'}")
     print(f"Minimum score: {args.min_score}")
     print(f"Writer: {args.writer}")
+    print(f"Workers: {args.workers}")
     print()
 
     found = len(processing_items)
@@ -5317,361 +5930,191 @@ def main():
     duration_review: list[dict] = []
     manual_review: list[dict] = []
     asin_matches: list[dict] = []
-    search_cache: dict[tuple[str, int], list[dict]] = {}
-    search_context_cache: dict[str, tuple[list[str], dict]] = {}
-    match_cache: dict[str, dict] = {}
+    search_cache: dict = {}
+    search_cache_lock = threading.Lock()
+    search_in_flight: dict = {}
+    search_context_cache: dict = {}
+    search_context_lock = threading.Lock()
+    match_cache: dict = {}
+    match_cache_lock = threading.Lock()
+    total = len(processing_items)
 
-    for index, file_path in enumerate(processing_items, start=1):
-        display_path = get_processing_display_path(file_path, multi_part_group_map)
-        print(f"[{index}/{len(processing_items)}] Processing: {display_path}", flush=True)
-
-        existing_marker = load_marker(file_path)
-
-        if existing_marker:
-            print(
-                f"  Marker: applied={existing_marker.get('applied')} "
-                f"aggressive={existing_marker.get('aggressive')} "
-                f"score={existing_marker.get('score')}"
+    # Scatter phase submits all items; gather phase consumes futures in submission
+    # order inside the same `with` block so output streams as workers complete
+    # instead of waiting for every worker to finish before printing anything.
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = [
+            executor.submit(
+                search_item,
+                index=index,
+                file_path=file_path,
+                total=total,
+                multi_part_group_map=multi_part_group_map,
+                args=args,
+                auth_file=args.auth_file,
+                auth_password=password,
+                search_context_cache=search_context_cache,
+                search_context_lock=search_context_lock,
+                match_cache=match_cache,
+                match_cache_lock=match_cache_lock,
+                search_cache=search_cache,
+                search_cache_lock=search_cache_lock,
+                search_in_flight=search_in_flight,
             )
+            for index, file_path in enumerate(processing_items, start=1)
+        ]
 
-        skip_due_to_marker, marker_reason = should_skip_due_to_marker(
-            source=file_path,
-            aggressive_run=args.aggressive,
-            force=args.force,
-            minimum_score=args.min_score,
-        )
+        # Pass 1: stream log output as futures complete; collect results
+        all_results: list[ItemResult] = []
+        for future in futures:
+            result = future.result()
+            for line in result.log_lines:
+                print(line, flush=True)
+            all_results.append(result)
 
-        if skip_due_to_marker:
-            print(f"  SKIP: {marker_reason}")
-            print()
-            # Already-processed marker skips are idempotent no-ops, not match
-            # discrepancies. Keep them out of Manual Review to avoid flooding
-            # normal reruns.
+    # Detect same-series ASIN conflicts across all results before writing.
+    # Must run outside the ThreadPoolExecutor block (workers have finished).
+    detect_asin_conflicts(all_results)
+
+    # Pass 2: stats, manual review, and writes in submission order
+    for result in all_results:
+        file_path = result.file_path
+        clues = result.clues or {}
+        metadata = result.metadata or {}
+        score = result.score
+        edit_mode = result.edit_mode
+        used_query = result.used_query
+
+        if result.status == "skipped":
             skipped += 1
-            continue
-
-        match_cache_key = get_search_context_cache_key(file_path, multi_part_group_map)
-        if match_cache_key in search_context_cache:
-            queries, clues = search_context_cache[match_cache_key]
-        else:
-            queries, clues, _ = build_search_context(
-                file_path, multi_part_group_map,
-                use_backup_tags=args.force_original,
-                reprobe=args.reprobe,
-                save_probe_cache=args.backup,
-            )
-            search_context_cache[match_cache_key] = (queries, clues)
-        local_duration_minutes = clues.get("local_duration_minutes")
-
-        skip_due_to_pattern, skip_pattern = matches_skip_patterns(
-            file_path=file_path,
-            clues=clues,
-            patterns=args.skip_pattern,
-        )
-
-        if skip_due_to_pattern:
-            reason = f"skipped: matched skip pattern: {skip_pattern}"
-            print(f"  SKIP: matched skip pattern: {skip_pattern}")
-            append_manual_review(
-                manual_review,
-                file_path,
-                [reason],
-                clues=clues,
-                status="skipped",
-            )
-            print()
-            skipped += 1
-            continue
-
-        if not queries:
-            reason = "skipped: no useful embedded metadata to search from"
-            print("  SKIP: no useful embedded metadata to search from")
-            append_manual_review(
-                manual_review,
-                file_path,
-                [reason],
-                clues=clues,
-                status="skipped",
-            )
-            print()
-            skipped += 1
-            continue
-
-        try:
-            if match_cache_key in match_cache:
-                cached_match = match_cache[match_cache_key]
-                product = cached_match["product"]
-                score = cached_match["score"]
-                used_query = cached_match["used_query"]
-                print("  Reusing cached match for shared search context")
-            else:
-                product = None
-                score = 0.0
-                used_query = ""
-
-                # Search in phases.
-                # Each query is tested by itself.
-                # If a query returns a strong enough match, we stop immediately
-                # instead of letting broader fallback queries override it.
-                for query in queries:
-                    print(f"  Trying query: {query}")
-                    cache_key = (query.lower(), args.limit)
-                    if cache_key in search_cache:
-                        query_products = search_cache[cache_key]
-                        print(f"  Results: {len(query_products)} (cached)")
-                    else:
-                        query_products = audible_search(client, query, args.limit)
-                        search_cache[cache_key] = query_products
-                        print(f"  Results: {len(query_products)}")
-
-                    if not query_products:
-                        continue
-
-                    candidate, candidate_score = pick_best_match_for_metadata(
-                        clues,
-                        query_products,
-                        local_duration_minutes,
-                    )
-
-                    if candidate:
-                        debug_metadata = metadata_from_product(
-                            candidate, clues, candidate_score
-                        )
-                        print(
-                            f"  Candidate: score={candidate_score} "
-                            f"title={debug_metadata.get('audible_title')} "
-                            f"sequence={debug_metadata.get('audible_sequence')} "
-                            f"duration={debug_metadata.get('audible_duration_minutes')} "
-                            f"mode={debug_metadata.get('edit_mode')} "
-                            f"asin={debug_metadata.get('asin')}"
-                        )
-
-                    if not candidate:
-                        continue
-
-                    # Keep the best candidate found so far.
-                    if candidate_score > score:
-                        product = candidate
-                        score = candidate_score
-                        used_query = query
-
-                    # Stop once this query produced a strong enough match.
-                    # This lets "Alaska Kingdom Aaron Crash" win before trying
-                    # broader queries like "American Dragons Series Aaron Crash".
-                    if candidate_score >= args.min_score:
-                        break
-
-                match_cache[match_cache_key] = {
-                    "product": product,
-                    "score": score,
-                    "used_query": used_query,
-                }
-
-            if not product:
-                reason = "skipped: no usable Audible match"
-                print("  SKIP: no usable Audible match")
-                print(f"  Tried queries: {queries}")
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    [reason],
-                    clues=clues,
-                    query=" | ".join(queries),
-                    status="skipped",
-                )
-                print()
-                skipped += 1
-                continue
-
-            metadata = metadata_from_product(product, clues, score)
-            metadata["file_type"] = get_file_type(file_path)
-
-            print_plan(file_path, used_query, score, metadata, clues)
-
-            edit_mode = metadata.get("edit_mode", "none") or "none"
-            mode_counts[edit_mode] += 1
-
-            duration = metadata.get("duration", {}) or {}
-            duration_status = duration.get("status", "unknown") or "unknown"
-            duration_counts[duration_status] += 1
-
-            diff_percent = duration.get("diff_percent")
-            if (
-                diff_percent is not None
-                and float(diff_percent) > args.duration_review_threshold
-            ):
-                duration_review.append(
-                    {
-                        "path": str(file_path),
-                        "file_type": get_file_type(file_path),
-                        "local_title": clues.get("title")
-                        or clues.get("raw_title")
-                        or "-",
-                        "audible_title": metadata.get("audible_title")
-                        or metadata.get("title")
-                        or "-",
-                        "mode": edit_mode,
-                        "score": score,
-                        "status": duration_status,
-                        "diff_percent": diff_percent,
-                        "local_minutes": duration.get("local_minutes"),
-                        "audible_minutes": duration.get("audible_minutes"),
-                    }
-                )
-
-            review_reasons = selected_match_review_reasons(
-                metadata,
-                clues,
-                score,
-                args.duration_review_threshold,
-            )
-            if review_reasons:
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    review_reasons,
-                    clues=clues,
-                    metadata=metadata,
-                    score=score,
-                    mode=edit_mode,
-                    query=used_query,
-                    status="selected",
-                )
-
-            if score < args.min_score:
-                reason = f"skipped: score below minimum: {score} < {args.min_score}"
-                print(f"  SKIP: score below minimum: {score} < {args.min_score}")
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    [reason],
-                    clues=clues,
-                    metadata=metadata,
-                    score=score,
-                    mode=edit_mode,
-                    query=used_query,
-                    status="skipped",
-                )
-                print()
-                skipped += 1
-                continue
-
-            if not metadata["title"] or not metadata["author"]:
-                reason = "skipped: missing title or author from Audible result"
-                print("  SKIP: missing title or author from Audible result")
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    [reason],
-                    clues=clues,
-                    metadata=metadata,
-                    score=score,
-                    mode=edit_mode,
-                    query=used_query,
-                    status="skipped",
-                )
-                print()
-                skipped += 1
-                continue
-
-            if metadata.get("edit_mode") == "none":
-                reason = "skipped: match marked unsafe / no editable metadata action"
-                print("  SKIP: match marked unsafe / no editable metadata action")
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    [reason],
-                    clues=clues,
-                    metadata=metadata,
-                    score=score,
-                    mode=edit_mode,
-                    query=used_query,
-                    status="skipped",
-                )
-                print()
-                skipped += 1
-                continue
-
-            asin_matches.append(
-                {
-                    "asin": metadata.get("asin", ""),
-                    "file_type": get_file_type(file_path),
-                    "mode": metadata.get("edit_mode", ""),
-                    "path": str(file_path),
-                    "local_title": clues.get("title", ""),
-                    "local_number": clues.get("book_number", ""),
-                    "local_number_source": clues.get("book_number_source", ""),
-                    "audible_title": metadata.get("audible_title", ""),
-                    "audible_sequence": metadata.get("audible_sequence", ""),
-                    "audible_number_candidates": metadata.get(
-                        "audible_number_candidates", []
-                    ),
-                    "score": score,
-                }
-            )
-
-            if args.apply:
-                aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
-                mode = "aggressive" if aggressive_edit else "normal"
-
-                if should_write_json_sidecar(file_path, clues):
-                    sidecar_path = write_m4b_tool_metadata_sidecar(
-                        file_path, metadata, clues, score
-                    )
-                    write_marker(
-                        source=file_path,
-                        metadata=metadata,
-                        clues=clues,
-                        score=score,
-                        mode=mode,
-                        aggressive=aggressive_edit,
-                        output_kind="json_sidecar",
-                    )
-                    print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
-                elif args.metadata_json:
-                    abs_path = write_audiobookshelf_metadata_json(
-                        file_path, metadata, clues
-                    )
-                    write_marker(
-                        source=file_path,
-                        metadata=metadata,
-                        clues=clues,
-                        score=score,
-                        mode=mode,
-                        aggressive=aggressive_edit,
-                        output_kind="metadata_json",
-                    )
-                    print(f"  APPLIED ({mode}, metadata_json={abs_path})")
+            if result.add_to_manual_review:
+                reason = result.skip_reason
+                if reason == "skipped: no usable Audible match":
+                    query_str = " | ".join(result.queries)
                 else:
-                    writer_used = write_tags(
-                        file_path,
-                        metadata,
-                        backup=args.backup,
-                        writer=args.writer,
-                        cover_if_missing=args.cover_if_missing,
-                        replace_cover=args.replace_cover,
-                    )
-                    update_backup_with_applied_metadata(file_path, metadata)
+                    query_str = used_query
+                append_manual_review(
+                    manual_review,
+                    file_path,
+                    [reason],
+                    clues=clues,
+                    metadata=metadata or None,
+                    score=score or None,
+                    mode=edit_mode,
+                    query=query_str,
+                    status="skipped",
+                )
+            continue
 
-                    write_marker(
-                        source=file_path,
-                        metadata=metadata,
-                        clues=clues,
-                        score=score,
-                        mode=mode,
-                        aggressive=aggressive_edit,
-                        output_kind="tags",
-                    )
-
-                    print(f"  APPLIED ({mode}, writer={writer_used})")
-                print()
-
-            matched += 1
-
-        except Exception as error:
-            print(f"  ERROR: {error}")
-            print()
+        if result.status == "failed":
             failed += 1
+            continue
+
+        # status == "matched"
+        mode_counts[edit_mode] += 1
+        duration_counts[result.duration_status] += 1
+
+        if result.duration_review_item:
+            duration_review.append(result.duration_review_item)
+
+        if result.asin_conflict and result.review_reasons:
+            # Re-emit the Processing line so the backend parser's current_file
+            # is set to this item before the SKIP line that follows.
+            print(f"[{result.index}/{total}] Processing: {result.display_path}", flush=True)
+            for reason in result.review_reasons:
+                if "duplicate Audible ASIN" in reason:
+                    print(f"  SKIP: {reason}", flush=True)
+                    break
+            print()
+
+        if result.review_reasons:
+            append_manual_review(
+                manual_review,
+                file_path,
+                result.review_reasons,
+                clues=clues,
+                metadata=metadata,
+                score=score,
+                mode=edit_mode,
+                query=used_query,
+                status="selected" if not result.asin_conflict else "skipped",
+            )
+
+        asin_matches.append(
+            {
+                "asin": metadata.get("asin", ""),
+                "file_type": get_file_type(file_path),
+                "mode": metadata.get("edit_mode", ""),
+                "path": str(file_path),
+                "local_title": clues.get("title", ""),
+                "local_number": clues.get("book_number", ""),
+                "local_number_source": clues.get("book_number_source", ""),
+                "audible_title": metadata.get("audible_title", ""),
+                "audible_sequence": metadata.get("audible_sequence", ""),
+                "audible_number_candidates": metadata.get("audible_number_candidates", []),
+                "score": score,
+            }
+        )
+
+        if result.asin_conflict:
+            skipped += 1
+            continue
+
+        if args.apply and not result.write_done:
+            aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
+            mode = "aggressive" if aggressive_edit else "normal"
+
+            if should_write_json_sidecar(file_path, clues):
+                sidecar_path = write_m4b_tool_metadata_sidecar(
+                    file_path, metadata, clues, score
+                )
+                write_marker(
+                    source=file_path,
+                    metadata=metadata,
+                    clues=clues,
+                    score=score,
+                    mode=mode,
+                    aggressive=aggressive_edit,
+                    output_kind="json_sidecar",
+                )
+                print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
+            elif args.metadata_json:
+                abs_path = write_audiobookshelf_metadata_json(
+                    file_path, metadata, clues
+                )
+                write_marker(
+                    source=file_path,
+                    metadata=metadata,
+                    clues=clues,
+                    score=score,
+                    mode=mode,
+                    aggressive=aggressive_edit,
+                    output_kind="metadata_json",
+                )
+                print(f"  APPLIED ({mode}, metadata_json={abs_path})")
+            else:
+                writer_used = write_tags(
+                    file_path,
+                    metadata,
+                    backup=args.backup,
+                    writer=args.writer,
+                    cover_if_missing=args.cover_if_missing,
+                    replace_cover=args.replace_cover,
+                )
+                update_backup_with_applied_metadata(file_path, metadata)
+                write_marker(
+                    source=file_path,
+                    metadata=metadata,
+                    clues=clues,
+                    score=score,
+                    mode=mode,
+                    aggressive=aggressive_edit,
+                    output_kind="tags",
+                )
+                print(f"  APPLIED ({mode}, writer={writer_used})")
+            print()
+
+        matched += 1
 
     print_run_summary(
         found=found,

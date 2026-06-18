@@ -127,6 +127,17 @@
         <textarea id="skipPatterns" rows="3" placeholder="Casual Farming"></textarea>
       </label>
 
+      <div id="v5Fields" style="display:none">
+        <div class="grid">
+          <label><span class="field-label">Workers <span class="info-tip" data-tooltip="Parallel Audible search workers. 1 = serial (safe default). Recommended 5 for faster runs; max 10. The bottleneck is API latency, not writes — writes always happen serially after search."></span></span>
+            <input id="workers" type="number" min="1" max="10" value="1" />
+          </label>
+          <label><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
+            <input id="apiDelayMs" type="number" min="0" value="0" />
+          </label>
+        </div>
+      </div>
+
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
         <label><input id="backup" type="checkbox" /> Backup and cache original metadata <span class="info-tip" data-tooltip="Creates a per-file JSON backup of original tags and caches the audio duration. Future runs use the cache to skip per-file ffprobe probes. Always recommended when applying."></span></label>
