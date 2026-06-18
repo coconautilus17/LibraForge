@@ -6,15 +6,16 @@ Self-hosted Audible metadata matching, M4B conversion, and Audiobookshelf librar
 
 ## Recent Updates
 
-- **Backup and cache** — `Backup and cache original metadata` now runs independently of apply, creating per-file `.metadata-backup.json` and per-group sidecar caches on the first run. Subsequent force re-runs skip all ffprobe calls by reading from cache. `Force original tags` and `Re-probe audio files` options control cache behaviour explicitly.
-- **Audiobookshelf metadata.json export** — `Write Audiobookshelf metadata.json` writes a sidecar at the book folder root instead of embedding tags in the audio file, for Audiobookshelf to pick up automatically.
+- **Concurrent workers (v5)** — parallel Audible API search with `--workers N`; per-thread client pool, per-query dedup, and a persistent chapter-count cache that makes discovery near-instant on repeat runs. ASIN conflict detection prevents wrong matches from being written even when scoring passes.
+- **Scoring improvements** — fixer now rejects candidates whose Audible title carries a different explicit series number than the local title (e.g. "Series 4" vs "Series 6"), and candidates where the local title has an explicit number but the Audible series title does not yet the sequence disagrees. Fixes wrong-book matches that previously scored 1.0 due to high title similarity and matching duration.
+- **Manual review loads original tags** — the manual book-load form now reads pre-apply original tags from the backup, not the (possibly wrong) Audible-written values, so suggested queries and scored results reflect the real book.
+- **Organizer: broadcaster prefix strip** — `BBC -`, `BBC Radio -`, etc. are removed from author tags before folder construction so books are filed under the actual author, not the broadcaster.
+- **metadata.json sidecar naming** — written as `<file>.metadata.json` so books in flat unorganised folders don't overwrite each other; the organizer renames it to `metadata.json` post-move.
+- **Backup and cache** — `Backup and cache original metadata` runs independently of apply, creating per-file `.metadata-backup.json` and per-group sidecar caches on the first run. Subsequent runs skip ffprobe by reading from cache.
 - **Dynamic script selection** — the fixer and organizer default to the latest versioned script found in `scripts/`, no configuration needed on upgrade.
-- **Manual review cleanup** — pattern-matched and already-processed skips are no longer included in the manual review list; only items that genuinely need attention appear.
-- **Multipart group extraction fix** — "Author - Title" folder names now correctly extract author and title even when chapter file tags carry the narrator as artist. Track numbers on chapter files are no longer mistaken for book sequence numbers.
 
 ## Planned
 
-- Configurable concurrent workers for faster metadata search and write.
 - Local agent advisory review: send a generated report to a local LLM endpoint and display its suggestions (read-only, no automatic writes).
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
@@ -64,6 +65,7 @@ Key options:
 | Force original tags | Re-search using pre-apply embedded tags instead of post-apply Audible values |
 | Re-probe audio files | Ignore cache and probe files fresh |
 | Write Audiobookshelf metadata.json | Write a sidecar instead of embedding tags |
+| Workers (v5) | Number of parallel Audible search workers; recommended 5, max 10 |
 
 **Manual Review** lets you load any book and search Audible manually. Requires an explicit `Full metadata` or `Series only` mode before applying.
 <img width="1215" height="1073" alt="image" src="https://github.com/user-attachments/assets/7702662c-d3d8-47cf-945d-777f86e4cbbd" />

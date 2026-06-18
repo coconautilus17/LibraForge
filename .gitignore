@@ -13,9 +13,6 @@ archive/
 output/
 docker-compose.override.yml
 
-# Experimental concurrent fixer branches are local-only until stabilized.
-scripts/audible-metadata-fixer-v5*.py
-
 HANDOFF.md
 PROJECT_REFERENCE.md
 

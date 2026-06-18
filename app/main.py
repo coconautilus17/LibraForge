@@ -463,6 +463,9 @@ class RunRequest(BaseModel):
     duration_review_threshold: float | None = 10.0
     skip_patterns: list[str] = Field(default_factory=list)
 
+    workers: int | None = None
+    api_delay_ms: int = 0
+
 
 class M4BMetadataForm(BaseModel):
     title: str = ""
@@ -672,7 +675,22 @@ def derive_manual_review_items(
         # working as designed — they don't belong in manual review.
         if reason.startswith("matched skip pattern:") or reason == "already processed":
             continue
-        ensure(path)["reasons"].append("status:skipped")
+        # Map verbose skip reasons to concise UI labels.
+        if reason.startswith("duplicate Audible ASIN") or "asin conflict" in reason.lower():
+            label = "asin conflict"
+        elif "no usable Audible match" in reason:
+            label = "no match"
+        elif reason.startswith("score below minimum"):
+            label = "low score"
+        elif "missing title or author" in reason:
+            label = "missing metadata"
+        elif "match marked unsafe" in reason or "no editable metadata" in reason:
+            label = "unsafe match"
+        elif "no useful embedded metadata" in reason:
+            label = "no metadata"
+        else:
+            label = "status:skipped"
+        ensure(path)["reasons"].append(label)
 
     for path in [item.get("path", "") for item in files_by_category.get("mode:series_only", []) if item.get("path")]:
         ensure(path)["reasons"].append("mode:series_only")
@@ -689,10 +707,12 @@ def derive_manual_review_items(
     for entry in items.values():
         entry["reasons"] = sorted(set(entry["reasons"]))
 
+    _skip_labels = {"no match", "asin conflict", "low score", "missing metadata", "unsafe match", "no metadata", "status:skipped"}
+
     return sorted(
         items.values(),
         key=lambda item: (
-            "status:skipped" not in item["reasons"],
+            not any(r in _skip_labels for r in item["reasons"]),
             "mode:none" not in item["reasons"],
             item["path"],
         ),
@@ -934,6 +954,11 @@ def stream_process_output(
         state.returncode = proc.wait()
 
 
+def _fixer_major_version(script_name: str) -> int:
+    m = re.search(r"-v(\d+)", script_name)
+    return int(m.group(1)) if m else 0
+
+
 def build_command(req: RunRequest) -> tuple[list[str], float]:
     script_path = live_script_path(req.script_name, "fixer")
 
@@ -977,6 +1002,12 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         pattern = pattern.strip()
         if pattern:
             cmd += ["--skip-pattern", pattern]
+
+    if _fixer_major_version(req.script_name) >= 5:
+        if req.workers is not None and req.workers > 0:
+            cmd += ["--workers", str(req.workers)]
+        if req.api_delay_ms > 0:
+            cmd += ["--api-delay-ms", str(req.api_delay_ms)]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
@@ -1614,7 +1645,12 @@ def inspect_manual_review_target(
             detail="Path must point to a single book file or grouped book folder",
         )
     source_path = processing_items[0]
-    queries, clues, _ = fixer_module.build_search_context(source_path, group_map)
+    # Use original pre-apply tags (format_tags from backup) so the manual
+    # review form reflects what the file looked like before the fixer wrote to
+    # it. Falls back to probing the live file when no backup exists.
+    queries, clues, _ = fixer_module.build_search_context(
+        source_path, group_map, use_backup_tags=True
+    )
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
 
     metadata = {
