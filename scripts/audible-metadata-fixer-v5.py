@@ -1640,6 +1640,14 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
         "mashton x y": "Mashton XY",
         "mashton xx": "Mashton XX",
         "mashton xy": "Mashton XY",
+        # Production studios that appear as artist/author tags — strip them
+        "graphic audio": "",
+        "graphicaudio": "",
+        "soundbooth theatre": "",
+        "soundbooth theater": "",
+        "soundbooththeatre": "",
+        "soundbooththeater": "",
+        "sbt": "",
     }
     people = []
     seen = set()
@@ -1649,6 +1657,8 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
         if not value or re.search(r"\s+-\s+editor\s*$", value, flags=re.IGNORECASE):
             continue
         canonical = aliases.get(value.casefold(), value)
+        if canonical == "":
+            continue
         key = normalize_for_match(canonical)
         if key and key not in seen:
             people.append(canonical)

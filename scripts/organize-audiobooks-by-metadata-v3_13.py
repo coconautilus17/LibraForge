@@ -71,6 +71,11 @@ GENERIC_AUTHOR_KEYS = {
     "unknownauthor",
     "multipleauthors",
     "narrator",
+    # Production studios that tag themselves as the artist/author
+    "graphicaudio",
+    "soundbooththeatre",
+    "soundbooththeater",
+    "sbt",
 }
 
 # These are container/helper folders, not real audiobook authors or series.
@@ -119,10 +124,15 @@ NON_AUTHOR_ROLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Broadcaster/label prefixes that appear as "BBC - Author Name" in embedded tags.
+# Broadcaster/studio prefixes that appear as "Studio - Author Name" in embedded tags.
 # Strip the prefix; keep the actual author.
 BROADCASTER_PREFIX_RE = re.compile(
-    r"^(?:BBC(?:\s+(?:Radio|Audio|Books|Worldwide))?)\s*[-–—]\s*",
+    r"^(?:"
+    r"BBC(?:\s+(?:Radio|Audio|Books|Worldwide))?|"
+    r"Graphic[\s-]*Audio|"
+    r"SoundBooth[\s-]*(?:Theatre|Theater)|"
+    r"SBT"
+    r")\s*[-–—]\s*",
     re.IGNORECASE,
 )
 
