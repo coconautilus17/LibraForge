@@ -1147,6 +1147,21 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
     stripped = strip_series_prefix(cleaned, series)
     if not title_is_bad_after_cleanup(stripped):
         cleaned = stripped
+    elif (
+        stripped
+        and stripped != cleaned
+        and not re.fullmatch(r"[\W_]+", stripped)
+        and not re.fullmatch(r"\d{1,4}(?:\.\d+)?", stripped)
+        and not re.fullmatch(
+            r"(?:book|volume|vol\.?|v)\s*\d{1,4}(?:\.\d+)?",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+    ):
+        # The subtitle after stripping the series prefix is a genre descriptor
+        # (e.g. "A LitRPG Adventure") but is still better than repeating the
+        # series name in the folder. Use it as long as it has real content.
+        cleaned = stripped
     elif normalize_for_compare(cleaned) != normalize_for_compare(redundant):
         # If the only thing left after stripping the series is "Book 001" or
         # "Volume 001", keep the clean series title rather than duplicating the
