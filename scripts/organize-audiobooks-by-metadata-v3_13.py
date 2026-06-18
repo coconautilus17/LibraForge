@@ -746,7 +746,16 @@ def detect_number_from_text(value: str) -> str:
     for pattern in range_patterns:
         match = re.search(pattern, value, flags=re.IGNORECASE)
         if match:
-            return normalize_book_number(f"{match.group(1)}-{match.group(2)}")
+            first, second = match.group(1), match.group(2)
+            # Skip matches where either number has a leading zero (chapter/track
+            # numbers like "01", "02") or the range is backwards — these are not
+            # book ranges.  Example: "Book 3 - 01" is book 3, chapter 01, not
+            # a range covering books 3 through 1.
+            if first.startswith("0") or second.startswith("0"):
+                continue
+            if int(first) >= int(second):
+                continue
+            return normalize_book_number(f"{first}-{second}")
 
     word_pattern = r"\b(?:book|volume|vol\.?|novel|side\s*story)\s+(" + "|".join(NUMBER_WORDS) + r")\b"
     word_match = re.search(word_pattern, value, flags=re.IGNORECASE)
