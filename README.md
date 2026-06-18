@@ -6,6 +6,10 @@ Self-hosted Audible metadata matching, M4B conversion, and Audiobookshelf librar
 
 ## Recent Updates
 
+- **Author initials normalization** — variant initial formats (`L M Kerr`, `L. M. Kerr`, `L.M. Kerr`) are recognised as the same author and deduplicated in both fixer scripts.
+- **Single MP3 direct tag write** — single-file MP3 books now have ID3 tags written directly in addition to the m4b-tool sidecar, so Audiobookshelf picks up metadata immediately without a conversion step.
+- **Studio/broadcaster exclusions expanded** — BBC, BBC Radio, Audible Studios, Brilliance Audio, Podium Audio, Tantor, Macmillan Audio, Full Cast Audio, Blackstone, Dreamscape, L.A. Theatre Works, and others are stripped from author tags in both fixer scripts.
+- **Report separators** — run log files now include a visual separator between book entries for easier manual review.
 - **Concurrent workers (v5)** — parallel Audible API search with `--workers N`; per-thread client pool, per-query dedup, and a persistent chapter-count cache that makes discovery near-instant on repeat runs. ASIN conflict detection prevents wrong matches from being written even when scoring passes.
 - **Scoring improvements** — fixer now rejects candidates whose Audible title carries a different explicit series number than the local title (e.g. "Series 4" vs "Series 6"), and candidates where the local title has an explicit number but the Audible series title does not yet the sequence disagrees. Fixes wrong-book matches that previously scored 1.0 due to high title similarity and matching duration.
 - **Manual review loads original tags** — the manual book-load form now reads pre-apply original tags from the backup, not the (possibly wrong) Audible-written values, so suggested queries and scored results reflect the real book.
@@ -16,6 +20,7 @@ Self-hosted Audible metadata matching, M4B conversion, and Audiobookshelf librar
 
 ## Planned
 
+- Choose metadata provider: select an alternative source instead of Audible for libraries where Audible coverage is limited.
 - Local agent advisory review: send a generated report to a local LLM endpoint and display its suggestions (read-only, no automatic writes).
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
