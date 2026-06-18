@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LibraForge - Audible Sign In</title>
+  <script src="/static/ui-preferences.js?v=20260615-5"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260615-5" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
+</head>
+<body data-page="auth-setup">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <main class="shell" id="main-content">
+    <header class="app-header">
+      <div class="brand">
+        <img class="app-logo" src="/app-icon.png?v=20260613-3" alt="" aria-hidden="true" />
+        <div class="header-copy">
+          <h1>LibraForge</h1>
+          <p class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="card" style="max-width:640px;margin:0 auto">
+      <h2>Audible sign in required</h2>
+      <p>LibraForge uses Audible to look up book metadata. You need to connect an Audible account before running the Metadata Forge or M4B Tool.</p>
+
+      <div class="callout callout-warning" style="margin:18px 0">
+        <strong>Recommendation:</strong> use a dedicated empty Audible account for metadata lookups rather than your primary account. No purchases, downloads, or library access are used — only the product catalogue search API.
+      </div>
+
+      <p class="note">Encrypted auth files are not supported. The generated auth file is stored unencrypted at <code>/auth/audible-metadata.json</code> inside the container (mounted from the host path you configured).</p>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:22px 0" />
+
+      <!-- Step 1 -->
+      <div id="step1">
+        <h3>Step 1 — generate a login URL</h3>
+        <div class="grid" style="--grid-cols:1">
+          <label>
+            <span class="field-label">Audible marketplace</span>
+            <select id="localeSelect"></select>
+          </label>
+          <label>
+            <span class="field-label">Auth file path (inside container)</span>
+            <input id="authFilePath" value="/auth/audible-metadata.json" />
+          </label>
+        </div>
+        <div class="actions" style="margin-top:14px">
+          <button id="generateBtn" type="button">Generate login URL</button>
+        </div>
+        <p id="step1Error" class="note" style="color:var(--danger);display:none"></p>
+      </div>
+
+      <!-- Step 2 -->
+      <div id="step2" hidden>
+        <h3>Step 2 — sign in on Amazon</h3>
+        <p>Open the link below in your browser. Sign in with your Audible (Amazon) account. After signing in, Amazon will redirect your browser to a new URL — the page may appear blank or show a brief error message. That is expected.</p>
+        <div style="margin:14px 0">
+          <a id="oauthLink" href="#" target="_blank" rel="noopener" class="button-link">Open Amazon sign-in →</a>
+        </div>
+        <p class="note">Copy the <strong>full URL</strong> from your browser's address bar after signing in and paste it below.</p>
+
+        <label style="margin-top:14px;display:block">
+          <span class="field-label">Redirect URL (paste from browser address bar)</span>
+          <textarea id="redirectUrl" rows="3" placeholder="https://www.amazon.com/ap/maplanding?..."></textarea>
+        </label>
+        <div class="actions" style="margin-top:14px">
+          <button id="completeBtn" type="button">Complete setup</button>
+          <button id="restartBtn" class="secondary" type="button">Start over</button>
+        </div>
+        <p id="step2Error" class="note" style="color:var(--danger);display:none"></p>
+      </div>
+
+      <!-- Step 3 — success -->
+      <div id="step3" hidden>
+        <h3>Setup complete</h3>
+        <p style="color:var(--success)">Auth file saved successfully. You can now use Metadata Forge and M4B Tool.</p>
+        <div class="actions" style="margin-top:14px">
+          <a href="/" class="button-link">Go to Metadata Forge →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <style>
+    .callout-warning {
+      background: var(--warning-soft);
+      border: 1px solid rgb(var(--warning-rgb, 242 189 97) / 30%);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-size: 0.9em;
+    }
+    .button-link {
+      display: inline-block;
+      padding: 0 20px;
+      height: var(--control-height);
+      line-height: var(--control-height);
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .button-link:hover { opacity: 0.88; }
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      background: var(--surface-raised);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    #step2 textarea { font-family: var(--font-mono); font-size: 0.82em; }
+  </style>
+
+  <script>
+    (() => {
+      const step1 = document.getElementById("step1");
+      const step2 = document.getElementById("step2");
+      const step3 = document.getElementById("step3");
+      const localeSelect = document.getElementById("localeSelect");
+      const authFilePath = document.getElementById("authFilePath");
+      const generateBtn = document.getElementById("generateBtn");
+      const step1Error = document.getElementById("step1Error");
+      const oauthLink = document.getElementById("oauthLink");
+      const redirectUrl = document.getElementById("redirectUrl");
+      const completeBtn = document.getElementById("completeBtn");
+      const restartBtn = document.getElementById("restartBtn");
+      const step2Error = document.getElementById("step2Error");
+
+      // Load locales
+      fetch("/api/auth/locales")
+        .then((r) => r.json())
+        .then(({ locales }) => {
+          Object.entries(locales).forEach(([key, label]) => {
+            const opt = document.createElement("option");
+            opt.value = key;
+            opt.textContent = label;
+            if (key === "us") opt.selected = true;
+            localeSelect.appendChild(opt);
+          });
+        });
+
+      function showError(el, msg) {
+        el.textContent = msg;
+        el.style.display = "";
+      }
+      function clearError(el) {
+        el.style.display = "none";
+        el.textContent = "";
+      }
+
+      generateBtn.addEventListener("click", async () => {
+        clearError(step1Error);
+        generateBtn.disabled = true;
+        generateBtn.textContent = "Generating…";
+        try {
+          const res = await fetch("/api/auth/login/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              locale: localeSelect.value,
+              auth_file: authFilePath.value.trim() || "/auth/audible-metadata.json",
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to generate URL");
+          oauthLink.href = data.oauth_url;
+          step1.hidden = true;
+          step2.hidden = false;
+        } catch (err) {
+          showError(step1Error, err.message);
+        } finally {
+          generateBtn.disabled = false;
+          generateBtn.textContent = "Generate login URL";
+        }
+      });
+
+      restartBtn.addEventListener("click", () => {
+        redirectUrl.value = "";
+        clearError(step2Error);
+        step2.hidden = true;
+        step1.hidden = false;
+      });
+
+      completeBtn.addEventListener("click", async () => {
+        clearError(step2Error);
+        const url = redirectUrl.value.trim();
+        if (!url) {
+          showError(step2Error, "Paste the redirect URL from your browser first.");
+          return;
+        }
+        completeBtn.disabled = true;
+        completeBtn.textContent = "Completing…";
+        try {
+          const res = await fetch("/api/auth/login/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ redirect_url: url }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Setup failed");
+          step2.hidden = true;
+          step3.hidden = false;
+        } catch (err) {
+          showError(step2Error, err.message);
+        } finally {
+          completeBtn.disabled = false;
+          completeBtn.textContent = "Complete setup";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

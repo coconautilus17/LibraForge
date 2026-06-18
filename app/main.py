@@ -55,6 +55,26 @@ M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
 M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
 
+DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
+
+# In-memory state for the in-progress OAuth login (single-user homelab — no sessions needed).
+_pending_login_lock = threading.Lock()
+_pending_login: dict | None = None
+
+_LOCALE_NAMES: dict[str, str] = {
+    "us": "United States",
+    "uk": "United Kingdom",
+    "de": "Germany",
+    "fr": "France",
+    "ca": "Canada",
+    "au": "Australia",
+    "it": "Italy",
+    "jp": "Japan",
+    "es": "Spain",
+    "br": "Brazil",
+    "in": "India",
+}
+
 PROCESSING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Processing:\s+(.+)$")
 FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
@@ -2490,6 +2510,128 @@ def app_icon() -> FileResponse:
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "LibraForge"}
 
+
+# ---------------------------------------------------------------------------
+# Auth setup
+# ---------------------------------------------------------------------------
+
+@app.get("/auth-setup", response_class=HTMLResponse)
+def auth_setup_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "auth-setup.html").read_text(encoding="utf-8"))
+
+
+@app.get("/api/auth/status")
+def auth_status() -> dict[str, Any]:
+    exists = DEFAULT_AUTH_FILE.exists() and DEFAULT_AUTH_FILE.stat().st_size > 10
+    return {"auth_ok": exists, "auth_file": str(DEFAULT_AUTH_FILE)}
+
+
+@app.get("/api/auth/locales")
+def auth_locales() -> dict[str, Any]:
+    return {"locales": _LOCALE_NAMES}
+
+
+class AuthLoginStartRequest(BaseModel):
+    locale: str = "us"
+    auth_file: str = str(DEFAULT_AUTH_FILE)
+
+
+@app.post("/api/auth/login/start")
+def auth_login_start(req: AuthLoginStartRequest) -> dict[str, Any]:
+    global _pending_login
+    from audible.localization import Locale as _Locale  # noqa: PLC0415
+    from audible.login import build_oauth_url, create_code_verifier  # noqa: PLC0415
+
+    if req.locale not in _LOCALE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unknown locale: {req.locale}")
+
+    try:
+        locale_obj = _Locale(req.locale)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    code_verifier = create_code_verifier()
+    oauth_url, serial = build_oauth_url(
+        country_code=locale_obj.country_code,
+        domain=locale_obj.domain,
+        market_place_id=locale_obj.market_place_id,
+        code_verifier=code_verifier,
+    )
+
+    with _pending_login_lock:
+        _pending_login = {
+            "code_verifier": code_verifier,
+            "serial": serial,
+            "domain": locale_obj.domain,
+            "locale": req.locale,
+            "auth_file": req.auth_file,
+        }
+
+    return {"oauth_url": oauth_url}
+
+
+class AuthLoginCompleteRequest(BaseModel):
+    redirect_url: str
+
+
+@app.post("/api/auth/login/complete")
+def auth_login_complete(req: AuthLoginCompleteRequest) -> dict[str, Any]:
+    global _pending_login
+    import urllib.parse as _urlparse  # noqa: PLC0415
+    from audible.localization import Locale as _Locale  # noqa: PLC0415
+    from audible.register import register as _register  # noqa: PLC0415
+
+    with _pending_login_lock:
+        pending = dict(_pending_login) if _pending_login else None
+
+    if not pending:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending login session. Click 'Generate login URL' first.",
+        )
+
+    # Parse the authorization code out of the redirect URL.
+    try:
+        parsed = _urlparse.urlparse(req.redirect_url)
+        params = _urlparse.parse_qs(parsed.query)
+        code_list = params.get("openid.oa2.authorization_code")
+        if not code_list:
+            raise ValueError("openid.oa2.authorization_code not found in URL")
+        authorization_code = code_list[0]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse redirect URL: {exc}") from exc
+
+    # Exchange code + verifier for device credentials.
+    try:
+        reg_result = _register(
+            authorization_code=authorization_code,
+            code_verifier=pending["code_verifier"],
+            domain=pending["domain"],
+            serial=pending["serial"],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Audible registration failed: {exc}") from exc
+
+    # Persist as an unencrypted JSON auth file.
+    try:
+        auth = audible.Authenticator()
+        auth.locale = _Locale(pending["locale"])
+        auth._update_attrs(**reg_result)
+        auth_file = Path(pending["auth_file"])
+        auth_file.parent.mkdir(parents=True, exist_ok=True)
+        auth.to_file(str(auth_file), encryption=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save auth file: {exc}") from exc
+
+    with _pending_login_lock:
+        _pending_login = None
+
+    return {"ok": True, "auth_file": str(pending["auth_file"])}
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
