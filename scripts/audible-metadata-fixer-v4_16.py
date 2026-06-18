@@ -1084,6 +1084,14 @@ def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
 
 
+def is_single_file_mp3(source: Path, clues: dict | None = None) -> bool:
+    """True for a standalone single-file .mp3 (not a multi-part folder group)."""
+    if source.suffix.lower() != ".mp3":
+        return False
+    group_search = (clues or {}).get("group_search", {}) or {}
+    return not group_search.get("applied")
+
+
 def probe_audio_stream_properties(file_path: Path) -> dict:
     cmd = [
         "ffprobe",
@@ -1545,6 +1553,13 @@ def clean_author_value(value: str) -> str:
     return remove_parenthetical(value)
 
 
+def _initials_dedup_key(name: str) -> str:
+    """Dedup key that collapses initial-format variants.
+    'L.M. Kerr', 'L. M. Kerr', 'L M Kerr' all map to 'l m kerr'."""
+    expanded = re.sub(r"\.(?=[A-Za-z])", " ", name)
+    return re.sub(r"\s+", " ", expanded.replace(".", "")).strip().lower()
+
+
 def canonicalize_author_credits(values: list[str] | str) -> str:
     if isinstance(values, str):
         values = [part.strip() for part in values.split(",")]
@@ -1557,6 +1572,36 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
         "mashton x y": "Mashton XY",
         "mashton xx": "Mashton XX",
         "mashton xy": "Mashton XY",
+        # Production studios / broadcasters that appear as artist/author tags — strip them
+        "graphic audio": "",
+        "graphicaudio": "",
+        "soundbooth theatre": "",
+        "soundbooth theater": "",
+        "soundbooththeatre": "",
+        "soundbooththeater": "",
+        "sbt": "",
+        "bbc": "",
+        "bbc radio": "",
+        "bbc radio 4": "",
+        "bbc radio 4 extra": "",
+        "bbc audio": "",
+        "bbc books": "",
+        "bbc radio drama": "",
+        "audible studios": "",
+        "audible original": "",
+        "audible originals": "",
+        "brilliance audio": "",
+        "podium audio": "",
+        "tantor audio": "",
+        "tantor media": "",
+        "macmillan audio": "",
+        "full cast audio": "",
+        "blackstone audio": "",
+        "blackstone publishing": "",
+        "dreamscape media": "",
+        "dreamscape audio": "",
+        "l.a. theatre works": "",
+        "la theatre works": "",
     }
     people = []
     seen = set()
@@ -1566,7 +1611,9 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
         if not value or re.search(r"\s+-\s+editor\s*$", value, flags=re.IGNORECASE):
             continue
         canonical = aliases.get(value.casefold(), value)
-        key = normalize_for_match(canonical)
+        if canonical == "":
+            continue
+        key = _initials_dedup_key(canonical)
         if key and key not in seen:
             people.append(canonical)
             seen.add(key)
@@ -4761,7 +4808,11 @@ def print_plan(
             value = value[:180].rstrip() + " ..."
         print(f"  {key}: {value}")
     if should_write_json_sidecar(file_path, clues):
-        print(f"  output: json sidecar -> {get_m4b_tool_metadata_path(file_path, clues)}")
+        if is_single_file_mp3(file_path, clues):
+            print("  output: id3 tags (direct) + json sidecar -> "
+                  f"{get_m4b_tool_metadata_path(file_path, clues)}")
+        else:
+            print(f"  output: json sidecar -> {get_m4b_tool_metadata_path(file_path, clues)}")
     print()
 
 
@@ -5324,6 +5375,8 @@ def main():
 
     for index, file_path in enumerate(processing_items, start=1):
         display_path = get_processing_display_path(file_path, multi_part_group_map)
+        if index > 1:
+            print("─" * 72, flush=True)
         print(f"[{index}/{len(processing_items)}] Processing: {display_path}", flush=True)
 
         existing_marker = load_marker(file_path)
@@ -5616,6 +5669,16 @@ def main():
                 mode = "aggressive" if aggressive_edit else "normal"
 
                 if should_write_json_sidecar(file_path, clues):
+                    if is_single_file_mp3(file_path, clues):
+                        writer_used = write_tags(
+                            file_path,
+                            metadata,
+                            backup=args.backup,
+                            writer=args.writer,
+                            cover_if_missing=args.cover_if_missing,
+                            replace_cover=args.replace_cover,
+                        )
+                        update_backup_with_applied_metadata(file_path, metadata)
                     sidecar_path = write_m4b_tool_metadata_sidecar(
                         file_path, metadata, clues, score
                     )
@@ -5628,7 +5691,10 @@ def main():
                         aggressive=aggressive_edit,
                         output_kind="json_sidecar",
                     )
-                    print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
+                    if is_single_file_mp3(file_path, clues):
+                        print(f"  APPLIED ({mode}, writer={writer_used}, json_sidecar={sidecar_path})")
+                    else:
+                        print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
                 elif args.metadata_json:
                     abs_path = write_audiobookshelf_metadata_json(
                         file_path, metadata, clues

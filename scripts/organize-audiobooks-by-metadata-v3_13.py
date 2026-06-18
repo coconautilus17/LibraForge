@@ -71,6 +71,11 @@ GENERIC_AUTHOR_KEYS = {
     "unknownauthor",
     "multipleauthors",
     "narrator",
+    # Production studios that tag themselves as the artist/author
+    "graphicaudio",
+    "soundbooththeatre",
+    "soundbooththeater",
+    "sbt",
 }
 
 # These are container/helper folders, not real audiobook authors or series.
@@ -119,10 +124,15 @@ NON_AUTHOR_ROLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Broadcaster/label prefixes that appear as "BBC - Author Name" in embedded tags.
+# Broadcaster/studio prefixes that appear as "Studio - Author Name" in embedded tags.
 # Strip the prefix; keep the actual author.
 BROADCASTER_PREFIX_RE = re.compile(
-    r"^(?:BBC(?:\s+(?:Radio|Audio|Books|Worldwide))?)\s*[-–—]\s*",
+    r"^(?:"
+    r"BBC(?:\s+(?:Radio|Audio|Books|Worldwide))?|"
+    r"Graphic[\s-]*Audio|"
+    r"SoundBooth[\s-]*(?:Theatre|Theater)|"
+    r"SBT"
+    r")\s*[-–—]\s*",
     re.IGNORECASE,
 )
 
@@ -746,7 +756,16 @@ def detect_number_from_text(value: str) -> str:
     for pattern in range_patterns:
         match = re.search(pattern, value, flags=re.IGNORECASE)
         if match:
-            return normalize_book_number(f"{match.group(1)}-{match.group(2)}")
+            first, second = match.group(1), match.group(2)
+            # Skip matches where either number has a leading zero (chapter/track
+            # numbers like "01", "02") or the range is backwards — these are not
+            # book ranges.  Example: "Book 3 - 01" is book 3, chapter 01, not
+            # a range covering books 3 through 1.
+            if first.startswith("0") or second.startswith("0"):
+                continue
+            if int(first) >= int(second):
+                continue
+            return normalize_book_number(f"{first}-{second}")
 
     word_pattern = r"\b(?:book|volume|vol\.?|novel|side\s*story)\s+(" + "|".join(NUMBER_WORDS) + r")\b"
     word_match = re.search(word_pattern, value, flags=re.IGNORECASE)
@@ -1137,6 +1156,21 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
     # Remove the series prefix only when doing so leaves a useful book title.
     stripped = strip_series_prefix(cleaned, series)
     if not title_is_bad_after_cleanup(stripped):
+        cleaned = stripped
+    elif (
+        stripped
+        and stripped != cleaned
+        and not re.fullmatch(r"[\W_]+", stripped)
+        and not re.fullmatch(r"\d{1,4}(?:\.\d+)?", stripped)
+        and not re.fullmatch(
+            r"(?:book|volume|vol\.?|v)\s*\d{1,4}(?:\.\d+)?",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+    ):
+        # The subtitle after stripping the series prefix is a genre descriptor
+        # (e.g. "A LitRPG Adventure") but is still better than repeating the
+        # series name in the folder. Use it as long as it has real content.
         cleaned = stripped
     elif normalize_for_compare(cleaned) != normalize_for_compare(redundant):
         # If the only thing left after stripping the series is "Book 001" or
