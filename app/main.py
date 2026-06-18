@@ -56,6 +56,142 @@ M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
 
 DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
+ABS_AGG_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-agg.json"
+
+# abs-agg provider catalog (key = URL slug, value = display label)
+_ABS_AGG_PROVIDERS: dict[str, str] = {
+    "librivox":         "LibriVox",
+    "goodreads":        "Goodreads",
+    "storytel":         "Storytel",
+    "audioteka":        "Audioteka",
+    "bookbeat":         "BookBeat",
+    "bigfinish":        "Big Finish",
+    "graphicaudio":     "Graphic Audio",
+    "hardcover":        "Hardcover",
+    "soundbooththeatre": "Soundbooth Theatre",
+    "ard":              "ARD Audiothek",
+    "diedrei":          "Die drei ???",
+}
+
+
+def _load_abs_agg_config() -> dict[str, Any]:
+    try:
+        if ABS_AGG_CONFIG_FILE.exists():
+            return json.loads(ABS_AGG_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"url": "http://localhost:3000"}
+
+
+def _save_abs_agg_config(config: dict[str, Any]) -> None:
+    ABS_AGG_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ABS_AGG_CONFIG_FILE.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def search_abs_agg_candidates(
+    *,
+    query: str,
+    base_url: str,
+    provider: str,
+    provider_params: str = "",
+    limit: int = 10,
+) -> dict[str, Any]:
+    import urllib.error as _urlerror
+    import urllib.parse as _urlparse
+
+    if provider not in _ABS_AGG_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown abs-agg provider: {provider}")
+
+    params_segment = f"/{provider_params.strip('/')}" if provider_params.strip("/") else ""
+    qs = _urlparse.urlencode({"title": query, "limit": limit})
+    search_url = f"{base_url.rstrip('/')}/{provider}{params_segment}/search?{qs}"
+
+    try:
+        req = urllib.request.Request(
+            search_url,
+            headers={"Accept": "application/json", "User-Agent": "LibraForge/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except _urlerror.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"abs-agg unreachable at {base_url}: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"abs-agg search failed: {exc}") from exc
+
+    results: list[dict[str, Any]] = []
+    for i, match in enumerate(data.get("matches", [])[:limit]):
+        series_list = match.get("series") or []
+        series_name = series_list[0].get("series", "") if series_list else ""
+        sequence = str(series_list[0].get("sequence", "") or "") if series_list else ""
+        author = match.get("author", "") or ""
+        narrator = match.get("narrator", "") or ""
+        year = str(match.get("publishedYear", "") or "")
+        cover_url = match.get("cover", "") or ""
+        summary = match.get("description", "") or ""
+        title = match.get("title", "") or ""
+        subtitle = match.get("subtitle", "") or ""
+        asin = match.get("asin", "") or f"abs-agg-{provider}-{i}"
+        duration_seconds = match.get("duration") or 0
+        duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
+
+        full_meta = {
+            "title": title,
+            "subtitle": subtitle,
+            "author": author,
+            "narrator": narrator,
+            "series": series_name,
+            "sequence": sequence,
+            "year": year,
+            "cover_url": cover_url,
+            "asin": asin,
+            "summary": summary,
+        }
+        series_only_meta = {
+            "title": "",
+            "subtitle": "",
+            "author": "",
+            "narrator": "",
+            "series": series_name,
+            "sequence": sequence,
+            "year": "",
+            "cover_url": "",
+            "asin": asin,
+            "summary": "",
+        }
+        allowed_modes = ["full"] + (["series_only"] if series_name else [])
+
+        results.append({
+            "asin": asin,
+            "query": query,
+            "score": None,
+            "edit_mode": "full",
+            "recommended_edit_mode": "full",
+            "allowed_edit_modes": allowed_modes,
+            "title": title,
+            "subtitle": subtitle,
+            "authors": [author] if author else [],
+            "narrators": [narrator] if narrator else [],
+            "series": series_name,
+            "sequence": sequence,
+            "duration_minutes": duration_minutes,
+            "year": year,
+            "cover_url": cover_url,
+            "summary": summary,
+            "chosen_metadata": full_meta,
+            "chosen_metadata_by_mode": {"full": full_meta, "series_only": series_only_meta},
+            "duration": {},
+            "provider": "abs-agg",
+            "abs_agg_provider": provider,
+        })
+
+    return {"queries": [query], "results": results}
+
 
 # In-memory state for the in-progress OAuth login (single-user homelab — no sessions needed).
 _pending_login_lock = threading.Lock()
@@ -2509,6 +2645,56 @@ def app_icon() -> FileResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "LibraForge"}
+
+
+# ---------------------------------------------------------------------------
+# abs-agg metadata provider
+# ---------------------------------------------------------------------------
+
+class AbsAggSettingsRequest(BaseModel):
+    url: str
+
+
+class AbsAggSearchRequest(BaseModel):
+    query: str
+    provider: str = "librivox"
+    provider_params: str = ""
+    limit: int = 10
+    base_url: str = ""
+
+
+@app.get("/api/abs-agg/providers")
+def abs_agg_providers() -> dict[str, Any]:
+    return {"providers": _ABS_AGG_PROVIDERS}
+
+
+@app.get("/api/abs-agg/settings")
+def get_abs_agg_settings() -> dict[str, Any]:
+    return _load_abs_agg_config()
+
+
+@app.put("/api/abs-agg/settings")
+def save_abs_agg_settings(req: AbsAggSettingsRequest) -> dict[str, Any]:
+    config = {"url": req.url}
+    _save_abs_agg_config(config)
+    return config
+
+
+@app.post("/api/abs-agg/search")
+def abs_agg_search(req: AbsAggSearchRequest) -> dict[str, Any]:
+    base_url = req.base_url.strip() or _load_abs_agg_config().get("url", "")
+    if not base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="abs-agg URL not configured. Enter it in the search panel.",
+        )
+    return search_abs_agg_candidates(
+        query=req.query,
+        base_url=base_url,
+        provider=req.provider,
+        provider_params=req.provider_params,
+        limit=req.limit,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -131,12 +131,29 @@
     </section>
 
     <section class="card">
-      <h2>Audible Search</h2>
+      <h2>Metadata Search</h2>
+      <div class="grid">
+        <label><span class="field-label">Metadata provider</span>
+          <select id="metaProvider">
+            <option value="audible">Audible</option>
+            <option value="abs-agg">abs-agg</option>
+          </select>
+        </label>
+        <label id="absAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
+          <select id="absAggProvider"></select>
+        </label>
+        <label id="absAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters for the selected abs-agg provider, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
+          <input id="absAggParams" placeholder="language:en" />
+        </label>
+        <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance, e.g. http://localhost:3000"></span></span>
+          <input id="absAggUrl" placeholder="http://localhost:3000" />
+        </label>
+      </div>
       <div class="search-row">
         <input id="searchQuery" placeholder="Search title, author, series..." />
-        <button id="searchBtn">Search Audible metadata</button>
+        <button id="searchBtn">Search metadata</button>
       </div>
-      <p class="action-explanation">This optional search fills the metadata form from a selected Audible result. It does not start conversion or write to the source.</p>
+      <p class="action-explanation">This optional search fills the metadata form from a selected result. It does not start conversion or write to the source.</p>
       <div id="searchMeta" class="note"></div>
       <div id="searchResults" class="results-grid"></div>
     </section>

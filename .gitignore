@@ -9,6 +9,7 @@ __pycache__/
 reports/*
 !reports/.gitkeep
 config/title-noise.local.json
+config/abs-agg.json
 archive/
 output/
 docker-compose.override.yml

@@ -39,9 +39,67 @@
       });
   }
 
+  async function loadAbsAggProviders(selectEl) {
+    try {
+      const res = await fetch("/api/abs-agg/providers");
+      const data = await res.json();
+      Object.entries(data.providers || {}).forEach(([key, label]) => {
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = label;
+        selectEl.appendChild(opt);
+      });
+    } catch {}
+  }
+
+  async function loadAbsAggSettings() {
+    try {
+      const res = await fetch("/api/abs-agg/settings");
+      return await res.json();
+    } catch {
+      return { url: "http://localhost:3000" };
+    }
+  }
+
+  async function saveAbsAggUrl(url) {
+    try {
+      await fetch("/api/abs-agg/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+    } catch {}
+  }
+
+  async function searchAbsAgg({ query, provider, providerParams = "", baseUrl = "", limit = 10 }) {
+    return fetch("/api/abs-agg/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        provider,
+        provider_params: providerParams,
+        limit,
+        base_url: baseUrl,
+      }),
+    });
+  }
+
+  function scoreBadge(result) {
+    if (result.score !== null && result.score !== undefined) {
+      return Number(result.score).toFixed(2);
+    }
+    return result.abs_agg_provider || "abs-agg";
+  }
+
   window.UiCommon = {
     escapeHtml,
     renderDownloadLinks,
     statCard,
+    loadAbsAggProviders,
+    loadAbsAggSettings,
+    saveAbsAggUrl,
+    searchAbsAgg,
+    scoreBadge,
   };
 })();

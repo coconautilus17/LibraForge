@@ -232,6 +232,24 @@
         </label>
       </div>
 
+      <div class="grid" style="margin-top:10px">
+        <label><span class="field-label">Metadata provider</span>
+          <select id="manualProvider">
+            <option value="audible">Audible</option>
+            <option value="abs-agg">abs-agg</option>
+          </select>
+        </label>
+        <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
+          <select id="manualAbsAggProvider"></select>
+        </label>
+        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
+          <input id="manualAbsAggParams" placeholder="language:en" />
+        </label>
+        <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance."></span></span>
+          <input id="manualAbsAggUrl" placeholder="http://localhost:3000" />
+        </label>
+      </div>
+
       <div class="actions">
         <button id="manualSearchBtn" class="secondary">Search For Selected Target</button>
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>

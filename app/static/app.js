@@ -5,7 +5,7 @@ let manualContext = null;
 let manualCurrentCoverUrl = '';
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, statCard: stat } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 function fixerMajorVersion(scriptName) {
   const m = scriptName.match(/-v(\d+)/i);
@@ -387,7 +387,7 @@ function renderManualSearchResults(results = []) {
               <h3>${escapeHtml(result.title)}</h3>
               ${subtitle}
             </div>
-            <div class="score-badge">${Number(result.score || 0).toFixed(2)}</div>
+            <div class="score-badge">${scoreBadge(result)}</div>
           </div>
           <div class="cover-comparison">
             <div>
@@ -397,10 +397,10 @@ function renderManualSearchResults(results = []) {
                 : '<p class="note">No current cover</p>'}
             </div>
             <div>
-              <strong>Audible</strong>
+              <strong>${result.provider === 'abs-agg' ? (result.abs_agg_provider || 'abs-agg') : 'Audible'}</strong>
               ${result.cover_url
-                ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="Selected Audible cover" />`
-                : '<p class="note">No Audible cover</p>'}
+                ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="Match cover" />`
+                : '<p class="note">No cover</p>'}
             </div>
           </div>
           <div class="result-meta">
@@ -464,21 +464,36 @@ async function searchManualTarget() {
     alert('Load a manual review target first.');
     return;
   }
-  const payload = {
-    query: $('manualQuery').value.trim(),
-    auth_file: $('authFile').value.trim(),
-    metadata: collectManualMetadata(),
-    limit: 10,
-    script_name: $('script').value,
-  };
-  const res = await fetch('/api/m4b/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+
+  const provider = $('manualProvider').value;
+  let res;
+
+  if (provider === 'abs-agg') {
+    res = await searchAbsAgg({
+      query: $('manualQuery').value.trim(),
+      provider: $('manualAbsAggProvider').value,
+      providerParams: $('manualAbsAggParams').value.trim(),
+      baseUrl: $('manualAbsAggUrl').value.trim(),
+      limit: 10,
+    });
+  } else {
+    const payload = {
+      query: $('manualQuery').value.trim(),
+      auth_file: $('authFile').value.trim(),
+      metadata: collectManualMetadata(),
+      limit: 10,
+      script_name: $('script').value,
+    };
+    res = await fetch('/api/m4b/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
   const data = await res.json();
   if (!res.ok) {
-    alert(data.detail || 'Audible search failed');
+    alert(data.detail || 'Search failed');
     return;
   }
   $('manualMeta').textContent = data.queries?.length ? `Search queries tried: ${data.queries.join(' | ')}` : 'No search queries were produced.';
@@ -494,8 +509,8 @@ async function applyManualMatch(result, editMode, replaceCover = false) {
     alert('Choose an apply mode first.');
     return;
   }
-  const coverMessage = replaceCover ? '\n\nThe current cover will be overwritten with the selected Audible cover.' : '';
-  const ok = confirm(`Apply the selected Audible match in ${editMode} mode to:\n${manualContext.display_path || manualContext.path}${coverMessage}`);
+  const coverMessage = replaceCover ? '\n\nThe current cover will be overwritten with the selected match cover.' : '';
+  const ok = confirm(`Apply the selected match in ${editMode} mode to:\n${manualContext.display_path || manualContext.path}${coverMessage}`);
   if (!ok) return;
 
   const res = await fetch('/api/manual-review/apply', {
@@ -529,3 +544,19 @@ $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());
 $("manualReloadCoverBtn").addEventListener("click", loadManualCurrentCover);
 loadScripts();
+
+// Provider selector for manual review
+(async () => {
+  await loadAbsAggProviders($('manualAbsAggProvider'));
+  const settings = await loadAbsAggSettings();
+  if (settings.url) $('manualAbsAggUrl').value = settings.url;
+
+  function toggleManualAbsAggFields() {
+    const isAbsAgg = $('manualProvider').value === 'abs-agg';
+    ['manualAbsAggProviderLabel', 'manualAbsAggParamsLabel', 'manualAbsAggUrlLabel'].forEach(id => {
+      $(id).hidden = !isAbsAgg;
+    });
+  }
+  $('manualProvider').addEventListener('change', toggleManualAbsAggFields);
+  $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
+})();
