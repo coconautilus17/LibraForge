@@ -4,7 +4,22 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+
+async function initProviderSelector() {
+  await loadAbsAggProviders($('absAggProvider'));
+  const settings = await loadAbsAggSettings();
+  if (settings.url) $('absAggUrl').value = settings.url;
+
+  function toggleAbsAggFields() {
+    const isAbsAgg = $('metaProvider').value === 'abs-agg';
+    ['absAggProviderLabel', 'absAggParamsLabel', 'absAggUrlLabel'].forEach(id => {
+      $(id).hidden = !isAbsAgg;
+    });
+  }
+  $('metaProvider').addEventListener('change', toggleAbsAggFields);
+  $('absAggUrl').addEventListener('change', () => saveAbsAggUrl($('absAggUrl').value.trim()));
+}
 
 async function loadScripts() {
   const res = await fetch('/api/scripts');
@@ -346,7 +361,7 @@ function renderResults(results = []) {
               <h3>${escapeHtml(result.title)}</h3>
               ${subtitle}
             </div>
-            <div class="score-badge">${Number(result.score || 0).toFixed(2)}</div>
+            <div class="score-badge">${scoreBadge(result)}</div>
           </div>
           ${result.cover_url ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="" />` : ''}
           <div class="result-meta">
@@ -365,7 +380,7 @@ function renderResults(results = []) {
         </article>
       `;
     }).join('')
-    : '<p class="note">No Audible results yet.</p>';
+    : '<p class="note">No results yet.</p>';
 
   for (const button of $('searchResults').querySelectorAll('button[data-use-match]')) {
     button.addEventListener('click', () => {
@@ -375,22 +390,36 @@ function renderResults(results = []) {
   }
 }
 
-async function searchAudible() {
-  const payload = {
-    query: $('searchQuery').value.trim(),
-    auth_file: $('authFile').value.trim(),
-    metadata: collectMetadata(),
-    limit: 10,
-    script_name: $('searchScript').value,
-  };
-  const res = await fetch('/api/m4b/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
+async function searchMetadata() {
+  const provider = $('metaProvider').value;
+  let res, data;
+
+  if (provider === 'abs-agg') {
+    res = await searchAbsAgg({
+      query: $('searchQuery').value.trim(),
+      provider: $('absAggProvider').value,
+      providerParams: $('absAggParams').value.trim(),
+      baseUrl: $('absAggUrl').value.trim(),
+      limit: 10,
+    });
+  } else {
+    const payload = {
+      query: $('searchQuery').value.trim(),
+      auth_file: $('authFile').value.trim(),
+      metadata: collectMetadata(),
+      limit: 10,
+      script_name: $('searchScript').value,
+    };
+    res = await fetch('/api/m4b/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  data = await res.json();
   if (!res.ok) {
-    alert(data.detail || 'Audible search failed');
+    alert(data.detail || 'Search failed');
     return;
   }
   $('searchMeta').textContent = data.queries?.length ? `Queries: ${data.queries.join(' | ')}` : '';
@@ -484,7 +513,7 @@ $('findMultipartBtn').addEventListener('click', () => discoverConversionCandidat
 $('findNonM4bBtn').addEventListener('click', () => discoverConversionCandidates('non_m4b'));
 $('refreshDiscoveryBtn').addEventListener('click', () => discoverConversionCandidates('multipart', true));
 $('refreshAudioProfilesBtn').addEventListener('click', refreshMultipartAudioProfiles);
-$('searchBtn').addEventListener('click', searchAudible);
+$('searchBtn').addEventListener('click', searchMetadata);
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
 $('force').addEventListener('change', updateCommandPreview);
@@ -492,4 +521,5 @@ $('noConversion').addEventListener('change', updateCommandPreview);
 $('useFilenamesAsChapters').addEventListener('change', updateCommandPreview);
 
 loadScripts();
+initProviderSelector();
 updateCommandPreview();
