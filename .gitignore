@@ -16,6 +16,10 @@ docker-compose.override.yml
 
 HANDOFF.md
 PROJECT_REFERENCE.md
+LIBRAFORGE_GITHUB_HANDOFF.md
+libraforge-roadmap-backlog.md
+start-here-mockup.html
+app/title_noise_policy.py_BKP
 
 .coverage
 .pytest_cache/

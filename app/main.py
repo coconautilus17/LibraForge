@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -621,6 +622,7 @@ class RunRequest(BaseModel):
 
     workers: int | None = None
     api_delay_ms: int = 0
+    write_mode: str = "smart"
 
 
 class M4BMetadataForm(BaseModel):
@@ -1164,6 +1166,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
             cmd += ["--workers", str(req.workers)]
         if req.api_delay_ms > 0:
             cmd += ["--api-delay-ms", str(req.api_delay_ms)]
+        if req.write_mode and req.write_mode != "smart":
+            cmd += ["--write-mode", req.write_mode]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
@@ -2647,6 +2651,388 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "LibraForge"}
 
 
+@app.get("/api/config")
+def get_config() -> dict[str, Any]:
+    return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
+
+
+_FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
+
+
+@app.get("/api/fs/ls")
+def fs_ls(path: str = "/") -> dict[str, Any]:
+    p = Path(path)
+    if not p.is_dir():
+        p = p.parent
+    if not p.is_dir():
+        return {"dirs": [], "path": path}
+    try:
+        dirs = sorted(
+            str(child)
+            for child in p.iterdir()
+            if child.is_dir() and not any(child.name.startswith(s) for s in _FS_SKIP_PREFIXES)
+        )[:80]
+    except PermissionError:
+        dirs = []
+    return {"dirs": dirs, "path": str(p)}
+
+
+class ScanRequest(BaseModel):
+    path: str
+
+
+_ASIN_TAG_KEYS = (
+    "----:com.apple.iTunes:asin",
+    "----:com.pilabor.tone:AUDIBLE_ASIN",
+    "----:com.apple.iTunes:ASIN",
+)
+_FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
+_FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
+# Folder names that are disc/part subdivisions of a single book, not separate books.
+_DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
+
+
+def _has_asin(folder: Path, audio_file: Path) -> bool:
+    """Check for an ASIN: sidecar fast-path first, then mutagen."""
+    if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
+        return True
+    if (folder / _FIXER_LEGACY_MARKER).exists():
+        return True
+    try:
+        if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
+            tags = MP4(str(audio_file)).tags
+            if tags:
+                for key in _ASIN_TAG_KEYS:
+                    raw = tags.get(key, [])
+                    if raw:
+                        val = raw[0]
+                        text = (
+                            bytes(val).decode("utf-8", errors="ignore")
+                            if isinstance(val, (bytes, bytearray, MP4FreeForm))
+                            else str(val)
+                        )
+                        if text.strip():
+                            return True
+        elif audio_file.suffix.lower() == ".mp3":
+            from mutagen.id3 import ID3  # noqa: PLC0415
+            t = ID3(str(audio_file))
+            return any("asin" in k.lower() for k in t.keys())
+    except Exception:
+        pass
+    return False
+
+
+def _book_audio_files(folder: Path) -> list[Path]:
+    """Direct audio files in a book folder, or files one level down (disc subfolders)."""
+    direct = sorted(c for c in folder.iterdir() if c.is_file() and is_audio_file(c))
+    if direct:
+        return direct
+    nested: list[Path] = []
+    for sub in folder.iterdir():
+        if sub.is_dir():
+            nested.extend(c for c in sub.iterdir() if c.is_file() and is_audio_file(c))
+    return sorted(nested)
+
+
+def _find_book_folders(root: Path) -> list[Path]:
+    """
+    Recursively find all book-level folders under root at any depth.
+    Handles Author/Series/Book/file and disc-subfolder patterns.
+    A folder that matches the disc naming pattern (Disc 1, CD2, Part 3…) is
+    collapsed into its parent so multi-disc books count as one.
+    """
+    # Walk the full tree, collect every folder that directly contains audio files.
+    audio_folders: set[Path] = set()
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not any(d.startswith(s) for s in _FS_SKIP_PREFIXES)
+            )
+            p = Path(dirpath)
+            if p == root:
+                continue
+            if any(is_audio_file(Path(dirpath) / f) for f in filenames):
+                audio_folders.add(p)
+    except PermissionError:
+        pass
+
+    # Collapse disc subfolders: if a folder name looks like "Disc 1" / "CD2" etc.,
+    # use its parent as the book folder instead.
+    book_folders: set[Path] = set()
+    for folder in audio_folders:
+        if _DISC_RE.match(folder.name) and folder.parent != root:
+            book_folders.add(folder.parent)
+        else:
+            book_folders.add(folder)
+
+    return sorted(book_folders)
+
+
+_COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
+
+# In-memory cache: path → (timestamp, fingerprint, [(folder_str, category)])
+_scan_cache: dict[str, tuple[float, str, list[tuple[str, str]]]] = {}
+_SCAN_CACHE_TTL = 3600  # 1 hour
+
+_AUDIO_EXTS_COVER = ("*.m4b", "*.m4a", "*.mp3", "*.mp4")
+
+
+def _library_fingerprint(root: Path) -> str:
+    """Fast change-detection fingerprint: root mtime + first-level subdir names/mtimes.
+    Catches new/removed author folders and changes inside existing author folders.
+    ~100 stat() calls on a typical audiobook library = <500ms even over NFS."""
+    parts: list[str] = []
+    try:
+        parts.append(str(root.stat().st_mtime_ns))
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and not any(child.name.startswith(s) for s in _FS_SKIP_PREFIXES):
+                parts.append(f"{child.name}:{child.stat().st_mtime_ns}")
+    except PermissionError:
+        pass
+    return "|".join(parts)
+
+
+def _store_scan_cache(path: Path, results: list[tuple[Path, str]]) -> None:
+    fp = _library_fingerprint(path)
+    _scan_cache[str(path)] = (time.monotonic(), fp, [(str(f), c) for f, c in results])
+
+
+def _load_scan_cache(path: Path) -> list[tuple[str, str]] | None:
+    entry = _scan_cache.get(str(path))
+    if not entry:
+        return None
+    ts, cached_fp, data = entry
+    if time.monotonic() - ts >= _SCAN_CACHE_TTL:
+        return None
+    if _library_fingerprint(path) != cached_fp:
+        return None  # library changed — force rescan
+    return data
+
+
+def _has_cover_fast(folder: Path) -> bool:
+    """Fast cover heuristic: file covers or any audio file presence."""
+    if any((folder / n).is_file() for n in _COVER_NAMES):
+        return True
+    for ext in _AUDIO_EXTS_COVER:
+        if next(folder.glob(ext), None):
+            return True
+    for sub in folder.iterdir():
+        if sub.is_dir():
+            for ext in _AUDIO_EXTS_COVER:
+                if next(sub.glob(ext), None):
+                    return True
+    return False
+
+
+@app.post("/api/scan")
+def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+    p = Path(req.path)
+    if not p.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+    t0 = time.monotonic()
+
+    # Fast cache check: fingerprint (~100 stat calls, <500ms) before full os.walk
+    cached = _load_scan_cache(p)
+    if cached is not None:
+        needs_metadata = sum(1 for _, c in cached if c == "needs_metadata")
+        needs_conversion = sum(1 for _, c in cached if c == "needs_conversion")
+        ready_to_organize = sum(1 for _, c in cached if c == "ready_to_organize")
+        organized = sum(1 for _, c in cached if c == "organized")
+        return {
+            "path": str(p),
+            "total": needs_metadata + needs_conversion + ready_to_organize + organized,
+            "needs_metadata": needs_metadata,
+            "needs_conversion": needs_conversion,
+            "ready_to_organize": ready_to_organize,
+            "organized": organized,
+            "scan_ms": round((time.monotonic() - t0) * 1000),
+            "from_cache": True,
+        }
+
+    # Full scan — fingerprint changed or no cache yet
+    book_folders = _find_book_folders(p)
+
+    def categorise(folder: Path) -> str:
+        depth = len(folder.relative_to(p).parts)
+        try:
+            audio = _book_audio_files(folder)
+        except PermissionError:
+            return "skip"
+        if not audio:
+            return "skip"
+        has_asin = _has_asin(folder, audio[0])
+        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
+        if not has_asin:
+            return "needs_metadata"
+        if single_m4b:
+            return "organized" if depth > 1 else "ready_to_organize"
+        return "needs_conversion"
+
+    needs_metadata = 0
+    needs_conversion = 0
+    ready_to_organize = 0
+    organized = 0
+    book_results: list[tuple[Path, str]] = []
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for folder, category in zip(book_folders, pool.map(categorise, book_folders)):
+            book_results.append((folder, category))
+            if category == "needs_metadata":
+                needs_metadata += 1
+            elif category == "needs_conversion":
+                needs_conversion += 1
+            elif category == "ready_to_organize":
+                ready_to_organize += 1
+            elif category == "organized":
+                organized += 1
+
+    _store_scan_cache(p, book_results)
+
+    total = needs_metadata + needs_conversion + ready_to_organize + organized
+    return {
+        "path": str(p),
+        "total": total,
+        "needs_metadata": needs_metadata,
+        "needs_conversion": needs_conversion,
+        "ready_to_organize": ready_to_organize,
+        "organized": organized,
+        "scan_ms": round((time.monotonic() - t0) * 1000),
+        "from_cache": False,
+    }
+
+
+def _book_author(folder: Path, scan_root: Path) -> str:
+    try:
+        rel = folder.relative_to(AUDIOBOOKS_ROOT)
+        return rel.parts[0] if len(rel.parts) > 1 else ""
+    except ValueError:
+        try:
+            rel = folder.relative_to(scan_root)
+            return rel.parts[0] if len(rel.parts) > 1 else ""
+        except ValueError:
+            return ""
+
+
+def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
+    """Return (cover_bytes, media_type) from a file cover or embedded audio tag."""
+    for name in _COVER_NAMES:
+        cover = folder / name
+        if cover.is_file():
+            media = "image/png" if cover.suffix.lower() == ".png" else "image/jpeg"
+            return (cover.read_bytes(), media)
+    # Find first audio file (prefer m4b > m4a > mp3 > mp4), one level deep
+    candidates: list[Path] = []
+    for ext in ("*.m4b", "*.m4a", "*.mp3", "*.mp4"):
+        found = sorted(folder.glob(ext))
+        if found:
+            candidates = found
+            break
+    if not candidates:
+        for sub in sorted(folder.iterdir()):
+            if sub.is_dir():
+                for ext in ("*.m4b", "*.m4a", "*.mp3", "*.mp4"):
+                    found = sorted(sub.glob(ext))
+                    if found:
+                        candidates = found
+                        break
+                if candidates:
+                    break
+    for audio_file in candidates[:1]:
+        try:
+            suffix = audio_file.suffix.lower()
+            if suffix in (".m4b", ".m4a", ".mp4"):
+                tags = MP4(str(audio_file)).tags
+                if tags and "covr" in tags and tags["covr"]:
+                    cover_item = tags["covr"][0]
+                    from mutagen.mp4 import MP4Cover  # noqa: PLC0415
+                    fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
+                    media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
+                    return (bytes(cover_item), media)
+            elif suffix == ".mp3":
+                from mutagen.id3 import ID3  # noqa: PLC0415
+                tags = ID3(str(audio_file))
+                for key in tags.keys():
+                    if key.startswith("APIC"):
+                        apic = tags[key]
+                        mime = getattr(apic, "mime", "image/jpeg")
+                        media = "image/png" if "png" in mime else "image/jpeg"
+                        return (bytes(apic.data), media)
+        except Exception:
+            pass
+    return None
+
+
+@app.post("/api/scan/books")
+def scan_books_route(req: ScanRequest) -> dict[str, Any]:
+    p = Path(req.path)
+    if not p.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+
+    cached = _load_scan_cache(p)
+    if cached is not None:
+        # Fast path: categories already known, only do cover checks for needs-attention books
+        attention = [(Path(f), c) for f, c in cached if c in ("needs_metadata", "needs_conversion")]
+
+        def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
+            folder, category = fc
+            return {
+                "path": str(folder),
+                "title": folder.name,
+                "author": _book_author(folder, p),
+                "has_cover": _has_cover_fast(folder),
+                "category": category,
+            }
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            books = list(pool.map(fast_entry, attention))
+        books.sort(key=lambda b: (b["category"], b["title"].lower()))
+        return {"books": books, "total": len(books)}
+
+    # Slow fallback when no scan cache (user navigated directly to books without scanning first)
+    book_folders = _find_book_folders(p)
+
+    def make_book_entry(folder: Path) -> dict[str, Any] | None:
+        depth = len(folder.relative_to(p).parts)
+        try:
+            audio = _book_audio_files(folder)
+        except PermissionError:
+            return None
+        if not audio:
+            return None
+        has_asin = _has_asin(folder, audio[0])
+        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
+        if has_asin and (single_m4b or depth > 1):
+            return None
+        return {
+            "path": str(folder),
+            "title": folder.name,
+            "author": _book_author(folder, p),
+            "has_cover": _has_cover_fast(folder),
+            "category": "needs_metadata" if not has_asin else "needs_conversion",
+        }
+
+    books = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for entry in pool.map(make_book_entry, book_folders):
+            if entry is not None:
+                books.append(entry)
+    books.sort(key=lambda b: (b["category"], b["title"].lower()))
+    return {"books": books, "total": len(books)}
+
+
+@app.get("/api/book/cover")
+def book_cover(path: str) -> Response:
+    folder = Path(path)
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Not a directory")
+    result = _book_cover_data(folder)
+    if result:
+        data, media = result
+        return Response(content=data, media_type=media)
+    raise HTTPException(status_code=404, detail="No cover found")
+
+
 # ---------------------------------------------------------------------------
 # abs-agg metadata provider
 # ---------------------------------------------------------------------------
@@ -2820,7 +3206,12 @@ def auth_login_complete(req: AuthLoginCompleteRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
+def start_here_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "start-here.html").read_text(encoding="utf-8"))
+
+
+@app.get("/forge", response_class=HTMLResponse)
+def forge_page() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
 
 

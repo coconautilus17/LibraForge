@@ -1,11 +1,16 @@
 # LibraForge
 
+> **Note:** This tool is in active development. All features and interfaces are prone to change and updates.
+
 Self-hosted Audible metadata matching, M4B conversion, and Audiobookshelf library organisation — three tools in one Docker container.
 
 ---
 
 ## Recent Updates
 
+- **Smart write diff and write modes** — v5 now compares planned tag values against what is already embedded before writing. The default `smart` mode skips the file write entirely if all fields already match. `fill-missing` only writes fields that have no current value. `overwrite` restores the previous always-write behaviour. *(Needs real-library testing before wide use.)*
+- **ASIN embedding** — the matched Audible ASIN is now written to every file on apply (MP4/M4B freeform atom, MP3 TXXX frame, ffmpeg `-metadata`). Previously the ASIN was recorded in the marker JSON only.
+- **ASIN-aware search** — if a book already has an ASIN embedded in its tags or in its filename (`[B0XXXXXXXX]`), v5 attempts a direct Audible product lookup by ASIN before falling back to keyword searches. The extraction pattern requires the `B0` prefix that all Audible ASINs share, avoiding false matches on other bracket tokens. A mismatch between the existing and matched ASIN flags the book for manual review. *(Needs real-library testing.)*
 - **Audible auth setup page** — a guided OAuth sign-in flow at `/auth-setup` lets you connect an Audible account without CLI tools. The fixer and M4B Tool redirect there automatically when no auth file is found, and skip it when a valid file is already present.
 - **abs-agg metadata provider** — Manual Review and M4B Tool searches can now use [abs-agg](https://github.com/Vito0912/abs-agg) as an alternative metadata source (LibriVox, Storytel, Audioteka, Big Finish, and 7 others). Provider selector lives in Run settings; the existing apply flow works unchanged.
 - **Author initials normalization** — variant initial formats (`L M Kerr`, `L. M. Kerr`, `L.M. Kerr`) are recognised as the same author and deduplicated in both fixer scripts.

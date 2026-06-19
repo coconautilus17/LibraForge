@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LibraForge - Start Here</title>
+  <script src="/static/ui-preferences.js?v=20260619-6"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260619-6" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
+</head>
+<body data-page="start-here">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <img class="app-logo" src="/app-icon.png?v=20260613-3" alt="" aria-hidden="true" />
+        <div class="brand-text">
+          <span class="brand-name">LibraForge</span>
+          <span class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</span>
+        </div>
+      </div>
+      <nav class="site-nav" aria-label="LibraForge tools">
+        <a class="site-nav-link active" href="/" aria-current="page">Start Here</a>
+        <a class="site-nav-link" href="/forge">Metadata Forge</a>
+        <a class="site-nav-link" href="/m4b-tool">M4B Tool</a>
+        <a class="site-nav-link" href="/organizer">Folder Forge</a>
+      </nav>
+      <div class="topbar-actions">
+        <button id="settingsToggle" class="icon-button" type="button" aria-label="Open global settings" aria-expanded="false" aria-controls="globalSettings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="globalSettings" class="settings-panel" hidden>
+    <div class="settings-panel-head">
+      <div>
+        <span class="eyebrow">Global preferences</span>
+        <h2>Settings</h2>
+      </div>
+      <button id="settingsClose" class="icon-button small" type="button" aria-label="Close global settings">×</button>
+    </div>
+    <div class="settings-grid">
+      <label class="preference-field">Appearance
+        <select id="uiTheme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
+      </label>
+      <label class="preference-field">Surface palette
+        <select id="uiSurface"></select>
+      </label>
+      <label class="preference-field">Accent color
+        <select id="uiAccent"><option value="sky">Sky</option><option value="violet">Violet</option><option value="emerald">Emerald</option><option value="amber">Amber</option></select>
+      </label>
+      <label class="preference-field">Display density
+        <select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
+      </label>
+    </div>
+  </div>
+
+  <main class="shell" id="main-content">
+
+    <div id="authBanner" class="callout callout-warning" style="margin-top:4px" hidden>
+      <strong>Audible auth needed.</strong>
+      Metadata Forge and M4B Tool require an Audible auth file to search the catalogue.
+      <a href="/auth-setup">Set up auth →</a>
+    </div>
+
+    <div class="start-here-hero">
+      <h1>What needs attention</h1>
+      <p>Point LibraForge at a folder and it'll tell you what's missing, what's ready, and what's already in shape — across tagging, conversion, and organization.</p>
+    </div>
+
+    <div class="pick-row">
+      <input id="folderPath" type="text" list="folderSuggestions"
+             placeholder="/audiobooks/_unorganized"
+             autocomplete="off" spellcheck="false" aria-label="Folder path to scan" />
+      <datalist id="folderSuggestions"></datalist>
+      <button id="browseBtn" type="button" class="secondary" aria-expanded="false" aria-controls="folderBrowser">Browse</button>
+      <button id="scanBtn" type="button">Scan folder</button>
+    </div>
+    <p class="pick-hint">
+      Supports local and network-mounted paths — the path must be accessible from within the container
+      (e.g. <code>/mnt/nas/audiobooks</code>).
+    </p>
+
+    <!-- Folder browser panel -->
+    <div id="folderBrowser" class="folder-browser" hidden aria-label="Folder browser">
+      <div class="fb-bar">
+        <button id="fbUp" class="icon-button small" type="button" title="Go to parent folder" aria-label="Go to parent folder">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 15V5M5 10l5-5 5 5"/></svg>
+        </button>
+        <nav id="fbBreadcrumb" class="fb-breadcrumb" aria-label="Current path"></nav>
+        <button id="fbHomeBtn" class="icon-button small" type="button" title="Go to library root" aria-label="Go to library root">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9.5L10 3l7 6.5V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5Z"/><path d="M7 18v-6h6v6"/></svg>
+        </button>
+        <button id="fbClose" class="icon-button small" type="button" aria-label="Close browser">×</button>
+      </div>
+      <ul id="fbList" class="fb-list" role="listbox" aria-label="Subdirectories"></ul>
+      <div class="fb-footer">
+        <span id="fbCurrentLabel" class="fb-current-path"></span>
+        <button id="fbSelect" type="button">Select this folder</button>
+      </div>
+    </div>
+
+    <p id="scanError" class="note" style="color:var(--danger)" hidden></p>
+
+    <div id="scanResults" hidden>
+      <div class="scan-summary">
+        <div class="scan-summary-head">
+          <h2>Scan result</h2>
+          <span id="scanMeta" class="scan-meta"></span>
+        </div>
+        <div class="stage-grid">
+          <div class="stage-card stage-danger">
+            <div class="stage-label">Needs metadata</div>
+            <div id="countMetadata" class="stage-count">0</div>
+            <p class="stage-desc">No ASIN match yet, or flagged for manual review.</p>
+            <a class="stage-link" href="/forge">Review in Metadata Forge →</a>
+          </div>
+          <div class="stage-card stage-warning">
+            <div class="stage-label">Needs conversion</div>
+            <div id="countConversion" class="stage-count">0</div>
+            <p class="stage-desc">Tagged, but source isn't a clean M4B yet.</p>
+            <a class="stage-link" href="/m4b-tool">Open in M4B Tool →</a>
+          </div>
+          <div class="stage-card stage-success">
+            <div class="stage-label">Ready to organize</div>
+            <div id="countOrganize" class="stage-count">0</div>
+            <p class="stage-desc">Tagged and converted. Just needs a home.</p>
+            <a class="stage-link" href="/organizer">Plan moves in Folder Forge →</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipeline-cta">
+        <div>
+          <h3 id="pipelineTitle">Run the full pipeline</h3>
+          <p>Tags whatever needs tagging, converts whatever needs converting, then plans moves for everything that's ready — one combined report at the end.</p>
+        </div>
+        <button id="pipelineBtn" type="button" disabled title="Full pipeline coming in a future update">Run full pipeline</button>
+      </div>
+
+      <!-- Book list (lazy-loaded on demand) -->
+      <div class="book-list-toggle">
+        <button id="bookListToggleBtn" type="button" class="secondary" data-count="0">
+          Show 0 books needing attention ▾
+        </button>
+      </div>
+      <div id="bookListBody" hidden>
+        <div id="bookListScroll" class="book-list-scroll"></div>
+      </div>
+    </div>
+
+    <div class="dryrun-notice">
+      <strong>Dry run is on.</strong>
+      Nothing gets renamed, retagged, or moved until you review the report and choose Apply. This applies whether you run stages individually or the full pipeline.
+    </div>
+
+    <div class="manual-nav">
+      <p class="manual-nav-heading">Or go straight to a stage</p>
+      <nav class="forge-nav" aria-label="LibraForge tools">
+        <a class="forge-nav-item" href="/forge">
+          <span class="forge-nav-icon"><img src="/static/metadata-forge.png?v=20260615-1" alt="" aria-hidden="true" /></span>
+          <span class="forge-nav-copy">
+            <span class="eyebrow">Match, review, apply</span>
+            <strong>Metadata Forge</strong>
+            <small>Match Audible metadata, inspect results, and apply approved fixes.</small>
+          </span>
+        </a>
+        <a class="forge-nav-item" href="/m4b-tool">
+          <span class="forge-nav-icon"><img src="/static/m4b-forge-tool.png?v=20260615-1" alt="" aria-hidden="true" /></span>
+          <span class="forge-nav-copy">
+            <span class="eyebrow">Prepare, tag, merge</span>
+            <strong>M4B Tool</strong>
+            <small>Prepare metadata and merge source audio into a finished M4B.</small>
+          </span>
+        </a>
+        <a class="forge-nav-item" href="/organizer">
+          <span class="forge-nav-icon"><img src="/static/folder-forge.png?v=20260615-1" alt="" aria-hidden="true" /></span>
+          <span class="forge-nav-copy">
+            <span class="eyebrow">Plan, inspect, organize</span>
+            <strong>Folder Forge</strong>
+            <small>Preview and apply safe, metadata-driven library organization.</small>
+          </span>
+        </a>
+      </nav>
+    </div>
+
+  </main>
+
+  <script src="/static/ui-common.js?v=20260619-6"></script>
+  <script>
+  (() => {
+    function esc(s) {
+      return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c]);
+    }
+
+    const input = document.getElementById("folderPath");
+    const datalist = document.getElementById("folderSuggestions");
+    const browser = document.getElementById("folderBrowser");
+    const browseBtn = document.getElementById("browseBtn");
+    const scanBtn = document.getElementById("scanBtn");
+    const scanResults = document.getElementById("scanResults");
+    const scanError = document.getElementById("scanError");
+
+    let libraryRoot = "/audiobooks";
+    let fbPath = libraryRoot;
+
+    // Load config
+    fetch("/api/config")
+      .then(r => r.json())
+      .then(cfg => {
+        libraryRoot = cfg.audiobooks_root || "/audiobooks";
+        fbPath = libraryRoot;
+        if (!input.value) input.value = libraryRoot;
+      })
+      .catch(() => {});
+
+    // Show auth banner if auth missing
+    fetch("/api/auth/status")
+      .then(r => r.json())
+      .then(data => { if (!data.auth_ok) document.getElementById("authBanner").hidden = false; })
+      .catch(() => {});
+
+    // ── Path autocomplete ────────────────────────────────────────────────────
+    let lsTimer = null;
+    input.addEventListener("input", () => {
+      clearTimeout(lsTimer);
+      lsTimer = setTimeout(() => {
+        const val = input.value;
+        const dir = val.endsWith("/") ? val : val.slice(0, val.lastIndexOf("/") + 1) || "/";
+        fetch(`/api/fs/ls?path=${encodeURIComponent(dir)}`)
+          .then(r => r.json())
+          .then(data => {
+            datalist.innerHTML = "";
+            (data.dirs || []).filter(d => d.startsWith(val)).forEach(d => {
+              const opt = document.createElement("option");
+              opt.value = d;
+              datalist.appendChild(opt);
+            });
+          })
+          .catch(() => {});
+      }, 180);
+    });
+
+    // ── Folder browser ───────────────────────────────────────────────────────
+    function fbNavigate(path) {
+      fbPath = path;
+      fetch(`/api/fs/ls?path=${encodeURIComponent(path)}`)
+        .then(r => r.json())
+        .then(data => {
+          fbPath = data.path;
+          renderBrowser(data.path, data.dirs || []);
+        })
+        .catch(() => renderBrowser(path, []));
+    }
+
+    function renderBrowser(currentPath, dirs) {
+      // Breadcrumb
+      const parts = currentPath.replace(/\/+$/, "").split("/").filter(Boolean);
+      const crumb = document.getElementById("fbBreadcrumb");
+      const segments = parts.map((seg, i) => {
+        const p = "/" + parts.slice(0, i + 1).join("/");
+        return `<button type="button" data-fbpath="${esc(p)}">${esc(seg)}</button>`;
+      });
+      crumb.innerHTML = (parts.length === 0 ? '<span>/</span>' : '') + segments.join('<span class="fb-sep">/</span>');
+
+      // Footer path label
+      document.getElementById("fbCurrentLabel").textContent = currentPath;
+
+      // Directory list
+      const list = document.getElementById("fbList");
+      if (dirs.length === 0) {
+        list.innerHTML = '<li class="fb-empty" role="option">No subdirectories</li>';
+      } else {
+        list.innerHTML = dirs.map(d => {
+          const name = d.split("/").pop();
+          return `<li role="option" tabindex="0" data-fbpath="${esc(d)}">
+            <span class="fb-item-icon" aria-hidden="true">📁</span>
+            <span class="fb-item-name">${esc(name)}</span>
+            <span class="fb-item-arrow" aria-hidden="true">›</span>
+          </li>`;
+        }).join("");
+      }
+    }
+
+    // Event delegation for browser list and breadcrumb
+    document.getElementById("fbList").addEventListener("click", e => {
+      const li = e.target.closest("li[data-fbpath]");
+      if (li) fbNavigate(li.dataset.fbpath);
+    });
+    document.getElementById("fbList").addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        const li = e.target.closest("li[data-fbpath]");
+        if (li) { e.preventDefault(); fbNavigate(li.dataset.fbpath); }
+      }
+    });
+    document.getElementById("fbBreadcrumb").addEventListener("click", e => {
+      const btn = e.target.closest("button[data-fbpath]");
+      if (btn) fbNavigate(btn.dataset.fbpath);
+    });
+
+    // Open/close browser
+    browseBtn.addEventListener("click", () => {
+      const open = !browser.hidden;
+      browser.hidden = open;
+      browseBtn.setAttribute("aria-expanded", String(!open));
+      if (!open) {
+        fbNavigate(input.value.trim() || fbPath || libraryRoot);
+      }
+    });
+    document.getElementById("fbClose").addEventListener("click", () => {
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
+    });
+
+    // Up button
+    document.getElementById("fbUp").addEventListener("click", () => {
+      const parent = fbPath.replace(/\/[^/]+\/?$/, "") || "/";
+      fbNavigate(parent);
+    });
+
+    // Home button
+    document.getElementById("fbHomeBtn").addEventListener("click", () => {
+      fbNavigate(libraryRoot);
+    });
+
+    // Select button
+    document.getElementById("fbSelect").addEventListener("click", () => {
+      input.value = fbPath;
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
+    });
+
+    // ── Scan ─────────────────────────────────────────────────────────────────
+    function doScan() {
+      const path = input.value.trim();
+      if (!path) return;
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
+      scanBtn.disabled = true;
+      scanBtn.textContent = "Scanning…";
+      scanResults.hidden = true;
+      scanError.hidden = true;
+
+      fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      })
+        .then(r => {
+          if (!r.ok) return r.json().then(e => Promise.reject(e.detail || "Scan failed"));
+          return r.json();
+        })
+        .then(data => {
+          const attention = data.needs_metadata + data.needs_conversion + data.ready_to_organize;
+          document.getElementById("countMetadata").textContent = data.needs_metadata;
+          document.getElementById("countConversion").textContent = data.needs_conversion;
+          document.getElementById("countOrganize").textContent = data.ready_to_organize;
+          const elapsed = data.scan_ms < 1000 ? `${data.scan_ms}ms` : `${(data.scan_ms / 1000).toFixed(1)}s`;
+          let meta = `${data.total} book${data.total !== 1 ? "s" : ""} found`;
+          if (data.organized > 0) meta += ` · ${data.organized} already in library`;
+          meta += data.from_cache ? ` · ${elapsed} (cached, library unchanged)` : ` · scanned in ${elapsed}`;
+          document.getElementById("scanMeta").textContent = meta;
+          document.getElementById("pipelineTitle").textContent =
+            `Run the full pipeline on ${attention > 0 ? `these ${attention}` : "0"} book${attention !== 1 ? "s" : ""}`;
+          const needsAttention = data.needs_metadata + data.needs_conversion;
+          const toggleBtn = document.getElementById("bookListToggleBtn");
+          toggleBtn.dataset.count = needsAttention;
+          toggleBtn.textContent = `Show ${needsAttention} books needing attention ▾`;
+          // Reset book list
+          document.getElementById("bookListBody").hidden = true;
+          document.getElementById("bookListScroll").innerHTML = "";
+          bookListLoaded = false;
+          lastScanPath = input.value.trim();
+          scanResults.hidden = false;
+        })
+        .catch(err => {
+          scanError.textContent = typeof err === "string" ? err : "Scan failed — check the path and try again.";
+          scanError.hidden = false;
+        })
+        .finally(() => {
+          scanBtn.disabled = false;
+          scanBtn.textContent = "Scan folder";
+        });
+    }
+
+    scanBtn.addEventListener("click", doScan);
+    input.addEventListener("keydown", e => { if (e.key === "Enter") doScan(); });
+
+    // ── Book list ─────────────────────────────────────────────────────────────
+    let bookListLoaded = false;
+    let lastScanPath = "";
+
+    document.getElementById("bookListToggleBtn").addEventListener("click", () => {
+      const body = document.getElementById("bookListBody");
+      const btn = document.getElementById("bookListToggleBtn");
+      const open = !body.hidden;
+      body.hidden = open;
+      const count = btn.dataset.count || "0";
+      btn.textContent = (open ? "Show" : "Hide") + ` ${count} books needing attention ${open ? "▾" : "▴"}`;
+      if (!open && !bookListLoaded) {
+        loadBookList(lastScanPath);
+      }
+    });
+
+    function loadBookList(path) {
+      const scroll = document.getElementById("bookListScroll");
+      scroll.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading…</div>';
+      fetch("/api/scan/books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          bookListLoaded = true;
+          scroll.innerHTML = "";
+          (data.books || []).forEach(book => {
+            const item = document.createElement("div");
+            item.className = "book-item";
+            const coverUrl = `/api/book/cover?path=${encodeURIComponent(book.path)}`;
+            const dotClass = book.category === "needs_metadata" ? "needs-metadata" : "needs-conversion";
+            item.innerHTML = `
+              ${book.has_cover
+                ? `<img class="book-cover-thumb" src="${esc(coverUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=book-cover-placeholder aria-hidden=true>♪</div>'" />`
+                : `<div class="book-cover-placeholder" aria-hidden="true">♪</div>`}
+              <div class="book-info">
+                <div class="book-title">${esc(book.title)}</div>
+                ${book.author ? `<div class="book-author">${esc(book.author)}</div>` : ""}
+              </div>
+              <span class="book-category-dot ${dotClass}" title="${book.category === 'needs_metadata' ? 'Needs metadata' : 'Needs conversion'}"></span>
+              <button class="book-copy-btn" type="button" data-path="${esc(book.path)}" aria-label="Copy path">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                  <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2H3.5A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/>
+                </svg>
+                <span class="copy-tooltip">Copy book path</span>
+              </button>`;
+            scroll.appendChild(item);
+          });
+          if (!data.books || data.books.length === 0) {
+            scroll.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No books found.</div>';
+          }
+        })
+        .catch(() => {
+          scroll.innerHTML = '<div style="padding:16px;color:var(--danger);font-size:13px">Failed to load book list.</div>';
+        });
+    }
+
+    // Copy-to-clipboard (event delegation on scroll container)
+    document.getElementById("bookListScroll").addEventListener("click", e => {
+      const btn = e.target.closest(".book-copy-btn");
+      if (!btn) return;
+      navigator.clipboard.writeText(btn.dataset.path).then(() => {
+        const tip = btn.querySelector(".copy-tooltip");
+        tip.textContent = "Copied!";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          tip.textContent = "Copy book path";
+        }, 1800);
+      }).catch(() => {});
+    });
+  })();
+  </script>
+</body>
+</html>

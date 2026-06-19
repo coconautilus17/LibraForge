@@ -51,6 +51,7 @@ function collectRequest() {
     metadata_json: $('metadataJson').checked,
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
+    write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
     min_score: parseFloat($('minScore').value || '0.7'),
     limit: parseInt($('limit').value || '50', 10),
     max_files: parseInt($('maxFiles').value || '0', 10),
@@ -558,5 +559,6 @@ loadScripts();
     });
   }
   $('manualProvider').addEventListener('change', toggleManualAbsAggFields);
+  toggleManualAbsAggFields();
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
 })();

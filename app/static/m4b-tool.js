@@ -18,6 +18,7 @@ async function initProviderSelector() {
     });
   }
   $('metaProvider').addEventListener('change', toggleAbsAggFields);
+  toggleAbsAggFields();
   $('absAggUrl').addEventListener('change', () => saveAbsAggUrl($('absAggUrl').value.trim()));
 }
 

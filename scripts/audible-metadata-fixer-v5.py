@@ -831,6 +831,10 @@ def mutagen_write_mp4_tags(
     mp4_set_freeform(tags, "mvnm", series)
     mp4_set_freeform(tags, "mvin", sequence)
 
+    asin = metadata.get("asin", "")
+    if asin:
+        mp4_set_freeform(tags, "asin", asin)
+
     # Preserve existing comment/description.
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
@@ -922,6 +926,10 @@ def mutagen_write_mp3_tags(
     id3_set_txxx(tags, "mvin", sequence)
     id3_set_txxx(tags, "series", series)
     id3_set_txxx(tags, "series-part", sequence)
+
+    asin = metadata.get("asin", "")
+    if asin:
+        id3_set_txxx(tags, "asin", asin)
 
     # Preserve existing comment/description.
 
@@ -3112,6 +3120,20 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
             clues["book_number"] = descriptive_path_meta["book_number"]
             clues["book_number_source"] = "path"
 
+    # Extract existing ASIN from embedded tags or filename bracket pattern [B0XXXXXXXX] / [ASIN.B0XXXXXXXX].
+    # Audible ASINs always start with B0; the B0-prefix pattern avoids false matches on other bracket
+    # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
+    # because it removes noise rather than extracting for validation.
+    existing_asin = (tags or {}).get("asin", "").strip().upper()
+    if not existing_asin:
+        # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
+        # The tighter pattern avoids false matches on other bracket tokens in filenames.
+        m = re.search(r"\[(?:ASIN\.)?([Bb]0[A-Z0-9]{8})\]", str(file_path), flags=re.IGNORECASE)
+        if m:
+            existing_asin = m.group(1).upper()
+    if existing_asin:
+        clues["existing_asin"] = existing_asin
+
     return recover_invalid_local_title(clues, file_path)
 
 
@@ -3590,6 +3612,7 @@ def build_search_context(
         write_original_metadata_backup(file_path, tags=tags, duration_minutes=duration)
     queries, clues = build_search_queries_from_metadata(file_path, tags=tags)
     clues["local_duration_minutes"] = duration
+    clues["_raw_tags"] = tags
     cache_key = f"file::{file_path}"
     return queries, clues, cache_key
 
@@ -3963,6 +3986,18 @@ def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]
     return response.get("products", []) or []
 
 
+def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
+    """Direct product lookup by ASIN. Returns the product dict or None on any error."""
+    try:
+        response = client.get(
+            f"catalog/products/{asin}",
+            params={"response_groups": RESPONSE_GROUPS},
+        )
+        return response.get("product") or None
+    except Exception:
+        return None
+
+
 _thread_local = threading.local()
 
 
@@ -4117,7 +4152,30 @@ def search_item(
             used_query = ""
             client = get_thread_client(auth_file, auth_password)
 
+            # ASIN-first: if the file already embeds an ASIN, attempt a direct
+            # product lookup before falling back to keyword searches.
+            existing_asin = clues.get("existing_asin", "")
+            if existing_asin:
+                log.append(f"  Trying ASIN direct lookup: {existing_asin}")
+                asin_product = audible_lookup_by_asin(client, existing_asin)
+                if asin_product:
+                    asin_candidate_score = score_product_for_metadata(
+                        clues, asin_product, local_duration_minutes
+                    )
+                    asin_debug = metadata_from_product(asin_product, clues, asin_candidate_score)
+                    log.append(
+                        f"  ASIN lookup: score={asin_candidate_score} "
+                        f"title={asin_debug.get('audible_title')} "
+                        f"mode={asin_debug.get('edit_mode')}"
+                    )
+                    if asin_candidate_score >= args.min_score:
+                        product = asin_product
+                        score = asin_candidate_score
+                        used_query = f"ASIN:{existing_asin}"
+
             for query in queries:
+                if product and score >= args.min_score:
+                    break
                 log.append(f"  Trying query: {query}")
                 cache_key = (query.lower(), args.limit)
                 with search_cache_lock:
@@ -4239,6 +4297,15 @@ def search_item(
         review_reasons = selected_match_review_reasons(
             metadata, clues, score, args.duration_review_threshold,
         )
+
+        # Flag if existing embedded ASIN differs from the matched product ASIN.
+        existing_asin = clues.get("existing_asin", "")
+        matched_asin = (metadata.get("asin") or "").upper()
+        if existing_asin and matched_asin and existing_asin != matched_asin:
+            review_reasons.append(
+                f"existing ASIN {existing_asin} does not match matched ASIN {matched_asin}"
+            )
+
         result.review_reasons = review_reasons
 
         if (
@@ -4996,6 +5063,9 @@ def build_metadata_args(metadata: dict) -> list[str]:
     if metadata.get("sequence"):
         tag_map["track"] = metadata["sequence"]
 
+    if metadata.get("asin"):
+        tag_map["asin"] = metadata["asin"]
+
     args = []
     for key, value in tag_map.items():
         value = sanitize_tag(value)
@@ -5159,6 +5229,72 @@ def mp3_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
             data=image_bytes,
         )
     )
+
+
+def compare_tags_for_write(
+    current_tags: dict, metadata: dict, edit_mode: str
+) -> tuple[bool, list[str]]:
+    """Compare current embedded tags to planned write values.
+
+    Returns (all_match, list_of_changed_field_names).
+    current_tags is the raw ffprobe/mutagen tag dict with lowercase keys.
+    """
+    def cur(keys: list[str]) -> str:
+        for k in keys:
+            v = str(current_tags.get(k, "") or "").strip()
+            if v:
+                return v
+        return ""
+
+    checks = [
+        ("title",  cur(["title"]),                              metadata.get("title", "")),
+        ("author", cur(["artist", "album_artist"]),             metadata.get("author", "")),
+        ("series", cur(["grouping", "mvnm"]),                   metadata.get("series", "")),
+        ("genre",  cur(["genre"]),                              "Audiobook"),
+        ("asin",   cur(["asin"]).upper(),                       (metadata.get("asin") or "").upper()),
+    ]
+    if edit_mode == "full":
+        checks += [
+            ("sequence", cur(["track", "mvin"]),                metadata.get("sequence", "")),
+            ("narrator", cur(["composer"]),                      metadata.get("narrator", "")),
+            ("year",     cur(["date", "year"]),                  metadata.get("year", "")),
+        ]
+
+    changed = [
+        field for field, current, planned in checks
+        if normalize_for_match(current) != normalize_for_match(planned)
+    ]
+    return len(changed) == 0, changed
+
+
+def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dict, list[str]]:
+    """Return a copy of metadata where already-populated fields keep their current value.
+
+    Returns (merged_metadata, list_of_fields_that_were_filled).
+    Only fields with no current value (empty/missing) are taken from metadata.
+    """
+    field_map = {
+        "title":    ["title"],
+        "author":   ["artist", "album_artist"],
+        "series":   ["grouping", "mvnm"],
+        "sequence": ["track", "mvin"],
+        "narrator": ["composer"],
+        "year":     ["date", "year"],
+        "asin":     ["asin"],
+    }
+    merged = dict(metadata)
+    filled: list[str] = []
+    for field, tag_keys in field_map.items():
+        current_value = next(
+            (str(current_tags.get(k, "") or "").strip() for k in tag_keys if current_tags.get(k)),
+            "",
+        )
+        planned_value = str(metadata.get(field, "") or "").strip()
+        if normalize_for_match(current_value):
+            merged[field] = sanitize_tag(current_value)
+        elif planned_value:
+            filled.append(field)
+    return merged, filled
 
 
 def write_tags(
@@ -5793,6 +5929,19 @@ def main():
     )
 
     parser.add_argument(
+        "--write-mode",
+        choices=["smart", "overwrite", "fill-missing"],
+        default="smart",
+        dest="write_mode",
+        help=(
+            "Controls how existing tags are handled when --apply is set. "
+            "smart (default): skip the write if all planned fields already match the current tags. "
+            "overwrite: always write all fields regardless of current values. "
+            "fill-missing: only write fields that are currently empty; existing values are kept."
+        ),
+    )
+
+    parser.add_argument(
         "--backup",
         action="store_true",
         help="Create a per-file JSON backup of the original metadata before writing tags. Recommended on first apply.",
@@ -6118,21 +6267,29 @@ def main():
         if args.apply and not result.write_done:
             aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
             mode = "aggressive" if aggressive_edit else "normal"
+            edit_mode = metadata.get("edit_mode", "none") or "none"
+            write_mode = getattr(args, "write_mode", "smart")
+            current_tags = clues.get("_raw_tags") or {}
 
-            if should_write_json_sidecar(file_path, clues):
-                if is_single_file_mp3(file_path, clues):
-                    writer_used = write_tags(
-                        file_path,
-                        metadata,
-                        backup=args.backup,
-                        writer=args.writer,
-                        cover_if_missing=args.cover_if_missing,
-                        replace_cover=args.replace_cover,
-                    )
-                    update_backup_with_applied_metadata(file_path, metadata)
-                sidecar_path = write_m4b_tool_metadata_sidecar(
-                    file_path, metadata, clues, score
-                )
+            # Resolve effective metadata and decide whether to write.
+            effective_metadata = metadata
+            skip_write = False
+            write_note = ""
+
+            if write_mode == "smart" and not should_write_json_sidecar(file_path, clues) and not args.metadata_json:
+                all_match, changed_fields = compare_tags_for_write(current_tags, metadata, edit_mode)
+                if all_match:
+                    skip_write = True
+                    write_note = "NO-OP (tags already match)"
+            elif write_mode == "fill-missing" and not should_write_json_sidecar(file_path, clues) and not args.metadata_json:
+                effective_metadata, filled_fields = merge_fill_missing_metadata(current_tags, metadata)
+                if not filled_fields:
+                    skip_write = True
+                    write_note = "NO-OP (no missing fields to fill)"
+                else:
+                    write_note = f"fill-missing: {', '.join(filled_fields)}"
+
+            if skip_write:
                 write_marker(
                     source=file_path,
                     metadata=metadata,
@@ -6140,19 +6297,45 @@ def main():
                     score=score,
                     mode=mode,
                     aggressive=aggressive_edit,
-                    output_kind="json_sidecar",
+                    output_kind="tags",
                 )
+                print(f"  {write_note}")
+                print()
+            elif should_write_json_sidecar(file_path, clues):
                 if is_single_file_mp3(file_path, clues):
-                    print(f"  APPLIED ({mode}, writer={writer_used}, json_sidecar={sidecar_path})")
-                else:
-                    print(f"  APPLIED ({mode}, json_sidecar={sidecar_path})")
-            elif args.metadata_json:
-                abs_path = write_audiobookshelf_metadata_json(
-                    file_path, metadata, clues
+                    writer_used = write_tags(
+                        file_path,
+                        effective_metadata,
+                        backup=args.backup,
+                        writer=args.writer,
+                        cover_if_missing=args.cover_if_missing,
+                        replace_cover=args.replace_cover,
+                    )
+                    update_backup_with_applied_metadata(file_path, effective_metadata)
+                sidecar_path = write_m4b_tool_metadata_sidecar(
+                    file_path, effective_metadata, clues, score
                 )
                 write_marker(
                     source=file_path,
-                    metadata=metadata,
+                    metadata=effective_metadata,
+                    clues=clues,
+                    score=score,
+                    mode=mode,
+                    aggressive=aggressive_edit,
+                    output_kind="json_sidecar",
+                )
+                suffix = f" [{write_note}]" if write_note else ""
+                if is_single_file_mp3(file_path, clues):
+                    print(f"  APPLIED ({mode}, writer={writer_used}, json_sidecar={sidecar_path}){suffix}")
+                else:
+                    print(f"  APPLIED ({mode}, json_sidecar={sidecar_path}){suffix}")
+            elif args.metadata_json:
+                abs_path = write_audiobookshelf_metadata_json(
+                    file_path, effective_metadata, clues
+                )
+                write_marker(
+                    source=file_path,
+                    metadata=effective_metadata,
                     clues=clues,
                     score=score,
                     mode=mode,
@@ -6163,23 +6346,24 @@ def main():
             else:
                 writer_used = write_tags(
                     file_path,
-                    metadata,
+                    effective_metadata,
                     backup=args.backup,
                     writer=args.writer,
                     cover_if_missing=args.cover_if_missing,
                     replace_cover=args.replace_cover,
                 )
-                update_backup_with_applied_metadata(file_path, metadata)
+                update_backup_with_applied_metadata(file_path, effective_metadata)
                 write_marker(
                     source=file_path,
-                    metadata=metadata,
+                    metadata=effective_metadata,
                     clues=clues,
                     score=score,
                     mode=mode,
                     aggressive=aggressive_edit,
                     output_kind="tags",
                 )
-                print(f"  APPLIED ({mode}, writer={writer_used})")
+                suffix = f" [{write_note}]" if write_note else ""
+                print(f"  APPLIED ({mode}, writer={writer_used}){suffix}")
             print()
 
         matched += 1
