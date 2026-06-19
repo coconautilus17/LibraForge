@@ -362,7 +362,7 @@
           const elapsed = data.scan_ms < 1000 ? `${data.scan_ms}ms` : `${(data.scan_ms / 1000).toFixed(1)}s`;
           let meta = `${data.total} book${data.total !== 1 ? "s" : ""} found`;
           if (data.organized > 0) meta += ` · ${data.organized} already in library`;
-          meta += ` · scanned in ${elapsed}`;
+          meta += data.from_cache ? ` · ${elapsed} (cached, library unchanged)` : ` · scanned in ${elapsed}`;
           document.getElementById("scanMeta").textContent = meta;
           document.getElementById("pipelineTitle").textContent =
             `Run the full pipeline on ${attention > 0 ? `these ${attention}` : "0"} book${attention !== 1 ? "s" : ""}`;
@@ -437,7 +437,7 @@
                   <rect x="5" y="5" width="9" height="9" rx="1.5"/>
                   <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2H3.5A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/>
                 </svg>
-                <span class="copy-tooltip">Copied!</span>
+                <span class="copy-tooltip">Copy book path</span>
               </button>`;
             scroll.appendChild(item);
           });
@@ -455,8 +455,13 @@
       const btn = e.target.closest(".book-copy-btn");
       if (!btn) return;
       navigator.clipboard.writeText(btn.dataset.path).then(() => {
+        const tip = btn.querySelector(".copy-tooltip");
+        tip.textContent = "Copied!";
         btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1800);
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          tip.textContent = "Copy book path";
+        }, 1800);
       }).catch(() => {});
     });
   })();

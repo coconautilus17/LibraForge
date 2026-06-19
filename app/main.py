@@ -2768,31 +2768,57 @@ def _find_book_folders(root: Path) -> list[Path]:
 
 _COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
-# In-memory cache: path → (timestamp, [(folder_str, category)])
-_scan_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
-_SCAN_CACHE_TTL = 600  # 10 minutes
+# In-memory cache: path → (timestamp, fingerprint, [(folder_str, category)])
+_scan_cache: dict[str, tuple[float, str, list[tuple[str, str]]]] = {}
+_SCAN_CACHE_TTL = 3600  # 1 hour
+
+_AUDIO_EXTS_COVER = ("*.m4b", "*.m4a", "*.mp3", "*.mp4")
+
+
+def _library_fingerprint(root: Path) -> str:
+    """Fast change-detection fingerprint: root mtime + first-level subdir names/mtimes.
+    Catches new/removed author folders and changes inside existing author folders.
+    ~100 stat() calls on a typical audiobook library = <500ms even over NFS."""
+    parts: list[str] = []
+    try:
+        parts.append(str(root.stat().st_mtime_ns))
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and not any(child.name.startswith(s) for s in _FS_SKIP_PREFIXES):
+                parts.append(f"{child.name}:{child.stat().st_mtime_ns}")
+    except PermissionError:
+        pass
+    return "|".join(parts)
 
 
 def _store_scan_cache(path: Path, results: list[tuple[Path, str]]) -> None:
-    _scan_cache[str(path)] = (time.monotonic(), [(str(f), c) for f, c in results])
+    fp = _library_fingerprint(path)
+    _scan_cache[str(path)] = (time.monotonic(), fp, [(str(f), c) for f, c in results])
 
 
 def _load_scan_cache(path: Path) -> list[tuple[str, str]] | None:
     entry = _scan_cache.get(str(path))
-    if entry and time.monotonic() - entry[0] < _SCAN_CACHE_TTL:
-        return entry[1]
-    return None
+    if not entry:
+        return None
+    ts, cached_fp, data = entry
+    if time.monotonic() - ts >= _SCAN_CACHE_TTL:
+        return None
+    if _library_fingerprint(path) != cached_fp:
+        return None  # library changed — force rescan
+    return data
 
 
 def _has_cover_fast(folder: Path) -> bool:
-    """O(directory listing) cover check — file covers or M4B existence (heuristic)."""
+    """Fast cover heuristic: file covers or any audio file presence."""
     if any((folder / n).is_file() for n in _COVER_NAMES):
         return True
-    if next(folder.glob("*.m4b"), None):
-        return True
-    for sub in folder.iterdir():
-        if sub.is_dir() and next(sub.glob("*.m4b"), None):
+    for ext in _AUDIO_EXTS_COVER:
+        if next(folder.glob(ext), None):
             return True
+    for sub in folder.iterdir():
+        if sub.is_dir():
+            for ext in _AUDIO_EXTS_COVER:
+                if next(sub.glob(ext), None):
+                    return True
     return False
 
 
@@ -2802,6 +2828,26 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
+
+    # Fast cache check: fingerprint (~100 stat calls, <500ms) before full os.walk
+    cached = _load_scan_cache(p)
+    if cached is not None:
+        needs_metadata = sum(1 for _, c in cached if c == "needs_metadata")
+        needs_conversion = sum(1 for _, c in cached if c == "needs_conversion")
+        ready_to_organize = sum(1 for _, c in cached if c == "ready_to_organize")
+        organized = sum(1 for _, c in cached if c == "organized")
+        return {
+            "path": str(p),
+            "total": needs_metadata + needs_conversion + ready_to_organize + organized,
+            "needs_metadata": needs_metadata,
+            "needs_conversion": needs_conversion,
+            "ready_to_organize": ready_to_organize,
+            "organized": organized,
+            "scan_ms": round((time.monotonic() - t0) * 1000),
+            "from_cache": True,
+        }
+
+    # Full scan — fingerprint changed or no cache yet
     book_folders = _find_book_folders(p)
 
     def categorise(folder: Path) -> str:
@@ -2849,6 +2895,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         "ready_to_organize": ready_to_organize,
         "organized": organized,
         "scan_ms": round((time.monotonic() - t0) * 1000),
+        "from_cache": False,
     }
 
 
@@ -2865,29 +2912,49 @@ def _book_author(folder: Path, scan_root: Path) -> str:
 
 
 def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
-    """Return (cover_bytes, media_type) from a file cover or embedded M4B tag."""
+    """Return (cover_bytes, media_type) from a file cover or embedded audio tag."""
     for name in _COVER_NAMES:
         cover = folder / name
         if cover.is_file():
             media = "image/png" if cover.suffix.lower() == ".png" else "image/jpeg"
             return (cover.read_bytes(), media)
-    # Fall back to embedded cover art in the first M4B/M4A in this folder or one level down
-    candidates = sorted(folder.glob("*.m4b")) + sorted(folder.glob("*.m4a"))
+    # Find first audio file (prefer m4b > m4a > mp3 > mp4), one level deep
+    candidates: list[Path] = []
+    for ext in ("*.m4b", "*.m4a", "*.mp3", "*.mp4"):
+        found = sorted(folder.glob(ext))
+        if found:
+            candidates = found
+            break
     if not candidates:
-        for sub in folder.iterdir():
+        for sub in sorted(folder.iterdir()):
             if sub.is_dir():
-                candidates = sorted(sub.glob("*.m4b")) + sorted(sub.glob("*.m4a"))
+                for ext in ("*.m4b", "*.m4a", "*.mp3", "*.mp4"):
+                    found = sorted(sub.glob(ext))
+                    if found:
+                        candidates = found
+                        break
                 if candidates:
                     break
     for audio_file in candidates[:1]:
         try:
-            tags = MP4(str(audio_file)).tags
-            if tags and "covr" in tags and tags["covr"]:
-                cover_item = tags["covr"][0]
-                from mutagen.mp4 import MP4Cover  # noqa: PLC0415
-                fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
-                media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
-                return (bytes(cover_item), media)
+            suffix = audio_file.suffix.lower()
+            if suffix in (".m4b", ".m4a", ".mp4"):
+                tags = MP4(str(audio_file)).tags
+                if tags and "covr" in tags and tags["covr"]:
+                    cover_item = tags["covr"][0]
+                    from mutagen.mp4 import MP4Cover  # noqa: PLC0415
+                    fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
+                    media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
+                    return (bytes(cover_item), media)
+            elif suffix == ".mp3":
+                from mutagen.id3 import ID3  # noqa: PLC0415
+                tags = ID3(str(audio_file))
+                for key in tags.keys():
+                    if key.startswith("APIC"):
+                        apic = tags[key]
+                        mime = getattr(apic, "mime", "image/jpeg")
+                        media = "image/png" if "png" in mime else "image/jpeg"
+                        return (bytes(apic.data), media)
         except Exception:
             pass
     return None
