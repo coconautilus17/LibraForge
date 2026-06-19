@@ -1909,6 +1909,7 @@ summary:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   margin-bottom: 28px;
+  background: var(--surface);
 }
 
 .book-item {

@@ -144,8 +144,8 @@
 
       <!-- Book list (lazy-loaded on demand) -->
       <div class="book-list-toggle">
-        <button id="bookListToggleBtn" type="button" class="secondary">
-          Show <span id="bookListCount">0</span> books needing attention ▾
+        <button id="bookListToggleBtn" type="button" class="secondary" data-count="0">
+          Show 0 books needing attention ▾
         </button>
       </div>
       <div id="bookListBody" hidden>
@@ -367,10 +367,11 @@
           document.getElementById("pipelineTitle").textContent =
             `Run the full pipeline on ${attention > 0 ? `these ${attention}` : "0"} book${attention !== 1 ? "s" : ""}`;
           const needsAttention = data.needs_metadata + data.needs_conversion;
-          document.getElementById("bookListCount").textContent = needsAttention;
+          const toggleBtn = document.getElementById("bookListToggleBtn");
+          toggleBtn.dataset.count = needsAttention;
+          toggleBtn.textContent = `Show ${needsAttention} books needing attention ▾`;
           // Reset book list
           document.getElementById("bookListBody").hidden = true;
-          document.getElementById("bookListToggleBtn").textContent = `Show ${needsAttention} books needing attention ▾`;
           document.getElementById("bookListScroll").innerHTML = "";
           bookListLoaded = false;
           lastScanPath = input.value.trim();
@@ -398,7 +399,7 @@
       const btn = document.getElementById("bookListToggleBtn");
       const open = !body.hidden;
       body.hidden = open;
-      const count = document.getElementById("bookListCount").textContent;
+      const count = btn.dataset.count || "0";
       btn.textContent = (open ? "Show" : "Hide") + ` ${count} books needing attention ${open ? "▾" : "▴"}`;
       if (!open && !bookListLoaded) {
         loadBookList(lastScanPath);
