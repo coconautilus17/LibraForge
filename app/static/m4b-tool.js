@@ -4,7 +4,7 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 async function initProviderSelector() {
   await loadAbsAggProviders($('absAggProvider'));
@@ -20,6 +20,20 @@ async function initProviderSelector() {
   $('metaProvider').addEventListener('change', toggleAbsAggFields);
   toggleAbsAggFields();
   $('absAggUrl').addEventListener('change', () => saveAbsAggUrl($('absAggUrl').value.trim()));
+
+  function updateAbsAggParamHint() {
+    const hint = getAbsAggProviderParamHint($('absAggProvider').value);
+    const input = $('absAggParams');
+    if (hint) {
+      input.placeholder = hint.example;
+      input.title = `${hint.required ? 'Required' : 'Optional'}: ${hint.description}`;
+    } else {
+      input.placeholder = '';
+      input.title = '';
+    }
+  }
+  $('absAggProvider').addEventListener('change', updateAbsAggParamHint);
+  updateAbsAggParamHint();
 }
 
 async function loadScripts() {

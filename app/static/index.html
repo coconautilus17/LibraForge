@@ -111,11 +111,11 @@
         <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
           <select id="manualAbsAggProvider"></select>
         </label>
-        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
-          <input id="manualAbsAggParams" placeholder="language:en" />
+        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="manualAbsAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value — e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
+          <input id="manualAbsAggParams" placeholder="en" />
         </label>
-        <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance, e.g. http://localhost:3000"></span></span>
-          <input id="manualAbsAggUrl" placeholder="http://localhost:3000" />
+        <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
+          <input id="manualAbsAggUrl" placeholder="http://abs-agg:3000" />
         </label>
         <label><span class="field-label">Target path <span class="info-tip" data-tooltip="The audiobook file or folder to scan. Use a narrow path for testing before processing the full library."></span></span>
           <input id="targetPath" value="/audiobooks" />
@@ -277,6 +277,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260619-1"></script>
-  <script src="/static/app.js?v=20260620-1"></script>
+  <script src="/static/app.js?v=20260620-2"></script>
 </body>
 </html>

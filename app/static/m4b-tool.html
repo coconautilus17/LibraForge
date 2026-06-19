@@ -137,11 +137,11 @@
         <label id="absAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
           <select id="absAggProvider"></select>
         </label>
-        <label id="absAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters for the selected abs-agg provider, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
-          <input id="absAggParams" placeholder="language:en" />
+        <label id="absAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="absAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value — e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
+          <input id="absAggParams" placeholder="en" />
         </label>
-        <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance, e.g. http://localhost:3000"></span></span>
-          <input id="absAggUrl" placeholder="http://localhost:3000" />
+        <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
+          <input id="absAggUrl" placeholder="http://abs-agg:3000" />
         </label>
       </div>
       <div class="search-row">
@@ -270,6 +270,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260619-1"></script>
-  <script src="/static/m4b-tool.js?v=20260619-2"></script>
+  <script src="/static/m4b-tool.js?v=20260620-1"></script>
 </body>
 </html>

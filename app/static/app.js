@@ -5,7 +5,7 @@ let manualContext = null;
 let manualCurrentCoverUrl = '';
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 function fixerMajorVersion(scriptName) {
   const m = scriptName.match(/-v(\d+)/i);
@@ -583,6 +583,22 @@ loadScripts();
   }
   await loadAbsProviders($('manualAbsProvider'));
   if ($('batchAbsProvider')) await loadAbsProviders($('batchAbsProvider'));
+
+  function updateAbsAggParamHint(selectEl, paramsInputEl) {
+    const hint = getAbsAggProviderParamHint(selectEl.value);
+    if (hint) {
+      paramsInputEl.placeholder = hint.example;
+      paramsInputEl.title = `${hint.required ? 'Required' : 'Optional'}: ${hint.description}`;
+    } else {
+      paramsInputEl.placeholder = '';
+      paramsInputEl.title = '';
+    }
+  }
+
+  $('manualAbsAggProvider').addEventListener('change', () =>
+    updateAbsAggParamHint($('manualAbsAggProvider'), $('manualAbsAggParams'))
+  );
+  updateAbsAggParamHint($('manualAbsAggProvider'), $('manualAbsAggParams'));
 
   function toggleManualProviderFields() {
     const v = $('manualProvider').value;

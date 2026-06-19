@@ -59,19 +59,26 @@ M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
 DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 ABS_AGG_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-agg.json"
 
-# abs-agg provider catalog (key = URL slug, value = display label)
-_ABS_AGG_PROVIDERS: dict[str, str] = {
-    "librivox":         "LibriVox",
-    "goodreads":        "Goodreads",
-    "storytel":         "Storytel",
-    "audioteka":        "Audioteka",
-    "bookbeat":         "BookBeat",
-    "bigfinish":        "Big Finish",
-    "graphicaudio":     "Graphic Audio",
-    "hardcover":        "Hardcover",
-    "soundbooththeatre": "Soundbooth Theatre",
-    "ard":              "ARD Audiothek",
-    "diedrei":          "Die drei ???",
+# Fallback provider catalog used when abs-agg is unreachable.
+# IDs must match the abs-agg URL slugs exactly (verified against /providers endpoint).
+_ABS_AGG_PROVIDERS_FALLBACK: dict[str, str] = {
+    "librivox":          "LibriVox",
+    "storytel":          "Storytel",
+    "audioteka":         "Audioteka",
+    "bookbeat":          "BookBeat",
+    "bigfinish":         "Big Finish",
+    "graphicaudio":      "Graphic Audio",
+    "soundbooththeater": "Soundbooth Theater",
+    "ardaudiothek":      "ARD Audiothek",
+    "dreifragezeichen":  "Die drei ???",
+}
+
+# Providers that require a path parameter — shown as a hint in the UI.
+# Format: provider_id -> (param_name, example_value, description)
+ABS_AGG_REQUIRED_PARAMS: dict[str, tuple[str, str, str]] = {
+    "storytel":  ("language", "en", "ISO language code, e.g. en, de, fr, sv, es"),
+    "audioteka": ("lang",     "pl", "Region code: pl, cz, de, sk, lt"),
+    "bookbeat":  ("market",   "germany", "Country name, e.g. germany, sweden, united-kingdom"),
 }
 
 
@@ -81,7 +88,7 @@ def _load_abs_agg_config() -> dict[str, Any]:
             return json.loads(ABS_AGG_CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception:
         pass
-    return {"url": "http://localhost:3000"}
+    return {"url": "http://abs-agg:3000"}
 
 
 def _save_abs_agg_config(config: dict[str, Any]) -> None:
@@ -95,6 +102,7 @@ def _save_abs_agg_config(config: dict[str, Any]) -> None:
 def search_abs_agg_candidates(
     *,
     query: str,
+    author: str = "",
     base_url: str,
     provider: str,
     provider_params: str = "",
@@ -103,11 +111,13 @@ def search_abs_agg_candidates(
     import urllib.error as _urlerror
     import urllib.parse as _urlparse
 
-    if provider not in _ABS_AGG_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"Unknown abs-agg provider: {provider}")
-
+    # provider_params is the raw path value (e.g. "en" for Storytel, "pl" for Audioteka).
+    # It slots directly into the URL path: /{provider}/{params}/search
     params_segment = f"/{provider_params.strip('/')}" if provider_params.strip("/") else ""
-    qs = _urlparse.urlencode({"title": query, "limit": limit})
+    qs_dict: dict[str, Any] = {"title": query, "limit": limit}
+    if author:
+        qs_dict["author"] = author
+    qs = _urlparse.urlencode(qs_dict)
     search_url = f"{base_url.rstrip('/')}/{provider}{params_segment}/search?{qs}"
 
     try:
@@ -3050,6 +3060,7 @@ class AbsAggSettingsRequest(BaseModel):
 
 class AbsAggSearchRequest(BaseModel):
     query: str
+    author: str = ""
     provider: str = "librivox"
     provider_params: str = ""
     limit: int = 10
@@ -3058,7 +3069,30 @@ class AbsAggSearchRequest(BaseModel):
 
 @app.get("/api/abs-agg/providers")
 def abs_agg_providers() -> dict[str, Any]:
-    return {"providers": _ABS_AGG_PROVIDERS}
+    import urllib.error as _urlerror
+    import urllib.parse as _urlparse
+
+    base_url = _load_abs_agg_config().get("url", "http://abs-agg:3000")
+    providers: dict[str, str] = {}
+    try:
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/providers",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        providers = {
+            p["id"]: p["name"]
+            for p in data.get("providers", [])
+            if p.get("available", True)
+        }
+    except Exception:
+        providers = _ABS_AGG_PROVIDERS_FALLBACK
+
+    return {
+        "providers": providers,
+        "required_params": ABS_AGG_REQUIRED_PARAMS,
+    }
 
 
 @app.get("/api/abs-agg/settings")
@@ -3083,6 +3117,7 @@ def abs_agg_search(req: AbsAggSearchRequest) -> dict[str, Any]:
         )
     return search_abs_agg_candidates(
         query=req.query,
+        author=req.author,
         base_url=base_url,
         provider=req.provider,
         provider_params=req.provider_params,
