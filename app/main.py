@@ -2822,41 +2822,96 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     }
 
 
+def _book_author(folder: Path, scan_root: Path) -> str:
+    try:
+        rel = folder.relative_to(AUDIOBOOKS_ROOT)
+        return rel.parts[0] if len(rel.parts) > 1 else ""
+    except ValueError:
+        try:
+            rel = folder.relative_to(scan_root)
+            return rel.parts[0] if len(rel.parts) > 1 else ""
+        except ValueError:
+            return ""
+
+
+def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
+    """Return (cover_bytes, media_type) from a file cover or embedded M4B tag."""
+    for name in _COVER_NAMES:
+        cover = folder / name
+        if cover.is_file():
+            media = "image/png" if cover.suffix.lower() == ".png" else "image/jpeg"
+            return (cover.read_bytes(), media)
+    # Fall back to embedded cover art in the first M4B/M4A in this folder or one level down
+    candidates = sorted(folder.glob("*.m4b")) + sorted(folder.glob("*.m4a"))
+    if not candidates:
+        for sub in folder.iterdir():
+            if sub.is_dir():
+                candidates = sorted(sub.glob("*.m4b")) + sorted(sub.glob("*.m4a"))
+                if candidates:
+                    break
+    for audio_file in candidates[:1]:
+        try:
+            tags = MP4(str(audio_file)).tags
+            if tags and "covr" in tags and tags["covr"]:
+                cover_item = tags["covr"][0]
+                from mutagen.mp4 import MP4Cover  # noqa: PLC0415
+                fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
+                media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
+                return (bytes(cover_item), media)
+        except Exception:
+            pass
+    return None
+
+
 @app.post("/api/scan/books")
 def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     p = Path(req.path)
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     book_folders = _find_book_folders(p)
-    books = []
-    for folder in book_folders:
-        title = folder.name
-        # Author: first segment under AUDIOBOOKS_ROOT (most reliable regardless of scan root)
+
+    def make_book_entry(folder: Path) -> dict[str, Any] | None:
+        depth = len(folder.relative_to(p).parts)
         try:
-            rel_from_lib = folder.relative_to(AUDIOBOOKS_ROOT)
-            author = rel_from_lib.parts[0] if len(rel_from_lib.parts) > 1 else ""
-        except ValueError:
-            try:
-                rel_parts = folder.relative_to(p).parts
-                author = rel_parts[0] if len(rel_parts) > 1 else ""
-            except ValueError:
-                author = ""
-        has_cover = any((folder / n).is_file() for n in _COVER_NAMES)
-        books.append({"path": str(folder), "title": title, "author": author, "has_cover": has_cover})
+            audio = _book_audio_files(folder)
+        except PermissionError:
+            return None
+        if not audio:
+            return None
+        has_asin = _has_asin(folder, audio[0])
+        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
+        # Skip books that are organized or ready-to-organize (only show ones needing work)
+        if has_asin and (single_m4b or depth > 1):
+            return None
+        category = "needs_metadata" if not has_asin else "needs_conversion"
+        has_cover = _book_cover_data(folder) is not None
+        return {
+            "path": str(folder),
+            "title": folder.name,
+            "author": _book_author(folder, p),
+            "has_cover": has_cover,
+            "category": category,
+        }
+
+    books = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for entry in pool.map(make_book_entry, book_folders):
+            if entry is not None:
+                books.append(entry)
+
+    books.sort(key=lambda b: (b["category"], b["title"].lower()))
     return {"books": books, "total": len(books)}
 
 
 @app.get("/api/book/cover")
-def book_cover(path: str) -> FileResponse:
+def book_cover(path: str) -> Response:
     folder = Path(path)
     if not folder.is_dir():
         raise HTTPException(status_code=404, detail="Not a directory")
-    for name in _COVER_NAMES:
-        cover = folder / name
-        if cover.is_file():
-            suffix = cover.suffix.lower()
-            media = "image/png" if suffix == ".png" else "image/jpeg"
-            return FileResponse(str(cover), media_type=media)
+    result = _book_cover_data(folder)
+    if result:
+        data, media = result
+        return Response(content=data, media_type=media)
     raise HTTPException(status_code=404, detail="No cover found")
 
 
