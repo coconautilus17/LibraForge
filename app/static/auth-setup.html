@@ -130,6 +130,12 @@
       const restartBtn = document.getElementById("restartBtn");
       const step2Error = document.getElementById("step2Error");
 
+      // If auth file already exists (moved back, re-mounted, etc.) skip setup entirely.
+      fetch("/api/auth/status")
+        .then((r) => r.json())
+        .then((data) => { if (data.auth_ok) window.location.replace("/"); })
+        .catch(() => {});
+
       // Load locales
       fetch("/api/auth/locales")
         .then((r) => r.json())

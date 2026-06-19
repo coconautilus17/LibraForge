@@ -103,6 +103,21 @@
         <label><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
+        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source used for manual review searches. Batch runs always use Audible."></span></span>
+          <select id="manualProvider">
+            <option value="audible">Audible</option>
+            <option value="abs-agg">abs-agg</option>
+          </select>
+        </label>
+        <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
+          <select id="manualAbsAggProvider"></select>
+        </label>
+        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
+          <input id="manualAbsAggParams" placeholder="language:en" />
+        </label>
+        <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance, e.g. http://localhost:3000"></span></span>
+          <input id="manualAbsAggUrl" placeholder="http://localhost:3000" />
+        </label>
         <label><span class="field-label">Target path <span class="info-tip" data-tooltip="The audiobook file or folder to scan. Use a narrow path for testing before processing the full library."></span></span>
           <input id="targetPath" value="/audiobooks" />
         </label>
@@ -232,24 +247,6 @@
         </label>
       </div>
 
-      <div class="grid" style="margin-top:10px">
-        <label><span class="field-label">Metadata provider</span>
-          <select id="manualProvider">
-            <option value="audible">Audible</option>
-            <option value="abs-agg">abs-agg</option>
-          </select>
-        </label>
-        <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
-          <select id="manualAbsAggProvider"></select>
-        </label>
-        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" data-tooltip="Optional path parameters, e.g. 'language:en' for Storytel or 'market:germany' for BookBeat."></span></span>
-          <input id="manualAbsAggParams" placeholder="language:en" />
-        </label>
-        <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your running abs-agg instance."></span></span>
-          <input id="manualAbsAggUrl" placeholder="http://localhost:3000" />
-        </label>
-      </div>
-
       <div class="actions">
         <button id="manualSearchBtn" class="secondary">Search For Selected Target</button>
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>
@@ -264,7 +261,7 @@
       <pre id="tail"></pre>
     </section>
   </main>
-  <script src="/static/ui-common.js?v=20260613-1"></script>
-  <script src="/static/app.js?v=20260615-2"></script>
+  <script src="/static/ui-common.js?v=20260619-1"></script>
+  <script src="/static/app.js?v=20260619-3"></script>
 </body>
 </html>
