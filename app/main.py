@@ -2647,6 +2647,106 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "LibraForge"}
 
 
+@app.get("/api/config")
+def get_config() -> dict[str, Any]:
+    return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
+
+
+@app.get("/api/fs/ls")
+def fs_ls(path: str = "/") -> dict[str, Any]:
+    p = Path(path)
+    if not p.is_dir():
+        p = p.parent
+    if not p.is_dir():
+        return {"dirs": [], "path": path}
+    try:
+        dirs = sorted(
+            str(child)
+            for child in p.iterdir()
+            if child.is_dir() and not child.name.startswith(".")
+        )[:60]
+    except PermissionError:
+        dirs = []
+    return {"dirs": dirs, "path": str(p)}
+
+
+class ScanRequest(BaseModel):
+    path: str
+
+
+_ASIN_TAG_KEYS = (
+    "----:com.apple.iTunes:asin",       # LibraForge fixer
+    "----:com.pilabor.tone:AUDIBLE_ASIN",  # Audiobookshelf / tone
+    "----:com.apple.iTunes:ASIN",       # uppercase variant
+)
+
+
+def _has_asin_tag(audio_file: Path) -> bool:
+    try:
+        if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
+            tags = MP4(str(audio_file)).tags
+            if tags:
+                for key in _ASIN_TAG_KEYS:
+                    raw = tags.get(key, [])
+                    if raw:
+                        val = raw[0]
+                        text = (bytes(val).decode("utf-8", errors="ignore") if isinstance(val, (bytes, bytearray, MP4FreeForm)) else str(val))
+                        if text.strip():
+                            return True
+        elif audio_file.suffix.lower() == ".mp3":
+            from mutagen.id3 import ID3  # noqa: PLC0415
+            t = ID3(str(audio_file))
+            return any("asin" in k.lower() for k in t.keys())
+    except Exception:
+        pass
+    return False
+
+
+def _scan_audio_files(folder: Path) -> list[Path]:
+    """Return audio files in a book folder, checking direct children first then one subdirectory level."""
+    direct = sorted(c for c in folder.iterdir() if c.is_file() and is_audio_file(c))
+    if direct:
+        return direct
+    nested: list[Path] = []
+    for sub in folder.iterdir():
+        if sub.is_dir():
+            nested.extend(c for c in sub.iterdir() if c.is_file() and is_audio_file(c))
+    return sorted(nested)
+
+
+@app.post("/api/scan")
+def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+    p = Path(req.path)
+    if not p.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+    t0 = time.monotonic()
+    needs_metadata = 0
+    needs_conversion = 0
+    ready_to_organize = 0
+    total = 0
+    for folder in sorted(p.iterdir()):
+        if not folder.is_dir():
+            continue
+        audio_files = _scan_audio_files(folder)
+        if not audio_files:
+            continue
+        total += 1
+        if not _has_asin_tag(audio_files[0]):
+            needs_metadata += 1
+        elif len(audio_files) == 1 and audio_files[0].suffix.lower() == ".m4b":
+            ready_to_organize += 1
+        else:
+            needs_conversion += 1
+    return {
+        "path": str(p),
+        "total": total,
+        "needs_metadata": needs_metadata,
+        "needs_conversion": needs_conversion,
+        "ready_to_organize": ready_to_organize,
+        "scan_ms": round((time.monotonic() - t0) * 1000),
+    }
+
+
 # ---------------------------------------------------------------------------
 # abs-agg metadata provider
 # ---------------------------------------------------------------------------
@@ -2820,7 +2920,12 @@ def auth_login_complete(req: AuthLoginCompleteRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
+def start_here_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "start-here.html").read_text(encoding="utf-8"))
+
+
+@app.get("/forge", response_class=HTMLResponse)
+def forge_page() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
 
 
