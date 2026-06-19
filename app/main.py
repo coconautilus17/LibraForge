@@ -2766,18 +2766,7 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders)
 
 
-def _categorise_book(folder: Path) -> str:
-    try:
-        audio = _book_audio_files(folder)
-    except PermissionError:
-        return "skip"
-    if not audio:
-        return "skip"
-    if not _has_asin(folder, audio[0]):
-        return "needs_metadata"
-    if len(audio) == 1 and audio[0].suffix.lower() == ".m4b":
-        return "ready_to_organize"
-    return "needs_conversion"
+_COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
 
 @app.post("/api/scan")
@@ -2788,28 +2777,87 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     t0 = time.monotonic()
     book_folders = _find_book_folders(p)
 
+    def categorise(folder: Path) -> str:
+        depth = len(folder.relative_to(p).parts)
+        try:
+            audio = _book_audio_files(folder)
+        except PermissionError:
+            return "skip"
+        if not audio:
+            return "skip"
+        has_asin = _has_asin(folder, audio[0])
+        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
+        if not has_asin:
+            return "needs_metadata"
+        if single_m4b:
+            # Depth > 1 means Author/Book or Author/Series/Book — already in library
+            return "organized" if depth > 1 else "ready_to_organize"
+        return "needs_conversion"
+
     needs_metadata = 0
     needs_conversion = 0
     ready_to_organize = 0
+    organized = 0
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for category in pool.map(_categorise_book, book_folders):
+        for category in pool.map(categorise, book_folders):
             if category == "needs_metadata":
                 needs_metadata += 1
             elif category == "needs_conversion":
                 needs_conversion += 1
             elif category == "ready_to_organize":
                 ready_to_organize += 1
+            elif category == "organized":
+                organized += 1
 
-    total = needs_metadata + needs_conversion + ready_to_organize
+    total = needs_metadata + needs_conversion + ready_to_organize + organized
     return {
         "path": str(p),
         "total": total,
         "needs_metadata": needs_metadata,
         "needs_conversion": needs_conversion,
         "ready_to_organize": ready_to_organize,
+        "organized": organized,
         "scan_ms": round((time.monotonic() - t0) * 1000),
     }
+
+
+@app.post("/api/scan/books")
+def scan_books_route(req: ScanRequest) -> dict[str, Any]:
+    p = Path(req.path)
+    if not p.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+    book_folders = _find_book_folders(p)
+    books = []
+    for folder in book_folders:
+        title = folder.name
+        # Author: first segment under AUDIOBOOKS_ROOT (most reliable regardless of scan root)
+        try:
+            rel_from_lib = folder.relative_to(AUDIOBOOKS_ROOT)
+            author = rel_from_lib.parts[0] if len(rel_from_lib.parts) > 1 else ""
+        except ValueError:
+            try:
+                rel_parts = folder.relative_to(p).parts
+                author = rel_parts[0] if len(rel_parts) > 1 else ""
+            except ValueError:
+                author = ""
+        has_cover = any((folder / n).is_file() for n in _COVER_NAMES)
+        books.append({"path": str(folder), "title": title, "author": author, "has_cover": has_cover})
+    return {"books": books, "total": len(books)}
+
+
+@app.get("/api/book/cover")
+def book_cover(path: str) -> FileResponse:
+    folder = Path(path)
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Not a directory")
+    for name in _COVER_NAMES:
+        cover = folder / name
+        if cover.is_file():
+            suffix = cover.suffix.lower()
+            media = "image/png" if suffix == ".png" else "image/jpeg"
+            return FileResponse(str(cover), media_type=media)
+    raise HTTPException(status_code=404, detail="No cover found")
 
 
 # ---------------------------------------------------------------------------

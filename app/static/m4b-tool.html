@@ -20,6 +20,12 @@
           <p class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</p>
         </div>
       </div>
+      <nav class="site-nav" aria-label="LibraForge tools">
+        <a class="site-nav-link" href="/">Start Here</a>
+        <a class="site-nav-link" href="/forge">Metadata Forge</a>
+        <a class="site-nav-link active" href="/m4b-tool" aria-current="page">M4B Tool</a>
+        <a class="site-nav-link" href="/organizer">Folder Forge</a>
+      </nav>
       <div class="header-actions">
         <button id="explanationsToggle" class="header-action" type="button" aria-pressed="false">Collapse explanations</button>
         <button id="settingsToggle" class="icon-button" type="button" aria-label="Open global settings" aria-expanded="false" aria-controls="globalSettings">
@@ -57,34 +63,11 @@
       </div>
     </header>
 
-    <p class="back-to-home"><a href="/">← Start Here</a></p>
-
-    <nav class="forge-nav" aria-label="LibraForge tools">
-      <a class="forge-nav-item" href="/forge">
-        <span class="forge-nav-icon"><img src="/static/metadata-forge.png?v=20260615-1" alt="" aria-hidden="true" /></span>
-        <span class="forge-nav-copy">
-          <span class="eyebrow">Match, review, apply</span>
-          <strong>Metadata Forge</strong>
-          <small>Match Audible metadata, inspect results, and apply approved fixes.</small>
-        </span>
-      </a>
-      <a class="forge-nav-item active" href="/m4b-tool" aria-current="page">
-        <span class="forge-nav-icon"><img src="/static/m4b-forge-tool.png?v=20260615-1" alt="" aria-hidden="true" /></span>
-        <span class="forge-nav-copy">
-          <span class="eyebrow">Prepare, tag, merge</span>
-          <strong>M4B Tool</strong>
-          <small>Prepare metadata and merge source audio into a finished M4B.</small>
-        </span>
-      </a>
-      <a class="forge-nav-item" href="/organizer">
-        <span class="forge-nav-icon"><img src="/static/folder-forge.png?v=20260615-1" alt="" aria-hidden="true" /></span>
-        <span class="forge-nav-copy">
-          <span class="eyebrow">Plan, inspect, organize</span>
-          <strong>Folder Forge</strong>
-          <small>Preview and apply safe, metadata-driven library organization.</small>
-        </span>
-      </a>
-    </nav>
+    <div class="page-descriptor">
+      <span class="eyebrow">Prepare, tag, merge</span>
+      <h2 class="page-descriptor-title">M4B Tool</h2>
+      <p class="page-descriptor-text">Prepare metadata and merge source audio into a finished M4B.</p>
+    </div>
 
     <section class="card">
       <h2>Source</h2>

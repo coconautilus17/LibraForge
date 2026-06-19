@@ -21,6 +21,12 @@
           <p class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</p>
         </div>
       </div>
+      <nav class="site-nav" aria-label="LibraForge tools">
+        <a class="site-nav-link active" href="/" aria-current="page">Start Here</a>
+        <a class="site-nav-link" href="/forge">Metadata Forge</a>
+        <a class="site-nav-link" href="/m4b-tool">M4B Tool</a>
+        <a class="site-nav-link" href="/organizer">Folder Forge</a>
+      </nav>
       <div class="header-actions">
         <button id="settingsToggle" class="icon-button" type="button" aria-label="Open global settings" aria-expanded="false" aria-controls="globalSettings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
@@ -130,6 +136,16 @@
           <p>Tags whatever needs tagging, converts whatever needs converting, then plans moves for everything that's ready — one combined report at the end.</p>
         </div>
         <button id="pipelineBtn" type="button" disabled title="Full pipeline coming in a future update">Run full pipeline</button>
+      </div>
+
+      <!-- Book list (lazy-loaded on demand) -->
+      <div class="book-list-toggle">
+        <button id="bookListToggleBtn" type="button" class="secondary">
+          Show all <span id="bookListCount">0</span> books ▾
+        </button>
+      </div>
+      <div id="bookListBody" hidden>
+        <div id="bookListScroll" class="book-list-scroll"></div>
       </div>
     </div>
 
@@ -335,14 +351,23 @@
           return r.json();
         })
         .then(data => {
+          const attention = data.needs_metadata + data.needs_conversion + data.ready_to_organize;
           document.getElementById("countMetadata").textContent = data.needs_metadata;
           document.getElementById("countConversion").textContent = data.needs_conversion;
           document.getElementById("countOrganize").textContent = data.ready_to_organize;
           const elapsed = data.scan_ms < 1000 ? `${data.scan_ms}ms` : `${(data.scan_ms / 1000).toFixed(1)}s`;
-          document.getElementById("scanMeta").textContent =
-            `${data.total} book${data.total !== 1 ? "s" : ""} found · scanned in ${elapsed}`;
+          let meta = `${data.total} book${data.total !== 1 ? "s" : ""} found`;
+          if (data.organized > 0) meta += ` · ${data.organized} already in library`;
+          meta += ` · scanned in ${elapsed}`;
+          document.getElementById("scanMeta").textContent = meta;
           document.getElementById("pipelineTitle").textContent =
-            `Run the full pipeline on ${data.total > 0 ? `these ${data.total}` : "0"} book${data.total !== 1 ? "s" : ""}`;
+            `Run the full pipeline on ${attention > 0 ? `these ${attention}` : "0"} book${attention !== 1 ? "s" : ""}`;
+          document.getElementById("bookListCount").textContent = data.total;
+          // Reset book list
+          document.getElementById("bookListBody").hidden = true;
+          document.getElementById("bookListScroll").innerHTML = "";
+          bookListLoaded = false;
+          lastScanPath = input.value.trim();
           scanResults.hidden = false;
         })
         .catch(err => {
@@ -357,6 +382,74 @@
 
     scanBtn.addEventListener("click", doScan);
     input.addEventListener("keydown", e => { if (e.key === "Enter") doScan(); });
+
+    // ── Book list ─────────────────────────────────────────────────────────────
+    let bookListLoaded = false;
+    let lastScanPath = "";
+
+    document.getElementById("bookListToggleBtn").addEventListener("click", () => {
+      const body = document.getElementById("bookListBody");
+      const btn = document.getElementById("bookListToggleBtn");
+      const open = !body.hidden;
+      body.hidden = open;
+      const count = document.getElementById("bookListCount").textContent;
+      btn.textContent = (open ? "Show" : "Hide") + ` all ${count} books ${open ? "▾" : "▴"}`;
+      if (!open && !bookListLoaded) {
+        loadBookList(lastScanPath);
+      }
+    });
+
+    function loadBookList(path) {
+      const scroll = document.getElementById("bookListScroll");
+      scroll.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading…</div>';
+      fetch("/api/scan/books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          bookListLoaded = true;
+          scroll.innerHTML = "";
+          (data.books || []).forEach(book => {
+            const item = document.createElement("div");
+            item.className = "book-item";
+            const coverUrl = `/api/book/cover?path=${encodeURIComponent(book.path)}`;
+            item.innerHTML = `
+              ${book.has_cover
+                ? `<img class="book-cover-thumb" src="${esc(coverUrl)}" alt="" loading="lazy" onerror="this.replaceWith(document.createElement('span'))" />`
+                : `<div class="book-cover-placeholder" aria-hidden="true">♪</div>`}
+              <div class="book-info">
+                <div class="book-title">${esc(book.title)}</div>
+                ${book.author ? `<div class="book-author">${esc(book.author)}</div>` : ""}
+              </div>
+              <button class="book-copy-btn" type="button" data-path="${esc(book.path)}" aria-label="Copy path">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                  <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2H3.5A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/>
+                </svg>
+                <span class="copy-tooltip">Copied!</span>
+              </button>`;
+            scroll.appendChild(item);
+          });
+          if (!data.books || data.books.length === 0) {
+            scroll.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">No books found.</div>';
+          }
+        })
+        .catch(() => {
+          scroll.innerHTML = '<div style="padding:16px;color:var(--danger);font-size:13px">Failed to load book list.</div>';
+        });
+    }
+
+    // Copy-to-clipboard (event delegation on scroll container)
+    document.getElementById("bookListScroll").addEventListener("click", e => {
+      const btn = e.target.closest(".book-copy-btn");
+      if (!btn) return;
+      navigator.clipboard.writeText(btn.dataset.path).then(() => {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1800);
+      }).catch(() => {});
+    });
   })();
   </script>
 </body>
