@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
-  <script src="/static/ui-preferences.js?v=20260620-1"></script>
+  <script src="/static/ui-preferences.js?v=20260620-2"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260619-6" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -57,6 +57,20 @@
         <select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
       </label>
     </div>
+    <section class="settings-section">
+      <h3>Library</h3>
+      <label class="preference-field">Default root path
+        <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <div style="margin-top:12px">
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
+        <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
+        <div style="display:flex;gap:6px">
+          <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
+          <button id="ignoredFoldersAdd" type="button" class="secondary">Add</button>
+        </div>
+      </div>
+    </section>
     <section class="settings-section">
       <h3>Developer</h3>
       <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
@@ -197,15 +211,11 @@
 
   </main>
 
-  <script src="/static/ui-common.js?v=20260620-1"></script>
+  <script src="/static/ui-common.js?v=20260620-2"></script>
   <script>
   (() => {
-    function esc(s) {
-      return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c]);
-    }
-
+    const { initFolderBrowser } = window.UiCommon;
     const input = document.getElementById("folderPath");
-    const datalist = document.getElementById("folderSuggestions");
     const browser = document.getElementById("folderBrowser");
     const browseBtn = document.getElementById("browseBtn");
     const scanBtn = document.getElementById("scanBtn");
@@ -213,133 +223,52 @@
     const scanError = document.getElementById("scanError");
 
     let libraryRoot = "/audiobooks";
-    let fbPath = libraryRoot;
+    const prefs = window.LibraForgePrefs?.get() || {};
 
-    // Load config
+    // Load server config then init browser with effective root
     fetch("/api/config")
       .then(r => r.json())
       .then(cfg => {
         libraryRoot = cfg.audiobooks_root || "/audiobooks";
-        fbPath = libraryRoot;
-        if (!input.value) input.value = libraryRoot;
+        const effectiveRoot = prefs.defaultRootPath || libraryRoot;
+        if (!input.value) input.value = effectiveRoot;
+        initFolderBrowser({
+          inputEl: input,
+          datalistEl: document.getElementById("folderSuggestions"),
+          browserEl: browser,
+          browseBtnEl: browseBtn,
+          listEl: document.getElementById("fbList"),
+          breadcrumbEl: document.getElementById("fbBreadcrumb"),
+          upBtnEl: document.getElementById("fbUp"),
+          homeBtnEl: document.getElementById("fbHomeBtn"),
+          closeBtnEl: document.getElementById("fbClose"),
+          selectBtnEl: document.getElementById("fbSelect"),
+          currentLabelEl: document.getElementById("fbCurrentLabel"),
+          libraryRoot: effectiveRoot,
+        });
       })
-      .catch(() => {});
+      .catch(() => {
+        initFolderBrowser({
+          inputEl: input,
+          datalistEl: document.getElementById("folderSuggestions"),
+          browserEl: browser,
+          browseBtnEl: browseBtn,
+          listEl: document.getElementById("fbList"),
+          breadcrumbEl: document.getElementById("fbBreadcrumb"),
+          upBtnEl: document.getElementById("fbUp"),
+          homeBtnEl: document.getElementById("fbHomeBtn"),
+          closeBtnEl: document.getElementById("fbClose"),
+          selectBtnEl: document.getElementById("fbSelect"),
+          currentLabelEl: document.getElementById("fbCurrentLabel"),
+          libraryRoot,
+        });
+      });
 
     // Show auth banner if auth missing
     fetch("/api/auth/status")
       .then(r => r.json())
       .then(data => { if (!data.auth_ok) document.getElementById("authBanner").hidden = false; })
       .catch(() => {});
-
-    // ── Path autocomplete ────────────────────────────────────────────────────
-    let lsTimer = null;
-    input.addEventListener("input", () => {
-      clearTimeout(lsTimer);
-      lsTimer = setTimeout(() => {
-        const val = input.value;
-        const dir = val.endsWith("/") ? val : val.slice(0, val.lastIndexOf("/") + 1) || "/";
-        fetch(`/api/fs/ls?path=${encodeURIComponent(dir)}`)
-          .then(r => r.json())
-          .then(data => {
-            datalist.innerHTML = "";
-            (data.dirs || []).filter(d => d.startsWith(val)).forEach(d => {
-              const opt = document.createElement("option");
-              opt.value = d;
-              datalist.appendChild(opt);
-            });
-          })
-          .catch(() => {});
-      }, 180);
-    });
-
-    // ── Folder browser ───────────────────────────────────────────────────────
-    function fbNavigate(path) {
-      fbPath = path;
-      fetch(`/api/fs/ls?path=${encodeURIComponent(path)}`)
-        .then(r => r.json())
-        .then(data => {
-          fbPath = data.path;
-          renderBrowser(data.path, data.dirs || []);
-        })
-        .catch(() => renderBrowser(path, []));
-    }
-
-    function renderBrowser(currentPath, dirs) {
-      // Breadcrumb
-      const parts = currentPath.replace(/\/+$/, "").split("/").filter(Boolean);
-      const crumb = document.getElementById("fbBreadcrumb");
-      const segments = parts.map((seg, i) => {
-        const p = "/" + parts.slice(0, i + 1).join("/");
-        return `<button type="button" data-fbpath="${esc(p)}">${esc(seg)}</button>`;
-      });
-      crumb.innerHTML = (parts.length === 0 ? '<span>/</span>' : '') + segments.join('<span class="fb-sep">/</span>');
-
-      // Footer path label
-      document.getElementById("fbCurrentLabel").textContent = currentPath;
-
-      // Directory list
-      const list = document.getElementById("fbList");
-      if (dirs.length === 0) {
-        list.innerHTML = '<li class="fb-empty" role="option">No subdirectories</li>';
-      } else {
-        list.innerHTML = dirs.map(d => {
-          const name = d.split("/").pop();
-          return `<li role="option" tabindex="0" data-fbpath="${esc(d)}">
-            <span class="fb-item-icon" aria-hidden="true">📁</span>
-            <span class="fb-item-name">${esc(name)}</span>
-            <span class="fb-item-arrow" aria-hidden="true">›</span>
-          </li>`;
-        }).join("");
-      }
-    }
-
-    // Event delegation for browser list and breadcrumb
-    document.getElementById("fbList").addEventListener("click", e => {
-      const li = e.target.closest("li[data-fbpath]");
-      if (li) fbNavigate(li.dataset.fbpath);
-    });
-    document.getElementById("fbList").addEventListener("keydown", e => {
-      if (e.key === "Enter" || e.key === " ") {
-        const li = e.target.closest("li[data-fbpath]");
-        if (li) { e.preventDefault(); fbNavigate(li.dataset.fbpath); }
-      }
-    });
-    document.getElementById("fbBreadcrumb").addEventListener("click", e => {
-      const btn = e.target.closest("button[data-fbpath]");
-      if (btn) fbNavigate(btn.dataset.fbpath);
-    });
-
-    // Open/close browser
-    browseBtn.addEventListener("click", () => {
-      const open = !browser.hidden;
-      browser.hidden = open;
-      browseBtn.setAttribute("aria-expanded", String(!open));
-      if (!open) {
-        fbNavigate(input.value.trim() || fbPath || libraryRoot);
-      }
-    });
-    document.getElementById("fbClose").addEventListener("click", () => {
-      browser.hidden = true;
-      browseBtn.setAttribute("aria-expanded", "false");
-    });
-
-    // Up button
-    document.getElementById("fbUp").addEventListener("click", () => {
-      const parent = fbPath.replace(/\/[^/]+\/?$/, "") || "/";
-      fbNavigate(parent);
-    });
-
-    // Home button
-    document.getElementById("fbHomeBtn").addEventListener("click", () => {
-      fbNavigate(libraryRoot);
-    });
-
-    // Select button
-    document.getElementById("fbSelect").addEventListener("click", () => {
-      input.value = fbPath;
-      browser.hidden = true;
-      browseBtn.setAttribute("aria-expanded", "false");
-    });
 
     // ── Scan ─────────────────────────────────────────────────────────────────
     function doScan() {

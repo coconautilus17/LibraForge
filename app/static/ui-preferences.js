@@ -27,6 +27,8 @@
     density: "comfortable",
     explanationsExpanded: true,
     debugMode: false,
+    defaultRootPath: "",
+    ignoredFolders: [".", "#", "@"],
   };
 
   function readPreferences() {
@@ -414,6 +416,9 @@
   let preferences = readPreferences();
   applyPreferences(preferences);
 
+  // Expose read-only access for page scripts that need preference values.
+  window.LibraForgePrefs = { get: () => preferences };
+
   const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
   const handleSystemThemeChange = () => {
     if (preferences.theme !== "system") return;
@@ -446,6 +451,56 @@
         preferences = { ...preferences, debugMode: debugModeEl.checked };
         savePreferences(preferences);
         if (debugLinks) debugLinks.hidden = !preferences.debugMode;
+      });
+    }
+
+    const defaultRootEl = document.getElementById("defaultRootPath");
+    if (defaultRootEl) {
+      defaultRootEl.value = preferences.defaultRootPath || "";
+      defaultRootEl.addEventListener("change", () => {
+        preferences = { ...preferences, defaultRootPath: defaultRootEl.value.trim() };
+        savePreferences(preferences);
+      });
+    }
+
+    const ignoredFoldersContainer = document.getElementById("ignoredFoldersList");
+    const ignoredFoldersInput = document.getElementById("ignoredFoldersInput");
+    const ignoredFoldersAddBtn = document.getElementById("ignoredFoldersAdd");
+
+    function renderIgnoredFolders() {
+      if (!ignoredFoldersContainer) return;
+      ignoredFoldersContainer.replaceChildren(
+        ...(preferences.ignoredFolders || []).map((entry) => {
+          const row = document.createElement("div");
+          row.className = "pattern-row";
+          const label = document.createElement("span");
+          label.textContent = entry;
+          label.className = "mono";
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Remove";
+          remove.className = "secondary";
+          remove.style.fontSize = "0.8em";
+          remove.addEventListener("click", () => {
+            preferences = { ...preferences, ignoredFolders: preferences.ignoredFolders.filter(f => f !== entry) };
+            savePreferences(preferences);
+            renderIgnoredFolders();
+          });
+          row.append(label, remove);
+          return row;
+        })
+      );
+    }
+    renderIgnoredFolders();
+
+    if (ignoredFoldersAddBtn && ignoredFoldersInput) {
+      ignoredFoldersAddBtn.addEventListener("click", () => {
+        const val = ignoredFoldersInput.value.trim();
+        if (!val || (preferences.ignoredFolders || []).includes(val)) return;
+        preferences = { ...preferences, ignoredFolders: [...(preferences.ignoredFolders || []), val] };
+        savePreferences(preferences);
+        ignoredFoldersInput.value = "";
+        renderIgnoredFolders();
       });
     }
 

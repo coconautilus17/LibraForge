@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
-  <script src="/static/ui-preferences.js?v=20260620-1"></script>
+  <script src="/static/ui-preferences.js?v=20260620-2"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260615-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -78,6 +78,20 @@
       <p id="titleNoiseStatus" class="note"></p>
     </section>
     <section class="settings-section">
+      <h3>Library</h3>
+      <label class="preference-field">Default root path
+        <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <div style="margin-top:12px">
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
+        <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
+        <div style="display:flex;gap:6px">
+          <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
+          <button id="ignoredFoldersAdd" type="button" class="secondary">Add</button>
+        </div>
+      </div>
+    </section>
+    <section class="settings-section">
       <h3>Developer</h3>
       <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
       <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
@@ -127,7 +141,11 @@
         </label>
         <p id="absAggWarning" class="note" hidden style="color:var(--warning,#e8a020)">abs-agg is not reachable at the configured URL. Start the service or check the URL above.</p>
         <label><span class="field-label">Target path <span class="info-tip" data-tooltip="The audiobook file or folder to scan. Use a narrow path for testing before processing the full library."></span></span>
-          <input id="targetPath" value="/audiobooks" />
+          <div class="search-row" style="gap:6px">
+            <input id="targetPath" list="targetSuggestions" value="/audiobooks" style="flex:1" />
+            <datalist id="targetSuggestions"></datalist>
+            <button id="targetBrowseBtn" class="secondary" type="button" aria-expanded="false" aria-controls="targetBrowser">Browse</button>
+          </div>
         </label>
         <label><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used only for catalog searches."></span></span>
           <input id="authFile" value="/auth/audible-metadata.json" />
@@ -174,6 +192,25 @@
           <label id="batchAbsProviderLabel" hidden><span class="field-label">ABS source</span>
             <select id="batchAbsProvider"></select>
           </label>
+        </div>
+      </div>
+
+      <!-- Folder browser panel for target path -->
+      <div id="targetBrowser" class="folder-browser" hidden aria-label="Folder browser">
+        <div class="fb-bar">
+          <button id="targetFbUp" class="icon-button small" type="button" aria-label="Go to parent folder">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 15V5M5 10l5-5 5 5"/></svg>
+          </button>
+          <nav id="targetFbBreadcrumb" class="fb-breadcrumb" aria-label="Current path"></nav>
+          <button id="targetFbHome" class="icon-button small" type="button" aria-label="Go to library root">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9.5L10 3l7 6.5V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5Z"/><path d="M7 18v-6h6v6"/></svg>
+          </button>
+          <button id="targetFbClose" class="icon-button small" type="button" aria-label="Close browser">×</button>
+        </div>
+        <ul id="targetFbList" class="fb-list" role="listbox" aria-label="Subdirectories"></ul>
+        <div class="fb-footer">
+          <span id="targetFbCurrentLabel" class="fb-current-path"></span>
+          <button id="targetFbSelect" type="button">Select this folder</button>
         </div>
       </div>
 
@@ -285,7 +322,7 @@
       <pre id="tail"></pre>
     </section>
   </main>
-  <script src="/static/ui-common.js?v=20260620-1"></script>
-  <script src="/static/app.js?v=20260620-5"></script>
+  <script src="/static/ui-common.js?v=20260620-2"></script>
+  <script src="/static/app.js?v=20260620-6"></script>
 </body>
 </html>

@@ -124,6 +124,120 @@
     return result.abs_agg_provider || "abs-agg";
   }
 
+  /**
+   * initFolderBrowser({ inputEl, datalistEl, browserEl, browseBtnEl,
+   *   listEl, breadcrumbEl, upBtnEl, homeBtnEl, closeBtnEl, selectBtnEl,
+   *   currentLabelEl, libraryRoot, onSelect })
+   *
+   * Wires up path autocomplete and the folder browser panel.
+   * onSelect(path) is called when the user clicks "Select this folder".
+   */
+  function initFolderBrowser({
+    inputEl, datalistEl, browserEl, browseBtnEl,
+    listEl, breadcrumbEl, upBtnEl, homeBtnEl, closeBtnEl, selectBtnEl,
+    currentLabelEl, libraryRoot = "/audiobooks", onSelect = null,
+  }) {
+    let fbPath = libraryRoot;
+
+    function esc(s) {
+      return String(s).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[c]);
+    }
+
+    function fbNavigate(path) {
+      fbPath = path;
+      fetch(`/api/fs/ls?path=${encodeURIComponent(path)}`)
+        .then(r => r.json())
+        .then(data => { fbPath = data.path; renderBrowser(data.path, data.dirs || []); })
+        .catch(() => renderBrowser(path, []));
+    }
+
+    function renderBrowser(currentPath, dirs) {
+      const parts = currentPath.replace(/\/+$/, "").split("/").filter(Boolean);
+      const segments = parts.map((seg, i) => {
+        const p = "/" + parts.slice(0, i + 1).join("/");
+        return `<button type="button" data-fbpath="${esc(p)}">${esc(seg)}</button>`;
+      });
+      breadcrumbEl.innerHTML = (parts.length === 0 ? "<span>/</span>" : "") + segments.join('<span class="fb-sep">/</span>');
+      if (currentLabelEl) currentLabelEl.textContent = currentPath;
+      if (dirs.length === 0) {
+        listEl.innerHTML = '<li class="fb-empty" role="option">No subdirectories</li>';
+      } else {
+        listEl.innerHTML = dirs.map(d => {
+          const name = d.split("/").pop();
+          return `<li role="option" tabindex="0" data-fbpath="${esc(d)}">
+            <span class="fb-item-icon" aria-hidden="true">📁</span>
+            <span class="fb-item-name">${esc(name)}</span>
+            <span class="fb-item-arrow" aria-hidden="true">›</span>
+          </li>`;
+        }).join("");
+      }
+    }
+
+    listEl.addEventListener("click", e => {
+      const li = e.target.closest("li[data-fbpath]");
+      if (li) fbNavigate(li.dataset.fbpath);
+    });
+    listEl.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        const li = e.target.closest("li[data-fbpath]");
+        if (li) { e.preventDefault(); fbNavigate(li.dataset.fbpath); }
+      }
+    });
+    breadcrumbEl.addEventListener("click", e => {
+      const btn = e.target.closest("button[data-fbpath]");
+      if (btn) fbNavigate(btn.dataset.fbpath);
+    });
+
+    const closeBrowser = () => {
+      browserEl.hidden = true;
+      if (browseBtnEl) browseBtnEl.setAttribute("aria-expanded", "false");
+    };
+
+    if (browseBtnEl) {
+      browseBtnEl.addEventListener("click", () => {
+        const open = !browserEl.hidden;
+        browserEl.hidden = open;
+        browseBtnEl.setAttribute("aria-expanded", String(!open));
+        if (!open) fbNavigate(inputEl.value.trim() || fbPath || libraryRoot);
+      });
+    }
+    if (closeBtnEl) closeBtnEl.addEventListener("click", closeBrowser);
+    if (upBtnEl) upBtnEl.addEventListener("click", () => {
+      fbNavigate(fbPath.replace(/\/[^/]+\/?$/, "") || "/");
+    });
+    if (homeBtnEl) homeBtnEl.addEventListener("click", () => fbNavigate(libraryRoot));
+    if (selectBtnEl) selectBtnEl.addEventListener("click", () => {
+      if (inputEl) inputEl.value = fbPath;
+      if (onSelect) onSelect(fbPath);
+      closeBrowser();
+    });
+
+    // Path autocomplete
+    if (inputEl && datalistEl) {
+      let lsTimer = null;
+      inputEl.addEventListener("input", () => {
+        clearTimeout(lsTimer);
+        lsTimer = setTimeout(() => {
+          const val = inputEl.value;
+          const dir = val.endsWith("/") ? val : val.slice(0, val.lastIndexOf("/") + 1) || "/";
+          fetch(`/api/fs/ls?path=${encodeURIComponent(dir)}`)
+            .then(r => r.json())
+            .then(data => {
+              datalistEl.innerHTML = "";
+              (data.dirs || []).filter(d => d.startsWith(val)).forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d;
+                datalistEl.appendChild(opt);
+              });
+            })
+            .catch(() => {});
+        }, 180);
+      });
+    }
+
+    return { navigate: fbNavigate, close: closeBrowser };
+  }
+
   window.UiCommon = {
     escapeHtml,
     renderDownloadLinks,
@@ -137,5 +251,6 @@
     saveAbsAggUrl,
     searchAbsAgg,
     scoreBadge,
+    initFolderBrowser,
   };
 })();

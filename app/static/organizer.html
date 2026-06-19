@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
-  <script src="/static/ui-preferences.js?v=20260620-1"></script>
+  <script src="/static/ui-preferences.js?v=20260620-2"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260615-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -63,6 +63,20 @@
       <div id="titleNoiseCustom" class="pattern-list"></div>
       <div class="actions"><button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button></div>
       <p id="titleNoiseStatus" class="note"></p>
+    </section>
+    <section class="settings-section">
+      <h3>Library</h3>
+      <label class="preference-field">Default root path
+        <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <div style="margin-top:12px">
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
+        <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
+        <div style="display:flex;gap:6px">
+          <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
+          <button id="ignoredFoldersAdd" type="button" class="secondary">Add</button>
+        </div>
+      </div>
     </section>
     <section class="settings-section">
       <h3>Developer</h3>
