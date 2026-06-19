@@ -600,16 +600,22 @@ loadScripts();
   );
   updateAbsAggParamHint($('manualAbsAggProvider'), $('manualAbsAggParams'));
 
-  async function toggleManualProviderFields() {
+  function toggleManualProviderFields() {
     const v = $('manualProvider').value;
     const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
-    $('manualAbsProviderLabel').hidden = !isAbs;
-    if ($('absWarning')) $('absWarning').hidden = !(isAbs && !(await checkAbsReachable()));
+    if ($('manualAbsProviderLabel')) $('manualAbsProviderLabel').hidden = !isAbs;
+    if ($('absWarning')) $('absWarning').hidden = !isAbs; // hide immediately; async check refines
     ['manualAbsAggProviderLabel', 'manualAbsAggParamsLabel', 'manualAbsAggUrlLabel'].forEach(id => {
-      $(id).hidden = !isAbsAgg;
+      if ($(id)) $(id).hidden = !isAbsAgg;
     });
     if ($('absAggWarning')) $('absAggWarning').hidden = !(isAbsAgg && !isAbsAggReachable());
+    // Async: refine ABS warning once status is known
+    if (isAbs && $('absWarning')) {
+      checkAbsReachable().then(reachable => {
+        if ($('manualProvider').value === 'abs' && $('absWarning')) $('absWarning').hidden = reachable;
+      });
+    }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
   toggleManualProviderFields();

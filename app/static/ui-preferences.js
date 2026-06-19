@@ -26,6 +26,7 @@
     accent: "sky",
     density: "comfortable",
     explanationsExpanded: true,
+    debugMode: false,
   };
 
   function readPreferences() {
@@ -435,6 +436,19 @@
     const surface = document.getElementById("uiSurface");
     const accent = document.getElementById("uiAccent");
     const density = document.getElementById("uiDensity");
+    const debugModeEl = document.getElementById("debugMode");
+    const debugLinks = document.getElementById("debugLinks");
+
+    if (debugModeEl) {
+      debugModeEl.checked = preferences.debugMode;
+      if (debugLinks) debugLinks.hidden = !preferences.debugMode;
+      debugModeEl.addEventListener("change", () => {
+        preferences = { ...preferences, debugMode: debugModeEl.checked };
+        savePreferences(preferences);
+        if (debugLinks) debugLinks.hidden = !preferences.debugMode;
+      });
+    }
+
     if (!theme || !surface || !accent || !density) return;
 
     theme.value = preferences.theme;

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
-  <script src="/static/ui-preferences.js?v=20260619-6"></script>
+  <script src="/static/ui-preferences.js?v=20260620-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260619-6" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -57,6 +57,13 @@
         <select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
       </label>
     </div>
+    <section class="settings-section">
+      <h3>Developer</h3>
+      <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
+      <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
+        <a href="/auth-setup">Auth &amp; provider setup →</a>
+      </div>
+    </section>
   </div>
 
   <main class="shell" id="main-content">
@@ -190,7 +197,7 @@
 
   </main>
 
-  <script src="/static/ui-common.js?v=20260619-6"></script>
+  <script src="/static/ui-common.js?v=20260620-1"></script>
   <script>
   (() => {
     function esc(s) {

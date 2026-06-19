@@ -27,16 +27,21 @@ async function initProviderSelector() {
     }
   } catch {}
 
-  async function toggleProviderFields() {
+  function toggleProviderFields() {
     const v = $('metaProvider').value;
     const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
     if ($('absProviderLabel')) $('absProviderLabel').hidden = !isAbs;
-    if ($('absWarning')) $('absWarning').hidden = !(isAbs && !(await checkAbsReachable()));
+    if ($('absWarning')) $('absWarning').hidden = !isAbs;
     ['absAggProviderLabel', 'absAggParamsLabel', 'absAggUrlLabel'].forEach(id => {
-      $(id).hidden = !isAbsAgg;
+      if ($(id)) $(id).hidden = !isAbsAgg;
     });
     if ($('absAggWarning')) $('absAggWarning').hidden = !(isAbsAgg && !isAbsAggReachable());
+    if (isAbs && $('absWarning')) {
+      checkAbsReachable().then(reachable => {
+        if ($('metaProvider').value === 'abs' && $('absWarning')) $('absWarning').hidden = reachable;
+      });
+    }
   }
   $('metaProvider').addEventListener('change', toggleProviderFields);
   toggleProviderFields();

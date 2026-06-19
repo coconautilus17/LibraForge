@@ -24,10 +24,13 @@
   }
 
   // Redirect to /auth-setup if the auth file is missing on pages that need it,
-  // unless the user explicitly skipped Audible setup this session.
+  // unless the user explicitly skipped Audible setup or debug mode is on.
   const _AUTH_PAGES = new Set(["fixer", "m4b-tool"]);
   const _page = document.body.dataset.page;
-  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped")) {
+  function _isDebugMode() {
+    try { return JSON.parse(localStorage.getItem("libraforge-preferences") || "{}").debugMode === true; } catch { return false; }
+  }
+  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped") && !_isDebugMode()) {
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then((data) => {
