@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -2684,16 +2685,16 @@ _ASIN_TAG_KEYS = (
 )
 _FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
 _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
+# Folder names that are disc/part subdivisions of a single book, not separate books.
+_DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 
 
 def _has_asin(folder: Path, audio_file: Path) -> bool:
-    """Check for an ASIN, using sidecar files as a fast path before mutagen."""
-    # Fast path: LibraForge fixer sidecar
+    """Check for an ASIN: sidecar fast-path first, then mutagen."""
     if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
         return True
     if (folder / _FIXER_LEGACY_MARKER).exists():
         return True
-    # Mutagen fallback for Audiobookshelf-tagged files
     try:
         if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
             tags = MP4(str(audio_file)).tags
@@ -2719,7 +2720,7 @@ def _has_asin(folder: Path, audio_file: Path) -> bool:
 
 
 def _book_audio_files(folder: Path) -> list[Path]:
-    """Audio files in a book folder: direct children, then one level of subdirs."""
+    """Direct audio files in a book folder, or files one level down (disc subfolders)."""
     direct = sorted(c for c in folder.iterdir() if c.is_file() and is_audio_file(c))
     if direct:
         return direct
@@ -2732,41 +2733,51 @@ def _book_audio_files(folder: Path) -> list[Path]:
 
 def _find_book_folders(root: Path) -> list[Path]:
     """
-    Find all book-level folders under root.
-    Handles both flat (root/Book/) and Author/Book/ structures.
+    Recursively find all book-level folders under root at any depth.
+    Handles Author/Series/Book/file and disc-subfolder patterns.
+    A folder that matches the disc naming pattern (Disc 1, CD2, Part 3…) is
+    collapsed into its parent so multi-disc books count as one.
     """
-    books: list[Path] = []
+    # Walk the full tree, collect every folder that directly contains audio files.
+    audio_folders: set[Path] = set()
     try:
-        level1 = sorted(
-            c for c in root.iterdir()
-            if c.is_dir() and not any(c.name.startswith(s) for s in _FS_SKIP_PREFIXES)
-        )
-    except PermissionError:
-        return books
-    for child in level1:
-        try:
-            child_audio = any(f.is_file() and is_audio_file(f) for f in child.iterdir())
-        except PermissionError:
-            continue
-        if child_audio:
-            books.append(child)
-        else:
-            # Might be an author folder — look one level deeper
-            try:
-                level2 = sorted(
-                    gc for gc in child.iterdir()
-                    if gc.is_dir() and not any(gc.name.startswith(s) for s in _FS_SKIP_PREFIXES)
-                )
-            except PermissionError:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not any(d.startswith(s) for s in _FS_SKIP_PREFIXES)
+            )
+            p = Path(dirpath)
+            if p == root:
                 continue
-            for grandchild in level2:
-                try:
-                    gc_audio = _book_audio_files(grandchild)
-                    if gc_audio:
-                        books.append(grandchild)
-                except PermissionError:
-                    continue
-    return books
+            if any(is_audio_file(Path(dirpath) / f) for f in filenames):
+                audio_folders.add(p)
+    except PermissionError:
+        pass
+
+    # Collapse disc subfolders: if a folder name looks like "Disc 1" / "CD2" etc.,
+    # use its parent as the book folder instead.
+    book_folders: set[Path] = set()
+    for folder in audio_folders:
+        if _DISC_RE.match(folder.name) and folder.parent != root:
+            book_folders.add(folder.parent)
+        else:
+            book_folders.add(folder)
+
+    return sorted(book_folders)
+
+
+def _categorise_book(folder: Path) -> str:
+    try:
+        audio = _book_audio_files(folder)
+    except PermissionError:
+        return "skip"
+    if not audio:
+        return "skip"
+    if not _has_asin(folder, audio[0]):
+        return "needs_metadata"
+    if len(audio) == 1 and audio[0].suffix.lower() == ".m4b":
+        return "ready_to_organize"
+    return "needs_conversion"
 
 
 @app.post("/api/scan")
@@ -2775,26 +2786,25 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
+    book_folders = _find_book_folders(p)
+
     needs_metadata = 0
     needs_conversion = 0
     ready_to_organize = 0
-    book_folders = _find_book_folders(p)
-    for folder in book_folders:
-        try:
-            audio_files = _book_audio_files(folder)
-        except PermissionError:
-            continue
-        if not audio_files:
-            continue
-        if not _has_asin(folder, audio_files[0]):
-            needs_metadata += 1
-        elif len(audio_files) == 1 and audio_files[0].suffix.lower() == ".m4b":
-            ready_to_organize += 1
-        else:
-            needs_conversion += 1
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for category in pool.map(_categorise_book, book_folders):
+            if category == "needs_metadata":
+                needs_metadata += 1
+            elif category == "needs_conversion":
+                needs_conversion += 1
+            elif category == "ready_to_organize":
+                ready_to_organize += 1
+
+    total = needs_metadata + needs_conversion + ready_to_organize
     return {
         "path": str(p),
-        "total": len(book_folders),
+        "total": total,
         "needs_metadata": needs_metadata,
         "needs_conversion": needs_conversion,
         "ready_to_organize": ready_to_organize,
