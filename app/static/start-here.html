@@ -424,7 +424,7 @@
             const dotClass = book.category === "needs_metadata" ? "needs-metadata" : "needs-conversion";
             item.innerHTML = `
               ${book.has_cover
-                ? `<img class="book-cover-thumb" src="${esc(coverUrl)}" alt="" loading="lazy" />`
+                ? `<img class="book-cover-thumb" src="${esc(coverUrl)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=book-cover-placeholder aria-hidden=true>♪</div>'" />`
                 : `<div class="book-cover-placeholder" aria-hidden="true">♪</div>`}
               <div class="book-info">
                 <div class="book-title">${esc(book.title)}</div>

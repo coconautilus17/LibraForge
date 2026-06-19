@@ -2768,6 +2768,33 @@ def _find_book_folders(root: Path) -> list[Path]:
 
 _COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
+# In-memory cache: path → (timestamp, [(folder_str, category)])
+_scan_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
+_SCAN_CACHE_TTL = 600  # 10 minutes
+
+
+def _store_scan_cache(path: Path, results: list[tuple[Path, str]]) -> None:
+    _scan_cache[str(path)] = (time.monotonic(), [(str(f), c) for f, c in results])
+
+
+def _load_scan_cache(path: Path) -> list[tuple[str, str]] | None:
+    entry = _scan_cache.get(str(path))
+    if entry and time.monotonic() - entry[0] < _SCAN_CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _has_cover_fast(folder: Path) -> bool:
+    """O(directory listing) cover check — file covers or M4B existence (heuristic)."""
+    if any((folder / n).is_file() for n in _COVER_NAMES):
+        return True
+    if next(folder.glob("*.m4b"), None):
+        return True
+    for sub in folder.iterdir():
+        if sub.is_dir() and next(sub.glob("*.m4b"), None):
+            return True
+    return False
+
 
 @app.post("/api/scan")
 def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
@@ -2790,7 +2817,6 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         if not has_asin:
             return "needs_metadata"
         if single_m4b:
-            # Depth > 1 means Author/Book or Author/Series/Book — already in library
             return "organized" if depth > 1 else "ready_to_organize"
         return "needs_conversion"
 
@@ -2798,9 +2824,11 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     needs_conversion = 0
     ready_to_organize = 0
     organized = 0
+    book_results: list[tuple[Path, str]] = []
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for category in pool.map(categorise, book_folders):
+        for folder, category in zip(book_folders, pool.map(categorise, book_folders)):
+            book_results.append((folder, category))
             if category == "needs_metadata":
                 needs_metadata += 1
             elif category == "needs_conversion":
@@ -2809,6 +2837,8 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
                 ready_to_organize += 1
             elif category == "organized":
                 organized += 1
+
+    _store_scan_cache(p, book_results)
 
     total = needs_metadata + needs_conversion + ready_to_organize + organized
     return {
@@ -2868,6 +2898,28 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     p = Path(req.path)
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
+
+    cached = _load_scan_cache(p)
+    if cached is not None:
+        # Fast path: categories already known, only do cover checks for needs-attention books
+        attention = [(Path(f), c) for f, c in cached if c in ("needs_metadata", "needs_conversion")]
+
+        def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
+            folder, category = fc
+            return {
+                "path": str(folder),
+                "title": folder.name,
+                "author": _book_author(folder, p),
+                "has_cover": _has_cover_fast(folder),
+                "category": category,
+            }
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            books = list(pool.map(fast_entry, attention))
+        books.sort(key=lambda b: (b["category"], b["title"].lower()))
+        return {"books": books, "total": len(books)}
+
+    # Slow fallback when no scan cache (user navigated directly to books without scanning first)
     book_folders = _find_book_folders(p)
 
     def make_book_entry(folder: Path) -> dict[str, Any] | None:
@@ -2880,17 +2932,14 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
             return None
         has_asin = _has_asin(folder, audio[0])
         single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
-        # Skip books that are organized or ready-to-organize (only show ones needing work)
         if has_asin and (single_m4b or depth > 1):
             return None
-        category = "needs_metadata" if not has_asin else "needs_conversion"
-        has_cover = _book_cover_data(folder) is not None
         return {
             "path": str(folder),
             "title": folder.name,
             "author": _book_author(folder, p),
-            "has_cover": has_cover,
-            "category": category,
+            "has_cover": _has_cover_fast(folder),
+            "category": "needs_metadata" if not has_asin else "needs_conversion",
         }
 
     books = []
@@ -2898,7 +2947,6 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
         for entry in pool.map(make_book_entry, book_folders):
             if entry is not None:
                 books.append(entry)
-
     books.sort(key=lambda b: (b["category"], b["title"].lower()))
     return {"books": books, "total": len(books)}
 
