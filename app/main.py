@@ -2652,6 +2652,9 @@ def get_config() -> dict[str, Any]:
     return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
 
 
+_FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
+
+
 @app.get("/api/fs/ls")
 def fs_ls(path: str = "/") -> dict[str, Any]:
     p = Path(path)
@@ -2663,8 +2666,8 @@ def fs_ls(path: str = "/") -> dict[str, Any]:
         dirs = sorted(
             str(child)
             for child in p.iterdir()
-            if child.is_dir() and not child.name.startswith(".")
-        )[:60]
+            if child.is_dir() and not any(child.name.startswith(s) for s in _FS_SKIP_PREFIXES)
+        )[:80]
     except PermissionError:
         dirs = []
     return {"dirs": dirs, "path": str(p)}
@@ -2675,13 +2678,22 @@ class ScanRequest(BaseModel):
 
 
 _ASIN_TAG_KEYS = (
-    "----:com.apple.iTunes:asin",       # LibraForge fixer
-    "----:com.pilabor.tone:AUDIBLE_ASIN",  # Audiobookshelf / tone
-    "----:com.apple.iTunes:ASIN",       # uppercase variant
+    "----:com.apple.iTunes:asin",
+    "----:com.pilabor.tone:AUDIBLE_ASIN",
+    "----:com.apple.iTunes:ASIN",
 )
+_FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
+_FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
 
 
-def _has_asin_tag(audio_file: Path) -> bool:
+def _has_asin(folder: Path, audio_file: Path) -> bool:
+    """Check for an ASIN, using sidecar files as a fast path before mutagen."""
+    # Fast path: LibraForge fixer sidecar
+    if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
+        return True
+    if (folder / _FIXER_LEGACY_MARKER).exists():
+        return True
+    # Mutagen fallback for Audiobookshelf-tagged files
     try:
         if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
             tags = MP4(str(audio_file)).tags
@@ -2690,7 +2702,11 @@ def _has_asin_tag(audio_file: Path) -> bool:
                     raw = tags.get(key, [])
                     if raw:
                         val = raw[0]
-                        text = (bytes(val).decode("utf-8", errors="ignore") if isinstance(val, (bytes, bytearray, MP4FreeForm)) else str(val))
+                        text = (
+                            bytes(val).decode("utf-8", errors="ignore")
+                            if isinstance(val, (bytes, bytearray, MP4FreeForm))
+                            else str(val)
+                        )
                         if text.strip():
                             return True
         elif audio_file.suffix.lower() == ".mp3":
@@ -2702,8 +2718,8 @@ def _has_asin_tag(audio_file: Path) -> bool:
     return False
 
 
-def _scan_audio_files(folder: Path) -> list[Path]:
-    """Return audio files in a book folder, checking direct children first then one subdirectory level."""
+def _book_audio_files(folder: Path) -> list[Path]:
+    """Audio files in a book folder: direct children, then one level of subdirs."""
     direct = sorted(c for c in folder.iterdir() if c.is_file() and is_audio_file(c))
     if direct:
         return direct
@@ -2712,6 +2728,45 @@ def _scan_audio_files(folder: Path) -> list[Path]:
         if sub.is_dir():
             nested.extend(c for c in sub.iterdir() if c.is_file() and is_audio_file(c))
     return sorted(nested)
+
+
+def _find_book_folders(root: Path) -> list[Path]:
+    """
+    Find all book-level folders under root.
+    Handles both flat (root/Book/) and Author/Book/ structures.
+    """
+    books: list[Path] = []
+    try:
+        level1 = sorted(
+            c for c in root.iterdir()
+            if c.is_dir() and not any(c.name.startswith(s) for s in _FS_SKIP_PREFIXES)
+        )
+    except PermissionError:
+        return books
+    for child in level1:
+        try:
+            child_audio = any(f.is_file() and is_audio_file(f) for f in child.iterdir())
+        except PermissionError:
+            continue
+        if child_audio:
+            books.append(child)
+        else:
+            # Might be an author folder — look one level deeper
+            try:
+                level2 = sorted(
+                    gc for gc in child.iterdir()
+                    if gc.is_dir() and not any(gc.name.startswith(s) for s in _FS_SKIP_PREFIXES)
+                )
+            except PermissionError:
+                continue
+            for grandchild in level2:
+                try:
+                    gc_audio = _book_audio_files(grandchild)
+                    if gc_audio:
+                        books.append(grandchild)
+                except PermissionError:
+                    continue
+    return books
 
 
 @app.post("/api/scan")
@@ -2723,15 +2778,15 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     needs_metadata = 0
     needs_conversion = 0
     ready_to_organize = 0
-    total = 0
-    for folder in sorted(p.iterdir()):
-        if not folder.is_dir():
+    book_folders = _find_book_folders(p)
+    for folder in book_folders:
+        try:
+            audio_files = _book_audio_files(folder)
+        except PermissionError:
             continue
-        audio_files = _scan_audio_files(folder)
         if not audio_files:
             continue
-        total += 1
-        if not _has_asin_tag(audio_files[0]):
+        if not _has_asin(folder, audio_files[0]):
             needs_metadata += 1
         elif len(audio_files) == 1 and audio_files[0].suffix.lower() == ".m4b":
             ready_to_organize += 1
@@ -2739,7 +2794,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
             needs_conversion += 1
     return {
         "path": str(p),
-        "total": total,
+        "total": len(book_folders),
         "needs_metadata": needs_metadata,
         "needs_conversion": needs_conversion,
         "ready_to_organize": ready_to_organize,

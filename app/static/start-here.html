@@ -51,7 +51,6 @@
       </div>
     </header>
 
-    <!-- auth banner: shown if Audible auth is missing -->
     <div id="authBanner" class="callout callout-warning" style="margin-top:18px" hidden>
       <strong>Audible auth needed.</strong>
       Metadata Forge and M4B Tool require an Audible auth file to search the catalogue.
@@ -64,16 +63,36 @@
     </div>
 
     <div class="pick-row">
-      <input id="folderPath" class="pick-row-input" type="text" list="folderSuggestions"
+      <input id="folderPath" type="text" list="folderSuggestions"
              placeholder="/audiobooks/_unorganized"
              autocomplete="off" spellcheck="false" aria-label="Folder path to scan" />
       <datalist id="folderSuggestions"></datalist>
+      <button id="browseBtn" type="button" class="secondary" aria-expanded="false" aria-controls="folderBrowser">Browse</button>
       <button id="scanBtn" type="button">Scan folder</button>
     </div>
     <p class="pick-hint">
       Supports local and network-mounted paths — the path must be accessible from within the container
       (e.g. <code>/mnt/nas/audiobooks</code>).
     </p>
+
+    <!-- Folder browser panel -->
+    <div id="folderBrowser" class="folder-browser" hidden aria-label="Folder browser">
+      <div class="fb-bar">
+        <button id="fbUp" class="icon-button small" type="button" title="Go to parent folder" aria-label="Go to parent folder">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 15V5M5 10l5-5 5 5"/></svg>
+        </button>
+        <nav id="fbBreadcrumb" class="fb-breadcrumb" aria-label="Current path"></nav>
+        <button id="fbHomeBtn" class="icon-button small" type="button" title="Go to library root" aria-label="Go to library root">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9.5L10 3l7 6.5V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5Z"/><path d="M7 18v-6h6v6"/></svg>
+        </button>
+        <button id="fbClose" class="icon-button small" type="button" aria-label="Close browser">×</button>
+      </div>
+      <ul id="fbList" class="fb-list" role="listbox" aria-label="Subdirectories"></ul>
+      <div class="fb-footer">
+        <span id="fbCurrentLabel" class="fb-current-path"></span>
+        <button id="fbSelect" type="button">Select this folder</button>
+      </div>
+    </div>
 
     <p id="scanError" class="note" style="color:var(--danger)" hidden></p>
 
@@ -154,63 +173,153 @@
   <script src="/static/ui-common.js?v=20260619-6"></script>
   <script>
   (() => {
-    // Pre-fill folder path from config
+    function esc(s) {
+      return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'})[c]);
+    }
+
+    const input = document.getElementById("folderPath");
+    const datalist = document.getElementById("folderSuggestions");
+    const browser = document.getElementById("folderBrowser");
+    const browseBtn = document.getElementById("browseBtn");
+    const scanBtn = document.getElementById("scanBtn");
+    const scanResults = document.getElementById("scanResults");
+    const scanError = document.getElementById("scanError");
+
+    let libraryRoot = "/audiobooks";
+    let fbPath = libraryRoot;
+
+    // Load config
     fetch("/api/config")
       .then(r => r.json())
       .then(cfg => {
-        const input = document.getElementById("folderPath");
-        if (cfg.audiobooks_root && !input.value) {
-          input.value = cfg.audiobooks_root;
-        }
+        libraryRoot = cfg.audiobooks_root || "/audiobooks";
+        fbPath = libraryRoot;
+        if (!input.value) input.value = libraryRoot;
       })
       .catch(() => {});
 
     // Show auth banner if auth missing
     fetch("/api/auth/status")
       .then(r => r.json())
-      .then(data => {
-        if (!data.auth_ok) {
-          document.getElementById("authBanner").hidden = false;
-        }
-      })
+      .then(data => { if (!data.auth_ok) document.getElementById("authBanner").hidden = false; })
       .catch(() => {});
 
-    // Path autocomplete via /api/fs/ls
-    const input = document.getElementById("folderPath");
-    const datalist = document.getElementById("folderSuggestions");
+    // ── Path autocomplete ────────────────────────────────────────────────────
     let lsTimer = null;
-
     input.addEventListener("input", () => {
       clearTimeout(lsTimer);
       lsTimer = setTimeout(() => {
         const val = input.value;
-        const dir = val.endsWith("/") ? val : (val.lastIndexOf("/") > 0 ? val.slice(0, val.lastIndexOf("/") + 1) : "/");
+        const dir = val.endsWith("/") ? val : val.slice(0, val.lastIndexOf("/") + 1) || "/";
         fetch(`/api/fs/ls?path=${encodeURIComponent(dir)}`)
           .then(r => r.json())
           .then(data => {
             datalist.innerHTML = "";
-            (data.dirs || [])
-              .filter(d => d.startsWith(val))
-              .forEach(d => {
-                const opt = document.createElement("option");
-                opt.value = d;
-                datalist.appendChild(opt);
-              });
+            (data.dirs || []).filter(d => d.startsWith(val)).forEach(d => {
+              const opt = document.createElement("option");
+              opt.value = d;
+              datalist.appendChild(opt);
+            });
           })
           .catch(() => {});
       }, 180);
     });
 
-    // Scan
-    const scanBtn = document.getElementById("scanBtn");
-    const scanResults = document.getElementById("scanResults");
-    const scanError = document.getElementById("scanError");
-    const scanMeta = document.getElementById("scanMeta");
+    // ── Folder browser ───────────────────────────────────────────────────────
+    function fbNavigate(path) {
+      fbPath = path;
+      fetch(`/api/fs/ls?path=${encodeURIComponent(path)}`)
+        .then(r => r.json())
+        .then(data => {
+          fbPath = data.path;
+          renderBrowser(data.path, data.dirs || []);
+        })
+        .catch(() => renderBrowser(path, []));
+    }
 
-    scanBtn.addEventListener("click", () => {
+    function renderBrowser(currentPath, dirs) {
+      // Breadcrumb
+      const parts = currentPath.replace(/\/+$/, "").split("/").filter(Boolean);
+      const crumb = document.getElementById("fbBreadcrumb");
+      const segments = parts.map((seg, i) => {
+        const p = "/" + parts.slice(0, i + 1).join("/");
+        return `<button type="button" data-fbpath="${esc(p)}">${esc(seg)}</button>`;
+      });
+      crumb.innerHTML = (parts.length === 0 ? '<span>/</span>' : '') + segments.join('<span class="fb-sep">/</span>');
+
+      // Footer path label
+      document.getElementById("fbCurrentLabel").textContent = currentPath;
+
+      // Directory list
+      const list = document.getElementById("fbList");
+      if (dirs.length === 0) {
+        list.innerHTML = '<li class="fb-empty" role="option">No subdirectories</li>';
+      } else {
+        list.innerHTML = dirs.map(d => {
+          const name = d.split("/").pop();
+          return `<li role="option" tabindex="0" data-fbpath="${esc(d)}">
+            <span class="fb-item-icon" aria-hidden="true">📁</span>
+            <span class="fb-item-name">${esc(name)}</span>
+            <span class="fb-item-arrow" aria-hidden="true">›</span>
+          </li>`;
+        }).join("");
+      }
+    }
+
+    // Event delegation for browser list and breadcrumb
+    document.getElementById("fbList").addEventListener("click", e => {
+      const li = e.target.closest("li[data-fbpath]");
+      if (li) fbNavigate(li.dataset.fbpath);
+    });
+    document.getElementById("fbList").addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        const li = e.target.closest("li[data-fbpath]");
+        if (li) { e.preventDefault(); fbNavigate(li.dataset.fbpath); }
+      }
+    });
+    document.getElementById("fbBreadcrumb").addEventListener("click", e => {
+      const btn = e.target.closest("button[data-fbpath]");
+      if (btn) fbNavigate(btn.dataset.fbpath);
+    });
+
+    // Open/close browser
+    browseBtn.addEventListener("click", () => {
+      const open = !browser.hidden;
+      browser.hidden = open;
+      browseBtn.setAttribute("aria-expanded", String(!open));
+      if (!open) {
+        fbNavigate(input.value.trim() || fbPath || libraryRoot);
+      }
+    });
+    document.getElementById("fbClose").addEventListener("click", () => {
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
+    });
+
+    // Up button
+    document.getElementById("fbUp").addEventListener("click", () => {
+      const parent = fbPath.replace(/\/[^/]+\/?$/, "") || "/";
+      fbNavigate(parent);
+    });
+
+    // Home button
+    document.getElementById("fbHomeBtn").addEventListener("click", () => {
+      fbNavigate(libraryRoot);
+    });
+
+    // Select button
+    document.getElementById("fbSelect").addEventListener("click", () => {
+      input.value = fbPath;
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
+    });
+
+    // ── Scan ─────────────────────────────────────────────────────────────────
+    function doScan() {
       const path = input.value.trim();
       if (!path) return;
-
+      browser.hidden = true;
+      browseBtn.setAttribute("aria-expanded", "false");
       scanBtn.disabled = true;
       scanBtn.textContent = "Scanning…";
       scanResults.hidden = true;
@@ -229,10 +338,9 @@
           document.getElementById("countMetadata").textContent = data.needs_metadata;
           document.getElementById("countConversion").textContent = data.needs_conversion;
           document.getElementById("countOrganize").textContent = data.ready_to_organize;
-          const elapsed = data.scan_ms < 1000
-            ? `${data.scan_ms}ms`
-            : `${(data.scan_ms / 1000).toFixed(1)}s`;
-          scanMeta.textContent = `${data.total} book${data.total !== 1 ? "s" : ""} found · scanned in ${elapsed}`;
+          const elapsed = data.scan_ms < 1000 ? `${data.scan_ms}ms` : `${(data.scan_ms / 1000).toFixed(1)}s`;
+          document.getElementById("scanMeta").textContent =
+            `${data.total} book${data.total !== 1 ? "s" : ""} found · scanned in ${elapsed}`;
           document.getElementById("pipelineTitle").textContent =
             `Run the full pipeline on ${data.total > 0 ? `these ${data.total}` : "0"} book${data.total !== 1 ? "s" : ""}`;
           scanResults.hidden = false;
@@ -245,12 +353,10 @@
           scanBtn.disabled = false;
           scanBtn.textContent = "Scan folder";
         });
-    });
+    }
 
-    // Allow Enter key to trigger scan
-    input.addEventListener("keydown", e => {
-      if (e.key === "Enter") scanBtn.click();
-    });
+    scanBtn.addEventListener("click", doScan);
+    input.addEventListener("keydown", e => { if (e.key === "Enter") doScan(); });
   })();
   </script>
 </body>
