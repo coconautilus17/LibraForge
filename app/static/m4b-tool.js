@@ -4,7 +4,7 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 async function initProviderSelector() {
   await loadAbsAggProviders($('absAggProvider'));
@@ -16,6 +16,7 @@ async function initProviderSelector() {
     ['absAggProviderLabel', 'absAggParamsLabel', 'absAggUrlLabel'].forEach(id => {
       $(id).hidden = !isAbsAgg;
     });
+    if ($('absAggWarning')) $('absAggWarning').hidden = !(isAbsAgg && !isAbsAggReachable());
   }
   $('metaProvider').addEventListener('change', toggleAbsAggFields);
   toggleAbsAggFields();

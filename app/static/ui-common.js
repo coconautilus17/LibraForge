@@ -40,12 +40,14 @@
   }
 
   let _absAggRequiredParams = {};
+  let _absAggReachable = false;
 
   async function loadAbsAggProviders(selectEl) {
     try {
       const res = await fetch("/api/abs-agg/providers");
       const data = await res.json();
       _absAggRequiredParams = data.required_params || {};
+      _absAggReachable = data.reachable === true;
       Object.entries(data.providers || {}).forEach(([key, label]) => {
         const opt = document.createElement("option");
         opt.value = key;
@@ -53,6 +55,10 @@
         selectEl.appendChild(opt);
       });
     } catch {}
+  }
+
+  function isAbsAggReachable() {
+    return _absAggReachable;
   }
 
   function getAbsAggProviderParamHint(providerId) {
@@ -108,6 +114,7 @@
     statCard,
     loadAbsAggProviders,
     getAbsAggProviderParamHint,
+    isAbsAggReachable,
     loadAbsAggSettings,
     saveAbsAggUrl,
     searchAbsAgg,

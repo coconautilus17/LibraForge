@@ -143,6 +143,7 @@
         <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
           <input id="absAggUrl" placeholder="http://abs-agg:3000" />
         </label>
+        <p id="absAggWarning" class="note" hidden style="color:var(--warning,#e8a020)">abs-agg is not reachable at the configured URL. Start the service or check the URL above.</p>
       </div>
       <div class="search-row">
         <input id="searchQuery" placeholder="Search title, author, series..." />
@@ -270,6 +271,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260619-1"></script>
-  <script src="/static/m4b-tool.js?v=20260620-1"></script>
+  <script src="/static/m4b-tool.js?v=20260620-2"></script>
 </body>
 </html>

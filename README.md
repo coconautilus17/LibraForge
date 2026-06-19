@@ -49,6 +49,13 @@ docker compose up -d --build
 
 LibraForge listens on `127.0.0.1:5056`. For HTTPS, attach to your reverse proxy network via `docker-compose.override.yml` (git-ignored).
 
+### Optional companion services
+
+| Service | Purpose | Required? |
+|---|---|---|
+| [Audiobookshelf](https://www.audiobookshelf.org/) | Alternative metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and set `ABS_API_KEY` in `.env`. | No |
+| [abs-agg](https://github.com/Vito0912/abs-agg) | Aggregates metadata from LibriVox, Storytel, BookBeat, Big Finish, and others. Deploy on the same Docker network as LibraForge; configure the URL in the provider settings panel. If unreachable, LibraForge shows a warning when abs-agg is selected. | No |
+
 ---
 
 ## Usage

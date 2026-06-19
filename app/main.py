@@ -3069,11 +3069,9 @@ class AbsAggSearchRequest(BaseModel):
 
 @app.get("/api/abs-agg/providers")
 def abs_agg_providers() -> dict[str, Any]:
-    import urllib.error as _urlerror
-    import urllib.parse as _urlparse
-
     base_url = _load_abs_agg_config().get("url", "http://abs-agg:3000")
     providers: dict[str, str] = {}
+    reachable = False
     try:
         req = urllib.request.Request(
             f"{base_url.rstrip('/')}/providers",
@@ -3086,12 +3084,15 @@ def abs_agg_providers() -> dict[str, Any]:
             for p in data.get("providers", [])
             if p.get("available", True)
         }
+        reachable = True
     except Exception:
         providers = _ABS_AGG_PROVIDERS_FALLBACK
 
     return {
         "providers": providers,
         "required_params": ABS_AGG_REQUIRED_PARAMS,
+        "reachable": reachable,
+        "url": base_url,
     }
 
 
