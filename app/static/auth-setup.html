@@ -81,6 +81,46 @@
           <a href="/" class="button-link">Go to Start Here →</a>
         </div>
       </div>
+
+      <!-- Skip -->
+      <div id="skipSection">
+        <hr style="border:none;border-top:1px solid var(--border);margin:28px 0" />
+        <p style="color:var(--muted);font-size:0.9em">
+          Not using Audible? You can skip this step and use
+          <strong>Audiobookshelf</strong> or <strong>abs-agg</strong> as metadata providers instead.<br>
+          Signing in with Audible enables both direct API access for batch runs and ABS/abs-agg for manual review.
+        </p>
+        <div class="actions" style="margin-top:10px">
+          <button id="skipBtn" class="secondary" type="button">Skip for now — use ABS providers</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ABS API key section -->
+    <section class="card" style="max-width:640px;margin:24px auto 0" id="absSection">
+      <h2>Audiobookshelf connection <span id="absStatusBadge" style="font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle"></span></h2>
+      <p>LibraForge can use your Audiobookshelf instance as a metadata provider — no Audible account required. It supports Audible (via ABS's own connection), Google Books, iTunes, Open Library, and more.</p>
+
+      <p>Create a dedicated API key in your ABS instance:
+        <strong>Settings → Users → API Keys</strong>.
+        Name it <code>libraforge</code>, associate it with an admin user.
+        <a href="https://www.audiobookshelf.org/guides/api-keys/" target="_blank" rel="noopener" style="color:var(--accent)">API key documentation →</a>
+      </p>
+
+      <div class="grid" style="--grid-cols:1;margin-top:16px">
+        <label>
+          <span class="field-label">ABS URL</span>
+          <input id="absUrl" value="http://audiobookshelf" placeholder="http://audiobookshelf" />
+        </label>
+        <label>
+          <span class="field-label">ABS API key</span>
+          <input id="absApiKey" type="password" placeholder="Paste your API key" autocomplete="off" />
+        </label>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="absConnectBtn" type="button">Save and verify</button>
+      </div>
+      <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
     </section>
   </main>
 
@@ -129,12 +169,74 @@
       const completeBtn = document.getElementById("completeBtn");
       const restartBtn = document.getElementById("restartBtn");
       const step2Error = document.getElementById("step2Error");
+      const skipBtn = document.getElementById("skipBtn");
+      const absConnectBtn = document.getElementById("absConnectBtn");
+      const absConnectStatus = document.getElementById("absConnectStatus");
+      const absStatusBadge = document.getElementById("absStatusBadge");
 
-      // If auth file already exists (moved back, re-mounted, etc.) skip setup entirely.
+      // If auth file already exists stay on page — user may still want to configure ABS.
       fetch("/api/auth/status")
         .then((r) => r.json())
-        .then((data) => { if (data.auth_ok) window.location.replace("/"); })
+        .then((data) => {
+          if (data.auth_ok) {
+            step1.hidden = true;
+            step2.hidden = true;
+            step3.hidden = false;
+            document.getElementById("skipSection").hidden = true;
+          }
+        })
         .catch(() => {});
+
+      // Skip Audible — mark in sessionStorage and go to home.
+      skipBtn.addEventListener("click", () => {
+        sessionStorage.setItem("audible-skipped", "1");
+        window.location.replace("/");
+      });
+
+      // ABS status badge.
+      function renderAbsBadge(status) {
+        if (status.reachable) {
+          absStatusBadge.textContent = "Connected";
+          absStatusBadge.style.cssText = "background:var(--success-soft,#1a3a2a);color:var(--success,#4ade80);font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle";
+        } else if (status.configured) {
+          absStatusBadge.textContent = "Not reachable";
+          absStatusBadge.style.cssText = "background:var(--warning-soft,#3a2a0a);color:var(--warning,#e8a020);font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle";
+        } else {
+          absStatusBadge.textContent = "Not configured";
+          absStatusBadge.style.cssText = "background:var(--surface-raised);color:var(--muted);font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle";
+        }
+      }
+
+      fetch("/api/abs/status").then((r) => r.json()).then(renderAbsBadge).catch(() => {});
+
+      absConnectBtn.addEventListener("click", async () => {
+        const url = document.getElementById("absUrl").value.trim();
+        const key = document.getElementById("absApiKey").value.trim();
+        if (!key) { absConnectStatus.textContent = "Enter an API key."; return; }
+        absConnectBtn.disabled = true;
+        absConnectBtn.textContent = "Saving…";
+        absConnectStatus.textContent = "";
+        try {
+          const res = await fetch("/api/abs/save-config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url, api_key: key }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to save.");
+          renderAbsBadge(data);
+          absConnectStatus.textContent = data.reachable
+            ? "Connected successfully. ABS providers are now available."
+            : "Key saved, but ABS is not reachable at the given URL. Check that the service is running.";
+          absConnectStatus.style.color = data.reachable ? "var(--success)" : "var(--warning,#e8a020)";
+        } catch (err) {
+          absConnectStatus.textContent = err.message;
+          absConnectStatus.style.color = "var(--danger)";
+        } finally {
+          absConnectBtn.disabled = false;
+          absConnectBtn.textContent = "Save and verify";
+        }
+      });
 
       // Load locales
       fetch("/api/auth/locales")

@@ -1183,8 +1183,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         if req.provider == "abs":
             cmd += ["--provider", "abs"]
             cmd += ["--abs-provider", req.abs_provider]
-            cmd += ["--abs-url", _ABS_URL]
-            cmd += ["--abs-api-key", _ABS_API_KEY]
+            cmd += ["--abs-url", _get_abs_url()]
+            cmd += ["--abs-api-key", _get_abs_api_key()]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
@@ -3130,21 +3130,52 @@ def abs_agg_search(req: AbsAggSearchRequest) -> dict[str, Any]:
 # ABS (Audiobookshelf) metadata provider
 # ---------------------------------------------------------------------------
 
-_ABS_URL = os.environ.get("ABS_URL", "http://audiobookshelf").rstrip("/")
-_ABS_API_KEY = os.environ.get("ABS_API_KEY", "")
+ABS_CONFIG_FILE = APP_ROOT.parent / "config" / "abs.json"
+
+# Env vars are the startup defaults; config file values override at request time.
+_ABS_URL_DEFAULT = os.environ.get("ABS_URL", "http://audiobookshelf").rstrip("/")
+_ABS_API_KEY_DEFAULT = os.environ.get("ABS_API_KEY", "")
+
+
+def _load_abs_config() -> dict[str, Any]:
+    try:
+        if ABS_CONFIG_FILE.exists():
+            return json.loads(ABS_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_abs_config(config: dict[str, Any]) -> None:
+    ABS_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ABS_CONFIG_FILE.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _get_abs_url() -> str:
+    return (_load_abs_config().get("url") or _ABS_URL_DEFAULT).rstrip("/")
+
+
+def _get_abs_api_key() -> str:
+    return _load_abs_config().get("api_key") or _ABS_API_KEY_DEFAULT
 
 
 def _abs_request(path: str, params: dict[str, str]) -> Any:
     import urllib.error as _urlerror
     import urllib.parse as _urlparse
 
-    if not _ABS_API_KEY:
-        raise HTTPException(status_code=503, detail="ABS_API_KEY not configured.")
+    abs_url = _get_abs_url()
+    abs_api_key = _get_abs_api_key()
+
+    if not abs_api_key:
+        raise HTTPException(status_code=503, detail="ABS API key not configured. Visit /auth-setup to add it.")
     qs = _urlparse.urlencode(params)
-    url = f"{_ABS_URL}{path}?{qs}"
+    url = f"{abs_url}{path}?{qs}"
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {_ABS_API_KEY}", "Accept": "application/json"},
+        headers={"Authorization": f"Bearer {abs_api_key}", "Accept": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -3250,7 +3281,47 @@ def abs_providers() -> dict[str, Any]:
 
 @app.get("/api/abs/status")
 def abs_status() -> dict[str, Any]:
-    return {"configured": bool(_ABS_API_KEY), "url": _ABS_URL}
+    abs_url = _get_abs_url()
+    abs_api_key = _get_abs_api_key()
+    configured = bool(abs_api_key)
+    reachable = False
+    if configured:
+        try:
+            req = urllib.request.Request(
+                f"{abs_url}/api/search/providers",
+                headers={"Authorization": f"Bearer {abs_api_key}", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+            reachable = True
+        except Exception:
+            pass
+    return {"configured": configured, "reachable": reachable, "url": abs_url}
+
+
+class AbsSaveConfigRequest(BaseModel):
+    url: str = "http://audiobookshelf"
+    api_key: str
+
+
+@app.post("/api/abs/save-config")
+def abs_save_config(req: AbsSaveConfigRequest) -> dict[str, Any]:
+    if not req.api_key.strip():
+        raise HTTPException(status_code=400, detail="API key cannot be empty.")
+    config = {"url": req.url.strip().rstrip("/"), "api_key": req.api_key.strip()}
+    _save_abs_config(config)
+    # Verify the key works before confirming success.
+    try:
+        probe = urllib.request.Request(
+            f"{config['url']}/api/search/providers",
+            headers={"Authorization": f"Bearer {config['api_key']}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(probe, timeout=5) as resp:
+            resp.read()
+        reachable = True
+    except Exception:
+        reachable = False
+    return {"ok": True, "reachable": reachable, "url": config["url"]}
 
 
 @app.post("/api/abs/search")

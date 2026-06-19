@@ -23,10 +23,11 @@
     return `<div class="stat"><small>${label}</small><strong>${value ?? 0}</strong><small>${help || ""}</small></div>`;
   }
 
-  // Redirect to /auth-setup if the auth file is missing, on pages that need it.
+  // Redirect to /auth-setup if the auth file is missing on pages that need it,
+  // unless the user explicitly skipped Audible setup this session.
   const _AUTH_PAGES = new Set(["fixer", "m4b-tool"]);
   const _page = document.body.dataset.page;
-  if (_AUTH_PAGES.has(_page)) {
+  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped")) {
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then((data) => {
@@ -34,10 +35,22 @@
           window.location.href = "/auth-setup";
         }
       })
-      .catch(() => {
-        // If the status check itself fails, don't block the user.
-      });
+      .catch(() => {});
   }
+
+  // ABS reachability — checked once on load, result shared across the page.
+  let _absStatus = { configured: false, reachable: false };
+  const _absStatusReady = fetch("/api/abs/status")
+    .then((r) => r.json())
+    .then((d) => { _absStatus = d; })
+    .catch(() => {});
+
+  async function checkAbsReachable() {
+    await _absStatusReady;
+    return _absStatus.reachable;
+  }
+
+  function isAbsConfigured() { return _absStatus.configured; }
 
   let _absAggRequiredParams = {};
   let _absAggReachable = false;
@@ -115,6 +128,8 @@
     loadAbsAggProviders,
     getAbsAggProviderParamHint,
     isAbsAggReachable,
+    checkAbsReachable,
+    isAbsConfigured,
     loadAbsAggSettings,
     saveAbsAggUrl,
     searchAbsAgg,

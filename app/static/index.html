@@ -108,6 +108,7 @@
         <label id="manualAbsProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf. Audible.com is the default and most complete for audiobooks."></span></span>
           <select id="manualAbsProvider"></select>
         </label>
+        <p id="absWarning" class="note" hidden style="color:var(--warning,#e8a020)">Audiobookshelf is not connected. <a href="/auth-setup" style="color:inherit;text-decoration:underline">Set up ABS connection →</a></p>
         <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
           <select id="manualAbsAggProvider"></select>
         </label>
@@ -278,6 +279,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260619-1"></script>
-  <script src="/static/app.js?v=20260620-3"></script>
+  <script src="/static/app.js?v=20260620-4"></script>
 </body>
 </html>

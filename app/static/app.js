@@ -5,7 +5,7 @@ let manualContext = null;
 let manualCurrentCoverUrl = '';
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 function fixerMajorVersion(scriptName) {
   const m = scriptName.match(/-v(\d+)/i);
@@ -600,10 +600,12 @@ loadScripts();
   );
   updateAbsAggParamHint($('manualAbsAggProvider'), $('manualAbsAggParams'));
 
-  function toggleManualProviderFields() {
+  async function toggleManualProviderFields() {
     const v = $('manualProvider').value;
-    $('manualAbsProviderLabel').hidden = v !== 'abs';
+    const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
+    $('manualAbsProviderLabel').hidden = !isAbs;
+    if ($('absWarning')) $('absWarning').hidden = !(isAbs && !(await checkAbsReachable()));
     ['manualAbsAggProviderLabel', 'manualAbsAggParamsLabel', 'manualAbsAggUrlLabel'].forEach(id => {
       $(id).hidden = !isAbsAgg;
     });

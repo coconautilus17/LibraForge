@@ -4,22 +4,42 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
 
 async function initProviderSelector() {
   await loadAbsAggProviders($('absAggProvider'));
   const settings = await loadAbsAggSettings();
   if (settings.url) $('absAggUrl').value = settings.url;
 
-  function toggleAbsAggFields() {
-    const isAbsAgg = $('metaProvider').value === 'abs-agg';
+  // Load ABS providers
+  try {
+    const res = await fetch('/api/abs/providers');
+    const data = await res.json();
+    const absProviderEl = $('absProvider');
+    if (absProviderEl) {
+      Object.entries(data.providers || {}).forEach(([value, text]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = text;
+        if (value === 'audible') opt.selected = true;
+        absProviderEl.appendChild(opt);
+      });
+    }
+  } catch {}
+
+  async function toggleProviderFields() {
+    const v = $('metaProvider').value;
+    const isAbs = v === 'abs';
+    const isAbsAgg = v === 'abs-agg';
+    if ($('absProviderLabel')) $('absProviderLabel').hidden = !isAbs;
+    if ($('absWarning')) $('absWarning').hidden = !(isAbs && !(await checkAbsReachable()));
     ['absAggProviderLabel', 'absAggParamsLabel', 'absAggUrlLabel'].forEach(id => {
       $(id).hidden = !isAbsAgg;
     });
     if ($('absAggWarning')) $('absAggWarning').hidden = !(isAbsAgg && !isAbsAggReachable());
   }
-  $('metaProvider').addEventListener('change', toggleAbsAggFields);
-  toggleAbsAggFields();
+  $('metaProvider').addEventListener('change', toggleProviderFields);
+  toggleProviderFields();
   $('absAggUrl').addEventListener('change', () => saveAbsAggUrl($('absAggUrl').value.trim()));
 
   function updateAbsAggParamHint() {
@@ -410,7 +430,17 @@ async function searchMetadata() {
   const provider = $('metaProvider').value;
   let res, data;
 
-  if (provider === 'abs-agg') {
+  if (provider === 'abs') {
+    res = await fetch('/api/abs/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: $('searchQuery').value.trim(),
+        provider: $('absProvider')?.value || 'audible',
+        limit: 10,
+      }),
+    });
+  } else if (provider === 'abs-agg') {
     res = await searchAbsAgg({
       query: $('searchQuery').value.trim(),
       provider: $('absAggProvider').value,
