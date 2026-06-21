@@ -3,6 +3,7 @@ let pollTimer = null;
 let latestState = null;
 let manualContext = null;
 let manualCurrentCoverUrl = '';
+let manualReviewItems = [];
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
@@ -34,11 +35,8 @@ async function loadScripts() {
 
 function collectRequest() {
   const prefs = window.LibraForgePrefs?.get() || {};
-  const ignoredFromPrefs = (prefs.ignoredFolders || []).map(f => f.trim()).filter(Boolean);
-  const skipPatterns = [
-    ...$('skipPatterns').value.split('\n').map((s) => s.trim()).filter(Boolean),
-    ...ignoredFromPrefs,
-  ];
+  const ignoredFolders = (prefs.ignoredFolders || []).map(f => f.trim()).filter(Boolean);
+  const skipPatterns = $('skipPatterns').value.split('\n').map((s) => s.trim()).filter(Boolean);
   return {
     script_name: $('script').value,
     target_path: $('targetPath').value.trim(),
@@ -53,7 +51,7 @@ function collectRequest() {
     show_asin_report: $('showAsin').checked,
     cover_if_missing: $('coverIfMissing').checked,
     replace_cover: $('replaceCover').checked,
-    metadata_json: $('metadataJson').checked,
+    metadata_json_only: $('metadataJsonOnly').checked,
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
@@ -64,6 +62,7 @@ function collectRequest() {
     max_files: parseInt($('maxFiles').value || '0', 10),
     duration_review_threshold: parseFloat($('durationThreshold').value || '10'),
     skip_patterns: skipPatterns,
+    ignored_folders: ignoredFolders,
   };
 }
 
@@ -160,12 +159,16 @@ function renderStats(stats, startedAt, finishedAt) {
   const duration = stats.duration_breakdown || {};
   const threshold = stats.large_duration_threshold || 10;
   const elapsed = formatElapsed(startedAt, finishedAt);
+  const fill = stats.fill_breakdown;
   $('stats').innerHTML = [
     elapsed ? stat('Run duration', elapsed, 'Total elapsed time for this run.') : '',
     stat('Found', stats.found, 'Supported files discovered before filtering.'),
     stat('Matched', stats.matched, 'Files where the script selected a usable match.'),
     stat('Skipped', stats.skipped, 'Files intentionally not processed.'),
     stat('Failed', stats.failed, 'Files that hit an error.'),
+    fill ? stat('Fill: books filled', fill.filled, 'Fill-missing: books that gained at least one empty field.') : '',
+    fill ? stat('Fill: already complete', fill.complete, 'Fill-missing: books where every field was already present (no write).') : '',
+    fill ? stat('Fill: ASIN filled', fill.asin, 'Fill-missing: books that gained an ASIN tag.') : '',
     stat('Mode: full', mode.full, 'Full metadata rewrite planned/applied.'),
     stat('Mode: series_only', mode.series_only, 'Only grouping-critical metadata is changed.'),
     stat('Mode: none', mode.none, 'No safe edit selected.'),
@@ -201,8 +204,16 @@ function renderCategoryFiles() {
   const key = $('categorySelect').value;
   const items = (latestState?.files_by_category || {})[key] || [];
   $('categoryFiles').innerHTML = items.length
-    ? items.map((item) => `<div class="file-item">${escapeHtml(item.path)}${item.title ? `<br><span>${escapeHtml(item.title)}</span>` : ''}</div>`).join('')
+    ? items.map((item) => `
+        <div class="file-item file-item-row">
+          <div>${escapeHtml(item.path)}${item.title ? `<br><span>${escapeHtml(item.title)}</span>` : ''}</div>
+          <button class="secondary" data-cat-load="${escapeHtml(item.path)}">Load target</button>
+        </div>`).join('')
     : '<div class="file-item">No category selected.</div>';
+
+  for (const button of $('categoryFiles').querySelectorAll('button[data-cat-load]')) {
+    button.addEventListener('click', () => loadManualTarget(button.getAttribute('data-cat-load')));
+  }
 }
 
 function renderManualDiscovery(data) {
@@ -309,6 +320,34 @@ async function browseManualPath(path = $('manualBrowsePath').value.trim() || '/a
 }
 
 function renderManualReview(items) {
+  manualReviewItems = items || [];
+
+  // Populate the reason filter from the union of reasons (with counts).
+  const filter = $('manualReviewFilter');
+  if (filter) {
+    const counts = {};
+    for (const item of manualReviewItems) {
+      for (const reason of item.reasons || []) {
+        counts[reason] = (counts[reason] || 0) + 1;
+      }
+    }
+    const previous = filter.value;
+    const reasons = Object.keys(counts).sort();
+    filter.innerHTML = `<option value="">All reasons (${manualReviewItems.length})</option>`
+      + reasons.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)} (${counts[r]})</option>`).join('');
+    filter.value = reasons.includes(previous) ? previous : '';
+  }
+
+  renderManualReviewList();
+}
+
+function renderManualReviewList() {
+  const filter = $('manualReviewFilter');
+  const selected = filter ? filter.value : '';
+  const items = selected
+    ? manualReviewItems.filter((item) => (item.reasons || []).includes(selected))
+    : manualReviewItems;
+
   $('manualReviewList').innerHTML = items.length
     ? items.map((item) => `
       <div class="file-item">
@@ -320,7 +359,7 @@ function renderManualReview(items) {
         <button class="secondary" data-manual-load="${escapeHtml(item.path)}">Load target</button>
       </div>
     `).join('')
-    : '<div class="file-item">No manual review items in this run.</div>';
+    : `<div class="file-item">${manualReviewItems.length ? 'No items match this reason.' : 'No manual review items in this run.'}</div>`;
 
   for (const button of $('manualReviewList').querySelectorAll('button[data-manual-load]')) {
     button.addEventListener('click', () => loadManualTarget(button.getAttribute('data-manual-load')));
@@ -358,6 +397,7 @@ async function loadManualTarget(path) {
     ? `Suggested queries: ${data.queries.join(' | ')}`
     : 'No suggested queries were derived from this target.';
   $('manualSearchResults').innerHTML = '<p class="note">Search this target to review manual candidates.</p>';
+  $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function loadManualCurrentCover() {
@@ -381,6 +421,68 @@ async function loadManualCurrentCover() {
 
   manualCurrentCoverUrl = URL.createObjectURL(await res.blob());
   $('manualCoverStatus').textContent = 'Current cover loaded once for comparison with all candidates.';
+}
+
+const COMPARE_FIELDS = [
+  ['Title', 'title'],
+  ['Subtitle', 'subtitle'],
+  ['Author', 'author'],
+  ['Narrator', 'narrator'],
+  ['Series', 'series'],
+  ['Sequence', 'sequence'],
+  ['Year', 'year'],
+  ['ASIN', 'asin'],
+  ['Publisher', 'publisher'],
+];
+
+function chosenMetadataFor(result, mode) {
+  return (result.chosen_metadata_by_mode && result.chosen_metadata_by_mode[mode])
+    || result.chosen_metadata
+    || {
+      title: result.title,
+      subtitle: result.subtitle,
+      author: (result.authors || []).join(', '),
+      narrator: (result.narrators || []).join(', '),
+      series: result.series,
+      sequence: result.sequence,
+      year: result.year,
+      asin: result.asin,
+      summary: result.summary,
+    };
+}
+
+function buildCompareTable(result, mode) {
+  const local = (manualContext && manualContext.metadata) || {};
+  const chosen = chosenMetadataFor(result, mode);
+  const rows = COMPARE_FIELDS.map(([label, key]) => {
+    const current = String(local[key] ?? '').trim();
+    // Publisher is preserved from the local file (the match never overwrites it).
+    const willWrite = key === 'publisher'
+      ? current
+      : String(chosen[key] ?? '').trim();
+    const changed = willWrite && willWrite !== current;
+    return `
+      <tr class="${changed ? 'changed' : ''}">
+        <th>${label}</th>
+        <td>${escapeHtml(current || '—')}</td>
+        <td>${escapeHtml(willWrite || '—')}</td>
+      </tr>`;
+  }).join('');
+  const summary = String(chosenMetadataFor(result, mode).summary ?? '').trim();
+  const summaryBlock = summary
+    ? `<details class="compare-summary"><summary>Summary</summary><p>${escapeHtml(summary)}</p></details>`
+    : '';
+  return `
+    <table class="compare-table">
+      <thead><tr><th>Field</th><th>Current</th><th>Will write</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${summaryBlock}`;
+}
+
+function renderCompareTable(index, result, mode) {
+  const holder = $('manualSearchResults').querySelector(`div[data-compare="${index}"]`);
+  if (holder) holder.innerHTML = buildCompareTable(result, mode);
 }
 
 function renderManualSearchResults(results = []) {
@@ -420,6 +522,10 @@ function renderManualSearchResults(results = []) {
             <span>Runtime: ${escapeHtml(String(result.duration_minutes || '-'))} min</span>
             <span>Duration status: ${escapeHtml(duration.status || '-')}</span>
           </div>
+          <details class="compare-panel">
+            <summary>Compare metadata (Current vs. Will write)</summary>
+            <div data-compare="${index}">${buildCompareTable(result, result.recommended_edit_mode || result.edit_mode)}</div>
+          </details>
           <div class="actions">
             <label>Apply mode
               <select data-manual-mode="${index}">
@@ -458,6 +564,7 @@ function renderManualSearchResults(results = []) {
     const updateCoverControl = () => {
       const index = select.getAttribute('data-manual-mode');
       const checkbox = $('manualSearchResults').querySelector(`input[data-manual-replace-cover="${index}"]`);
+      renderCompareTable(Number(index), results[Number(index)], select.value);
       if (!checkbox) return;
       checkbox.disabled = select.value !== 'full' || !results[Number(index)]?.cover_url;
       if (checkbox.disabled) checkbox.checked = false;
@@ -558,6 +665,7 @@ $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
 $('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
+$('manualReviewFilter')?.addEventListener('change', renderManualReviewList);
 $('manualSearchBtn').addEventListener('click', searchManualTarget);
 $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());

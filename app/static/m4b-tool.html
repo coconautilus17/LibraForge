@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - M4B Tool</title>
-  <script src="/static/ui-preferences.js?v=20260620-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260615-5" />
+  <script src="/static/ui-preferences.js?v=20260621-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260621-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -65,6 +65,29 @@
       <div id="titleNoiseCustom" class="pattern-list"></div>
       <div class="actions"><button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button></div>
       <p id="titleNoiseStatus" class="note"></p>
+    </section>
+    <section class="settings-section">
+      <h3>Publishers</h3>
+      <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
+      <div id="publisherDefaults" class="pattern-list"></div>
+      <div class="pattern-editor">
+        <label>Publisher name
+          <input id="publisherName" placeholder="Tantor Audio" />
+        </label>
+        <label>Special endpoint
+          <select id="publisherSpecial">
+            <option value="">None</option>
+            <option value="graphicaudio">Graphic Audio</option>
+            <option value="soundbooththeater">Soundbooth Theater</option>
+          </select>
+        </label>
+        <button id="publisherAddBtn" class="secondary" type="button">Add publisher</button>
+      </div>
+      <div id="publisherCustom" class="pattern-list"></div>
+      <div class="actions">
+        <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
+      </div>
+      <p id="publisherStatus" class="note"></p>
     </section>
     <section class="settings-section">
       <h3>Library</h3>

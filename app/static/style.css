@@ -2395,3 +2395,80 @@ summary:focus-visible {
     align-items: flex-start;
   }
 }
+
+/* Category file rows with a quick "Load target" action */
+.file-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.file-item-row > div {
+  min-width: 0;
+  word-break: break-all;
+}
+
+/* Manual-review candidate comparison panel */
+.compare-panel {
+  margin: 10px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.compare-panel > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 0.9em;
+  color: var(--text-soft);
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.compare-table th,
+.compare-table td {
+  text-align: left;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.compare-table thead th {
+  color: var(--muted);
+  font-weight: 600;
+  border-top: none;
+}
+
+.compare-table tbody th {
+  color: var(--muted);
+  font-weight: 600;
+  width: 22%;
+}
+
+.compare-table tr.changed td:last-child {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.compare-summary {
+  margin: 6px 12px 10px;
+}
+
+.compare-summary > summary {
+  cursor: pointer;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.compare-summary p {
+  font-size: 0.85em;
+  color: var(--text-soft);
+  margin: 6px 0 0;
+}

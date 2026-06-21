@@ -413,6 +413,144 @@
     load();
   }
 
+  function publisherCustomId(name) {
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    return slug || `publisher-${Date.now()}`;
+  }
+
+  function initializePublisherSettings() {
+    const defaultsContainer = document.getElementById("publisherDefaults");
+    const customContainer = document.getElementById("publisherCustom");
+    const status = document.getElementById("publisherStatus");
+    const nameInput = document.getElementById("publisherName");
+    const specialSelect = document.getElementById("publisherSpecial");
+    const addButton = document.getElementById("publisherAddBtn");
+    const saveButton = document.getElementById("publisherSaveBtn");
+    if (!defaultsContainer || !customContainer || !status || !nameInput || !addButton || !saveButton) return;
+
+    let policy = null;
+
+    const specialLabel = (id) => (policy?.special_providers || {})[id] || id;
+
+    const render = () => {
+      const entries = policy?.publishers || [];
+      defaultsContainer.replaceChildren(
+        ...entries.filter((item) => item.source === "default").map((item) => {
+          const row = document.createElement("label");
+          row.className = "pattern-row";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = item.enabled;
+          input.dataset.publisherDefault = item.id;
+          const copy = document.createElement("span");
+          const detail = [item.aliases?.length ? `aka ${item.aliases.join(", ")}` : "", item.special_provider ? `→ ${specialLabel(item.special_provider)} endpoint` : ""].filter(Boolean).join(" · ");
+          copy.append(createTextElement("strong", item.name), createTextElement("small", detail || "publisher / imprint"));
+          row.append(input, copy);
+          return row;
+        }),
+      );
+
+      const custom = entries.filter((item) => item.source !== "default");
+      if (!custom.length) {
+        customContainer.replaceChildren(createTextElement("p", "No custom or learned publishers.", "note"));
+        return;
+      }
+      customContainer.replaceChildren(...custom.map((item) => {
+        const row = document.createElement("div");
+        row.className = "pattern-row custom-pattern-row";
+        row.dataset.publisherCustom = item.id;
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = item.enabled;
+        input.dataset.patternEnabled = "";
+        const copy = document.createElement("span");
+        const detail = [item.source === "learned" ? "learned" : "custom", item.special_provider ? `→ ${specialLabel(item.special_provider)} endpoint` : ""].filter(Boolean).join(" · ");
+        copy.append(createTextElement("strong", item.name), createTextElement("small", detail));
+        label.append(input, copy);
+        const remove = createTextElement("button", "Remove", "secondary");
+        remove.type = "button";
+        remove.addEventListener("click", () => {
+          policy.publishers = policy.publishers.filter((candidate) => candidate.id !== item.id);
+          render();
+          status.textContent = "Publisher removed locally. Save to apply the change.";
+        });
+        row.append(label, remove);
+        return row;
+      }));
+    };
+
+    const load = async () => {
+      const response = await fetch("/api/settings/publishers");
+      const data = await response.json();
+      if (!response.ok) {
+        status.textContent = data.detail || "Could not load publishers.";
+        return;
+      }
+      policy = data;
+      render();
+      status.textContent = "Using shared defaults and local overrides.";
+    };
+
+    addButton.addEventListener("click", () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        status.textContent = "Enter a publisher name.";
+        return;
+      }
+      policy ||= { publishers: [] };
+      policy.publishers.push({
+        id: publisherCustomId(name),
+        name,
+        aliases: [],
+        special_provider: specialSelect && specialSelect.value ? specialSelect.value : null,
+        source: "custom",
+        enabled: true,
+      });
+      nameInput.value = "";
+      if (specialSelect) specialSelect.value = "";
+      render();
+      status.textContent = "Publisher added locally. Save to apply it.";
+    });
+
+    saveButton.addEventListener("click", async () => {
+      const disabledDefaults = [
+        ...defaultsContainer.querySelectorAll("[data-publisher-default]:not(:checked)"),
+      ].map((input) => input.dataset.publisherDefault);
+      const customPublishers = [
+        ...customContainer.querySelectorAll("[data-publisher-custom]"),
+      ].map((row) => {
+        const item = policy.publishers.find((candidate) => candidate.id === row.dataset.publisherCustom);
+        return {
+          id: item.id,
+          name: item.name,
+          aliases: item.aliases || [],
+          special_provider: item.special_provider || null,
+          source: item.source === "learned" ? "learned" : "custom",
+          enabled: row.querySelector("[data-pattern-enabled]").checked,
+        };
+      });
+      const response = await fetch("/api/settings/publishers", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          disabled_defaults: disabledDefaults,
+          custom_publishers: customPublishers,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        status.textContent = data.detail || "Could not save publishers.";
+        return;
+      }
+      policy = data;
+      render();
+      status.textContent = "Saved. New runs now use these publishers.";
+    });
+
+    load();
+  }
+
   let preferences = readPreferences();
   applyPreferences(preferences);
 
@@ -437,6 +575,7 @@
     initializeSettingsPanel();
     initializeExplanations();
     initializeTitleNoiseSettings();
+    initializePublisherSettings();
     const theme = document.getElementById("uiTheme");
     const surface = document.getElementById("uiSurface");
     const accent = document.getElementById("uiAccent");

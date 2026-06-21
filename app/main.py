@@ -42,6 +42,7 @@ from app.progress_phases import (
     terminal_phase,
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
+from app.publisher_policy import load_publisher_policy, save_publisher_policy
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = APP_ROOT / "static"
@@ -232,8 +233,17 @@ MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
 DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
 SUMMARY_RE = re.compile(r"^\s*(Matched|Skipped|Failed):\s+(\d+)\s*$")
+FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+(\d+)\s*$")
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
+MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
+AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
+FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
+SPECIAL_PUB_RE = re.compile(r"consider the .+ abs-agg endpoint")
+SECTION_END_RE = re.compile(
+    r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
+    r"ASIN VERIFICATION|Checking the library)"
+)
 ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves):\s+(\d+)\s*$")
 ORGANIZER_MODE_RE = re.compile(r"^Mode:\s+(APPLY|DRY RUN|INDEX ONLY)\s*$")
 ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure):\s+(.+)$")
@@ -626,13 +636,14 @@ class RunRequest(BaseModel):
     show_asin_report: bool = False
     cover_if_missing: bool = False
     replace_cover: bool = False
-    metadata_json: bool = False
+    metadata_json_only: bool = False
 
     min_score: float | None = 0.70
     limit: int | None = 50
     max_files: int | None = 0
     duration_review_threshold: float | None = 10.0
     skip_patterns: list[str] = Field(default_factory=list)
+    ignored_folders: list[str] = Field(default_factory=list)
 
     workers: int | None = None
     api_delay_ms: int = 0
@@ -759,6 +770,20 @@ class TitleNoisePolicyUpdate(BaseModel):
     custom_patterns: list[TitleNoiseCustomPattern] = Field(default_factory=list)
 
 
+class PublisherEntry(BaseModel):
+    id: str = ""
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    special_provider: str | None = None
+    source: str = "custom"
+    enabled: bool = True
+
+
+class PublisherPolicyUpdate(BaseModel):
+    disabled_defaults: list[str] = Field(default_factory=list)
+    custom_publishers: list[PublisherEntry] = Field(default_factory=list)
+
+
 @dataclass
 class RunState:
     id: str
@@ -869,6 +894,14 @@ def derive_manual_review_items(
     for path in [item.get("path", "") for item in files_by_category.get("mode:series_only", []) if item.get("path")]:
         ensure(path)["reasons"].append("mode:series_only")
 
+    # Resolved-but-ambiguous matches (duration tie-break) and special-edition
+    # publishers matched the run but still warrant a manual look.
+    for path in [item.get("path", "") for item in files_by_category.get("review:duration-tiebreak", []) if item.get("path")]:
+        ensure(path)["reasons"].append("duration tie-break")
+
+    for path in [item.get("path", "") for item in files_by_category.get("review:special-publisher", []) if item.get("path")]:
+        ensure(path)["reasons"].append("special publisher")
+
     threshold = stats.get("large_duration_threshold", 10)
     for item in stats.get("large_duration_items", []):
         path = item.get("path", "")
@@ -908,6 +941,14 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     detected_phase = fixer_phase_for_line(line, state.current_file)
     if detected_phase:
         set_run_phase(state, *detected_phase)
+
+    # Once the end-of-run summary/report region begins, no further lines belong to
+    # a processed item. Clear current_file so per-item reason lines re-printed in
+    # the reports (e.g. "(chose ... on duration)", "abs-agg endpoint") are not
+    # misattributed to the last processed book.
+    if SECTION_END_RE.match(line):
+        state.current_file = ""
+        return
 
     m = FOUND_RE.match(line)
     if m:
@@ -954,6 +995,14 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.stats[m.group(1).lower()] = int(m.group(2))
         return
 
+    m = FILL_STATS_RE.match(line)
+    if m:
+        key = {"Books filled": "filled", "Already complete": "complete", "ASIN filled": "asin"}[
+            m.group(1)
+        ]
+        state.stats.setdefault("fill_breakdown", {})[key] = int(m.group(2))
+        return
+
     m = MODE_RE.match(line)
     if m and state.current_file:
         mode = m.group(1)
@@ -992,6 +1041,30 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     if m and state.current_file:
         state.stats["error_count"] += 1
         add_category(state, "status", "error", state.current_file, m.group(1).strip())
+        return
+
+    if state.current_file and MATCH_RE.match(line):
+        add_category(state, "status", "matched", state.current_file)
+        return
+
+    if state.current_file and AMBIG_RESOLVED_RE.search(line):
+        add_category(state, "review", "duration-tiebreak", state.current_file)
+        return
+
+    if state.current_file and SPECIAL_PUB_RE.search(line):
+        add_category(state, "review", "special-publisher", state.current_file)
+        return
+
+    m = FILL_ITEM_RE.match(line)
+    if m and state.current_file:
+        filled = m.group(1)
+        if filled:
+            add_category(state, "fill", "filled", state.current_file, filled.strip())
+            fields = {f.strip().lower() for f in filled.split(",")}
+            if "asin" in fields:
+                add_category(state, "fill", "asin", state.current_file)
+        else:
+            add_category(state, "fill", "complete", state.current_file)
         return
 
 
@@ -1162,8 +1235,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         cmd.append("--cover-if-missing")
     if req.replace_cover:
         cmd.append("--replace-cover")
-    if req.metadata_json:
-        cmd.append("--metadata-json")
+    if req.metadata_json_only:
+        cmd.append("--metadata-json-only")
     if req.min_score is not None:
         cmd += ["--min-score", str(req.min_score)]
     if req.limit is not None:
@@ -1176,6 +1249,10 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         pattern = pattern.strip()
         if pattern:
             cmd += ["--skip-pattern", pattern]
+    for folder in req.ignored_folders:
+        folder = folder.strip()
+        if folder:
+            cmd += ["--ignore-folder", folder]
 
     if _fixer_major_version(req.script_name) >= 5:
         if req.workers is not None and req.workers > 0:
@@ -1843,6 +1920,7 @@ def inspect_manual_review_target(
         "sequence": clues.get("book_number", ""),
         "year": "",
         "summary": "",
+        "publisher": clues.get("publisher", ""),
         "cover_url": "",
         "asin": "",
         "local_duration_minutes": clues.get("local_duration_minutes"),
@@ -4125,6 +4203,22 @@ def update_title_noise_policy(req: TitleNoisePolicyUpdate) -> dict[str, Any]:
         return save_title_noise_policy(
             disabled_defaults=req.disabled_defaults,
             custom_patterns=[item.model_dump() for item in req.custom_patterns],
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/settings/publishers")
+def get_publisher_policy() -> dict[str, Any]:
+    return load_publisher_policy()
+
+
+@app.put("/api/settings/publishers")
+def update_publisher_policy(req: PublisherPolicyUpdate) -> dict[str, Any]:
+    try:
+        return save_publisher_policy(
+            disabled_defaults=req.disabled_defaults,
+            custom_publishers=[item.model_dump() for item in req.custom_publishers],
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

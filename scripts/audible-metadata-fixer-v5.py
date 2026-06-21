@@ -24,9 +24,23 @@ import audible
 
 try:
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
+    from app.publisher_policy import (
+        learn_publishers,
+        match_canonical_publisher,
+        special_provider_for,
+        strip_publisher_noise,
+        SPECIAL_PROVIDERS,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
+    from app.publisher_policy import (
+        learn_publishers,
+        match_canonical_publisher,
+        special_provider_for,
+        strip_publisher_noise,
+        SPECIAL_PROVIDERS,
+    )
 
 try:
     from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
@@ -48,6 +62,7 @@ try:
         TIT2,
         TPE1,
         TPE2,
+        TPUB,
         TRCK,
         TXXX,
     )
@@ -55,6 +70,7 @@ except Exception:
     ID3 = None
     ID3NoHeaderError = None
     APIC = None
+    TPUB = None
     TALB = None
     TCOM = None
     TCON = None
@@ -141,6 +157,7 @@ class ItemResult:
     review_reasons: list[str] = field(default_factory=list)
     duration_review_item: dict | None = None
     write_done: bool = False
+    metadata_json_done: bool = False
     asin_conflict: bool = False
     error: str = ""
 
@@ -191,6 +208,25 @@ def get_m4b_tool_metadata_path(source: Path, clues: dict | None = None) -> Path:
         return folder / f"{folder.name}{M4B_TOOL_METADATA_SUFFIX}"
 
     return source.with_name(f"{source.name}{M4B_TOOL_METADATA_SUFFIX}")
+
+
+def get_audiobookshelf_metadata_path(
+    source: Path, clues: dict | None = None, alone_in_folder: bool = False
+) -> Path:
+    """Resolve where the Audiobookshelf ``metadata.json`` should be written.
+
+    A multi-file book (grouped as a single book) or a single file that is alone
+    in its folder gets a plain ``folder/metadata.json`` — Audiobookshelf reads it
+    directly. A loose single file that shares its folder with other books gets a
+    collision-safe companion ``<file>.metadata.json``; the organizer renames it to
+    ``metadata.json`` once the book has its own folder.
+    """
+    group_search = (clues or {}).get("group_search", {}) or {}
+
+    if group_search.get("applied") or alone_in_folder:
+        return source.parent / "metadata.json"
+
+    return source.with_name(source.name + ".metadata.json")
 
 
 def write_original_metadata_backup(
@@ -836,6 +872,10 @@ def mutagen_write_mp4_tags(
     if asin:
         mp4_set_freeform(tags, "asin", asin)
 
+    publisher = metadata.get("publisher", "")
+    if publisher:
+        mp4_set_freeform(tags, "publisher", publisher)
+
     # Preserve existing comment/description.
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
@@ -931,6 +971,10 @@ def mutagen_write_mp3_tags(
     asin = metadata.get("asin", "")
     if asin:
         id3_set_txxx(tags, "asin", asin)
+
+    publisher = metadata.get("publisher", "")
+    if publisher and TPUB is not None:
+        id3_set_text(tags, "TPUB", TPUB, publisher)
 
     # Preserve existing comment/description.
 
@@ -1423,20 +1467,20 @@ def write_audiobookshelf_metadata_json(
     source: Path,
     metadata: dict,
     clues: dict | None = None,
+    alone_in_folder: bool = False,
 ) -> Path:
-    """Write an Audiobookshelf-compatible metadata sidecar next to the audio file.
+    """Write an Audiobookshelf-compatible metadata.json for the book.
 
-    Written as <source>.metadata.json (e.g. Book.m4b.metadata.json) so that
-    books not yet in their own folder do not collide with each other. The
-    organizer recognises this suffix as a companion file, moves it alongside the
-    audio file, and renames it to metadata.json post-move so Audiobookshelf
-    picks it up automatically.
+    Placement is resolved by :func:`get_audiobookshelf_metadata_path`: a grouped
+    multi-file book or a single file alone in its folder gets folder/metadata.json;
+    a loose single file sharing its folder gets a collision-safe companion
+    <file>.metadata.json (the organizer renames it to metadata.json post-move).
     """
-    if source.is_file():
-        target = source.with_name(source.name + ".metadata.json")
-    else:
+    if source.is_dir():
         # Fallback for directory source — shouldn't happen in normal flow
         target = source / "metadata.json"
+    else:
+        target = get_audiobookshelf_metadata_path(source, clues, alone_in_folder)
 
     authors = [
         {"name": name.strip()}
@@ -1463,6 +1507,7 @@ def write_audiobookshelf_metadata_json(
         "series": series,
         "genres": ["Audiobook"],
         "publishedYear": str(metadata.get("year", "") or ""),
+        "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
         "isbn": None,
         "asin": metadata.get("asin", "") or None,
@@ -3135,14 +3180,157 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     if existing_asin:
         clues["existing_asin"] = existing_asin
 
+    # Recover an author baked into the title ("... by Douglas Adams") when the
+    # author tag is empty. This only fills a missing field; it never overrides an
+    # existing author, and the search-only title noise is stripped elsewhere.
+    if not clues.get("author"):
+        embedded_author = extract_author_from_title(
+            clues.get("title", "") or clues.get("raw_title", "")
+        )
+        if embedded_author:
+            clues["author"] = embedded_author
+            clues["author_source"] = "title"
+
+    capture_publisher_clue(clues, tags or {})
+
     return recover_invalid_local_title(clues, file_path)
 
 
+def capture_publisher_clue(clues: dict, tags: dict) -> dict:
+    """Record the local publisher (before query sanitization) and clean leaks.
+
+    The publisher is captured from its dedicated tag when present, otherwise from
+    a canonical-publisher match in the author/narrator/album/comment fields (some
+    libraries dump the imprint there). The captured value is preserved verbatim so
+    it can be written back to the tag + metadata.json, while any publisher token
+    that leaked into the author/narrator clues is stripped for cleaner searches and
+    fallback writes. ``publisher_verified`` marks values confirmed against the
+    canonical catalog (the rest are candidates for learning).
+    """
+    def is_descriptor(entry: dict | None) -> bool:
+        # Catalog entries like "Unabridged"/"Audiobook" exist to strip query/author
+        # noise; they are format descriptors, not real publishers to record.
+        return bool(entry) and str(entry.get("id", "")).startswith("noise-")
+
+    raw_publisher = str(tags.get("publisher", "") or "").strip()
+    canonical = match_canonical_publisher(raw_publisher) if raw_publisher else None
+    # A publisher tag that is only a format descriptor ("Unabridged") is not a publisher.
+    if raw_publisher and is_descriptor(canonical) and not strip_publisher_noise(raw_publisher):
+        raw_publisher, canonical = "", None
+
+    if not raw_publisher:
+        # Look for a recognized imprint hiding in adjacent fields.
+        for field in ("album_artist", "comment", "album", "artist", "composer"):
+            entry = match_canonical_publisher(str(tags.get(field, "") or ""))
+            if entry and not is_descriptor(entry):
+                canonical = entry
+                raw_publisher = entry["name"]
+                break
+
+    if raw_publisher:
+        clues["publisher"] = raw_publisher
+        clues["publisher_verified"] = bool(canonical)
+        if canonical and canonical.get("special_provider"):
+            clues["special_publisher_provider"] = canonical["special_provider"]
+
+    # Strip any leaked publisher token from author/narrator without losing real data.
+    for field in ("author", "narrator"):
+        value = str(clues.get(field, "") or "")
+        if not value:
+            continue
+        cleaned = strip_publisher_noise(value)
+        if cleaned and cleaned != value:
+            clues[field] = cleaned
+
+    return clues
+
+
+# Leading filler phrases some libraries prepend to title tags.
+SEARCH_TITLE_PREFIX_NOISE = [
+    "listening to",
+]
+
+
+def strip_publisher_search_noise(text: str) -> str:
+    """Remove known publisher/imprint/source tokens from a search string.
+
+    Word-boundary, case-insensitive. Backed by the shared, editable canonical
+    publisher catalog (``app.publisher_policy``). Used for search queries and for
+    cleaning author/narrator clues — never for the dedicated publisher field.
+    """
+    if not text:
+        return text
+    return strip_publisher_noise(text)
+
+
+# Trailing "by <Name>" baked into a title, capturing the name and any trailing
+# book/part number (e.g. "... by Douglas Adams 1"). Up to four capitalised words.
+_TRAILING_BY_AUTHOR_RE = re.compile(
+    r"\s+by\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
+)
+
+
+def strip_title_search_noise(text: str, author: str = "") -> str:
+    """Strip search-only title noise: a leading "Listening to" and a trailing
+    "by <Author Name>" baked into the title tag. Used for queries and
+    title-evidence scoring only — never for written tags.
+
+    The trailing "by <Name>" is only removed when it is clearly filename
+    pollution: it is followed by a book/part number (e.g. "by Douglas Adams 1")
+    or the name matches the known author. This protects legitimate titles such
+    as "Death by Black Hole".
+
+    Example:
+        "Listening to Dirk Gently's Holistic Detective Agency by Douglas Adams 1"
+        -> "Dirk Gently's Holistic Detective Agency"
+    """
+    if not text:
+        return text
+
+    result = clean_text(text)
+
+    for prefix in SEARCH_TITLE_PREFIX_NOISE:
+        result = re.sub(
+            r"^\s*" + re.escape(prefix) + r"\s+", "", result, flags=re.IGNORECASE
+        )
+
+    match = _TRAILING_BY_AUTHOR_RE.search(result)
+    if match:
+        has_trailing_number = bool(match.group(2))
+        name_matches_author = bool(
+            author
+            and normalize_for_match(match.group(1)) == normalize_for_match(author)
+        )
+        if has_trailing_number or name_matches_author:
+            result = result[: match.start()]
+
+    return re.sub(r"\s+", " ", result).strip()
+
+
+def extract_author_from_title(text: str) -> str:
+    """Recover an author name baked into a title as "... by <Name> <number>".
+
+    A trailing book/part number is required so legitimate titles like
+    "Death by Black Hole" are not misread as having author "Black Hole".
+    Returns "" when no such pattern is present.
+    """
+    if not text:
+        return ""
+
+    match = _TRAILING_BY_AUTHOR_RE.search(clean_text(text))
+    if match and match.group(2):
+        return match.group(1).strip()
+    return ""
+
+
 def build_search_queries_from_clues(clues: dict) -> list[str]:
-    title = clues["title"]
+    # Strip search-only noise ("Listening to", trailing "by <author>") so the
+    # query carries the real title; recover the author if it was only present
+    # inside the title.
+    author = clues["author"] or extract_author_from_title(clues["title"]) or extract_author_from_title(clues["raw_title"])
     series = clues["series"]
-    author = clues["author"]
-    raw_title = clues["raw_title"]
+    title = strip_title_search_noise(clues["title"], author) or clues["title"]
+    raw_title = strip_title_search_noise(clues["raw_title"], author) or clues["raw_title"]
     book_number = normalize_book_number(clues.get("book_number", ""))
 
     queries = []
@@ -3207,6 +3395,7 @@ def build_search_queries_from_clues(clues: dict) -> list[str]:
         query = query.replace(",", " ")
         query = re.sub(r"[_\-:]+", " ", query)
         query = re.sub(r"[^\w\s'.]+", " ", query)
+        query = strip_publisher_search_noise(query)
         query = re.sub(r"\s+", " ", query).strip()
 
         if query and query.lower() not in seen:
@@ -3434,6 +3623,17 @@ def build_multi_file_search_context(
             "chapter_validation": validation,
         },
     }
+
+    # Carry the publisher captured per file up to the group (most common value).
+    group_publisher = pick_most_common_value(
+        [c.get("publisher", "") for c in clues_list if c.get("publisher")]
+    )
+    if group_publisher:
+        clues["publisher"] = group_publisher
+        canonical = match_canonical_publisher(group_publisher)
+        clues["publisher_verified"] = bool(canonical)
+        if canonical and canonical.get("special_provider"):
+            clues["special_publisher_provider"] = canonical["special_provider"]
 
     queries = build_search_queries_from_clues(clues)
     return queries, clues
@@ -3776,6 +3976,76 @@ def get_local_number_identity_candidates(clues: dict) -> list[str]:
     return unique
 
 
+def parse_book_number_range(text: str) -> tuple[int, int] | None:
+    """Parse an omnibus book-number range like "Books 11-12", "11 to 12", or
+    "Books 011 012" into an (low, high) tuple. Returns None when there is no
+    range. Implausibly wide spans are ignored to avoid matching noise.
+    """
+    if not text:
+        return None
+
+    value = clean_text(str(text))
+
+    # "Books 11-12", "11-12", "11 to 12", "11 through 12", "11 & 12"
+    match = re.search(
+        r"\b(?:books?\s+)?(\d{1,4})\s*(?:-|–|—|to|through|&)\s*(\d{1,4})\b",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        # "Books 011 012" (space-separated pair after an explicit Books label)
+        match = re.search(
+            r"\bbooks?\s+(\d{1,4})\s+(\d{1,4})\b", value, flags=re.IGNORECASE
+        )
+
+    if not match:
+        return None
+
+    low, high = int(match.group(1)), int(match.group(2))
+    if high < low or (high - low) > 50:
+        return None
+    return (low, high)
+
+
+def get_local_book_number_range(clues: dict) -> tuple[int, int] | None:
+    for key in ("title", "raw_title", "series", "album"):
+        found = parse_book_number_range(clues.get(key, ""))
+        if found:
+            return found
+    return None
+
+
+def get_audible_book_number_range(product: dict) -> tuple[int, int] | None:
+    _, sequence = get_primary_series(product)
+    found = parse_book_number_range(str(sequence or ""))
+    if found:
+        return found
+    for key in ("title", "subtitle"):
+        found = parse_book_number_range(product.get(key, "") or "")
+        if found:
+            return found
+    return None
+
+
+def omnibus_range_relation(clues: dict, product: dict) -> str:
+    """Compare local and Audible omnibus spans.
+
+    Returns:
+      "match"    both sides express the same exact range (e.g. 11-12 vs 11-12)
+      "conflict" both sides express ranges but they differ (11-12 vs 13-14)
+      "none"     at least one side has no range to compare
+    """
+    local_range = get_local_book_number_range(clues)
+    audible_range = get_audible_book_number_range(product)
+    if not local_range or not audible_range:
+        return "none"
+    return "match" if local_range == audible_range else "conflict"
+
+
+def has_matching_omnibus_range(clues: dict, product: dict) -> bool:
+    return omnibus_range_relation(clues, product) == "match"
+
+
 def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     """Reject wrong books in the same series when title numbers disagree.
 
@@ -3786,6 +4056,16 @@ def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     If both sides expose numeric identity evidence and none of the local numbers
     exists on the Audible candidate, the candidate is the wrong book.
     """
+    # Omnibus spans are compared exactly: an identical range (e.g. local
+    # "Books 11-12" vs an Audible Pack covering 11-12) is the right record even
+    # though the Pack's own number differs; a different range (11-12 vs 13-14)
+    # is the wrong box set.
+    relation = omnibus_range_relation(clues, product)
+    if relation == "match":
+        return False
+    if relation == "conflict":
+        return True
+
     local_numbers = get_local_number_identity_candidates(clues)
     audible_numbers = get_audible_number_candidates(product)
 
@@ -3922,6 +4202,21 @@ def has_sequence_conflict(
     if number_source == "track":
         return False
 
+    # When both the local title and the Audible title carry explicit, differing
+    # trailing numbers (e.g. local "Power Mage 5" vs Audible "Power Mage 6"),
+    # the numbers ARE the identity of two different books in the same series.
+    # High title similarity (they share the base series name) must not be allowed
+    # to mask this as a parallel-numbering case.
+    local_title_number = extract_title_identity_number(
+        clues.get("title", "") or clues.get("raw_title", "")
+    )
+    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
+    explicit_title_number_conflict = bool(
+        local_title_number
+        and audible_title_number
+        and local_title_number != audible_title_number
+    )
+
     # If the title is a strong match and duration confirms it,
     # do not reject only because the local folder numbering differs from
     # Audible's sub-series sequence.
@@ -3929,8 +4224,11 @@ def has_sequence_conflict(
     # This handles companion/parallel series like:
     # Local Book 003 - Of Dawn and Darkness
     # Audible The Elder Empire: Sea, Book 2
+    #
+    # It must NOT fire when the titles themselves carry conflicting numbers.
     if (
-        title_score >= 0.85
+        not explicit_title_number_conflict
+        and title_score >= 0.85
         and duration_result["status"] in {"perfect", "strong", "acceptable"}
         and (author_good or narrator_good)
     ):
@@ -4113,6 +4411,7 @@ def search_item(
     search_cache: dict,
     search_cache_lock: threading.Lock,
     search_in_flight: dict,
+    folder_audio_counts: dict | None = None,
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
@@ -4169,6 +4468,19 @@ def search_item(
         result.queries = queries
         result.clues = clues
 
+        skip_due_to_folder, skip_folder = matches_ignored_folders(
+            file_path=file_path,
+            folders=args.ignore_folder,
+        )
+        if skip_due_to_folder:
+            reason = f"skipped: ignored folder: {skip_folder}"
+            log.append(f"  SKIP: ignored folder: {skip_folder}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
         skip_due_to_pattern, skip_pattern = matches_skip_patterns(
             file_path=file_path,
             clues=clues,
@@ -4200,11 +4512,13 @@ def search_item(
             product = cached_match["product"]
             score = cached_match["score"]
             used_query = cached_match["used_query"]
+            match_ambiguity = cached_match.get("ambiguity")
             log.append("  Reusing cached match for shared search context")
         else:
             product = None
             score = 0.0
             used_query = ""
+            match_ambiguity = None
 
             use_abs = getattr(args, "provider", "audible") == "abs"
 
@@ -4226,7 +4540,7 @@ def search_item(
                     log.append(f"  Results: {len(query_products)}")
                     if not query_products:
                         continue
-                    candidate, candidate_score = pick_best_match_for_metadata(
+                    candidate, candidate_score, candidate_ambiguity = pick_best_match_for_metadata(
                         clues, query_products, local_duration_minutes,
                     )
                     if candidate:
@@ -4237,10 +4551,13 @@ def search_item(
                             f"mode={debug_metadata.get('edit_mode')} "
                             f"asin={debug_metadata.get('asin')}"
                         )
+                        if candidate_ambiguity:
+                            log.append(f"  {candidate_ambiguity['reason']}")
                         if candidate_score > score:
                             product = candidate
                             score = candidate_score
                             used_query = query
+                            match_ambiguity = candidate_ambiguity
             else:
                 client = get_thread_client(auth_file, auth_password)
 
@@ -4264,6 +4581,7 @@ def search_item(
                             product = asin_product
                             score = asin_candidate_score
                             used_query = f"ASIN:{existing_asin}"
+                            match_ambiguity = None
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
@@ -4287,7 +4605,7 @@ def search_item(
                 if not query_products:
                     continue
 
-                candidate, candidate_score = pick_best_match_for_metadata(
+                candidate, candidate_score, candidate_ambiguity = pick_best_match_for_metadata(
                     clues, query_products, local_duration_minutes,
                 )
                 if candidate:
@@ -4300,6 +4618,8 @@ def search_item(
                         f"mode={debug_metadata.get('edit_mode')} "
                         f"asin={debug_metadata.get('asin')}"
                     )
+                    if candidate_ambiguity:
+                        log.append(f"  {candidate_ambiguity['reason']}")
 
                 if not candidate:
                     continue
@@ -4308,6 +4628,7 @@ def search_item(
                     product = candidate
                     score = candidate_score
                     used_query = query
+                    match_ambiguity = candidate_ambiguity
 
                 if candidate_score >= args.min_score:
                     break
@@ -4318,11 +4639,13 @@ def search_item(
                     "product": product,
                     "score": score,
                     "used_query": used_query,
+                    "ambiguity": match_ambiguity,
                 })
                 stored = match_cache[match_cache_key]
                 product = stored["product"]
                 score = stored["score"]
                 used_query = stored["used_query"]
+                match_ambiguity = stored.get("ambiguity")
 
         result.score = score
         result.used_query = used_query
@@ -4383,12 +4706,27 @@ def search_item(
             result.add_to_manual_review = True
             return result
 
+        # Multiple candidates tied at the top score and the duration fallbacks
+        # could not pick a clear winner: route to manual review rather than guess.
+        if match_ambiguity and not match_ambiguity.get("resolved"):
+            reason = f"skipped: {match_ambiguity['reason']}"
+            log.append(f"  SKIP: {match_ambiguity['reason']}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = reason
+            result.add_to_manual_review = True
+            return result
+
         result.status = "matched"
 
         # Pre-compute review data for the gather phase
         review_reasons = selected_match_review_reasons(
             metadata, clues, score, args.duration_review_threshold,
         )
+
+        # A resolved tie still gets flagged so the ambiguity is visible in review.
+        if match_ambiguity:
+            review_reasons.append(match_ambiguity["reason"])
 
         # Flag if existing embedded ASIN differs from the matched product ASIN.
         existing_asin = clues.get("existing_asin", "")
@@ -4397,6 +4735,23 @@ def search_item(
             review_reasons.append(
                 f"existing ASIN {existing_asin} does not match matched ASIN {matched_asin}"
             )
+
+        # Special editions (GraphicAudio / Soundbooth Theater) are dramatized and
+        # not on Audible proper: keep the best-effort match but recommend their
+        # dedicated abs-agg endpoint for a better source.
+        special_provider = clues.get("special_publisher_provider") or special_provider_for(
+            clues.get("publisher", "")
+        )
+        if special_provider:
+            label = SPECIAL_PROVIDERS.get(special_provider, special_provider)
+            special_note = (
+                f"publisher {label} — consider the {label} abs-agg endpoint "
+                f"({special_provider}) instead of Audible"
+            )
+            review_reasons.append(special_note)
+            # Emit in Pass 1 (under the Processing header) so the report parser can
+            # categorize it to the right book.
+            log.append(f"  {special_note}")
 
         result.review_reasons = review_reasons
 
@@ -4417,26 +4772,56 @@ def search_item(
                 "audible_minutes": duration.get("audible_minutes"),
             }
 
-        # In metadata_json mode with multiple workers, write inside the worker.
-        # Only for single-file books (no group_search): each has its own folder,
-        # so concurrent writes never touch the same path. Multipart group files
-        # share a folder — their write stays in the serial gather phase.
+        # Emit a per-item FILL marker (fill-missing mode) so the report can list which
+        # books gained fields. Computed here in the worker (Pass 1) where the log line
+        # streams under the correct Processing header; the serial Pass-2 counters
+        # recompute the same deterministic result, so totals stay in sync.
+        if getattr(args, "write_mode", "smart") == "fill-missing" and not should_write_json_sidecar(
+            file_path, clues
+        ):
+            _eff, fill_filled = merge_fill_missing_metadata(
+                (clues or {}).get("_raw_tags") or {}, metadata
+            )
+            if fill_filled:
+                log.append(f"  FILL: filled {', '.join(fill_filled)}")
+            else:
+                log.append("  FILL: complete")
+
+        # In metadata-json-only mode with multiple workers, write metadata.json inside
+        # the worker for parallel NAS I/O. Only for single-file books (no group_search):
+        # each has its own collision-safe target. Multipart groups and the (suppressed)
+        # in-file writes stay in the serial gather phase. metadata-json-only means there
+        # is no in-file write to do, so this fully completes the book (write_done).
         is_single_file = not (clues or {}).get("group_search", {}).get("applied")
-        if args.metadata_json and args.apply and args.workers > 1 and is_single_file:
+        if args.metadata_json_only and args.apply and args.workers > 1 and is_single_file:
             aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
             mode = "aggressive" if aggressive_edit else "normal"
-            abs_path = write_audiobookshelf_metadata_json(file_path, metadata, clues)
+            current_tags = (clues or {}).get("_raw_tags") or {}
+            write_mode = getattr(args, "write_mode", "smart")
+            effective_metadata, skip_write, write_note, _filled = decide_write(
+                current_tags, metadata, metadata.get("edit_mode", "none") or "none", write_mode
+            )
+            alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+            meta_target = get_audiobookshelf_metadata_path(file_path, clues, alone)
+            if skip_write and meta_target.exists():
+                log.append(f"  {write_note} (metadata.json unchanged)")
+            else:
+                abs_path = write_audiobookshelf_metadata_json(
+                    file_path, effective_metadata, clues, alone
+                )
+                suffix = f" [{write_note}]" if write_note else ""
+                log.append(f"  APPLIED ({mode}, metadata_json={abs_path}){suffix}")
             write_marker(
                 source=file_path,
-                metadata=metadata,
+                metadata=effective_metadata,
                 clues=clues,
                 score=score,
                 mode=mode,
                 aggressive=aggressive_edit,
                 output_kind="metadata_json",
             )
-            log.append(f"  APPLIED ({mode}, metadata_json={abs_path})")
             log.append("")
+            result.metadata_json_done = True
             result.write_done = True
 
         return result
@@ -4450,13 +4835,19 @@ def search_item(
 
 
 def title_evidence_score(clues: dict, product: dict) -> float:
-    local_title = normalize_for_match(clues.get("title", ""))
-    local_raw_title = normalize_for_match(clues.get("raw_title", ""))
+    # Strip search-only noise ("Listening to ...", trailing "by <author>") so a
+    # polluted local title still scores against the clean Audible title.
+    local_author = clues.get("author", "")
+    clean_title = strip_title_search_noise(clues.get("title", ""), local_author) or clues.get("title", "")
+    clean_raw_title = strip_title_search_noise(clues.get("raw_title", ""), local_author) or clues.get("raw_title", "")
+
+    local_title = normalize_for_match(clean_title)
+    local_raw_title = normalize_for_match(clean_raw_title)
     local_sequence_free_title = normalize_for_match(
-        strip_leading_sequence_from_title(clues.get("title", ""))
+        strip_leading_sequence_from_title(clean_title)
     )
     local_sequence_free_raw_title = normalize_for_match(
-        strip_leading_sequence_from_title(clues.get("raw_title", ""))
+        strip_leading_sequence_from_title(clean_raw_title)
     )
     audible_title = normalize_for_match(product.get("title", "") or "")
     audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
@@ -4475,7 +4866,7 @@ def title_evidence_score(clues: dict, product: dict) -> float:
         if candidate
     ]
 
-    local_tokens = significant_title_tokens(clues.get("title", "") or clues.get("raw_title", ""))
+    local_tokens = significant_title_tokens(clean_title or clean_raw_title)
     audible_token_sets = [
         set(significant_title_tokens(product.get("title", "") or "")),
         set(significant_title_tokens(product.get("subtitle", "") or "")),
@@ -4815,22 +5206,122 @@ def preferred_audible_sequence(product: dict) -> str:
     return candidates[0] if len(set(candidates)) == 1 else ""
 
 
+# Tie-break configuration for multiple top-scoring candidates.
+# Scores within TIE_SCORE_EPSILON of the maximum are treated as tied at the top.
+TIE_SCORE_EPSILON = 0.02
+# Duration-status preference: a perfect-duration candidate beats a strong one, etc.
+DURATION_STATUS_RANK = {
+    "perfect": 4,
+    "strong": 3,
+    "acceptable": 2,
+    "unknown": 1,
+    "mismatch": 0,
+}
+# Same-status tie: the closer candidate must beat the other by at least this many
+# minutes of duration difference (30 seconds) to count as a clear winner.
+TIE_DURATION_MARGIN_MINUTES = 0.5
+
+
+def _candidate_duration(
+    product: dict, local_duration_minutes: float | None
+) -> dict:
+    return compare_duration(
+        local_minutes=local_duration_minutes,
+        audible_minutes=get_audible_duration_minutes(product),
+    )
+
+
 def pick_best_match_for_metadata(
     clues: dict,
     products: list[dict],
     local_duration_minutes: float | None = None,
-) -> tuple[dict | None, float]:
-    best_product = None
-    best_score = 0.0
+) -> tuple[dict | None, float, dict | None]:
+    """Pick the best Audible product for the local book.
 
-    for product in products:
-        score = score_product_for_metadata(clues, product, local_duration_minutes)
+    Returns (best_product, best_score, ambiguity). When two or more products
+    tie at the top score, fallbacks decide the winner:
+      1. duration status (perfect > strong > acceptable > ...), picked silently;
+      2. for the same status, the candidate that is at least 30 seconds closer
+         on exact duration wins; otherwise there is no clear winner.
 
-        if score > best_score:
-            best_score = score
-            best_product = product
+    ambiguity is None for an unambiguous single winner. When several candidates
+    tie at the top it is a dict describing the contest:
+      {"count", "resolved", "reason", "chosen", "alternatives"}
+    where resolved=False means the fallbacks could not separate the top two and
+    the caller should route the book to manual review.
+    """
+    scored = [
+        (score, product)
+        for product in products
+        for score in (
+            score_product_for_metadata(clues, product, local_duration_minutes),
+        )
+        if score > 0.0
+    ]
 
-    return best_product, best_score
+    if not scored:
+        return None, 0.0, None
+
+    best_score = max(score for score, _ in scored)
+    top = [item for item in scored if best_score - item[0] <= TIE_SCORE_EPSILON]
+
+    def sort_key(item: tuple[float, dict]):
+        score, product = item
+        duration = _candidate_duration(product, local_duration_minutes)
+        status_rank = DURATION_STATUS_RANK.get(duration.get("status", "unknown"), 1)
+        diff = duration.get("diff_minutes")
+        # Higher score, then better duration status, then smaller exact diff.
+        return (
+            round(score, 4),
+            status_rank,
+            -(diff if diff is not None else float("inf")),
+        )
+
+    top.sort(key=sort_key, reverse=True)
+    best_score_value, best_product = top[0]
+
+    if len(top) == 1:
+        return best_product, best_score_value, None
+
+    # Multiple candidates tied at the top score: try to resolve with fallbacks.
+    second_product = top[1][1]
+    best_dur = _candidate_duration(best_product, local_duration_minutes)
+    second_dur = _candidate_duration(second_product, local_duration_minutes)
+    best_rank = DURATION_STATUS_RANK.get(best_dur.get("status", "unknown"), 1)
+    second_rank = DURATION_STATUS_RANK.get(second_dur.get("status", "unknown"), 1)
+
+    resolved = False
+    if best_rank > second_rank:
+        # e.g. perfect beats strong — clear winner, resolved silently.
+        resolved = True
+    elif best_rank == second_rank:
+        best_diff = best_dur.get("diff_minutes")
+        second_diff = second_dur.get("diff_minutes")
+        if best_diff is not None and second_diff is not None:
+            if (second_diff - best_diff) >= TIE_DURATION_MARGIN_MINUTES:
+                resolved = True
+
+    def label(product: dict) -> str:
+        title = product.get("title", "") or "?"
+        asin = product.get("asin", "") or "?"
+        return f"{title} [{asin}]"
+
+    ambiguity = {
+        "count": len(top),
+        "resolved": resolved,
+        "chosen": label(best_product),
+        "alternatives": [label(product) for _score, product in top[1:]],
+        "reason": (
+            f"ambiguous match: {len(top)} candidates at score {best_score_value} "
+            + (
+                f"(chose {label(best_product)} on duration)"
+                if resolved
+                else "with no clear duration winner"
+            )
+        ),
+    }
+
+    return best_product, best_score_value, ambiguity
 
 
 def is_generic_series_number_title(clues: dict) -> bool:
@@ -5101,6 +5592,7 @@ def metadata_from_product(
         "sequence": sequence_to_write,
         "year": year_to_write,
         "summary": summary_to_write,
+        "publisher": sanitize_tag(clues.get("publisher", "")),
         "album": album,
         "audible_title": audible_title,
         "audible_sequence": sequence,
@@ -5150,6 +5642,7 @@ def build_metadata_args(metadata: dict) -> list[str]:
         "composer": metadata.get("narrator", ""),
         "date": metadata.get("year", ""),
         "genre": "Audiobook",
+        "publisher": metadata.get("publisher", ""),
     }
 
     if metadata.get("sequence"):
@@ -5180,6 +5673,7 @@ def final_metadata_preview(metadata: dict) -> dict:
         "composer": metadata.get("narrator", ""),
         "date": metadata.get("year", ""),
         "genre": "Audiobook",
+        "publisher": metadata.get("publisher", ""),
     }
 
     if metadata.get("sequence"):
@@ -5387,6 +5881,40 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
         elif planned_value:
             filled.append(field)
     return merged, filled
+
+
+def decide_write(
+    current_tags: dict, metadata: dict, edit_mode: str, write_mode: str
+) -> tuple[dict, bool, str, list[str]]:
+    """Resolve the effective metadata and whether the in-file tag write is a NO-OP.
+
+    Shared by the worker (parallel metadata.json write) and the serial gather phase
+    so the two never diverge. Returns
+    ``(effective_metadata, skip_write, write_note, filled_fields)`` where
+    ``skip_write`` means the in-file tags already satisfy the plan and
+    ``filled_fields`` lists the gaps filled in fill-missing mode (for counters).
+    """
+    effective_metadata = metadata
+    skip_write = False
+    write_note = ""
+    filled_fields: list[str] = []
+
+    if write_mode == "smart":
+        all_match, _changed = compare_tags_for_write(current_tags, metadata, edit_mode)
+        if all_match:
+            skip_write = True
+            write_note = "NO-OP (tags already match)"
+    elif write_mode == "fill-missing":
+        effective_metadata, filled_fields = merge_fill_missing_metadata(
+            current_tags, metadata
+        )
+        if not filled_fields:
+            skip_write = True
+            write_note = "NO-OP (fill-missing: all fields already present)"
+        else:
+            write_note = f"fill-missing: filled {', '.join(filled_fields)}"
+
+    return effective_metadata, skip_write, write_note, filled_fields
 
 
 def write_tags(
@@ -5622,6 +6150,28 @@ def print_asin_verification_report(asin_matches: list[dict]) -> None:
         print()
 
 
+def matches_ignored_folders(file_path: Path, folders: list[str]) -> tuple[bool, str]:
+    """Return True when any *directory* in the path begins with an ignore token.
+
+    Only directory components are checked (the filename is excluded), and the
+    match is a case-insensitive prefix. This lets short tokens like ``.``, ``#``
+    and ``@`` skip hidden/temp/system folders (e.g. ``.thumbs``, ``@eaDir``)
+    without matching every file via its extension.
+    """
+    if not folders:
+        return False, ""
+
+    dir_components = [part.lower() for part in Path(file_path).parent.parts]
+    for folder in folders:
+        needle = str(folder or "").strip().lower()
+        if not needle:
+            continue
+        if any(component.startswith(needle) for component in dir_components):
+            return True, folder
+
+    return False, ""
+
+
 def matches_skip_patterns(
     file_path: Path, clues: dict, patterns: list[str]
 ) -> tuple[bool, str]:
@@ -5630,6 +6180,8 @@ def matches_skip_patterns(
     Patterns are case-insensitive plain substrings checked against the full path
     and the extracted local metadata fields. This keeps the option simple and
     safe for excluding known-problem folders/series such as Casual Farming.
+    Folder-prefix ignore tokens are handled separately by
+    :func:`matches_ignored_folders`.
     """
     if not patterns:
         return False, ""
@@ -5945,6 +6497,152 @@ def detect_asin_conflicts(results: list["ItemResult"]) -> None:
                 result.review_reasons.append(reason)
 
 
+# Local (non-NAS) cache of each file's embedded ASIN, keyed by path + mtime, so the
+# whole-library scan that powers the duplicate-ASIN guard is a one-time cost: after the
+# first run only new/changed files are re-probed. Stored under reports/ (bind-mounted,
+# fast local disk) — never written to the audiobook library folder.
+DISK_ASIN_CACHE_PATH = Path(
+    os.environ.get("DISK_ASIN_CACHE_PATH", "/app/reports/.disk-asin-cache.json")
+)
+
+
+def _load_disk_asin_cache() -> dict[str, dict]:
+    try:
+        data = json.loads(DISK_ASIN_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_disk_asin_cache(cache: dict[str, dict]) -> None:
+    try:
+        DISK_ASIN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DISK_ASIN_CACHE_PATH.write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
+    """Map each ASIN already embedded on disk -> set of file paths that carry it.
+
+    Reads the ``asin`` format tag from each file. Results are cached locally by
+    path + mtime, so only new or changed files are ffprobed on later runs (the cold
+    scan of a large network library is slow and only paid once). Used by
+    :func:`detect_global_asin_duplicates` to avoid assigning an ASIN that already
+    belongs to a different book in the library.
+    """
+    cache = _load_disk_asin_cache()
+    resolved: dict[str, str] = {}
+    to_probe: list[tuple[str, float | None]] = []
+
+    for fp in files:
+        key = str(fp)
+        try:
+            mtime = fp.stat().st_mtime
+        except OSError:
+            mtime = None
+        entry = cache.get(key)
+        if entry is not None and mtime is not None and entry.get("mtime") == mtime:
+            resolved[key] = str(entry.get("asin", "") or "")
+        else:
+            to_probe.append((key, mtime))
+
+    if to_probe:
+        def read_one(item: tuple[str, float | None]) -> tuple[str, float | None, str]:
+            key, mtime = item
+            tags, _ = probe_file(Path(key))
+            asin = str((tags or {}).get("asin", "") or "").strip().upper()
+            return key, mtime, asin
+
+        if workers and workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                probed = list(executor.map(read_one, to_probe))
+        else:
+            probed = [read_one(item) for item in to_probe]
+
+        for key, mtime, asin in probed:
+            resolved[key] = asin
+            cache[key] = {"mtime": mtime, "asin": asin}
+
+    # Prune cache to the current file set so it can't grow without bound, then persist.
+    pruned = {str(fp): cache[str(fp)] for fp in files if str(fp) in cache}
+    _save_disk_asin_cache(pruned)
+
+    asin_map: dict[str, set[str]] = {}
+    for key, asin in resolved.items():
+        if asin:
+            asin_map.setdefault(asin, set()).add(key)
+    return asin_map
+
+
+def detect_global_asin_duplicates(
+    results: list["ItemResult"], disk_asin_map: dict[str, set[str]]
+) -> None:
+    """Suppress writes that would put the same ASIN on more than one book.
+
+    Extends :func:`detect_asin_conflicts` (same-series only) to also catch
+    cross-series duplicates within this run AND collisions with an ASIN already
+    embedded on a *different* book on disk. Conflicting items are flagged
+    (``asin_conflict``) so their writes are suppressed and they surface in the
+    manual review report. The book that already owns the ASIN on disk is kept;
+    when no on-disk owner exists, an in-run collision has no reliable winner so
+    every claimant is flagged.
+    """
+    from collections import defaultdict
+
+    # This run's planned ASIN per file, ignoring items the same-series detector
+    # already flagged (their writes are suppressed already).
+    planned: dict[str, str] = {}
+    run_by_asin: dict[str, list[ItemResult]] = defaultdict(list)
+    for result in results:
+        if result.status != "matched" or result.asin_conflict or not result.metadata:
+            continue
+        asin = str(result.metadata.get("asin", "") or "").strip().upper()
+        if not asin:
+            continue
+        planned[str(result.file_path)] = asin
+        run_by_asin[asin].append(result)
+
+    for asin, writers in run_by_asin.items():
+        disk_files = disk_asin_map.get(asin, set())
+        # On-disk books that will still hold this ASIN after the run (i.e. not being
+        # rewritten to a different ASIN this run). A writer re-confirming the ASIN it
+        # already carries counts as a legitimate incumbent, not a duplicate.
+        incumbents = {p for p in disk_files if planned.get(p, asin) == asin}
+        writer_files = {str(r.file_path) for r in writers}
+
+        if len(incumbents | writer_files) <= 1:
+            continue  # only one book will hold this ASIN — fine
+
+        if incumbents:
+            # Another book already owns this ASIN: keep it, flag any writer adding the
+            # ASIN to a book that does not already carry it.
+            keeper = Path(sorted(incumbents)[0]).name
+            for result in writers:
+                if str(result.file_path) in incumbents:
+                    continue  # this book already owns the ASIN on disk
+                result.asin_conflict = True
+                reason = (
+                    f"duplicate Audible ASIN {asin}: already embedded on another book "
+                    f"in the library ({keeper})"
+                )
+                if reason not in result.review_reasons:
+                    result.review_reasons.append(reason)
+        elif len(writer_files) > 1:
+            # No on-disk owner; multiple books in this run matched the same ASIN with
+            # no reliable winner — flag them all for manual review.
+            for result in writers:
+                result.asin_conflict = True
+                reason = (
+                    f"duplicate Audible ASIN {asin}: matched to "
+                    f"{len(writer_files)} different books in this run"
+                )
+                if reason not in result.review_reasons:
+                    result.review_reasons.append(reason)
+
+
 def print_run_summary(
     found: int,
     matched: int,
@@ -5956,6 +6654,10 @@ def print_run_summary(
     duration_review: list[dict],
     duration_review_threshold: float,
     manual_review: list[dict],
+    write_mode: str = "smart",
+    fill_books_filled: int = 0,
+    fill_books_complete: int = 0,
+    fill_field_counts: "Counter | None" = None,
 ) -> None:
     print("Summary:")
     print(f"  Found:   {found} files")
@@ -5987,6 +6689,18 @@ def print_run_summary(
     else:
         print("  none:        0")
     print()
+
+    if write_mode == "fill-missing":
+        field_counts = fill_field_counts or Counter()
+        print("Fill-missing breakdown:")
+        print(f"  Books filled:     {fill_books_filled}")
+        print(f"  Already complete: {fill_books_complete}")
+        print(f"  ASIN filled:      {field_counts.get('asin', 0)}")
+        print("  Fields filled (books that gained each field):")
+        for field_name in ["title", "author", "series", "sequence", "narrator", "year", "asin"]:
+            label = "ASIN" if field_name == "asin" else field_name
+            print(f"    {label + ':':<11}{field_counts.get(field_name, 0)}")
+        print()
 
     print_duration_review_report(duration_review, duration_review_threshold)
     print_manual_review_report(manual_review)
@@ -6121,6 +6835,18 @@ def main():
     )
 
     parser.add_argument(
+        "--ignore-folder",
+        action="append",
+        default=[],
+        help=(
+            "Skip files inside any directory whose name begins with this "
+            "case-insensitive token. Only directory names are matched (not the "
+            "filename), so short tokens like '.', '#' or '@' skip hidden/system "
+            "folders such as '.thumbs' or '@eaDir'. Can be repeated."
+        ),
+    )
+
+    parser.add_argument(
         "--duration-review-threshold",
         type=float,
         default=10.0,
@@ -6131,6 +6857,18 @@ def main():
         "--show-asin-report",
         action="store_true",
         help="Print duplicate ASIN verification report at the end. Hidden by default.",
+    )
+    parser.add_argument(
+        "--asin-scan-workers",
+        type=int,
+        default=int(os.environ.get("ASIN_SCAN_WORKERS", "8")),
+        help=(
+            "Concurrent ffprobe workers for the one-time on-disk ASIN scan used by the "
+            "duplicate-ASIN guard. Independent of --workers because this scan never "
+            "calls Audible (no rate limit). Default 8; env ASIN_SCAN_WORKERS overrides. "
+            "Each probe has its own 30s timeout, so a single stuck file only stalls its "
+            "own worker, not the whole scan."
+        ),
     )
     parser.add_argument(
         "--cover-if-missing",
@@ -6145,12 +6883,15 @@ def main():
     )
 
     parser.add_argument(
-        "--metadata-json",
+        "--metadata-json-only",
         action="store_true",
+        dest="metadata_json_only",
         help=(
-            "Write an Audiobookshelf-compatible metadata.json to the book folder "
-            "instead of embedding tags in the audio file. The file is placed at "
-            "<book-folder>/metadata.json and Audiobookshelf will pick it up automatically."
+            "Write ONLY the Audiobookshelf metadata.json and do not modify the audio "
+            "files' embedded tags. An Audiobookshelf-compatible metadata.json is always "
+            "written for matched books regardless of this flag; this flag just suppresses "
+            "the in-file tag rewrite. (Loose/multi-file books still get their M4B-tool "
+            "merge sidecar.)"
         ),
     )
 
@@ -6196,7 +6937,7 @@ def main():
         help=(
             "Parallel search workers. 1 = serial (current behavior). "
             "Recommended 5; max 10 to avoid Audible rate limits. "
-            "Defaults to 5 when --metadata-json is set, otherwise 1."
+            "Defaults to 5 when --metadata-json-only is set, otherwise 1."
         ),
     )
 
@@ -6211,17 +6952,32 @@ def main():
     args = parser.parse_args()
 
     if args.workers is None:
-        args.workers = 5 if args.metadata_json else 1
+        args.workers = 5 if args.metadata_json_only else 1
 
     root = Path(args.root).resolve()
 
     if not root.exists():
         raise SystemExit(f"ERROR: path does not exist: {root}")
 
+    # These three steps walk the whole library before any per-book output and can
+    # take a while on network mounts (NAS/SMB/NFS). Announce each so the UI shows the
+    # run is alive and reaching the library folder rather than looking stuck.
+    print(f"Scanning library folder: {root}", flush=True)
     files = collect_audio_files(root)
     if not args.restore_metadata:
+        print(f"Reading chapter data from {len(files)} files in the library folder...", flush=True)
         prefetch_chapter_counts(files, args.workers)
+    print("Analyzing multi-part audiobooks...", flush=True)
     multi_part_group_map = build_multi_part_group_map(files)
+
+    # Full library file list (kept before --max-files truncation) so the duplicate-ASIN
+    # check can compare against every book on disk, not just this run's subset.
+    full_library_files = list(files)
+
+    # Per-folder audio-file counts (whole library, computed once from data already in
+    # memory — no extra NAS stat). A folder with exactly one audio file means its single
+    # book is alone there, so metadata.json can be written as folder/metadata.json.
+    folder_audio_counts: Counter = Counter(fp.parent for fp in full_library_files)
 
     if args.max_files > 0:
         files = files[: args.max_files]
@@ -6260,6 +7016,11 @@ def main():
     duration_review: list[dict] = []
     manual_review: list[dict] = []
     asin_matches: list[dict] = []
+    # fill-missing reporting: how many books gained fields vs were already complete,
+    # plus a per-field tally (ASIN included) for the run summary.
+    fill_books_filled = 0
+    fill_books_complete = 0
+    fill_field_counts: Counter = Counter()
     search_cache: dict = {}
     search_cache_lock = threading.Lock()
     search_in_flight: dict = {}
@@ -6290,6 +7051,7 @@ def main():
                 search_cache=search_cache,
                 search_cache_lock=search_cache_lock,
                 search_in_flight=search_in_flight,
+                folder_audio_counts=folder_audio_counts,
             )
             for index, file_path in enumerate(processing_items, start=1)
         ]
@@ -6306,6 +7068,23 @@ def main():
     # Detect same-series ASIN conflicts across all results before writing.
     # Must run outside the ThreadPoolExecutor block (workers have finished).
     detect_asin_conflicts(all_results)
+
+    # Then guard against assigning a duplicate ASIN globally: same ASIN matched to
+    # multiple books this run (cross-series), or an ASIN already embedded on a
+    # different book on disk. Scans every file's embedded ASIN once (parallelised).
+    needs_dup_check = any(
+        result.status == "matched"
+        and not result.asin_conflict
+        and (result.metadata or {}).get("asin")
+        for result in all_results
+    )
+    if needs_dup_check:
+        print(
+            "Checking the library for existing ASINs to prevent duplicates...",
+            flush=True,
+        )
+        disk_asin_map = build_disk_asin_map(full_library_files, args.asin_scan_workers)
+        detect_global_asin_duplicates(all_results, disk_asin_map)
 
     # Pass 2: stats, manual review, and writes in submission order
     for result in all_results:
@@ -6391,95 +7170,103 @@ def main():
             skipped += 1
             continue
 
-        if args.apply and not result.write_done:
+        if not result.write_done:
             aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
             mode = "aggressive" if aggressive_edit else "normal"
             edit_mode = metadata.get("edit_mode", "none") or "none"
             write_mode = getattr(args, "write_mode", "smart")
             current_tags = clues.get("_raw_tags") or {}
+            only_json = args.metadata_json_only
+            is_sidecar = should_write_json_sidecar(file_path, clues)
+            alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
 
-            # Resolve effective metadata and decide whether to write.
-            effective_metadata = metadata
-            skip_write = False
-            write_note = ""
-
-            if write_mode == "smart" and not should_write_json_sidecar(file_path, clues) and not args.metadata_json:
-                all_match, changed_fields = compare_tags_for_write(current_tags, metadata, edit_mode)
-                if all_match:
-                    skip_write = True
-                    write_note = "NO-OP (tags already match)"
-            elif write_mode == "fill-missing" and not should_write_json_sidecar(file_path, clues) and not args.metadata_json:
-                effective_metadata, filled_fields = merge_fill_missing_metadata(current_tags, metadata)
-                if not filled_fields:
-                    skip_write = True
-                    write_note = "NO-OP (no missing fields to fill)"
-                else:
-                    write_note = f"fill-missing: {', '.join(filled_fields)}"
-
-            if skip_write:
-                write_marker(
-                    source=file_path,
-                    metadata=metadata,
-                    clues=clues,
-                    score=score,
-                    mode=mode,
-                    aggressive=aggressive_edit,
-                    output_kind="tags",
+            # Resolve effective metadata and decide whether the in-file write is a NO-OP.
+            # NO-OP/fill logic applies to single-file books only; loose/multi-file
+            # (sidecar) books always (re)write their merge sidecar.
+            if not is_sidecar:
+                effective_metadata, skip_write, write_note, filled_fields = decide_write(
+                    current_tags, metadata, edit_mode, write_mode
                 )
-                print(f"  {write_note}")
-                print()
-            elif should_write_json_sidecar(file_path, clues):
-                if is_single_file_mp3(file_path, clues):
-                    writer_used = write_tags(
-                        file_path,
-                        effective_metadata,
-                        backup=args.backup,
-                        writer=args.writer,
-                        cover_if_missing=args.cover_if_missing,
-                        replace_cover=args.replace_cover,
-                    )
-                    update_backup_with_applied_metadata(file_path, effective_metadata)
-                sidecar_path = write_m4b_tool_metadata_sidecar(
-                    file_path, effective_metadata, clues, score
-                )
-                write_marker(
-                    source=file_path,
-                    metadata=effective_metadata,
-                    clues=clues,
-                    score=score,
-                    mode=mode,
-                    aggressive=aggressive_edit,
-                    output_kind="json_sidecar",
-                )
-                suffix = f" [{write_note}]" if write_note else ""
-                if is_single_file_mp3(file_path, clues):
-                    print(f"  APPLIED ({mode}, writer={writer_used}, json_sidecar={sidecar_path}){suffix}")
-                else:
-                    print(f"  APPLIED ({mode}, json_sidecar={sidecar_path}){suffix}")
-            elif args.metadata_json:
-                abs_path = write_audiobookshelf_metadata_json(
-                    file_path, effective_metadata, clues
-                )
-                write_marker(
-                    source=file_path,
-                    metadata=effective_metadata,
-                    clues=clues,
-                    score=score,
-                    mode=mode,
-                    aggressive=aggressive_edit,
-                    output_kind="metadata_json",
-                )
-                print(f"  APPLIED ({mode}, metadata_json={abs_path})")
+                if write_mode == "fill-missing":
+                    if not filled_fields:
+                        fill_books_complete += 1
+                    else:
+                        fill_books_filled += 1
+                        for filled_field in filled_fields:
+                            fill_field_counts[filled_field] += 1
             else:
-                writer_used = write_tags(
-                    file_path,
-                    effective_metadata,
-                    backup=args.backup,
-                    writer=args.writer,
-                    cover_if_missing=args.cover_if_missing,
-                    replace_cover=args.replace_cover,
-                )
-                update_backup_with_applied_metadata(file_path, effective_metadata)
+                effective_metadata, skip_write, write_note = metadata, False, ""
+
+            # metadata.json is always written for matched books, except a fully-NO-OP
+            # book whose metadata.json already exists.
+            meta_target = get_audiobookshelf_metadata_path(file_path, clues, alone)
+            metadata_json_pending = (
+                not result.metadata_json_done
+                and not (skip_write and meta_target.exists())
+            )
+
+            if not args.apply:
+                # Dry-run: report the planned write outcome, touch nothing.
+                plan_parts = []
+                if metadata_json_pending:
+                    plan_parts.append("metadata.json")
+                if not skip_write:
+                    if is_sidecar:
+                        plan_parts.append("json_sidecar")
+                    elif not only_json:
+                        plan_parts.append("tags")
+                if plan_parts:
+                    suffix = f" [{write_note}]" if write_note else ""
+                    print(f"  PLAN: would write {' + '.join(plan_parts)} ({mode}){suffix}")
+                else:
+                    print(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}")
+                print()
+            else:
+                applied_parts: list[str] = []
+                primary_output_kind = "tags"
+
+                # 1. metadata.json (always-on).
+                if metadata_json_pending:
+                    abs_path = write_audiobookshelf_metadata_json(
+                        file_path, effective_metadata, clues, alone
+                    )
+                    applied_parts.append(f"metadata_json={abs_path}")
+                    primary_output_kind = "metadata_json"
+
+                # 2. In-file tags / M4B-tool merge sidecar (unless suppressed or NO-OP).
+                if not skip_write:
+                    if is_sidecar:
+                        # Merge sidecar is written even in only-json mode; only the
+                        # in-file single-mp3 tag write is suppressed by only-json.
+                        if is_single_file_mp3(file_path, clues) and not only_json:
+                            writer_used = write_tags(
+                                file_path,
+                                effective_metadata,
+                                backup=args.backup,
+                                writer=args.writer,
+                                cover_if_missing=args.cover_if_missing,
+                                replace_cover=args.replace_cover,
+                            )
+                            update_backup_with_applied_metadata(file_path, effective_metadata)
+                            applied_parts.append(f"writer={writer_used}")
+                        sidecar_path = write_m4b_tool_metadata_sidecar(
+                            file_path, effective_metadata, clues, score
+                        )
+                        applied_parts.append(f"json_sidecar={sidecar_path}")
+                        primary_output_kind = "json_sidecar"
+                    elif not only_json:
+                        writer_used = write_tags(
+                            file_path,
+                            effective_metadata,
+                            backup=args.backup,
+                            writer=args.writer,
+                            cover_if_missing=args.cover_if_missing,
+                            replace_cover=args.replace_cover,
+                        )
+                        update_backup_with_applied_metadata(file_path, effective_metadata)
+                        applied_parts.append(f"writer={writer_used}")
+                        primary_output_kind = "tags"
+
                 write_marker(
                     source=file_path,
                     metadata=effective_metadata,
@@ -6487,13 +7274,34 @@ def main():
                     score=score,
                     mode=mode,
                     aggressive=aggressive_edit,
-                    output_kind="tags",
+                    output_kind=primary_output_kind,
                 )
                 suffix = f" [{write_note}]" if write_note else ""
-                print(f"  APPLIED ({mode}, writer={writer_used}){suffix}")
-            print()
+                if applied_parts:
+                    print(f"  APPLIED ({mode}, {', '.join(applied_parts)}){suffix}")
+                else:
+                    print(f"  {write_note or 'NO-OP'}")
+                print()
 
         matched += 1
+
+    # Learn publishers seen this run that aren't yet in the canonical catalog, so
+    # future runs recognize them (and can sanitize/flag them). Done once, serially,
+    # to avoid worker write races; learned entries are editable in Settings.
+    learned_candidates = sorted(
+        {
+            str((result.clues or {}).get("publisher", "")).strip()
+            for result in all_results
+            if (result.clues or {}).get("publisher")
+            and not (result.clues or {}).get("publisher_verified")
+        }
+    )
+    if learned_candidates:
+        try:
+            if learn_publishers(learned_candidates):
+                print(f"  Learned {len(learned_candidates)} new publisher(s) for future runs.")
+        except Exception as error:
+            print(f"  WARNING: could not update publisher catalog: {error}")
 
     print_run_summary(
         found=found,
@@ -6506,6 +7314,10 @@ def main():
         duration_review=duration_review,
         duration_review_threshold=args.duration_review_threshold,
         manual_review=manual_review,
+        write_mode=getattr(args, "write_mode", "smart"),
+        fill_books_filled=fill_books_filled,
+        fill_books_complete=fill_books_complete,
+        fill_field_counts=fill_field_counts,
     )
 
     if args.show_asin_report:
