@@ -242,9 +242,9 @@
       </div>
 
       <div class="wide">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
-          <span class="field-label">Skip patterns, one per line <span class="info-tip" data-tooltip="Skips any item whose path or derived metadata contains one of these patterns. Matching is case-insensitive."></span></span>
-          <label class="inline-check"><input id="usePersistentSkip" type="checkbox" /> Include persistent patterns from global policy</label>
+        <div style="display:flex;flex-direction:row;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:nowrap">
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">Skip patterns, one per line <span class="info-tip" data-tooltip="Skips any item whose path or derived metadata contains one of these patterns. Matching is case-insensitive."></span></span>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--text-soft);white-space:nowrap;cursor:pointer;flex-shrink:0"><input id="usePersistentSkip" type="checkbox" style="margin:0;cursor:pointer" /> Include persistent patterns from global policy</label>
         </div>
         <textarea id="skipPatterns" rows="3" placeholder="Casual Farming"></textarea>
       </div>
