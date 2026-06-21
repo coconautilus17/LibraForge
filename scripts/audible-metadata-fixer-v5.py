@@ -8,6 +8,7 @@ import html
 import io
 import json
 import re
+import signal
 import stat
 import subprocess
 import struct
@@ -99,9 +100,22 @@ IGNORED_EXTENSIONS = set()
 MARKER_FILENAME = ".audible-metadata-fixer.json"
 METADATA_BACKUP_SUFFIX = ".metadata-backup.json"
 MARKER_SUFFIX = ".audible-metadata-fixer.json"
+LIBRAFORGE_SUFFIX = ".libraforge.json"
 M4B_TOOL_METADATA_SUFFIX = ".m4b-tool-metadata.json"
 IGNORED_PATH_PARTS = {"#recycle", "@eadir"}
 TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
+
+# Cancel flag: set by SIGTERM handler so the gather loop stops cleanly after
+# the current book's writes complete rather than being killed mid-write.
+_cancel_requested = False
+
+
+def _handle_sigterm(signum: int, frame: object) -> None:
+    global _cancel_requested
+    _cancel_requested = True
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 MUTAGEN_MP4_EXTENSIONS = {".m4b", ".m4a", ".mp4"}
 MUTAGEN_MP3_EXTENSIONS = {".mp3"}
 # Formats that should be treated as a single audiobook when multiple files
@@ -182,23 +196,130 @@ def get_legacy_marker_path(source: Path) -> Path:
 
 
 def load_marker(source: Path) -> dict:
-    marker_paths = [get_marker_path(source), get_legacy_marker_path(source)]
-
-    for marker_path in marker_paths:
-        if not marker_path.exists():
-            continue
-
-        try:
-            with marker_path.open("r", encoding="utf-8") as file:
-                return json.load(file)
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    return {}
+    _, payload = _load_libraforge_raw(source)
+    return payload.get("marker", {})
 
 
 def get_metadata_backup_path(source: Path) -> Path:
     return source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}")
+
+
+def get_libraforge_path(source: Path, clues: dict | None = None) -> Path:
+    group_search = (clues or {}).get("group_search", {}) or {}
+    if group_search.get("applied"):
+        return source.parent / "libraforge.json"
+    return source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}")
+
+
+def _write_libraforge(path: Path, payload: dict) -> None:
+    try:
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _load_libraforge_raw(
+    source: Path, clues: dict | None = None
+) -> tuple[Path, dict]:
+    """Load the unified libraforge sidecar, migrating old canonical files on first access.
+
+    Multi-file (grouped) books use a folder-level ``libraforge.json``.
+    Single-file books use a per-file ``<name>.libraforge.json``.
+    Detection is by existence: folder-level is checked first.
+
+    Returns (libraforge_path, payload). payload is {} when nothing exists yet.
+    Migrates old backup/marker files and old group sidecars on first access.
+    """
+    folder_lf = source.parent / "libraforge.json"
+    file_lf = source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}")
+
+    if folder_lf.is_file():
+        try:
+            return folder_lf, json.loads(folder_lf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return folder_lf, {}
+
+    if file_lf.is_file():
+        try:
+            return file_lf, json.loads(file_lf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return file_lf, {}
+
+    # Determine write path for new data
+    group_search = (clues or {}).get("group_search", {}) or {}
+    lf_path = folder_lf if group_search.get("applied") else file_lf
+
+    payload: dict = {}
+    old_to_remove: list[Path] = []
+
+    # Migrate old group sidecar (multi-file books)
+    old_group_sidecar = source.parent / f"{source.parent.name}{M4B_TOOL_METADATA_SUFFIX}"
+    if old_group_sidecar.is_file():
+        try:
+            sd = json.loads(old_group_sidecar.read_text(encoding="utf-8"))
+            payload["sidecar"] = {
+                k: sd[k]
+                for k in ("book", "audible", "matching", "local_before",
+                          "audio_summary", "source", "audio_profile_updated_at")
+                if k in sd
+            }
+            if sd.get("file_cache"):
+                payload["file_cache"] = sd["file_cache"]
+            old_to_remove.append(old_group_sidecar)
+            lf_path = folder_lf
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Migrate old per-file backup (single-file books)
+    old_backup = source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}")
+    if old_backup.is_file():
+        try:
+            bd = json.loads(old_backup.read_text(encoding="utf-8"))
+            payload["backup"] = {
+                k: bd[k]
+                for k in ("created_at", "source_file", "duration_minutes",
+                          "format_tags", "applied_tags", "applied_at")
+                if k in bd
+            }
+            old_to_remove.append(old_backup)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Migrate old per-file marker (single-file) or per-directory marker (legacy)
+    for old_marker in [
+        source.with_name(f"{source.name}{MARKER_SUFFIX}"),
+        source.parent / MARKER_FILENAME,
+    ]:
+        if old_marker.is_file():
+            try:
+                md = json.loads(old_marker.read_text(encoding="utf-8"))
+                payload["marker"] = {
+                    k: md[k]
+                    for k in ("processed_at", "applied", "mode", "edit_mode",
+                              "aggressive", "score", "source_file", "output_kind",
+                              "duration", "audible", "local_before", "restored_at")
+                    if k in md
+                }
+                old_to_remove.append(old_marker)
+            except (json.JSONDecodeError, OSError):
+                pass
+            break
+
+    if payload:
+        payload["schema_version"] = 2
+        payload["tool"] = "audible-metadata-fixer"
+        payload["migrated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_libraforge(lf_path, payload)
+        for old_file in old_to_remove:
+            try:
+                old_file.unlink()
+            except OSError:
+                pass
+
+    return lf_path, payload
 
 
 def get_m4b_tool_metadata_path(source: Path, clues: dict | None = None) -> Path:
@@ -235,19 +356,15 @@ def write_original_metadata_backup(
     tags: dict | None = None,
     duration_minutes: float | None = None,
 ) -> Path:
-    """Store the original container-level metadata in a small JSON file.
-
-    This is intentionally a metadata backup, not a media-file duplicate. The
-    restore operation uses this file to clear current container metadata and
-    write these tags back to the file with ffmpeg copy mode.
+    """Store the original container-level metadata in the unified .libraforge.json sidecar.
 
     Pass tags and duration_minutes when the file has already been probed to
     avoid a second ffprobe call.
     """
-    backup_path = get_metadata_backup_path(source)
+    lf_path, payload = _load_libraforge_raw(source)
 
-    if backup_path.exists():
-        return backup_path
+    if "backup" in payload:
+        return lf_path
 
     if tags is None or duration_minutes is None:
         probed_tags, probed_duration = probe_file(source)
@@ -256,22 +373,17 @@ def write_original_metadata_backup(
         if duration_minutes is None:
             duration_minutes = probed_duration
 
-    payload = {
-        "schema_version": 1,
-        "tool": "audible-metadata-fixer",
-        "backup_type": "format_tags",
+    payload.setdefault("schema_version", 2)
+    payload.setdefault("tool", "audible-metadata-fixer")
+    payload["backup"] = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_file": source.name,
-        "source_path": str(source),
         "duration_minutes": round(duration_minutes, 4) if duration_minutes else None,
         "format_tags": tags,
     }
 
-    with backup_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)
-        file.write("\n")
-
-    return backup_path
+    _write_libraforge(lf_path, payload)
+    return lf_path
 
 
 def build_raw_metadata_args(tags: dict) -> list[str]:
@@ -290,23 +402,14 @@ def build_raw_metadata_args(tags: dict) -> list[str]:
 
 
 def mark_metadata_restored(source: Path) -> None:
-    marker_path = get_marker_path(source)
-
-    if not marker_path.exists():
+    lf_path, payload = _load_libraforge_raw(source)
+    if not payload.get("marker"):
         return
-
     try:
-        marker = load_marker(source)
-        if not marker:
-            return
-
-        marker["applied"] = False
-        marker["restored_at"] = datetime.now(timezone.utc).isoformat()
-
-        with marker_path.open("w", encoding="utf-8") as file:
-            json.dump(marker, file, indent=2, ensure_ascii=False)
-            file.write("\n")
-    except OSError:
+        payload["marker"]["applied"] = False
+        payload["marker"]["restored_at"] = datetime.now(timezone.utc).isoformat()
+        _write_libraforge(lf_path, payload)
+    except (OSError, KeyError):
         return
 
 
@@ -390,20 +493,12 @@ def safe_ffmpeg_copy_metadata_command(
 
 
 def load_metadata_backup_payload(source: Path) -> tuple[Path, dict]:
-    backup_path = get_metadata_backup_path(source)
-
-    if not backup_path.exists():
-        raise FileNotFoundError(f"metadata backup not found: {backup_path}")
-
-    with backup_path.open("r", encoding="utf-8") as file:
-        payload = json.load(file)
-
-    tags = payload.get("format_tags", {})
-
-    if not isinstance(tags, dict):
-        raise ValueError(f"metadata backup has invalid format_tags: {backup_path}")
-
-    return backup_path, tags
+    lf_path, payload = _load_libraforge_raw(source)
+    backup = payload.get("backup", {})
+    tags = backup.get("format_tags", {})
+    if not isinstance(tags, dict) or not tags:
+        raise FileNotFoundError(f"no backup data found: {lf_path}")
+    return lf_path, tags
 
 
 def ffmpeg_restore_metadata_from_backup(source: Path) -> Path:
@@ -1091,16 +1186,16 @@ def restore_metadata_backups(
     for index, file_path in enumerate(files, start=1):
         print(f"[{index}/{len(files)}] Restoring: {file_path}", flush=True)
 
-        backup_path = get_metadata_backup_path(file_path)
-        if not backup_path.exists():
-            print(f"  SKIP: metadata backup not found: {backup_path}")
+        _, _lf = _load_libraforge_raw(file_path)
+        if not _lf.get("backup", {}).get("format_tags"):
+            print(f"  SKIP: no backup data found: {get_libraforge_path(file_path)}")
             print()
             skipped += 1
             continue
 
         try:
             restore_metadata_from_backup(file_path, writer=writer)
-            print(f"  RESTORED from: {backup_path}")
+            print(f"  RESTORED from: {get_libraforge_path(file_path)}")
             print()
             restored += 1
         except Exception as error:
@@ -1168,11 +1263,10 @@ def write_marker(
     aggressive: bool,
     output_kind: str = "tags",
 ) -> None:
-    marker_path = get_marker_path(source)
-
-    marker = {
-        "schema_version": 1,
-        "tool": "audible-metadata-fixer",
+    lf_path, payload = _load_libraforge_raw(source, clues)
+    payload.setdefault("schema_version", 2)
+    payload.setdefault("tool", "audible-metadata-fixer")
+    payload["marker"] = {
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "applied": True,
         "mode": mode,
@@ -1204,10 +1298,7 @@ def write_marker(
             "narrator": clues.get("narrator", ""),
         },
     }
-
-    with marker_path.open("w", encoding="utf-8") as file:
-        json.dump(marker, file, indent=2, ensure_ascii=False)
-        file.write("\n")
+    _write_libraforge(lf_path, payload)
 
 
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
@@ -1454,14 +1545,17 @@ def build_m4b_tool_metadata_payload(
 def write_m4b_tool_metadata_sidecar(
     source: Path, metadata: dict, clues: dict, score: float
 ) -> Path:
-    sidecar_path = get_m4b_tool_metadata_path(source, clues)
-    payload = build_m4b_tool_metadata_payload(source, metadata, clues, score)
-
-    with sidecar_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)
-        file.write("\n")
-
-    return sidecar_path
+    sidecar_data = build_m4b_tool_metadata_payload(source, metadata, clues, score)
+    lf_path, lf_payload = _load_libraforge_raw(source, clues)
+    lf_payload.setdefault("schema_version", 2)
+    lf_payload.setdefault("tool", "audible-metadata-fixer")
+    lf_payload["sidecar"] = {
+        k: sidecar_data[k]
+        for k in ("book", "audible", "matching", "local_before", "audio_summary", "source")
+        if k in sidecar_data
+    }
+    _write_libraforge(lf_path, lf_payload)
+    return lf_path
 
 
 def write_audiobookshelf_metadata_json(
@@ -1531,36 +1625,31 @@ def refresh_multipart_sidecar_audio_profile(
     chapter_files: list[Path],
     audio_summary: dict | None = None,
 ) -> Path:
-    sidecar_path = folder / f"{folder.name}{M4B_TOOL_METADATA_SUFFIX}"
-    with sidecar_path.open("r", encoding="utf-8") as file:
-        payload = json.load(file)
+    lf_path = folder / "libraforge.json"
+    lf_payload: dict = {}
+    if lf_path.is_file():
+        try:
+            lf_payload = json.loads(lf_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            lf_payload = {}
 
-    if not isinstance(payload, dict):
-        raise ValueError("sidecar root must be a JSON object")
+    lf_payload.setdefault("schema_version", 2)
+    lf_payload.setdefault("tool", "audible-metadata-fixer")
 
     ordered_files = sorted(chapter_files, key=natural_audio_sort_key)
-    payload["audio_summary"] = audio_summary or summarize_audio_stream_properties(
-        ordered_files
-    )
-    payload["audio_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
+    sidecar = lf_payload.setdefault("sidecar", {})
+    sidecar["audio_summary"] = audio_summary or summarize_audio_stream_properties(ordered_files)
+    sidecar["audio_profile_updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    source_payload = payload.get("source")
-    if not isinstance(source_payload, dict):
-        source_payload = {}
-        payload["source"] = source_payload
-    source_payload["chapter_files"] = [str(file_path) for file_path in ordered_files]
-
-    group_search = source_payload.get("group_search")
+    source_section = sidecar.setdefault("source", {})
+    source_section["chapter_files"] = [str(fp) for fp in ordered_files]
+    group_search = source_section.get("group_search")
     if isinstance(group_search, dict):
         group_search["file_count"] = len(ordered_files)
-        group_search["files"] = [str(file_path) for file_path in ordered_files]
+        group_search["files"] = [str(fp) for fp in ordered_files]
 
-    temporary_path = sidecar_path.with_name(f".{sidecar_path.name}.tmp")
-    with temporary_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)
-        file.write("\n")
-    temporary_path.replace(sidecar_path)
-    return sidecar_path
+    _write_libraforge(lf_path, lf_payload)
+    return lf_path
 
 
 def clean_text(value: str) -> str:
@@ -1962,19 +2051,15 @@ def _synthesize_applied_tags(metadata: dict) -> dict:
 
 
 def update_backup_with_applied_metadata(source: Path, metadata: dict) -> None:
-    """Append applied_tags to the backup so future runs skip probing the file."""
-    backup_path = get_metadata_backup_path(source)
-    if not backup_path.is_file():
+    """Append applied_tags to the backup section so future runs skip probing the file."""
+    lf_path, payload = _load_libraforge_raw(source)
+    if "backup" not in payload:
         return
     try:
-        payload = json.loads(backup_path.read_text(encoding="utf-8"))
-        payload["applied_tags"] = _synthesize_applied_tags(metadata)
-        payload["applied_at"] = datetime.now(timezone.utc).isoformat()
-        backup_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except (OSError, json.JSONDecodeError):
+        payload["backup"]["applied_tags"] = _synthesize_applied_tags(metadata)
+        payload["backup"]["applied_at"] = datetime.now(timezone.utc).isoformat()
+        _write_libraforge(lf_path, payload)
+    except (OSError, KeyError):
         pass
 
 
@@ -1982,7 +2067,7 @@ def _save_group_file_cache(
     file_paths: list[Path],
     per_file: list[tuple[dict, float | None]],
 ) -> None:
-    """Store per-chapter probe data in the group sidecar for future cache reads.
+    """Store per-chapter probe data in the folder-level libraforge.json for future cache reads.
 
     Only writes format_tags when an entry is new — never overwrites an
     existing format_tags with post-apply synthesized data so the original
@@ -1990,24 +2075,18 @@ def _save_group_file_cache(
     """
     if not file_paths:
         return
-    folder = file_paths[0].parent
-    sidecar_path = folder / f"{folder.name}{M4B_TOOL_METADATA_SUFFIX}"
-
-    payload: dict = {}
-    if sidecar_path.is_file():
+    lf_path = file_paths[0].parent / "libraforge.json"
+    lf_payload: dict = {}
+    if lf_path.is_file():
         try:
-            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            lf_payload = json.loads(lf_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            payload = {}
+            lf_payload = {}
 
-    if not payload:
-        payload = {
-            "schema_version": 1,
-            "tool": "audible-metadata-fixer",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+    lf_payload.setdefault("schema_version", 2)
+    lf_payload.setdefault("tool", "audible-metadata-fixer")
 
-    existing_cache: dict = payload.get("file_cache", {})
+    existing_cache: dict = lf_payload.get("file_cache", {})
     changed = False
 
     for fp, (tags, duration) in zip(file_paths, per_file):
@@ -2024,15 +2103,9 @@ def _save_group_file_cache(
     if not changed:
         return
 
-    payload["file_cache"] = existing_cache
-    payload["file_cache_updated_at"] = datetime.now(timezone.utc).isoformat()
-    try:
-        sidecar_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+    lf_payload["file_cache"] = existing_cache
+    lf_payload["file_cache_updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_libraforge(lf_path, lf_payload)
 
 
 def read_tags_and_duration(
@@ -2056,37 +2129,19 @@ def read_tags_and_duration(
     if reprobe:
         return probe_file(file_path)
 
-    # Per-file backup (single M4B/M4A files).
-    backup_path = get_metadata_backup_path(file_path)
-    if backup_path.is_file():
-        try:
-            payload = json.loads(backup_path.read_text(encoding="utf-8"))
-            duration = payload.get("duration_minutes")
-            if duration is not None:
-                if use_backup_tags:
-                    tags = payload.get("format_tags")
-                else:
-                    tags = payload.get("applied_tags") or payload.get("format_tags")
-                if isinstance(tags, dict):
-                    return tags, float(duration)
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
-
-    # Group sidecar (multipart chapter files).
-    group_sidecar = file_path.parent / f"{file_path.parent.name}{M4B_TOOL_METADATA_SUFFIX}"
-    if group_sidecar.is_file():
-        try:
-            payload = json.loads(group_sidecar.read_text(encoding="utf-8"))
-            entry = (payload.get("file_cache") or {}).get(str(file_path))
+    # Folder-level libraforge (multi-file / grouped books).
+    try:
+        folder_lf = file_path.parent / "libraforge.json"
+        if folder_lf.is_file():
+            lf = json.loads(folder_lf.read_text(encoding="utf-8"))
+            entry = (lf.get("file_cache") or {}).get(str(file_path))
             if entry:
                 duration = entry.get("duration_minutes")
                 if duration is not None:
                     if use_backup_tags:
                         tags = entry.get("format_tags")
                     else:
-                        # Prefer applied metadata from the sidecar's book section
-                        # (the clean Audible values written on the last apply).
-                        book = payload.get("book")
+                        book = (lf.get("sidecar") or {}).get("book")
                         tags = (
                             _synthesize_applied_tags(book)
                             if book
@@ -2094,8 +2149,23 @@ def read_tags_and_duration(
                         )
                     if isinstance(tags, dict):
                         return tags, float(duration)
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+
+    # File-level libraforge (single-file books).
+    try:
+        _, lf = _load_libraforge_raw(file_path)
+        backup = lf.get("backup", {})
+        duration = backup.get("duration_minutes")
+        if duration is not None:
+            if use_backup_tags:
+                tags = backup.get("format_tags")
+            else:
+                tags = backup.get("applied_tags") or backup.get("format_tags")
+            if isinstance(tags, dict):
+                return tags, float(duration)
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
 
     return probe_file(file_path)
 
@@ -7182,6 +7252,10 @@ def main():
             skipped += 1
             continue
 
+        if _cancel_requested:
+            print(f"\n[{result.index}/{total}] Cancelled - stopping cleanly after previous writes.", flush=True)
+            break
+
         if not result.write_done:
             aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
             mode = "aggressive" if aggressive_edit else "normal"
@@ -7247,7 +7321,7 @@ def main():
 
                 # 2. In-file tags / M4B-tool merge sidecar (unless suppressed or NO-OP).
                 if not skip_write:
-                    if not args.backup and not get_metadata_backup_path(file_path).is_file():
+                    if not is_sidecar and not args.backup and "backup" not in _load_libraforge_raw(file_path)[1]:
                         bp = write_original_metadata_backup(file_path)
                         print(f"  Auto-backup: {bp}")
                     if is_sidecar:
