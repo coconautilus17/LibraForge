@@ -4865,6 +4865,28 @@ def print_asin_verification_report(asin_matches: list[dict]) -> None:
         print()
 
 
+def matches_ignored_folders(file_path: Path, folders: list[str]) -> tuple[bool, str]:
+    """Return True when any *directory* in the path begins with an ignore token.
+
+    Only directory components are checked (the filename is excluded), and the
+    match is a case-insensitive prefix. This lets short tokens like ``.``, ``#``
+    and ``@`` skip hidden/temp/system folders (e.g. ``.thumbs``, ``@eaDir``)
+    without matching every file via its extension.
+    """
+    if not folders:
+        return False, ""
+
+    dir_components = [part.lower() for part in Path(file_path).parent.parts]
+    for folder in folders:
+        needle = str(folder or "").strip().lower()
+        if not needle:
+            continue
+        if any(component.startswith(needle) for component in dir_components):
+            return True, folder
+
+    return False, ""
+
+
 def matches_skip_patterns(
     file_path: Path, clues: dict, patterns: list[str]
 ) -> tuple[bool, str]:
@@ -4873,6 +4895,8 @@ def matches_skip_patterns(
     Patterns are case-insensitive plain substrings checked against the full path
     and the extracted local metadata fields. This keeps the option simple and
     safe for excluding known-problem folders/series such as Casual Farming.
+    Folder-prefix ignore tokens are handled separately by
+    :func:`matches_ignored_folders`.
     """
     if not patterns:
         return False, ""
@@ -5287,6 +5311,18 @@ def main():
     )
 
     parser.add_argument(
+        "--ignore-folder",
+        action="append",
+        default=[],
+        help=(
+            "Skip files inside any directory whose name begins with this "
+            "case-insensitive token. Only directory names are matched (not the "
+            "filename), so short tokens like '.', '#' or '@' skip hidden/system "
+            "folders such as '.thumbs' or '@eaDir'. Can be repeated."
+        ),
+    )
+
+    parser.add_argument(
         "--duration-review-threshold",
         type=float,
         default=10.0,
@@ -5327,7 +5363,12 @@ def main():
     if not root.exists():
         raise SystemExit(f"ERROR: path does not exist: {root}")
 
+    # These steps walk the whole library before any per-book output and can take a
+    # while on network mounts (NAS/SMB/NFS). Announce each so the UI shows the run is
+    # alive and reaching the library folder rather than looking stuck.
+    print(f"Scanning library folder: {root}", flush=True)
     files = collect_audio_files(root)
+    print("Analyzing multi-part audiobooks...", flush=True)
     multi_part_group_map = build_multi_part_group_map(files)
 
     if args.max_files > 0:
@@ -5416,6 +5457,25 @@ def main():
             )
             search_context_cache[match_cache_key] = (queries, clues)
         local_duration_minutes = clues.get("local_duration_minutes")
+
+        skip_due_to_folder, skip_folder = matches_ignored_folders(
+            file_path=file_path,
+            folders=args.ignore_folder,
+        )
+
+        if skip_due_to_folder:
+            reason = f"skipped: ignored folder: {skip_folder}"
+            print(f"  SKIP: ignored folder: {skip_folder}")
+            append_manual_review(
+                manual_review,
+                file_path,
+                [reason],
+                clues=clues,
+                status="skipped",
+            )
+            print()
+            skipped += 1
+            continue
 
         skip_due_to_pattern, skip_pattern = matches_skip_patterns(
             file_path=file_path,

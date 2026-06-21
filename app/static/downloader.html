@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Library Downloader</title>
-  <script src="/static/ui-preferences.js?v=20260620-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260619-6" />
+  <script src="/static/ui-preferences.js?v=20260621-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260621-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
   <style>
@@ -209,6 +209,7 @@
     const libError = document.getElementById("libError");
     let libraryRoot = "/audiobooks";
     let ownedAsins = new Set();
+    let ownedPending = false; // true while the owned-ASIN scan of the library folder runs
     let library = [];        // [{asin,title,author,...,owned,selected,override,dupAction}]
 
     // ── Folder browser + config ────────────────────────────────────────────
@@ -257,30 +258,42 @@
       libError.hidden = true;
       loadBtn.disabled = true;
       loadBtn.textContent = "Loading…";
+      // The owned scan reads ASIN tags from every file in the library folder, which
+      // can be slow on a network mount. Don't block the whole view on it: render the
+      // Audible list as soon as it arrives, then fold in "owned" highlighting after.
       const ownedReq = fetch(`/api/library/owned-asins?root=${encodeURIComponent(libraryRoot)}`)
         .then(r => r.ok ? r.json() : { asins: [] })
         .catch(() => ({ asins: [] }));
-      const listReq = fetch(`/api/library/list?auth_file=${encodeURIComponent(AUTH_FILE)}`)
-        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e.detail || "Library fetch failed")); return r.json(); });
 
-      Promise.all([listReq, ownedReq])
-        .then(([list, owned]) => {
-          ownedAsins = new Set((owned.asins || []).map(a => a.toUpperCase()));
+      fetch(`/api/library/list?auth_file=${encodeURIComponent(AUTH_FILE)}`)
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e.detail || "Library fetch failed")); return r.json(); })
+        .then(list => {
           library = (list.items || []).map(it => ({
             ...it,
-            owned: ownedAsins.has((it.asin || "").toUpperCase()),
+            owned: false,
             selected: false,
             override: false,
             dupAction: "new",
           }));
+          ownedPending = true;
           document.getElementById("libSection").hidden = false;
+          loadBtn.disabled = false;
+          loadBtn.textContent = "Reload library";
           renderLibrary();
+          // Fold in which titles are already in your library once the scan finishes.
+          ownedReq.then(owned => {
+            ownedAsins = new Set((owned.asins || []).map(a => a.toUpperCase()));
+            library.forEach(it => { it.owned = ownedAsins.has((it.asin || "").toUpperCase()); });
+            ownedPending = false;
+            renderLibrary();
+          });
         })
         .catch(err => {
           libError.textContent = typeof err === "string" ? err : "Could not load your Audible library.";
           libError.hidden = false;
-        })
-        .finally(() => { loadBtn.disabled = false; loadBtn.textContent = "Reload library"; });
+          loadBtn.disabled = false;
+          loadBtn.textContent = "Reload library";
+        });
     }
 
     // ── Render ─────────────────────────────────────────────────────────────
@@ -310,8 +323,11 @@
     function renderLibrary() {
       const items = visibleItems();
       const ownedCount = library.filter(i => i.owned).length;
+      const ownedPart = ownedPending
+        ? "checking which titles you already own…"
+        : `${ownedCount} already owned`;
       document.getElementById("libMeta").textContent =
-        `${library.length} titles in your library · ${ownedCount} already owned · showing ${items.length}`;
+        `${library.length} titles in your library · ${ownedPart} · showing ${items.length}`;
       if (!items.length) {
         grid.innerHTML = '<div class="lib-empty">No titles match.</div>';
         updateSelCount();

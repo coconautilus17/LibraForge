@@ -6,6 +6,15 @@ Phase = tuple[str, str, str]
 
 def fixer_phase_for_line(line: str, current_file: str = "") -> Phase | None:
     stripped = line.strip()
+    if stripped.startswith("Scanning library folder"):
+        detail = stripped.split(":", 1)[1].strip() if ":" in stripped else ""
+        return ("scanning", "Scanning library folder", detail)
+    if stripped.startswith("Reading chapter data"):
+        return ("probing", "Reading chapter data from library", current_file)
+    if stripped.startswith("Analyzing multi-part audiobooks"):
+        return ("grouping", "Grouping multi-part audiobooks", "")
+    if stripped.startswith("Checking the library for existing ASINs"):
+        return ("dedup-check", "Checking for duplicate ASINs", "")
     if stripped.startswith("Trying query:"):
         return (
             "searching",

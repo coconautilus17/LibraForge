@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "publishers": [
+    { "id": "audible-studios", "name": "Audible Studios", "aliases": ["Audible Originals", "Audible Original", "Audible UK"] },
+    { "id": "tantor-audio", "name": "Tantor Audio", "aliases": ["Tantor Media", "Tantor"] },
+    { "id": "recorded-books", "name": "Recorded Books" },
+    { "id": "brilliance-audio", "name": "Brilliance Audio", "aliases": ["Brilliance"] },
+    { "id": "blackstone-audio", "name": "Blackstone Audio", "aliases": ["Blackstone Publishing", "Blackstone"] },
+    { "id": "graphicaudio", "name": "Graphic Audio", "aliases": ["GraphicAudio"], "special_provider": "graphicaudio" },
+    { "id": "soundbooth-theater", "name": "Soundbooth Theater", "aliases": ["Soundbooth"], "special_provider": "soundbooththeater" },
+    { "id": "dreamscape-media", "name": "Dreamscape Media", "aliases": ["Dreamscape"] },
+    { "id": "macmillan-audio", "name": "Macmillan Audio" },
+    { "id": "penguin-audio", "name": "Penguin Audio" },
+    { "id": "harpercollins", "name": "HarperCollins", "aliases": ["Harper Audio", "HarperAudio"] },
+    { "id": "random-house-audio", "name": "Random House Audio" },
+    { "id": "simon-schuster-audio", "name": "Simon Schuster Audio" },
+    { "id": "hachette-audio", "name": "Hachette Audio" },
+    { "id": "highbridge-audio", "name": "HighBridge Audio" },
+    { "id": "podium-audio", "name": "Podium Audio", "aliases": ["Podium Publishing", "Podium"] },
+    { "id": "bbc-audio", "name": "BBC Audio", "aliases": ["BBC Radio", "BBC Worldwide", "BBC"] },
+    { "id": "scribd", "name": "Scribd" },
+    { "id": "noise-unabridged", "name": "Unabridged" },
+    { "id": "noise-abridged", "name": "Abridged" },
+    { "id": "noise-audiobook", "name": "Audiobook" }
+  ]
+}

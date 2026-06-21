@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
-  <script src="/static/ui-preferences.js?v=20260620-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260615-5" />
+  <script src="/static/ui-preferences.js?v=20260621-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260621-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -78,6 +78,29 @@
         <button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button>
       </div>
       <p id="titleNoiseStatus" class="note"></p>
+    </section>
+    <section class="settings-section">
+      <h3>Publishers</h3>
+      <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
+      <div id="publisherDefaults" class="pattern-list"></div>
+      <div class="pattern-editor">
+        <label>Publisher name
+          <input id="publisherName" placeholder="Tantor Audio" />
+        </label>
+        <label>Special endpoint
+          <select id="publisherSpecial">
+            <option value="">None</option>
+            <option value="graphicaudio">Graphic Audio</option>
+            <option value="soundbooththeater">Soundbooth Theater</option>
+          </select>
+        </label>
+        <button id="publisherAddBtn" class="secondary" type="button">Add publisher</button>
+      </div>
+      <div id="publisherCustom" class="pattern-list"></div>
+      <div class="actions">
+        <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
+      </div>
+      <p id="publisherStatus" class="note"></p>
     </section>
     <section class="settings-section">
       <h3>Library</h3>
@@ -247,7 +270,7 @@
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
         <label><input id="backup" type="checkbox" /> Backup and cache original metadata <span class="info-tip" data-tooltip="Creates a per-file JSON backup of original tags and caches the audio duration. Future runs use the cache to skip per-file ffprobe probes. Always recommended when applying."></span></label>
         <label><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
-        <label><input id="metadataJson" type="checkbox" /> Write Audiobookshelf metadata.json <span class="info-tip" data-tooltip="Writes a metadata.json sidecar to each book folder instead of embedding tags in the audio file. Audiobookshelf picks this up automatically. Cover art and audio are not modified."></span></label>
+        <label><input id="metadataJsonOnly" type="checkbox" /> Write only metadata.json (don't modify audio files) <span class="info-tip" data-tooltip="An Audiobookshelf metadata.json is always written for matched books. Check this to write ONLY that file and leave the audio files' embedded tags untouched. Loose/multi-file books still get their M4B-tool merge sidecar."></span></label>
         <label><input id="aggressive" type="checkbox" /> Aggressive <span class="info-tip" data-tooltip="Allows reprocessing of items previously handled by a normal run while still respecting aggressive markers. Review results carefully."></span></label>
         <label><input id="force" type="checkbox" /> Force / ignore markers <span class="info-tip" data-tooltip="Processes items even when existing marker files would normally skip them. This can repeat prior work."></span></label>
         <label><input id="forceOriginal" type="checkbox" /> Force original tags <span class="info-tip" data-tooltip="Uses the pre-apply tags from the backup JSON as the search context. Use when the previous match was wrong and you want to re-search from the original local metadata."></span></label>
@@ -308,6 +331,9 @@
       </div>
 
       <h3>Items from current run</h3>
+      <label class="field-label" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">Filter by reason
+        <select id="manualReviewFilter" style="flex:0 1 auto"><option value="">All reasons</option></select>
+      </label>
       <div id="manualReviewList" class="file-list"></div>
 
       <div class="grid manual-grid">
@@ -352,6 +378,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260620-7"></script>
+  <script src="/static/app.js?v=20260621-2"></script>
 </body>
 </html>
