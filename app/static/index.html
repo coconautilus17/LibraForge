@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260621-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260621-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -224,13 +224,13 @@
         <label><span class="field-label">Minimum score <span class="info-tip" data-tooltip="Lowest accepted match score from 0 to 1. Higher values are safer but may skip valid books."></span></span>
           <input id="minScore" type="number" step="0.01" value="0.70" />
         </label>
-        <label><span class="field-label">Audible result limit <span class="info-tip" data-tooltip="Maximum Audible results requested per search query. Higher limits may improve difficult matches but take longer to score."></span></span>
+        <label><span class="field-label">Search results per book <span class="info-tip" data-tooltip="Maximum results requested per search query. Higher limits may improve difficult matches but take longer to score."></span></span>
           <input id="limit" type="number" value="50" />
         </label>
-        <label><span class="field-label">Max files, 0 means all <span class="info-tip" data-tooltip="Limits how many processing items are handled. Use a small number for a bounded test; 0 processes everything found."></span></span>
+        <label><span class="field-label">Book limit (0 = all) <span class="info-tip" data-tooltip="Limits how many books are processed in this run. Use a small number for a bounded test; 0 processes everything found."></span></span>
           <input id="maxFiles" type="number" value="0" />
         </label>
-        <label><span class="field-label">Large duration review threshold % <span class="info-tip" data-tooltip="Adds selected matches above this runtime difference to manual review. It does not override the fixer's matching safety rules."></span></span>
+        <label><span class="field-label">Duration mismatch review <span class="info-tip" data-tooltip="Books whose runtime from the search endpoint differs from the local file by more than this percentage are added to the manual review queue, even if the match score is otherwise acceptable. Helps catch wrong matches that share a similar title but different length."></span></span>
           <input id="durationThreshold" type="number" step="0.1" value="10" />
         </label>
       </div>
@@ -268,14 +268,11 @@
 
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
-        <label><input id="backup" type="checkbox" /> Backup and cache original metadata <span class="info-tip" data-tooltip="Creates a per-file JSON backup of original tags and caches the audio duration. Future runs use the cache to skip per-file ffprobe probes. Always recommended when applying."></span></label>
+        <label><input id="backup" type="checkbox" /> Back up and cache original metadata <span class="info-tip" data-tooltip="Saves a per-file JSON with the original embedded tags and full audio probe data (duration, chapters, ASIN, codec info). After a successful apply, the matched metadata is also written into this cache so future re-runs skip re-probing. Run a dry-run with Backup first to pre-populate the cache. Apply runs create the backup automatically if one does not exist yet. Required for Search from original backup to work."></span></label>
         <label><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
         <label><input id="metadataJsonOnly" type="checkbox" /> Write only metadata.json (don't modify audio files) <span class="info-tip" data-tooltip="An Audiobookshelf metadata.json is always written for matched books. Check this to write ONLY that file and leave the audio files' embedded tags untouched. Loose/multi-file books still get their M4B-tool merge sidecar."></span></label>
-        <label><input id="aggressive" type="checkbox" /> Aggressive <span class="info-tip" data-tooltip="Allows reprocessing of items previously handled by a normal run while still respecting aggressive markers. Review results carefully."></span></label>
-        <label><input id="force" type="checkbox" /> Force / ignore markers <span class="info-tip" data-tooltip="Processes items even when existing marker files would normally skip them. This can repeat prior work."></span></label>
-        <label><input id="forceOriginal" type="checkbox" /> Force original tags <span class="info-tip" data-tooltip="Uses the pre-apply tags from the backup JSON as the search context. Use when the previous match was wrong and you want to re-search from the original local metadata."></span></label>
-        <label><input id="reprobe" type="checkbox" /> Re-probe audio files <span class="info-tip" data-tooltip="Always runs ffprobe on each file, ignoring any cached backup data. Use when you suspect the backup is stale or the file has been replaced since it was last backed up."></span></label>
-        <label><input id="showAsin" type="checkbox" /> Show ASIN report <span class="info-tip" data-tooltip="Adds duplicate-ASIN diagnostics to the output so repeated Audible product selections can be reviewed."></span></label>
+        <label><input id="force" type="checkbox" /> Force reprocess <span class="info-tip" data-tooltip="Ignores already-processed markers and re-searches every matched book through the search endpoint. Search clues are read from the backup JSON cache (the clean metadata applied last time), or from the original embedded tags if the backup has no applied cache yet. Requires a prior run with backup enabled to avoid re-probing every file."></span></label>
+        <label style="padding-left:20px"><input id="forceOriginal" type="checkbox" /> Search from original backup <span class="info-tip" data-tooltip="Only active when Force reprocess is on. Overrides the cached applied metadata and searches from the original pre-fixer embedded tags instead. Use this when a previous match was wrong and you want to re-search from scratch using what the file contained before the fixer ever touched it. Requires a backup JSON from a prior run."></span></label>
         <label><input id="coverIfMissing" type="checkbox" /> Add cover only if missing <span class="info-tip" data-tooltip="Embeds the Audible cover only when the book does not already have cover art. Existing covers are preserved."></span></label>
         <label><input id="replaceCover" type="checkbox" /> Replace existing cover <span class="info-tip" data-tooltip="Replaces current cover art with the selected Audible cover during apply. This is intentionally more destructive."></span></label>
       </div>
@@ -284,7 +281,14 @@
         <button id="startBtn">Start run</button>
         <button id="cancelBtn" class="secondary" disabled>Cancel</button>
       </div>
-      <p class="action-explanation"><strong>Start run</strong> is read-only unless Apply changes or Restore metadata is enabled. Use the dry-run report to review matches before allowing writes.</p>
+      <div class="action-guide">
+        <strong>Recommended workflow</strong>
+        <ol>
+          <li><strong>Dry run</strong> - pick a write mode (Smart / Fill / Overwrite) and enable Back up and cache to build the probe cache.</li>
+          <li><strong>Review</strong> - inspect manual review items and correct any flags.</li>
+          <li><strong>Apply</strong> - re-run with Apply changes checked. Backup is created automatically if not already done.</li>
+        </ol>
+      </div>
       <p class="note">Encrypted Audible auth files are intentionally not supported by this UI. Use a metadata-only dummy account with an unencrypted auth JSON mounted into the container.</p>
     </section>
 
@@ -395,6 +399,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260621-5"></script>
+  <script src="/static/app.js?v=20260621-6"></script>
 </body>
 </html>

@@ -44,11 +44,8 @@ function collectRequest() {
     apply: $('apply').checked,
     backup: $('backup').checked,
     restore_metadata: $('restore').checked,
-    aggressive: $('aggressive').checked,
     force: $('force').checked,
     force_original: $('forceOriginal').checked,
-    reprobe: $('reprobe').checked,
-    show_asin_report: $('showAsin').checked,
     cover_if_missing: $('coverIfMissing').checked,
     replace_cover: $('replaceCover').checked,
     metadata_json_only: $('metadataJsonOnly').checked,
@@ -719,6 +716,16 @@ async function applyManualMatch(result, editMode, replaceCover = false) {
   }
   alert(`Applied manual match in ${data.edit_mode} mode.\nTarget: ${data.target_path}\nOutput: ${data.output_kind}\nSaved to: ${data.output_path}`);
 }
+
+function syncForceOriginal() {
+  const forceOn = $('force').checked;
+  const fo = $('forceOriginal');
+  fo.disabled = !forceOn;
+  fo.closest('label').style.opacity = forceOn ? '' : '0.4';
+  if (!forceOn) fo.checked = false;
+}
+$('force').addEventListener('change', syncForceOriginal);
+syncForceOriginal();
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
