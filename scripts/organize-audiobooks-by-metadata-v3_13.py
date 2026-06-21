@@ -118,7 +118,7 @@ COMPANION_SUFFIXES = (
 )
 
 # Optional ebook/sidecar companions when they clearly share the audio stem.
-COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg", ".png"}
+COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".txt"}
 
 NON_AUTHOR_ROLE_RE = re.compile(
     r"\s+-\s+(?:translator|translations?|introduction|introductions?|editor|foreword|afterword|adapter|adapted by)\s*$",
@@ -3515,33 +3515,13 @@ def print_move(move: dict[str, Any]) -> None:
     if metadata.get("book_number"):
         label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
         print(f"  Number: {label} {display_book_number(metadata['book_number'])}")
+    # Always display directory paths only — no individual filenames or companion lists.
+    source_display = move["source"] if move["kind"] == "folder" else move["source"].parent
+    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
     print("  MOVE:")
-    print(f"    {move['source']}")
+    print(f"    {source_display}")
     print("  TO:")
-    print(f"    {move['target']}")
-    if move.get("companions"):
-        print("  COMPANION FILES:")
-        source = move["source"]
-        target = move["target"]
-        for companion in move["companions"]:
-            print(f"    {companion}")
-            if move["kind"] == "folder":
-                # Companion moves with the folder; only rename is needed.
-                if companion.name.endswith(".metadata.json"):
-                    print(f"    -> {target / 'metadata.json'} (renamed)")
-                elif companion.name.endswith(".libraforge.json") and not companion.name == "libraforge.json":
-                    print(f"    -> {target / 'libraforge.json'} (renamed)")
-                else:
-                    print(f"    -> {target / companion.name}")
-            else:
-                suffix = companion.name.removeprefix(source.name)
-                companion_target = target.with_name(target.name + suffix)
-                if suffix == ".metadata.json":
-                    print(f"    -> {companion_target.parent / 'metadata.json'} (renamed)")
-                elif suffix == ".libraforge.json":
-                    print(f"    -> {companion_target.parent / 'libraforge.json'} (renamed)")
-                else:
-                    print(f"    -> {companion_target}")
+    print(f"    {target_display}")
     print()
 
 
@@ -3771,14 +3751,21 @@ def main() -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(target))
             for companion in move.get("companions", []):
-                suffix = companion.name.removeprefix(source.name)
-                companion_target = target.with_name(target.name + suffix)
+                if companion.stem == source.stem:
+                    # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
+                    # keep the same stem, just change the extension.
+                    companion_target = target.with_suffix(companion.suffix)
+                else:
+                    # Suffix companion (e.g. Book.m4b.libraforge.json):
+                    # append the suffix after the full audio filename.
+                    suffix = companion.name.removeprefix(source.name)
+                    companion_target = target.with_name(target.name + suffix)
                 shutil.move(str(companion), str(companion_target))
-                if suffix == ".metadata.json":
+                if companion_target.name.endswith(".metadata.json"):
                     final = companion_target.parent / "metadata.json"
                     if not final.exists():
                         companion_target.rename(final)
-                elif suffix == ".libraforge.json":
+                elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
                     final = companion_target.parent / "libraforge.json"
                     if not final.exists():
                         companion_target.rename(final)
