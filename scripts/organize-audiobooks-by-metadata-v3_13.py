@@ -1136,7 +1136,10 @@ def strip_series_prefix(title: str, series: str) -> str:
         re.IGNORECASE,
     )
     candidate = plain_pattern.sub("", title, count=1).strip(" -:._")
-    if candidate and not title_is_bad_after_cleanup(candidate):
+    # Require a multi-word remainder when there is no separator: a single bare
+    # word after stripping (e.g. "The Bright Lord" → "Lord") means the series
+    # name is part of the title itself, not a redundant prefix decoration.
+    if candidate and not title_is_bad_after_cleanup(candidate) and " " in candidate:
         return candidate
     return title
 
