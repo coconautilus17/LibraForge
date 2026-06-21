@@ -118,7 +118,7 @@ COMPANION_SUFFIXES = (
 )
 
 # Optional ebook/sidecar companions when they clearly share the audio stem.
-COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg", ".png"}
+COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".txt"}
 
 NON_AUTHOR_ROLE_RE = re.compile(
     r"\s+-\s+(?:translator|translations?|introduction|introductions?|editor|foreword|afterword|adapter|adapted by)\s*$",
@@ -1136,12 +1136,36 @@ def strip_series_prefix(title: str, series: str) -> str:
         re.IGNORECASE,
     )
     candidate = plain_pattern.sub("", title, count=1).strip(" -:._")
-    if candidate and not title_is_bad_after_cleanup(candidate):
+    # Require a multi-word remainder when there is no separator: a single bare
+    # word after stripping (e.g. "The Bright Lord" → "Lord") means the series
+    # name is part of the title itself, not a redundant prefix decoration.
+    if candidate and not title_is_bad_after_cleanup(candidate) and " " in candidate:
         return candidate
     return title
 
 
-def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title") -> str:
+def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title", trusted: bool = False) -> str:
+    if trusted:
+        # Trusted Audible titles skip cleanup_title_artifacts/sanitize_book_title
+        # which wholesale-wipes titles containing genre keywords like "cultivation".
+        # We still strip TRAILING marketing suffixes ("1% Lifesteal: A LitRPG
+        # Adventure" → "1% Lifesteal") and series prefixes ("Dashing Devil 5 -
+        # Bold Beginnings" → "Bold Beginnings"), but only when the result is
+        # non-trivial so "The Bright Lord" (series "The Bright") stays intact.
+        cleaned = sanitize_path_name(title, "") or fallback
+        # Strip trailing marketing descriptor suffix if present.
+        without_suffix = remove_trailing_marketing_descriptor(cleaned)
+        if without_suffix and without_suffix != cleaned:
+            cleaned = without_suffix.strip(" -_.,")
+        series_clean = clean_series_name(series)
+        stripped = strip_series_prefix(cleaned, series_clean)
+        _has_sep = bool(re.search(r"[-:,]|\d", cleaned))
+        if stripped != cleaned and not title_is_bad_after_cleanup(stripped) and (_has_sep or " " in stripped):
+            cleaned = stripped
+            numbered = clean_title_from_number(cleaned)
+            if numbered and not title_is_bad_after_cleanup(numbered):
+                cleaned = numbered
+        return cleaned or fallback
     cleaned_seed = cleanup_title_artifacts(title)
     if not cleaned_seed and series:
         # If the only available title is a generic marketing subtitle, fall back
@@ -1212,7 +1236,10 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         cleaned = final_redundant
 
     if title_is_bad_after_cleanup(cleaned):
-        cleaned = clean_series_name(series) if series else original
+        # For trusted Audible titles, don't replace with the series name — the
+        # title is canonical even if it matches a genre noise pattern
+        # (e.g. "The Fifth Law of Cultivation" ends with "cultivation").
+        cleaned = original if trusted else (clean_series_name(series) if series else original)
 
     # Final pass after all title transformations: remove any release/edition
     # fragments that were exposed by sequence/series stripping.
@@ -1337,15 +1364,19 @@ def person_segment_matches(segment: str, people: list[str]) -> bool:
     return False
 
 
-def strip_author_narrator_noise_from_title(title: str, author: str, narrator: str = "") -> str:
+def strip_author_narrator_noise_from_title(title: str, author: str, narrator: str = "", trusted: bool = False) -> str:
     """Remove common folder-name decorations once author/narrator are known.
 
     Handles examples like:
       Ryan Eisenhower - Starship Tigress
       How to Defeat ... - Andrew/Andre Rowe - Narrator
       Dan Raxor, Jace Cannon - Supers of Vault 12
+
+    When trusted=True (Audible-matched metadata), skip cleanup_title_artifacts
+    so genre-keyword titles like "The Fifth Law of Cultivation" are not wiped
+    before the author/narrator stripping logic runs.
     """
-    value = sanitize_path_name(cleanup_title_artifacts(title), "")
+    value = sanitize_path_name(title if trusted else cleanup_title_artifacts(title), "")
     if not value:
         return value
 
@@ -2160,12 +2191,21 @@ def parse_book_folder_name(name: str) -> dict[str, str]:
 def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
     paths: list[Path] = []
     if item.kind == "folder":
+        # Folder-level libraforge.json (alone-in-folder single-file books and
+        # multi-file chapter groups) has no filename prefix — check it first.
+        folder_lf = item.source_path / "libraforge.json"
+        if folder_lf.is_file():
+            paths.append(folder_lf)
         paths.extend(sorted(item.source_path.glob("*.m4b-tool-metadata.json")))
         paths.extend(sorted(item.source_path.glob("*.libraforge.json")))
         paths.extend(sorted(item.source_path.glob("*.audible-metadata-fixer.json")))
         paths.append(item.representative.with_name(item.representative.name + ".libraforge.json"))
         paths.append(item.representative.with_name(item.representative.name + ".audible-metadata-fixer.json"))
     else:
+        # Loose file alone in its folder may have a folder-level libraforge.json.
+        folder_lf = item.source_path.parent / "libraforge.json"
+        if folder_lf.is_file():
+            paths.append(folder_lf)
         paths.append(item.source_path.with_name(item.source_path.name + ".m4b-tool-metadata.json"))
         paths.append(item.source_path.with_name(item.source_path.name + ".libraforge.json"))
         paths.append(item.source_path.with_name(item.source_path.name + ".audible-metadata-fixer.json"))
@@ -2543,13 +2583,14 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
             if path_title_differs:
                 add_review_reason("title differs between metadata and path")
         elif (
-            not trusted_metadata
-            and normalize_for_compare(title) == normalize_for_compare(series)
+            normalize_for_compare(title) == normalize_for_compare(series)
             and has_distinct_book_title(path_title, series, book_number)
             and not is_marketing_descriptor(path_title)
         ):
+            # title == series is a strong signal the metadata is incomplete or
+            # wrong-matched. Prefer the path title regardless of source trust.
             use_path_title = True
-            add_review_reason("title inferred from path")
+            add_review_reason("title matches series name; path title used instead")
         elif trusted_metadata and path_title_differs:
             if title_conflict_should_trigger_review(
                 metadata_title=metadata_title,
@@ -2648,13 +2689,16 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         )
 
     # Once the author is known, remove common release-folder decorations from titles.
-    title = strip_author_narrator_noise_from_title(title, author_full, narrator)
+    # Pass trusted_metadata so the function skips cleanup_title_artifacts for
+    # Audible-confirmed titles — genre-keyword titles must not be wiped here.
+    title = strip_author_narrator_noise_from_title(title, author_full, narrator, trusted=trusted_metadata)
     sequence_label = prefer_series_title_volume_label(sequence_label, title, clean_series, book_number)
-    clean_title = clean_book_title(title, clean_series, book_number)
+    clean_title = clean_book_title(title, clean_series, book_number, trusted=trusted_metadata)
     metadata_clean_title = clean_book_title(
         metadata_title,
         clean_series,
         book_number,
+        trusted=trusted_metadata,
     )
     path_title_hint = strip_author_narrator_noise_from_title(
         clues.get("title", ""),
@@ -2685,7 +2729,9 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     # Do not let placeholder values such as "Unknown Title" become real folder
     # names.  When series + sequence are known, use the series title so
     # build_book_folder_name() collapses the target to just "Book N"/"Vol. N".
-    if title_is_bad_after_cleanup(clean_title) and clean_series:
+    # For trusted Audible titles, keep the original title even when it matches a
+    # genre noise pattern (e.g. "The Fifth Law of Cultivation" ends with "cultivation").
+    if title_is_bad_after_cleanup(clean_title) and clean_series and not trusted_metadata:
         clean_title = clean_series
 
     return {
@@ -3110,8 +3156,10 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
     number = metadata.get("book_number", "")
     title = metadata.get("title", "")
     author = metadata.get("author", "")
+    source = metadata.get("metadata_source", "")
+    trusted = metadata_source_is_trusted(source)
 
-    cleaned_title = clean_book_title(title, series, number)
+    cleaned_title = clean_book_title(title, series, number, trusted=trusted)
     if (
         series
         and (
@@ -3119,6 +3167,7 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
             or is_marketing_descriptor(cleaned_title)
             or title_matches_author_name(cleaned_title, author)
         )
+        and not trusted
     ):
         cleaned_title = clean_book_title(series, series, number)
 
@@ -3466,33 +3515,15 @@ def print_move(move: dict[str, Any]) -> None:
     if metadata.get("book_number"):
         label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
         print(f"  Number: {label} {display_book_number(metadata['book_number'])}")
+    # Always display directory paths for consistency. Folder moves already use
+    # folder paths; loose-file moves show the containing folder and destination
+    # folder so both kinds look the same.
+    source_display = move["source"] if move["kind"] == "folder" else move["source"].parent
+    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
     print("  MOVE:")
-    print(f"    {move['source']}")
+    print(f"    {source_display}")
     print("  TO:")
-    print(f"    {move['target']}")
-    if move.get("companions"):
-        print("  COMPANION FILES:")
-        source = move["source"]
-        target = move["target"]
-        for companion in move["companions"]:
-            print(f"    {companion}")
-            if move["kind"] == "folder":
-                # Companion moves with the folder; only rename is needed.
-                if companion.name.endswith(".metadata.json"):
-                    print(f"    -> {target / 'metadata.json'} (renamed)")
-                elif companion.name.endswith(".libraforge.json") and not companion.name == "libraforge.json":
-                    print(f"    -> {target / 'libraforge.json'} (renamed)")
-                else:
-                    print(f"    -> {target / companion.name}")
-            else:
-                suffix = companion.name.removeprefix(source.name)
-                companion_target = target.with_name(target.name + suffix)
-                if suffix == ".metadata.json":
-                    print(f"    -> {companion_target.parent / 'metadata.json'} (renamed)")
-                elif suffix == ".libraforge.json":
-                    print(f"    -> {companion_target.parent / 'libraforge.json'} (renamed)")
-                else:
-                    print(f"    -> {companion_target}")
+    print(f"    {target_display}")
     print()
 
 
@@ -3722,14 +3753,21 @@ def main() -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(target))
             for companion in move.get("companions", []):
-                suffix = companion.name.removeprefix(source.name)
-                companion_target = target.with_name(target.name + suffix)
+                if companion.stem == source.stem:
+                    # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
+                    # keep the same stem, just change the extension.
+                    companion_target = target.with_suffix(companion.suffix)
+                else:
+                    # Suffix companion (e.g. Book.m4b.libraforge.json):
+                    # append the suffix after the full audio filename.
+                    suffix = companion.name.removeprefix(source.name)
+                    companion_target = target.with_name(target.name + suffix)
                 shutil.move(str(companion), str(companion_target))
-                if suffix == ".metadata.json":
+                if companion_target.name.endswith(".metadata.json"):
                     final = companion_target.parent / "metadata.json"
                     if not final.exists():
                         companion_target.rename(final)
-                elif suffix == ".libraforge.json":
+                elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
                     final = companion_target.parent / "libraforge.json"
                     if not final.exists():
                         companion_target.rename(final)
@@ -3745,7 +3783,9 @@ def main() -> None:
 
     if args.apply and not args.no_structure_cache:
         # Rebuild after apply so future _unorganized runs do not need a full ffprobe scan.
+        print("Rebuilding structure cache...", flush=True)
         build_structure_cache(destination_root, cache_path, args.progress_every)
+        print("Structure cache rebuild complete.", flush=True)
 
     if not args.apply:
         print("Dry-run only. Re-run with --apply to move files.")

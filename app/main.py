@@ -2517,6 +2517,14 @@ def parse_organizer_line(state: RunState, line: str) -> None:
         set_run_phase(state, "planning", label, f"Mode: {m.group(1)}")
         return
 
+    if line == "Rebuilding structure cache...":
+        set_run_phase(state, "caching", "Rebuilding structure cache", "Scanning library for cache update...")
+        return
+
+    if line == "Structure cache rebuild complete.":
+        set_run_phase(state, "caching", "Structure cache updated", "Cache is ready for next run.")
+        return
+
     if line == "BOOK:":
         finalize_organizer_move(state)
         state.parser_state["organizer_current_move"] = {"companions": []}

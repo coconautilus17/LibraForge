@@ -2,6 +2,18 @@ let currentRun = null;
 let pollTimer = null;
 let latestMoveItems = [];
 
+// Strip the trailing filename from a path so only the directory is shown.
+// Paths ending in a known audio extension are treated as files; others as dirs.
+function pathDir(p) {
+  if (!p) return p;
+  const audioExts = /\.(m4b|m4a|mp3|ogg|opus|flac|aac|wma)$/i;
+  if (audioExts.test(p)) {
+    const idx = p.lastIndexOf('/');
+    return idx > 0 ? p.slice(0, idx) : p;
+  }
+  return p;
+}
+
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat } = window.UiCommon;
 
@@ -136,7 +148,10 @@ function renderRisks(items) {
   const reviewItems = items.filter((item) => (item.review_reasons || []).length > 0).length;
   const unknownAuthors = items.filter((item) => !item.author || item.author === "Unknown Author").length;
   const ambiguousStructures = items.filter((item) => item.structure === "ambiguous").length;
-  const duplicateSources = items.length - new Set(items.map((item) => item.source)).size;
+  // Duplicate source only matters for folder moves — multiple loose files
+  // from the same source folder is normal and not a conflict.
+  const folderMoves = items.filter((item) => item.kind === "folder");
+  const duplicateSources = folderMoves.length - new Set(folderMoves.map((item) => item.source)).size;
   const duplicateTargets = items.length - new Set(items.map((item) => item.target)).size;
   const risks = [];
   if (reviewItems) risks.push(`${reviewItems} move${reviewItems === 1 ? "" : "s"} use inferred or conflicting identity data`);
@@ -183,8 +198,8 @@ function renderMoves(items) {
         <details class="move-details">
           <summary>Show source, destination, and companion files</summary>
           <div class="file-list">
-            <div class="file-item"><strong>From</strong><br>${escapeHtml(item.source || "-")}</div>
-            <div class="file-item"><strong>To</strong><br>${escapeHtml(item.target || "-")}</div>
+            <div class="file-item"><strong>From</strong><br>${escapeHtml(pathDir(item.source) || "-")}</div>
+            <div class="file-item"><strong>To</strong><br>${escapeHtml(pathDir(item.target) || "-")}</div>
             ${(item.companions || []).length ? `<div class="file-item"><strong>Companions</strong><br>${(item.companions || []).map((entry) => escapeHtml(entry)).join("<br>")}</div>` : ""}
           </div>
         </details>
