@@ -2886,6 +2886,53 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders) + sorted(loose_root_files)
 
 
+def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
+    """Book units under ``p``, counted exactly like a real fixer run.
+
+    Returns ``(ref, audio_files, book_dir)`` where ``ref`` is the containing folder for
+    a grouped multi-part book or the file itself for a standalone book. A folder holding
+    several complete books (each its own file) yields one unit per book, while a folder
+    of chapter files yields a single unit — reusing the fixer's chapter-count-based
+    multi-part grouping so the scan and a run agree. Falls back to folder-based discovery
+    if the fixer module cannot be loaded.
+    """
+    try:
+        fixer = load_fixer_module(default_fixer_script())
+        files = fixer.collect_audio_files(p)
+        group_map = fixer.build_multi_part_group_map(files)
+        units = fixer.build_processing_items(files, group_map)
+    except Exception:
+        out: list[tuple[Path, list[Path], Path]] = []
+        for folder in _find_book_folders(p):
+            out.append((folder, _book_audio_files(folder), folder if folder.is_dir() else folder.parent))
+        return out
+
+    out = []
+    for unit in units:
+        group_files = group_map.get(unit.parent)
+        if group_files and unit in group_files:
+            out.append((unit.parent, list(group_files), unit.parent))
+        else:
+            out.append((unit, [unit], unit.parent))
+    return out
+
+
+def _categorise_book_unit(audio: list[Path], book_dir: Path, root: Path) -> str:
+    if not audio:
+        return "skip"
+    try:
+        depth = len(book_dir.relative_to(root).parts)
+    except ValueError:
+        depth = 1
+    has_asin = _has_asin(book_dir, audio[0])
+    single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
+    if not has_asin:
+        return "needs_metadata"
+    if single_m4b:
+        return "organized" if depth > 1 else "ready_to_organize"
+    return "needs_conversion"
+
+
 _COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
 # In-memory cache: path → (timestamp, fingerprint, [(folder_str, category)])
@@ -2969,25 +3016,17 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
             "from_cache": True,
         }
 
-    # Full scan — fingerprint changed or no cache yet
-    book_folders = _find_book_folders(p)
+    # Full scan — fingerprint changed or no cache yet. Count book units the way a
+    # real run does (multi-part grouping), so a folder of several standalone books
+    # counts each separately and a folder of chapter files counts as one.
+    units = _scan_book_units(p)
 
-    def categorise(folder: Path) -> str:
-        depth = len(folder.relative_to(p).parts)
+    def categorise(unit: tuple[Path, list[Path], Path]) -> str:
+        _ref, audio, book_dir = unit
         try:
-            audio = _book_audio_files(folder)
+            return _categorise_book_unit(audio, book_dir, p)
         except PermissionError:
             return "skip"
-        if not audio:
-            return "skip"
-        book_dir = folder if folder.is_dir() else folder.parent
-        has_asin = _has_asin(book_dir, audio[0])
-        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
-        if not has_asin:
-            return "needs_metadata"
-        if single_m4b:
-            return "organized" if depth > 1 else "ready_to_organize"
-        return "needs_conversion"
 
     needs_metadata = 0
     needs_conversion = 0
@@ -2996,8 +3035,8 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     book_results: list[tuple[Path, str]] = []
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for folder, category in zip(book_folders, pool.map(categorise, book_folders)):
-            book_results.append((folder, category))
+        for unit, category in zip(units, pool.map(categorise, units)):
+            book_results.append((unit[0], category))
             if category == "needs_metadata":
                 needs_metadata += 1
             elif category == "needs_conversion":
@@ -3110,32 +3149,26 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
         return {"books": books, "total": len(books)}
 
     # Slow fallback when no scan cache (user navigated directly to books without scanning first)
-    book_folders = _find_book_folders(p)
+    units = _scan_book_units(p)
 
-    def make_book_entry(folder: Path) -> dict[str, Any] | None:
-        depth = len(folder.relative_to(p).parts)
-        try:
-            audio = _book_audio_files(folder)
-        except PermissionError:
-            return None
+    def make_book_entry(unit: tuple[Path, list[Path], Path]) -> dict[str, Any] | None:
+        ref, audio, book_dir = unit
         if not audio:
             return None
-        book_dir = folder if folder.is_dir() else folder.parent
-        has_asin = _has_asin(book_dir, audio[0])
-        single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
-        if has_asin and (single_m4b or depth > 1):
-            return None
+        category = _categorise_book_unit(audio, book_dir, p)
+        if category in ("organized", "ready_to_organize", "skip"):
+            return None  # only surface books that need attention
         return {
-            "path": str(folder),
-            "title": folder.stem if folder.is_file() else folder.name,
-            "author": _book_author(folder, p),
-            "has_cover": _has_cover_fast(folder),
-            "category": "needs_metadata" if not has_asin else "needs_conversion",
+            "path": str(ref),
+            "title": ref.stem if ref.is_file() else ref.name,
+            "author": _book_author(ref, p),
+            "has_cover": _has_cover_fast(book_dir),
+            "category": category,
         }
 
     books = []
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for entry in pool.map(make_book_entry, book_folders):
+        for entry in pool.map(make_book_entry, units):
             if entry is not None:
                 books.append(entry)
     books.sort(key=lambda b: (b["category"], b["title"].lower()))
