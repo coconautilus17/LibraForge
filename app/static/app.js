@@ -129,8 +129,7 @@ function render(state) {
   const pct = Number(state.percent || 0).toFixed(1);
   $('ring').style.setProperty('--pct', pct);
   $('percent').textContent = `${pct}%`;
-  const count = state.total ? ` · ${state.current || 0}/${state.total}` : '';
-  $('runStatus').textContent = `${state.phase_label || state.status.toUpperCase()}${count}`;
+  $('runStatus').textContent = state.phase_label || state.status.toUpperCase();
   const phaseDetail = state.phase_detail || '';
   const currentPath = state.current_file || '';
   $('currentFile').textContent = state.error
@@ -140,9 +139,51 @@ function render(state) {
   $('tail').textContent = (state.tail || []).join('\n');
   $('tail').scrollTop = $('tail').scrollHeight;
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
+  renderPhaseCounters(state);
   renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
+}
+
+function renderPhaseCounters(state) {
+  const el = $('phaseCounters');
+  if (!el) return;
+  if (state.run_type !== 'fixer') { el.style.display = 'none'; return; }
+  el.style.display = '';
+
+  const total = state.total || 0;
+  const matchCurrent = state.current || 0;
+  const writeCurrent = state.write_current || 0;
+  const isRunning = state.status === 'running';
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(state.status);
+  const scanDone = total > 0;
+
+  // Scan bar — indeterminate while scanning, solid green when found
+  const scanFill = $('scanFill');
+  if (scanDone) {
+    scanFill.className = 'phase-fill complete';
+  } else if (isRunning) {
+    scanFill.className = 'phase-fill indeterminate';
+  } else {
+    scanFill.className = 'phase-fill';
+  }
+  $('scanCount').textContent = scanDone ? 'done' : (isRunning ? '…' : '—');
+
+  // Match bar
+  const matchPct = total ? (matchCurrent / total * 100) : 0;
+  const matchDone = total > 0 && matchCurrent >= total;
+  const matchFill = $('matchFill');
+  matchFill.className = 'phase-fill' + (matchDone ? ' complete' : '');
+  if (!matchDone) matchFill.style.width = `${matchPct}%`;
+  $('matchCount').textContent = total ? `${matchCurrent} / ${total}` : '—';
+
+  // Write bar
+  const writePct = total ? Math.min(100, writeCurrent / total * 100) : 0;
+  const writeDone = isTerminal && writeCurrent > 0 && writePct >= 99.9;
+  const writeFill = $('writeFill');
+  writeFill.className = 'phase-fill' + (writeDone ? ' complete' : '');
+  if (!writeDone) writeFill.style.width = `${writePct}%`;
+  $('writeCount').textContent = total ? `${writeCurrent} / ${total}` : '—';
 }
 
 function formatElapsed(startedAt, finishedAt) {
@@ -743,7 +784,7 @@ if ($('targetScanBtn')) {
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Scan failed'); }
       const data = await res.json();
       $('fixerCountMetadata').textContent = data.needs_metadata;
-      $('fixerCountProcessed').textContent = data.organized ?? (data.total - data.needs_metadata - data.needs_conversion);
+      $('fixerCountProcessed').textContent = (data.organized ?? 0) + (data.ready_to_organize ?? 0);
       $('fixerCountConversion').textContent = data.needs_conversion;
       const elapsed = data.scan_ms < 1000 ? `${data.scan_ms}ms` : `${(data.scan_ms/1000).toFixed(1)}s`;
       const cached = data.from_cache ? ' (cached)' : '';

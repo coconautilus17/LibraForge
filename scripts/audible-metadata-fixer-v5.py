@@ -8,6 +8,7 @@ import html
 import io
 import json
 import re
+import stat
 import subprocess
 import struct
 import sys
@@ -1515,10 +1516,13 @@ def write_audiobookshelf_metadata_json(
         "explicit": False,
     }
 
-    target.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    try:
+        target.write_text(content, encoding="utf-8")
+    except PermissionError:
+        # existing file may be read-only; unlink (directory write lets us do this) and retry
+        target.unlink()
+        target.write_text(content, encoding="utf-8")
     return target
 
 
@@ -5927,6 +5931,14 @@ def write_tags(
 ) -> str:
     """Write metadata and return the writer used: mutagen or ffmpeg."""
     if writer in {"auto", "mutagen"}:
+        # NAS/CIFS files may arrive read-only; ensure write bit is set so mutagen
+        # can modify the file in-place (we own the file, so chmod should succeed).
+        try:
+            mode = source.stat().st_mode
+            if not (mode & stat.S_IWRITE):
+                source.chmod(mode | stat.S_IWRITE)
+        except OSError:
+            pass
         try:
             if is_mutagen_mp4_candidate(source):
                 mutagen_write_mp4_tags(
