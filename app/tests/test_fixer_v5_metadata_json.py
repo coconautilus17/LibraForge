@@ -82,7 +82,7 @@ class DecideWriteTests(unittest.TestCase):
         }
         _eff, skip_write, note, filled = FIXER.decide_write(current, meta, "full", "smart")
         self.assertTrue(skip_write)
-        self.assertIn("NO-OP", note)
+        self.assertIn("Smart-skip", note)
         self.assertEqual(filled, [])
 
     def test_smart_writes_when_tags_differ(self):
