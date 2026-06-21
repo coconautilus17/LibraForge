@@ -800,9 +800,11 @@ class RunState:
     returncode: int | None = None
     error: str = ""
     current_file: str = ""
+    run_type: str = ""
     current: int = 0
     total: int = 0
     percent: float = 0.0
+    write_current: int = 0
     lines_tail: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
     files_by_category: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -937,10 +939,32 @@ def add_category(state: RunState, kind: str, value: str, path: str, title: str =
         state.files_by_category[key].append({"path": path, "title": title})
 
 
+def _fixer_percent(state: RunState) -> float:
+    """Overall percent from 3 phases: scan 5%, match 70%, write 25%."""
+    if not state.total:
+        return 0.0
+    scan = 5.0
+    match = state.current / state.total * 70
+    write = state.write_current / state.total * 25
+    return round(scan + match + write, 2)
+
+
 def parse_line(state: RunState, line: str, threshold: float) -> None:
     detected_phase = fixer_phase_for_line(line, state.current_file)
     if detected_phase:
         set_run_phase(state, *detected_phase)
+        phase_id = detected_phase[0]
+        if phase_id == "recording" and state.total:
+            state.write_current += 1
+            state.percent = _fixer_percent(state)
+        elif phase_id == "summarizing":
+            state.percent = max(state.percent, 98.0)
+
+    # NO-OP books complete the write phase without emitting APPLIED.
+    stripped = line.strip()
+    if stripped.startswith("NO-OP") and state.current >= state.total > 0:
+        state.write_current += 1
+        state.percent = _fixer_percent(state)
 
     # Once the end-of-run summary/report region begins, no further lines belong to
     # a processed item. Clear current_file so per-item reason lines re-printed in
@@ -954,6 +978,7 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     if m:
         state.total = int(m.group(1))
         state.stats["found"] = int(m.group(1))
+        state.percent = 5.0  # scan phase complete
         set_run_phase(
             state,
             "preparing",
@@ -967,7 +992,7 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.current = int(m.group(1))
         state.total = int(m.group(2))
         state.current_file = m.group(3).strip()
-        state.percent = round((state.current / state.total) * 100, 2) if state.total else 0.0
+        state.percent = _fixer_percent(state)
         set_run_phase(
             state,
             "inspecting",
@@ -2573,6 +2598,7 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
     with runs_lock:
         state = runs[run_id]
 
+    state.run_type = "fixer"
     threshold = float(req.duration_review_threshold or 10.0)
     state.stats = initial_stats(threshold)
     state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
@@ -4432,9 +4458,11 @@ def get_run(run_id: str) -> dict[str, Any]:
         "returncode": state.returncode,
         "error": state.error,
         "command": state.command,
+        "run_type": state.run_type,
         "current_file": state.current_file,
         "current": state.current,
         "total": state.total,
+        "write_current": state.write_current,
         "percent": state.percent,
         "tail": state.lines_tail,
         "stats": state.stats,

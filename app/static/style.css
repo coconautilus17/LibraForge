@@ -1205,6 +1205,69 @@ summary:focus-visible {
   margin: 0;
 }
 
+.phase-counters {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.phase-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 52px;
+  align-items: center;
+  gap: 10px;
+}
+
+.phase-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.phase-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.phase-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.5s ease;
+  width: 0%;
+}
+
+.phase-fill.indeterminate {
+  width: 100% !important;
+  background: linear-gradient(90deg, var(--border) 0%, var(--accent) 40%, var(--border) 80%);
+  background-size: 200% 100%;
+  animation: phase-shimmer 1.5s ease-in-out infinite;
+}
+
+.phase-fill.complete {
+  background: var(--success);
+  width: 100% !important;
+  transition: none;
+}
+
+.phase-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@keyframes phase-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 #downloadLinks {
   display: flex;
   gap: 12px;

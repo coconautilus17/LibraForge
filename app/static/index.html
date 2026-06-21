@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260621-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260621-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -200,7 +200,7 @@
           <div class="stage-card stage-danger">
             <div class="stage-label">Needs metadata</div>
             <div id="fixerCountMetadata" class="stage-count">0</div>
-            <p class="stage-desc">No marker yet — fixer hasn't processed these.</p>
+            <p class="stage-desc">No marker yet. Fixer hasn't processed these.</p>
           </div>
           <div class="stage-card stage-success">
             <div class="stage-label">Already processed</div>
@@ -298,6 +298,23 @@
           <div id="downloadLinks"></div>
         </div>
       </div>
+      <div id="phaseCounters" class="phase-counters" style="display:none">
+        <div class="phase-row">
+          <span class="phase-label">Scan</span>
+          <div class="phase-track"><div class="phase-fill" id="scanFill"></div></div>
+          <span class="phase-count" id="scanCount">—</span>
+        </div>
+        <div class="phase-row">
+          <span class="phase-label">Matching</span>
+          <div class="phase-track"><div class="phase-fill" id="matchFill"></div></div>
+          <span class="phase-count" id="matchCount">—</span>
+        </div>
+        <div class="phase-row">
+          <span class="phase-label">Writing</span>
+          <div class="phase-track"><div class="phase-fill" id="writeFill"></div></div>
+          <span class="phase-count" id="writeCount">—</span>
+        </div>
+      </div>
     </section>
 
     <section class="card">
@@ -378,6 +395,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260621-3"></script>
+  <script src="/static/app.js?v=20260621-5"></script>
 </body>
 </html>
