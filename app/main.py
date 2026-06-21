@@ -419,7 +419,8 @@ def cached_audio_summary(path: Path) -> dict[str, Any] | None:
 
 
 def sidecar_audio_files(payload: dict[str, Any], fallback: Path) -> list[Path]:
-    chapter_files = (payload.get("source", {}) or {}).get("chapter_files", []) or []
+    root = payload.get("sidecar", payload) if "sidecar" in payload else payload
+    chapter_files = (root.get("source", {}) or {}).get("chapter_files", []) or []
     files = [
         Path(file_path)
         for file_path in chapter_files
@@ -430,8 +431,17 @@ def sidecar_audio_files(payload: dict[str, Any], fallback: Path) -> list[Path]:
 
 def discover_sidecars(path: Path) -> list[Path]:
     folder = path if path.is_dir() else path.parent
-    sidecars = sorted(folder.glob(f"*{M4B_TOOL_SIDECAR_SUFFIX}"))
-    return [sidecar for sidecar in sidecars if sidecar.is_file()]
+    sidecars: list[Path] = []
+    lf = folder / "libraforge.json"
+    if lf.is_file():
+        try:
+            payload = json.loads(lf.read_text(encoding="utf-8"))
+            if payload.get("sidecar"):
+                sidecars.append(lf)
+        except (OSError, json.JSONDecodeError):
+            pass
+    sidecars.extend(sorted(folder.glob(f"*{M4B_TOOL_SIDECAR_SUFFIX}")))
+    return [s for s in sidecars if s.is_file()]
 
 
 def pick_sidecar(path: Path, sidecars: list[Path]) -> Path | None:
@@ -439,6 +449,12 @@ def pick_sidecar(path: Path, sidecars: list[Path]) -> Path | None:
         return path
 
     folder = path if path.is_dir() else path.parent
+
+    # Prefer folder-level libraforge.json when it has sidecar data
+    lf = folder / "libraforge.json"
+    if lf in sidecars:
+        return lf
+
     preferred = folder / f"{folder.name}{M4B_TOOL_SIDECAR_SUFFIX}"
     if preferred in sidecars:
         return preferred
@@ -1362,21 +1378,26 @@ def save_sidecar_file(
         sidecar_path = validate_output_path(requested_sidecar_path)
     else:
         if source_path.is_dir():
-            sidecar_path = source_path / f"{source_path.name}{M4B_TOOL_SIDECAR_SUFFIX}"
+            sidecar_path = source_path / "libraforge.json"
         else:
             sidecar_path = source_path.with_name(f"{source_path.name}{M4B_TOOL_SIDECAR_SUFFIX}")
 
+    is_libraforge = sidecar_path.name == "libraforge.json"
     excluded = {path.resolve() for path in (excluded_paths or set())}
+    lf_payload: dict[str, Any] = {}
     existing: dict[str, Any] = {}
     if sidecar_path.is_file():
         try:
-            existing = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            lf_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            existing = lf_payload.get("sidecar", lf_payload) if is_libraforge else lf_payload
         except (OSError, json.JSONDecodeError):
+            lf_payload = {}
             existing = {}
 
+    existing_source = existing.get("source", {}) or {}
     chapter_file_paths = [
         Path(value).resolve()
-        for value in ((existing.get("source", {}) or {}).get("chapter_files", []) or [])
+        for value in (existing_source.get("chapter_files", []) or [])
         if value
     ]
     chapter_file_paths = [
@@ -1406,24 +1427,26 @@ def save_sidecar_file(
     if existing:
         payload["tool"] = existing.get("tool", payload["tool"])
         payload["created_at"] = existing.get("created_at", payload["created_at"])
-        payload["updated_at"] = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-        )
+        payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         payload["matching"] = existing.get("matching", payload["matching"])
-        payload["local_before"] = existing.get(
-            "local_before", payload["local_before"]
-        )
+        payload["local_before"] = existing.get("local_before", payload["local_before"])
         payload["audible"] = {
             **(existing.get("audible", {}) or {}),
             **payload["audible"],
         }
-        existing_source = existing.get("source", {}) or {}
         payload["source"]["group_search"] = {
             **(existing_source.get("group_search", {}) or {}),
             **payload["source"]["group_search"],
             "files": payload["source"]["chapter_files"],
         }
-    sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    if is_libraforge:
+        lf_payload.setdefault("schema_version", 2)
+        lf_payload.setdefault("tool", "audible-metadata-fixer")
+        lf_payload["sidecar"] = payload
+        sidecar_path.write_text(json.dumps(lf_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return sidecar_path
 
 
@@ -1462,6 +1485,9 @@ def normalize_m4b_metadata(metadata: M4BMetadataForm) -> M4BMetadataForm:
 
 
 def sidecar_to_form(sidecar: dict[str, Any]) -> dict[str, Any]:
+    # libraforge.json nests sidecar data under a "sidecar" key
+    if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
+        sidecar = sidecar["sidecar"]
     book = sidecar.get("book", {}) or {}
     audible_meta = sidecar.get("audible", {}) or {}
     local_before = sidecar.get("local_before", {}) or {}
@@ -1868,7 +1894,7 @@ def refresh_cached_multipart_audio_profiles(
     for candidate in candidates:
         folder = Path(candidate.get("display_path", ""))
         chapter_files = [Path(item) for item in candidate.get("files", [])]
-        sidecar_path = folder / f"{folder.name}{fixer_module.M4B_TOOL_METADATA_SUFFIX}"
+        sidecar_path = folder / "libraforge.json"
 
         if not folder.is_dir() or not chapter_files:
             failed.append(
@@ -2624,6 +2650,50 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
             runs.pop(run_id, None)
 
 
+def _aggregate_m4b_libraforge(input_path: Path, output_path: Path) -> None:
+    """After a successful m4b-tool merge, fold the source folder's libraforge.json
+    data into the output file's libraforge.json and clean up the old folder file."""
+    try:
+        source_folder = input_path if input_path.is_dir() else input_path.parent
+        folder_lf = source_folder / "libraforge.json"
+        out_lf = output_path.with_name(f"{output_path.name}.libraforge.json")
+        out_payload: dict = {}
+
+        if out_lf.is_file():
+            try:
+                out_payload = json.loads(out_lf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                out_payload = {}
+
+        if folder_lf.is_file():
+            try:
+                src = json.loads(folder_lf.read_text(encoding="utf-8"))
+                for key in ("sidecar", "file_cache", "marker"):
+                    if key in src and key not in out_payload:
+                        out_payload[key] = src[key]
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        if out_payload:
+            out_payload.setdefault("schema_version", 2)
+            out_payload.setdefault("tool", "audible-metadata-fixer")
+            out_payload["merged_from"] = str(source_folder)
+            out_payload["merged_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            out_lf.write_text(
+                json.dumps(out_payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+        # Clean up folder-level libraforge and any per-chapter libraforge files
+        if folder_lf.is_file():
+            folder_lf.unlink(missing_ok=True)
+        if source_folder.is_dir():
+            for ch_lf in source_folder.glob("*.libraforge.json"):
+                ch_lf.unlink(missing_ok=True)
+    except Exception:
+        pass  # aggregation is best-effort; never fail a successful merge
+
+
 def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
     with runs_lock:
         state = runs[run_id]
@@ -2691,6 +2761,7 @@ def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
             )
             enforce_m4b_output_metadata(output_path, req.metadata)
             state.stats["metadata_enforced"] = True
+            _aggregate_m4b_libraforge(input_path, output_path)
         state.finished_at = time.time()
         if state.status != "cancelled":
             state.status = "completed" if state.returncode == 0 else "failed"
@@ -4319,14 +4390,17 @@ def load_m4b_metadata(req: M4BLoadRequest) -> dict[str, Any]:
     if selected:
         payload = load_json(selected)
         form = sidecar_to_form(payload)
-        root_file = str((payload.get("source", {}) or {}).get("root_file", "") or "")
+        sidecar_section = payload.get("sidecar") if "sidecar" in payload else payload
+        root_file = str((sidecar_section.get("source", {}) or {}).get("root_file", "") or "")
         if root_file:
             source_path = Path(root_file)
 
     source_for_default = source_path if selected else path
     audio_summary = cached_audio_summary(path)
-    if not audio_summary and selected and isinstance(payload.get("audio_summary"), dict):
-        audio_summary = payload["audio_summary"]
+    if not audio_summary and selected:
+        sidecar_section = payload.get("sidecar") if "sidecar" in payload else payload
+        if isinstance(sidecar_section.get("audio_summary"), dict):
+            audio_summary = sidecar_section["audio_summary"]
     if not audio_summary:
         audio_files = sidecar_audio_files(payload, source_for_default)
         audio_summary = summarize_audio_probes(
@@ -4510,9 +4584,8 @@ def cancel_run(run_id: str) -> dict[str, Any]:
         except Exception:
             state.process.terminate()
         state.status = "cancelled"
-        state.finished_at = time.time()
-        set_terminal_phase(state)
-        write_final_report(state)
+        # Don't write the final report here — the worker thread does it after
+        # the process exits cleanly (respecting any in-flight writes).
     return {"status": state.status}
 
 

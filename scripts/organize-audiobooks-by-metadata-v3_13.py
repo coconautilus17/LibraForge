@@ -2160,10 +2160,13 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
     paths: list[Path] = []
     if item.kind == "folder":
         paths.extend(sorted(item.source_path.glob("*.m4b-tool-metadata.json")))
+        paths.extend(sorted(item.source_path.glob("*.libraforge.json")))
         paths.extend(sorted(item.source_path.glob("*.audible-metadata-fixer.json")))
+        paths.append(item.representative.with_name(item.representative.name + ".libraforge.json"))
         paths.append(item.representative.with_name(item.representative.name + ".audible-metadata-fixer.json"))
     else:
         paths.append(item.source_path.with_name(item.source_path.name + ".m4b-tool-metadata.json"))
+        paths.append(item.source_path.with_name(item.source_path.name + ".libraforge.json"))
         paths.append(item.source_path.with_name(item.source_path.name + ".audible-metadata-fixer.json"))
 
     for path in paths:
@@ -2197,7 +2200,14 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
                 "source": f"sidecar:{path.name}",
             }
 
-        audible_data = payload.get("audible", {}) if isinstance(payload.get("audible"), dict) else {}
+        # New unified format: audible data is nested under marker.audible
+        marker_section = payload.get("marker")
+        audible_data = (
+            marker_section.get("audible", {})
+            if isinstance(marker_section, dict)
+            else payload.get("audible", {})
+        )
+        audible_data = audible_data if isinstance(audible_data, dict) else {}
         if audible_data:
             title = audible_data.get("chosen_title") or audible_data.get("title") or ""
             series = audible_data.get("series", "")
