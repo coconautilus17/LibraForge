@@ -1144,7 +1144,25 @@ def strip_series_prefix(title: str, series: str) -> str:
     return title
 
 
-def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title") -> str:
+def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title", trusted: bool = False) -> str:
+    if trusted:
+        # Trusted Audible titles skip the heavy marketing/genre descriptor pipeline
+        # (cleanup_title_artifacts → sanitize_book_title → is_marketing_descriptor)
+        # which incorrectly wipes real titles containing cultivation/xianxia/etc.
+        # Still apply series prefix stripping so titles like
+        # "Dashing Devil 5 - Bold Beginnings" (series "Dashing Devil") become
+        # "Bold Beginnings", but only when the stripped remainder is multi-word
+        # (or has a separator) to avoid "The Bright Lord" → "Lord".
+        cleaned = sanitize_path_name(title, "") or fallback
+        series_clean = clean_series_name(series)
+        stripped = strip_series_prefix(cleaned, series_clean)
+        _has_sep = bool(re.search(r"[-:,]|\d", cleaned))
+        if stripped != cleaned and not title_is_bad_after_cleanup(stripped) and (_has_sep or " " in stripped):
+            cleaned = stripped
+            numbered = clean_title_from_number(cleaned)
+            if numbered and not title_is_bad_after_cleanup(numbered):
+                cleaned = numbered
+        return cleaned or fallback
     cleaned_seed = cleanup_title_artifacts(title)
     if not cleaned_seed and series:
         # If the only available title is a generic marketing subtitle, fall back
@@ -1215,7 +1233,10 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         cleaned = final_redundant
 
     if title_is_bad_after_cleanup(cleaned):
-        cleaned = clean_series_name(series) if series else original
+        # For trusted Audible titles, don't replace with the series name — the
+        # title is canonical even if it matches a genre noise pattern
+        # (e.g. "The Fifth Law of Cultivation" ends with "cultivation").
+        cleaned = original if trusted else (clean_series_name(series) if series else original)
 
     # Final pass after all title transformations: remove any release/edition
     # fragments that were exposed by sequence/series stripping.
@@ -2661,13 +2682,18 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         )
 
     # Once the author is known, remove common release-folder decorations from titles.
-    title = strip_author_narrator_noise_from_title(title, author_full, narrator)
+    # For trusted Audible titles, preserve the original when noise stripping wipes it
+    # (strip_author_narrator_noise_from_title calls cleanup_title_artifacts internally
+    # which strips genre-keyword titles like "The Fifth Law of Cultivation").
+    _stripped_title = strip_author_narrator_noise_from_title(title, author_full, narrator)
+    title = _stripped_title if (_stripped_title or not trusted_metadata) else title
     sequence_label = prefer_series_title_volume_label(sequence_label, title, clean_series, book_number)
-    clean_title = clean_book_title(title, clean_series, book_number)
+    clean_title = clean_book_title(title, clean_series, book_number, trusted=trusted_metadata)
     metadata_clean_title = clean_book_title(
         metadata_title,
         clean_series,
         book_number,
+        trusted=trusted_metadata,
     )
     path_title_hint = strip_author_narrator_noise_from_title(
         clues.get("title", ""),
@@ -2698,7 +2724,9 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     # Do not let placeholder values such as "Unknown Title" become real folder
     # names.  When series + sequence are known, use the series title so
     # build_book_folder_name() collapses the target to just "Book N"/"Vol. N".
-    if title_is_bad_after_cleanup(clean_title) and clean_series:
+    # For trusted Audible titles, keep the original title even when it matches a
+    # genre noise pattern (e.g. "The Fifth Law of Cultivation" ends with "cultivation").
+    if title_is_bad_after_cleanup(clean_title) and clean_series and not trusted_metadata:
         clean_title = clean_series
 
     return {
@@ -3123,8 +3151,10 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
     number = metadata.get("book_number", "")
     title = metadata.get("title", "")
     author = metadata.get("author", "")
+    source = metadata.get("metadata_source", "")
+    trusted = metadata_source_is_trusted(source)
 
-    cleaned_title = clean_book_title(title, series, number)
+    cleaned_title = clean_book_title(title, series, number, trusted=trusted)
     if (
         series
         and (
@@ -3132,6 +3162,7 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
             or is_marketing_descriptor(cleaned_title)
             or title_matches_author_name(cleaned_title, author)
         )
+        and not trusted
     ):
         cleaned_title = clean_book_title(series, series, number)
 
