@@ -974,9 +974,9 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         elif phase_id == "summarizing":
             state.percent = max(state.percent, 98.0)
 
-    # NO-OP books complete the write phase without emitting APPLIED.
+    # NO-OP and Smart-skip books complete the write phase without emitting APPLIED.
     stripped = line.strip()
-    if stripped.startswith("NO-OP") and state.current >= state.total > 0:
+    if (stripped.startswith("NO-OP") or stripped.startswith("Smart-skip")) and state.current >= state.total > 0:
         state.write_current += 1
         state.percent = _fixer_percent(state)
 

@@ -6009,7 +6009,7 @@ def decide_write(
         all_match, _changed = compare_tags_for_write(current_tags, metadata, edit_mode)
         if all_match:
             skip_write = True
-            write_note = "NO-OP (tags already match)"
+            write_note = "Smart-skip (tags already match)"
     elif write_mode == "fill-missing":
         effective_metadata, filled_fields = merge_fill_missing_metadata(
             current_tags, metadata
