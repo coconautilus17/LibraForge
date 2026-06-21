@@ -108,7 +108,7 @@
         <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
       </label>
       <div style="margin-top:12px">
-        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name, e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
         <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
         <div style="display:flex;gap:6px">
           <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
@@ -116,7 +116,7 @@
         </div>
       </div>
       <div style="margin-top:16px">
-        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Persistent skip patterns <span style="color:var(--muted);font-size:0.9em">(one per line — merged into the run when "Include persistent patterns" is checked on the Forge page)</span></p>
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Persistent skip patterns <span style="color:var(--muted);font-size:0.9em">(one per line, merged into the run when "Include persistent patterns" is checked on the Forge page)</span></p>
         <textarea id="persistentSkipPatterns" rows="4" placeholder="Casual Farming&#10;Sample Chapter" style="font-family:var(--font-mono);font-size:0.85em;width:100%;box-sizing:border-box"></textarea>
       </div>
     </section>
@@ -148,7 +148,7 @@
         <label><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
-        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance — no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service."></span></span>
+        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service."></span></span>
           <select id="manualProvider">
             <option value="audible">Audible (direct)</option>
             <option value="abs">Audiobookshelf (ABS)</option>
@@ -162,7 +162,7 @@
         <label id="manualAbsAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
           <select id="manualAbsAggProvider"></select>
         </label>
-        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="manualAbsAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value — e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
+        <label id="manualAbsAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="manualAbsAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value, e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
           <input id="manualAbsAggParams" placeholder="en" />
         </label>
         <label id="manualAbsAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
@@ -181,7 +181,7 @@
         </label>
       </div>
 
-      <!-- Folder browser — sits directly below the target path field -->
+      <!-- Folder browser: sits directly below the target path field -->
       <div id="targetBrowser" class="folder-browser" hidden aria-label="Folder browser">
         <div class="fb-bar">
           <button id="targetFbUp" class="icon-button small" type="button" aria-label="Go to parent folder">
@@ -251,7 +251,7 @@
 
       <div id="v5Fields" style="display:none">
         <div class="grid">
-          <label><span class="field-label">Workers <span class="info-tip" data-tooltip="Parallel Audible search workers. 1 = serial (safe default). Recommended 5 for faster runs; max 10. The bottleneck is API latency, not writes — writes always happen serially after search."></span></span>
+          <label><span class="field-label">Workers <span class="info-tip" data-tooltip="Parallel Audible search workers. 1 = serial (safe default). Recommended 5 for faster runs; max 10. The bottleneck is API latency, not writes. Writes always happen serially after search."></span></span>
             <input id="workers" type="number" min="1" max="10" value="1" />
           </label>
           <label><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
@@ -264,7 +264,7 @@
               <option value="overwrite">Overwrite (always write all fields)</option>
             </select>
           </label>
-          <label><span class="field-label">Batch provider <span class="info-tip" data-tooltip="Search backend for batch runs. Audible uses the auth file directly. ABS proxies through your Audiobookshelf instance — no Audible auth file needed."></span></span>
+          <label><span class="field-label">Batch provider <span class="info-tip" data-tooltip="Search backend for batch runs. Audible uses the auth file directly. ABS proxies through your Audiobookshelf instance, no Audible auth file needed."></span></span>
             <select id="batchProvider">
               <option value="audible">Audible (direct)</option>
               <option value="abs">Audiobookshelf (ABS)</option>
@@ -316,17 +316,17 @@
         <div class="phase-row">
           <span class="phase-label">Scan</span>
           <div class="phase-track"><div class="phase-fill" id="scanFill"></div></div>
-          <span class="phase-count" id="scanCount">—</span>
+          <span class="phase-count" id="scanCount">-</span>
         </div>
         <div class="phase-row">
           <span class="phase-label">Matching</span>
           <div class="phase-track"><div class="phase-fill" id="matchFill"></div></div>
-          <span class="phase-count" id="matchCount">—</span>
+          <span class="phase-count" id="matchCount">-</span>
         </div>
         <div class="phase-row">
           <span class="phase-label">Writing</span>
           <div class="phase-track"><div class="phase-fill" id="writeFill"></div></div>
-          <span class="phase-count" id="writeCount">—</span>
+          <span class="phase-count" id="writeCount">-</span>
         </div>
       </div>
     </section>
