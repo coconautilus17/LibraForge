@@ -2,7 +2,9 @@ services:
   libraforge:
     build: .
     container_name: libraforge
-    user: "${UID}:${GID}"
+    # Defaults to 1000:1000 so a bare `docker compose up` works. `make up` exports the
+    # current host UID/GID so bind-mounted dirs stay writable on non-1000 hosts.
+    user: "${UID:-1000}:${GID:-1000}"
     restart: unless-stopped
     ports:
       - "127.0.0.1:5056:5056"
@@ -19,12 +21,13 @@ services:
       - ./config:/app/config
       # Completed log/report files are written here and exposed for download.
       - ./reports:/app/reports
-      # Your audiobook library. Change left side if needed.
-      - ${AUDIOBOOKS_PATH}:/audiobooks
+      # Your audiobook library. Defaults to a repo-local folder so first boot works
+      # with zero config; point AUDIOBOOKS_PATH at your real library in .env.
+      - ${AUDIOBOOKS_PATH:-./data/audiobooks}:/audiobooks
       # Audible auth files. Read-write so the app can add/switch/disconnect accounts
       # (login + deregister write here). Recommended: a dedicated dir, not your main
       # audible-cli config. Future hardening: gate the web app behind Linux users.
-      - ${AUDIBLE_AUTH_PATH}:/auth
+      - ${AUDIBLE_AUTH_PATH:-./data/auth}:/auth
     healthcheck:
       test:
         - CMD

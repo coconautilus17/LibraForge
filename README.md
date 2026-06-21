@@ -67,26 +67,33 @@ This page also configures the Audiobookshelf and abs-agg providers.
 
 ## Install
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```dotenv
-UID=1000
-GID=1000
-AUDIOBOOKS_PATH=/path/to/audiobooks
-AUDIBLE_AUTH_PATH=/path/to/audible-auth
-```
+Requires Docker with the Compose plugin. Clone and start — no config needed:
 
 ```bash
-docker compose up -d --build
+git clone https://github.com/coconautilus17/LibraForge.git
+cd LibraForge
+make up
 ```
 
-LibraForge listens on `127.0.0.1:5056`. For HTTPS, attach to your reverse proxy network
-via `docker-compose.override.yml` (git-ignored). Connect an Audible account from the
-**Accounts** page, or skip Audible and use Audiobookshelf / abs-agg as providers.
+Then open **http://127.0.0.1:5056**. That's it — `make up` builds the image, creates the
+first-boot data folders, and runs the container as your user so mounted files stay
+writable. Without `make`, `docker compose up -d --build` works too (it falls back to a
+repo-local `./data/` library and UID/GID `1000`).
+
+**Point it at your library.** By default LibraForge mounts the empty `./data/audiobooks`
+and `./data/auth` folders. To use your real library, copy the env file and set the paths:
+
+```bash
+cp .env.example .env      # then edit AUDIOBOOKS_PATH / AUDIBLE_AUTH_PATH, and UID/GID if not 1000
+make up                   # re-run to apply
+```
+
+Connect an Audible account from the **Accounts** page, or skip Audible and use
+Audiobookshelf / abs-agg as providers. For HTTPS, attach to your reverse proxy network
+via `docker-compose.override.yml` (git-ignored).
+
+Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test`
+(run `make help` for the full list).
 
 ### Optional companion services
 
@@ -121,14 +128,14 @@ via `docker-compose.override.yml` (git-ignored). Connect an Audible account from
 ## Development
 
 ```bash
-# Run tests
-python3 -m unittest discover -s app/tests -v
+# Run tests (inside the container, where dependencies are installed)
+make test
 
 # Restart after backend (app/main.py) changes
-docker compose restart libraforge
+make restart
 
 # Rebuild after Dockerfile or dependency changes
-docker compose up -d --build
+make rebuild
 ```
 
 Static files (`app/static`, `scripts/`) are bind-mounted — HTML, CSS, and JS edits are

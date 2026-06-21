@@ -8,6 +8,10 @@ __pycache__/
 
 reports/*
 !reports/.gitkeep
+# Repo-local default mount targets (first-boot data). Keep the dirs, ignore contents.
+data/*/*
+!data/audiobooks/.gitkeep
+!data/auth/.gitkeep
 config/title-noise.local.json
 config/abs-agg.json
 config/abs.json
