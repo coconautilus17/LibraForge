@@ -148,7 +148,10 @@ function renderRisks(items) {
   const reviewItems = items.filter((item) => (item.review_reasons || []).length > 0).length;
   const unknownAuthors = items.filter((item) => !item.author || item.author === "Unknown Author").length;
   const ambiguousStructures = items.filter((item) => item.structure === "ambiguous").length;
-  const duplicateSources = items.length - new Set(items.map((item) => item.source)).size;
+  // Duplicate source only matters for folder moves — multiple loose files
+  // from the same source folder is normal and not a conflict.
+  const folderMoves = items.filter((item) => item.kind === "folder");
+  const duplicateSources = folderMoves.length - new Set(folderMoves.map((item) => item.source)).size;
   const duplicateTargets = items.length - new Set(items.map((item) => item.target)).size;
   const risks = [];
   if (reviewItems) risks.push(`${reviewItems} move${reviewItems === 1 ? "" : "s"} use inferred or conflicting identity data`);
