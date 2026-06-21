@@ -29,6 +29,8 @@
     debugMode: false,
     defaultRootPath: "",
     ignoredFolders: [".", "#", "@"],
+    persistentSkipPatterns: "",
+    usePersistentSkip: false,
   };
 
   function readPreferences() {
@@ -640,6 +642,24 @@
         savePreferences(preferences);
         ignoredFoldersInput.value = "";
         renderIgnoredFolders();
+      });
+    }
+
+    const persistentSkipEl = document.getElementById("persistentSkipPatterns");
+    if (persistentSkipEl) {
+      persistentSkipEl.value = preferences.persistentSkipPatterns || "";
+      persistentSkipEl.addEventListener("change", () => {
+        preferences = { ...preferences, persistentSkipPatterns: persistentSkipEl.value };
+        savePreferences(preferences);
+      });
+    }
+
+    const usePersistentSkipEl = document.getElementById("usePersistentSkip");
+    if (usePersistentSkipEl) {
+      usePersistentSkipEl.checked = preferences.usePersistentSkip || false;
+      usePersistentSkipEl.addEventListener("change", () => {
+        preferences = { ...preferences, usePersistentSkip: usePersistentSkipEl.checked };
+        savePreferences(preferences);
       });
     }
 

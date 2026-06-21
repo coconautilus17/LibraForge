@@ -204,9 +204,11 @@ def get_metadata_backup_path(source: Path) -> Path:
     return source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}")
 
 
-def get_libraforge_path(source: Path, clues: dict | None = None) -> Path:
+def get_libraforge_path(
+    source: Path, clues: dict | None = None, alone: bool = False
+) -> Path:
     group_search = (clues or {}).get("group_search", {}) or {}
-    if group_search.get("applied"):
+    if group_search.get("applied") or alone:
         return source.parent / "libraforge.json"
     return source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}")
 
@@ -222,35 +224,63 @@ def _write_libraforge(path: Path, payload: dict) -> None:
 
 
 def _load_libraforge_raw(
-    source: Path, clues: dict | None = None
+    source: Path, clues: dict | None = None, alone: bool = False
 ) -> tuple[Path, dict]:
     """Load the unified libraforge sidecar, migrating old canonical files on first access.
 
-    Multi-file (grouped) books use a folder-level ``libraforge.json``.
-    Single-file books use a per-file ``<name>.libraforge.json``.
+    Multi-file (grouped) books and single-file books alone in their folder
+    use a folder-level ``libraforge.json``.  Single-file books sharing a
+    folder with other books use a per-file ``<name>.libraforge.json``.
     Detection is by existence: folder-level is checked first.
 
     Returns (libraforge_path, payload). payload is {} when nothing exists yet.
     Migrates old backup/marker files and old group sidecars on first access.
+    Also cleans up any orphaned old-format files whenever a libraforge.json
+    is found (handles the case where the sidecar was written before cleanup ran).
     """
     folder_lf = source.parent / "libraforge.json"
     file_lf = source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}")
 
+    _old_per_file = [
+        source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}"),
+        source.with_name(f"{source.name}{MARKER_SUFFIX}"),
+    ]
+
+    def _cleanup_orphans() -> None:
+        for orphan in _old_per_file:
+            if orphan.is_file():
+                try:
+                    orphan.unlink()
+                except OSError:
+                    pass
+
     if folder_lf.is_file():
+        _cleanup_orphans()
         try:
             return folder_lf, json.loads(folder_lf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return folder_lf, {}
 
     if file_lf.is_file():
+        _cleanup_orphans()
+        payload: dict = {}
         try:
-            return file_lf, json.loads(file_lf.read_text(encoding="utf-8"))
+            payload = json.loads(file_lf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return file_lf, {}
+            pass
+        # If the book is now alone in its folder, migrate file-level to folder-level.
+        if alone:
+            _write_libraforge(folder_lf, payload)
+            try:
+                file_lf.unlink()
+            except OSError:
+                pass
+            return folder_lf, payload
+        return file_lf, payload
 
     # Determine write path for new data
     group_search = (clues or {}).get("group_search", {}) or {}
-    lf_path = folder_lf if group_search.get("applied") else file_lf
+    lf_path = folder_lf if (group_search.get("applied") or alone) else file_lf
 
     payload: dict = {}
     old_to_remove: list[Path] = []
@@ -355,13 +385,14 @@ def write_original_metadata_backup(
     source: Path,
     tags: dict | None = None,
     duration_minutes: float | None = None,
+    alone: bool = False,
 ) -> Path:
     """Store the original container-level metadata in the unified .libraforge.json sidecar.
 
     Pass tags and duration_minutes when the file has already been probed to
     avoid a second ffprobe call.
     """
-    lf_path, payload = _load_libraforge_raw(source)
+    lf_path, payload = _load_libraforge_raw(source, alone=alone)
 
     if "backup" in payload:
         return lf_path
@@ -1262,8 +1293,9 @@ def write_marker(
     mode: str,
     aggressive: bool,
     output_kind: str = "tags",
+    alone: bool = False,
 ) -> None:
-    lf_path, payload = _load_libraforge_raw(source, clues)
+    lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
     payload["marker"] = {
@@ -7321,8 +7353,8 @@ def main():
 
                 # 2. In-file tags / M4B-tool merge sidecar (unless suppressed or NO-OP).
                 if not skip_write:
-                    if not is_sidecar and not args.backup and "backup" not in _load_libraforge_raw(file_path)[1]:
-                        bp = write_original_metadata_backup(file_path)
+                    if not is_sidecar and not args.backup and "backup" not in _load_libraforge_raw(file_path, alone=alone)[1]:
+                        bp = write_original_metadata_backup(file_path, alone=alone)
                         print(f"  Auto-backup: {bp}")
                     if is_sidecar:
                         # Merge sidecar is written even in only-json mode; only the
@@ -7364,6 +7396,7 @@ def main():
                     mode=mode,
                     aggressive=aggressive_edit,
                     output_kind=primary_output_kind,
+                    alone=alone,
                 )
                 suffix = f" [{write_note}]" if write_note else ""
                 if applied_parts:

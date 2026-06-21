@@ -37,6 +37,12 @@ function collectRequest() {
   const prefs = window.LibraForgePrefs?.get() || {};
   const ignoredFolders = (prefs.ignoredFolders || []).map(f => f.trim()).filter(Boolean);
   const skipPatterns = $('skipPatterns').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  if ($('usePersistentSkip')?.checked) {
+    const persistent = (prefs.persistentSkipPatterns || '').split('\n').map(s => s.trim()).filter(Boolean);
+    for (const p of persistent) {
+      if (!skipPatterns.includes(p)) skipPatterns.push(p);
+    }
+  }
   return {
     script_name: $('script').value,
     target_path: $('targetPath').value.trim(),
@@ -155,7 +161,7 @@ function renderPhaseCounters(state) {
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(state.status);
   const scanDone = total > 0;
 
-  // Scan bar — indeterminate while scanning, solid green when found
+  // Scan bar: indeterminate while scanning, solid green when found
   const scanFill = $('scanFill');
   if (scanDone) {
     scanFill.className = 'phase-fill complete';
@@ -164,7 +170,7 @@ function renderPhaseCounters(state) {
   } else {
     scanFill.className = 'phase-fill';
   }
-  $('scanCount').textContent = scanDone ? 'done' : (isRunning ? '…' : '—');
+  $('scanCount').textContent = scanDone ? 'done' : (isRunning ? '…' : '-');
 
   // Match bar
   const matchPct = total ? (matchCurrent / total * 100) : 0;
@@ -172,7 +178,7 @@ function renderPhaseCounters(state) {
   const matchFill = $('matchFill');
   matchFill.className = 'phase-fill' + (matchDone ? ' complete' : '');
   if (!matchDone) matchFill.style.width = `${matchPct}%`;
-  $('matchCount').textContent = total ? `${matchCurrent} / ${total}` : '—';
+  $('matchCount').textContent = total ? `${matchCurrent} / ${total}` : '-';
 
   // Write bar
   const writePct = total ? Math.min(100, writeCurrent / total * 100) : 0;
@@ -180,7 +186,7 @@ function renderPhaseCounters(state) {
   const writeFill = $('writeFill');
   writeFill.className = 'phase-fill' + (writeDone ? ' complete' : '');
   if (!writeDone) writeFill.style.width = `${writePct}%`;
-  $('writeCount').textContent = total ? `${writeCurrent} / ${total}` : '—';
+  $('writeCount').textContent = total ? `${writeCurrent} / ${total}` : '-';
 }
 
 function formatElapsed(startedAt, finishedAt) {
@@ -502,8 +508,8 @@ function buildCompareTable(result, mode) {
     return `
       <tr class="${changed ? 'changed' : ''}">
         <th>${label}</th>
-        <td>${escapeHtml(current || '—')}</td>
-        <td>${escapeHtml(willWrite || '—')}</td>
+        <td>${escapeHtml(current || '-')}</td>
+        <td>${escapeHtml(willWrite || '-')}</td>
       </tr>`;
   }).join('');
   // Duration is informational (the match never rewrites runtime): compare local
@@ -520,8 +526,8 @@ function buildCompareTable(result, mode) {
   const durationRow = `
       <tr>
         <th>Duration</th>
-        <td>${escapeHtml(localDur || '—')}</td>
-        <td>${escapeHtml(audibleDur || '—')}</td>
+        <td>${escapeHtml(localDur || '-')}</td>
+        <td>${escapeHtml(audibleDur || '-')}</td>
       </tr>`;
 
   const summary = String(chosenMetadataFor(result, mode).summary ?? '').trim();
