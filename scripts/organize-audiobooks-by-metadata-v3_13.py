@@ -1146,14 +1146,17 @@ def strip_series_prefix(title: str, series: str) -> str:
 
 def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title", trusted: bool = False) -> str:
     if trusted:
-        # Trusted Audible titles skip the heavy marketing/genre descriptor pipeline
-        # (cleanup_title_artifacts → sanitize_book_title → is_marketing_descriptor)
-        # which incorrectly wipes real titles containing cultivation/xianxia/etc.
-        # Still apply series prefix stripping so titles like
-        # "Dashing Devil 5 - Bold Beginnings" (series "Dashing Devil") become
-        # "Bold Beginnings", but only when the stripped remainder is multi-word
-        # (or has a separator) to avoid "The Bright Lord" → "Lord".
+        # Trusted Audible titles skip cleanup_title_artifacts/sanitize_book_title
+        # which wholesale-wipes titles containing genre keywords like "cultivation".
+        # We still strip TRAILING marketing suffixes ("1% Lifesteal: A LitRPG
+        # Adventure" → "1% Lifesteal") and series prefixes ("Dashing Devil 5 -
+        # Bold Beginnings" → "Bold Beginnings"), but only when the result is
+        # non-trivial so "The Bright Lord" (series "The Bright") stays intact.
         cleaned = sanitize_path_name(title, "") or fallback
+        # Strip trailing marketing descriptor suffix if present.
+        without_suffix = remove_trailing_marketing_descriptor(cleaned)
+        if without_suffix and without_suffix != cleaned:
+            cleaned = without_suffix.strip(" -_.,")
         series_clean = clean_series_name(series)
         stripped = strip_series_prefix(cleaned, series_clean)
         _has_sep = bool(re.search(r"[-:,]|\d", cleaned))
@@ -1361,15 +1364,19 @@ def person_segment_matches(segment: str, people: list[str]) -> bool:
     return False
 
 
-def strip_author_narrator_noise_from_title(title: str, author: str, narrator: str = "") -> str:
+def strip_author_narrator_noise_from_title(title: str, author: str, narrator: str = "", trusted: bool = False) -> str:
     """Remove common folder-name decorations once author/narrator are known.
 
     Handles examples like:
       Ryan Eisenhower - Starship Tigress
       How to Defeat ... - Andrew/Andre Rowe - Narrator
       Dan Raxor, Jace Cannon - Supers of Vault 12
+
+    When trusted=True (Audible-matched metadata), skip cleanup_title_artifacts
+    so genre-keyword titles like "The Fifth Law of Cultivation" are not wiped
+    before the author/narrator stripping logic runs.
     """
-    value = sanitize_path_name(cleanup_title_artifacts(title), "")
+    value = sanitize_path_name(title if trusted else cleanup_title_artifacts(title), "")
     if not value:
         return value
 
@@ -2682,11 +2689,9 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         )
 
     # Once the author is known, remove common release-folder decorations from titles.
-    # For trusted Audible titles, preserve the original when noise stripping wipes it
-    # (strip_author_narrator_noise_from_title calls cleanup_title_artifacts internally
-    # which strips genre-keyword titles like "The Fifth Law of Cultivation").
-    _stripped_title = strip_author_narrator_noise_from_title(title, author_full, narrator)
-    title = _stripped_title if (_stripped_title or not trusted_metadata) else title
+    # Pass trusted_metadata so the function skips cleanup_title_artifacts for
+    # Audible-confirmed titles — genre-keyword titles must not be wiped here.
+    title = strip_author_narrator_noise_from_title(title, author_full, narrator, trusted=trusted_metadata)
     sequence_label = prefer_series_title_volume_label(sequence_label, title, clean_series, book_number)
     clean_title = clean_book_title(title, clean_series, book_number, trusted=trusted_metadata)
     metadata_clean_title = clean_book_title(
