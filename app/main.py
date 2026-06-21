@@ -629,11 +629,8 @@ class RunRequest(BaseModel):
     apply: bool = False
     backup: bool = False
     restore_metadata: bool = False
-    aggressive: bool = False
     force: bool = False
     force_original: bool = False
-    reprobe: bool = False
-    show_asin_report: bool = False
     cover_if_missing: bool = False
     replace_cover: bool = False
     metadata_json_only: bool = False
@@ -1253,16 +1250,10 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         cmd.append("--apply")
     if req.backup:
         cmd.append("--backup")
-    if req.aggressive:
-        cmd.append("--aggressive")
     if req.force:
         cmd.append("--force")
     if req.force_original:
         cmd.append("--force-original")
-    if req.reprobe:
-        cmd.append("--reprobe")
-    if req.show_asin_report:
-        cmd.append("--show-asin-report")
     if req.cover_if_missing:
         cmd.append("--cover-if-missing")
     if req.replace_cover:

@@ -7247,6 +7247,9 @@ def main():
 
                 # 2. In-file tags / M4B-tool merge sidecar (unless suppressed or NO-OP).
                 if not skip_write:
+                    if not args.backup and not get_metadata_backup_path(file_path).is_file():
+                        bp = write_original_metadata_backup(file_path)
+                        print(f"  Auto-backup: {bp}")
                     if is_sidecar:
                         # Merge sidecar is written even in only-json mode; only the
                         # in-file single-mp3 tag write is suppressed by only-json.
