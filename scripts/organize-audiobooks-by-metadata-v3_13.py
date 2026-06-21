@@ -108,6 +108,7 @@ DEFAULT_STRUCTURE_CACHE = Path("/app/reports/organizer-structure-cache.json")
 STRUCTURE_CACHE_SCHEMA_VERSION = 11
 
 COMPANION_SUFFIXES = (
+    ".libraforge.json",
     ".metadata-backup.json",
     ".audible-metadata-fixer.json",
     ".cover-backup.jpg",
@@ -3479,6 +3480,8 @@ def print_move(move: dict[str, Any]) -> None:
                 # Companion moves with the folder; only rename is needed.
                 if companion.name.endswith(".metadata.json"):
                     print(f"    -> {target / 'metadata.json'} (renamed)")
+                elif companion.name.endswith(".libraforge.json") and not companion.name == "libraforge.json":
+                    print(f"    -> {target / 'libraforge.json'} (renamed)")
                 else:
                     print(f"    -> {target / companion.name}")
             else:
@@ -3486,6 +3489,8 @@ def print_move(move: dict[str, Any]) -> None:
                 companion_target = target.with_name(target.name + suffix)
                 if suffix == ".metadata.json":
                     print(f"    -> {companion_target.parent / 'metadata.json'} (renamed)")
+                elif suffix == ".libraforge.json":
+                    print(f"    -> {companion_target.parent / 'libraforge.json'} (renamed)")
                 else:
                     print(f"    -> {companion_target}")
     print()
@@ -3699,14 +3704,20 @@ def main() -> None:
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), str(target))
-            # Companions inside the folder moved with it; rename .metadata.json
-            # to metadata.json so Audiobookshelf picks it up.
+            # Companions inside the folder moved with it; strip per-file prefix
+            # from .metadata.json and .libraforge.json so ABS and the fixer
+            # can locate them without the audio filename prefix.
             for companion in move.get("companions", []):
                 if companion.name.endswith(".metadata.json"):
                     moved = target / companion.name
-                    final_metadata = target / "metadata.json"
-                    if moved.exists() and not final_metadata.exists():
-                        moved.rename(final_metadata)
+                    final = target / "metadata.json"
+                    if moved.exists() and not final.exists():
+                        moved.rename(final)
+                elif companion.name.endswith(".libraforge.json") and companion.name != "libraforge.json":
+                    moved = target / companion.name
+                    final = target / "libraforge.json"
+                    if moved.exists() and not final.exists():
+                        moved.rename(final)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(target))
@@ -3715,9 +3726,13 @@ def main() -> None:
                 companion_target = target.with_name(target.name + suffix)
                 shutil.move(str(companion), str(companion_target))
                 if suffix == ".metadata.json":
-                    final_metadata = companion_target.parent / "metadata.json"
-                    if not final_metadata.exists():
-                        companion_target.rename(final_metadata)
+                    final = companion_target.parent / "metadata.json"
+                    if not final.exists():
+                        companion_target.rename(final)
+                elif suffix == ".libraforge.json":
+                    final = companion_target.parent / "libraforge.json"
+                    if not final.exists():
+                        companion_target.rename(final)
 
         if args.remove_empty_dirs:
             remove_empty_parents(original_parent, root)
