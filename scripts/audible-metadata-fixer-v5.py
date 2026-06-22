@@ -115,7 +115,10 @@ def _handle_sigterm(signum: int, frame: object) -> None:
     _cancel_requested = True
 
 
-signal.signal(signal.SIGTERM, _handle_sigterm)
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except (ValueError, OSError):
+    pass  # not in main thread (e.g. imported by FastAPI worker)
 MUTAGEN_MP4_EXTENSIONS = {".m4b", ".m4a", ".mp4"}
 MUTAGEN_MP3_EXTENSIONS = {".mp3"}
 # Formats that should be treated as a single audiobook when multiple files
