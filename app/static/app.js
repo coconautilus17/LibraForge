@@ -8,6 +8,14 @@ let manualReviewItems = [];
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
 
+const PROVIDER_LABELS = {
+  'audible': 'Audible',
+  'abs': 'Audiobookshelf',
+  'abs-agg': 'abs-agg',
+  'graphicaudio': 'GraphicAudio',
+  'soundbooththeater': 'SoundBooth Theater',
+};
+
 function fixerMajorVersion(scriptName) {
   const m = scriptName.match(/-v(\d+)/i);
   return m ? parseInt(m[1]) : 0;
@@ -442,6 +450,19 @@ async function loadManualTarget(path) {
     ? `Suggested queries: ${data.queries.join(' | ')}`
     : 'No suggested queries were derived from this target.';
   $('manualSearchResults').innerHTML = '<p class="note">Search this target to review manual candidates.</p>';
+
+  // Auto-detect GraphicAudio / SoundBooth Theater from series or metadata
+  // and switch the provider so the search hits the right endpoint.
+  const detectedSeries = (data.metadata?.series || '').toLowerCase();
+  const detectedPub   = (data.metadata?.publisher || '').toLowerCase();
+  if (detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')) {
+    $('manualProvider').value = 'graphicaudio';
+    toggleManualProviderFields();
+  } else if (detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth')) {
+    $('manualProvider').value = 'soundbooththeater';
+    toggleManualProviderFields();
+  }
+
   $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -570,7 +591,7 @@ function renderManualSearchResults(results = []) {
                 : '<p class="note">No current cover</p>'}
             </div>
             <div>
-              <strong>${result.provider === 'abs-agg' ? (result.abs_agg_provider || 'abs-agg') : 'Audible'}</strong>
+              <strong>${result.provider === 'abs-agg' ? (PROVIDER_LABELS[result.abs_agg_provider] || result.abs_agg_provider || 'abs-agg') : 'Audible'}</strong>
               ${result.cover_url
                 ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="Match cover" />`
                 : '<p class="note">No cover</p>'}
@@ -663,6 +684,12 @@ async function searchManualTarget() {
       provider: $('manualAbsAggProvider').value,
       providerParams: $('manualAbsAggParams').value.trim(),
       baseUrl: $('manualAbsAggUrl').value.trim(),
+      limit: 10,
+    });
+  } else if (provider === 'graphicaudio' || provider === 'soundbooththeater') {
+    res = await searchAbsAgg({
+      query: $('manualQuery').value.trim(),
+      provider,
       limit: 10,
     });
   } else {
@@ -860,16 +887,19 @@ if ($('targetScanBtn')) {
     const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
     if ($('manualAbsProviderLabel')) $('manualAbsProviderLabel').hidden = !isAbs;
-    if ($('absWarning')) $('absWarning').hidden = !isAbs; // hide immediately; async check refines
+    if ($('absWarning')) $('absWarning').hidden = !isAbs;
     ['manualAbsAggProviderLabel', 'manualAbsAggParamsLabel', 'manualAbsAggUrlLabel'].forEach(id => {
       if ($(id)) $(id).hidden = !isAbsAgg;
     });
     if ($('absAggWarning')) $('absAggWarning').hidden = !(isAbsAgg && !isAbsAggReachable());
-    // Async: refine ABS warning once status is known
     if (isAbs && $('absWarning')) {
       checkAbsReachable().then(reachable => {
         if ($('manualProvider').value === 'abs' && $('absWarning')) $('absWarning').hidden = reachable;
       });
+    }
+    // Update provider hint near "Search query"
+    if ($('manualProviderHintName')) {
+      $('manualProviderHintName').textContent = PROVIDER_LABELS[v] || v;
     }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
