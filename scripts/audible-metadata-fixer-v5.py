@@ -5684,17 +5684,47 @@ def determine_edit_mode(
         return "none"
 
     # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
-    # runtime data via abs-agg so duration is always "unknown".  If title and author
-    # match we trust the result from the catalog and allow a full write.
-    if product.get("_abs_provider") in SPECIAL_PROVIDERS:
-        local_title_n = normalize_for_match(clues.get("title", ""))
-        abs_title_n   = normalize_for_match(product.get("title", "") or "")
-        local_author_n = normalize_for_match(clues.get("author", ""))
-        abs_author_n   = normalize_for_match(" ".join(get_people(product, "authors")))
-        title_ok  = bool(local_title_n and (local_title_n == abs_title_n or local_title_n in abs_title_n or abs_title_n in local_title_n))
-        author_ok = bool(local_author_n and abs_author_n and SequenceMatcher(None, local_author_n, abs_author_n).ratio() >= 0.75)
-        if title_ok and author_ok:
-            return "full"
+    # runtime data via abs-agg so duration is always "unknown".  Verify the local
+    # file's composer (©wrt) tag confirms the production company, then check
+    # title+author match before allowing a full write.
+    _sp = product.get("_abs_provider")
+    if _sp in SPECIAL_PROVIDERS:
+        _COMPOSER_MARKERS: dict[str, str] = {
+            "graphicaudio": "graphicaudio",
+            "soundbooththeater": "soundbooth",
+        }
+        _expected = _COMPOSER_MARKERS.get(_sp, "")
+        _raw_tags = clues.get("_raw_tags") or {}
+        _composer_text = ""
+        for _tag_key in ("©wrt", "\xa9wrt"):
+            for _val in (_raw_tags.get(_tag_key) or []):
+                try:
+                    _composer_text = (
+                        bytes(_val).decode("utf-8", "ignore")
+                        if hasattr(_val, "__bytes__") else str(_val)
+                    )
+                except Exception:
+                    pass
+                break
+            if _composer_text:
+                break
+        composer_confirmed = bool(_expected and _expected in _composer_text.lower())
+        if composer_confirmed:
+            local_title_n  = normalize_for_match(clues.get("title", ""))
+            abs_title_n    = normalize_for_match(product.get("title", "") or "")
+            local_author_n = normalize_for_match(clues.get("author", ""))
+            abs_author_n   = normalize_for_match(" ".join(get_people(product, "authors")))
+            title_ok  = bool(local_title_n and (
+                local_title_n == abs_title_n
+                or local_title_n in abs_title_n
+                or abs_title_n in local_title_n
+            ))
+            author_ok = bool(
+                local_author_n and abs_author_n
+                and SequenceMatcher(None, local_author_n, abs_author_n).ratio() >= 0.75
+            )
+            if title_ok and author_ok:
+                return "full"
 
     duration_status = (duration_result or {}).get("status", "unknown")
     title_score = title_evidence_score(clues, product)
