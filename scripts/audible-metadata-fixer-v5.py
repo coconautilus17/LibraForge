@@ -1344,22 +1344,35 @@ def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
 
 
 def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
-    """Write a non-applied marker with NOREALASIN for books that could not be matched.
+    """Write a non-applied marker for books that could not be matched.
 
-    This lets the Start Here scanner fast-path skip mutagen on future scans:
-    NOREALASIN means "we tried and found nothing" rather than "unknown".
-    Does not set applied=True, so the fixer will re-process on the next run.
+    Preserves any real ASIN already present (existing_asin from clues or the
+    sidecar's marker.audible.asin). Only writes NOREALASIN when no real ASIN
+    is known anywhere, so the Start Here scanner can skip mutagen on books
+    with no ASIN while keeping the correct value for books that do have one.
+    Does not set applied=True so the fixer will re-process on the next run.
     """
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
+    existing_audible = (payload.get("marker") or {}).get("audible") or {}
+    existing_asin = (
+        existing_audible.get("asin")
+        or (clues or {}).get("existing_asin")
+        or ""
+    )
+    asin_to_write = (
+        existing_asin
+        if existing_asin and existing_asin != "NOREALASIN"
+        else "NOREALASIN"
+    )
     payload["marker"] = {
         **payload.get("marker", {}),
         "applied": False,
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "audible": {
-            **(payload.get("marker", {}).get("audible") or {}),
-            "asin": "NOREALASIN",
+            **existing_audible,
+            "asin": asin_to_write,
         },
     }
     _write_libraforge(lf_path, payload)
