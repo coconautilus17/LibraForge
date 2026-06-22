@@ -4751,6 +4751,7 @@ def search_item(
                             used_query = f"ASIN:{existing_asin}"
                             match_ambiguity = None
                             effective_min_score = _asin_threshold
+                            queries = []  # ASIN hit is definitive; skip keyword searches
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
@@ -5330,7 +5331,12 @@ def score_product_for_metadata(
 
     # Series-grouping correction path.
     # Allows series_only correction even when duration/title/sequence are messy.
-    if series_match and (author_good or narrator_good):
+    # Guard: only boost when there is at least minimal title evidence -- this
+    # prevents clearly wrong books in the same series (e.g. "The Last Hero"
+    # matching "The Amazing Maurice") from reaching the write threshold on
+    # series + author signal alone. sequence is suppressed in series_only
+    # mode regardless, so the series write still happens on legitimate matches.
+    if series_match and (author_good or narrator_good) and title_score >= 0.15:
         score = max(score, 0.72)
 
     # Perfect confidence path:
@@ -5342,6 +5348,13 @@ def score_product_for_metadata(
         and (author_good or narrator_good)
     ):
         score = 1.0
+
+    # Language penalty: non-English products score lower for English-language
+    # libraries. Prevents foreign-language editions (French, Spanish, etc.)
+    # from being chosen over English matches via duration coincidence.
+    product_language = str(product.get("language", "") or "").lower()
+    if product_language and product_language != "english":
+        score -= 0.30
 
     return round(min(max(score, 0.0), 1.0), 4)
 
