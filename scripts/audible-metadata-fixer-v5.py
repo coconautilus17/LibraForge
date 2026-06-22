@@ -3585,6 +3585,10 @@ def is_generic_chapter_title(value: str) -> bool:
         r"^cd\s+\d+\s+track\s+\d+$",
         r"^\d+$",
         r"^file\s+\d+$",
+        # Chapter-level credit/filler titles that are never book titles
+        r"^credits?$",
+        r"^(opening|end|ending|outro|intro|closing|beginning)\s+credits?$",
+        r"^(intro|outro)$",
     ]
 
     return any(re.fullmatch(pattern, value) for pattern in patterns)
@@ -4646,6 +4650,7 @@ def search_item(
             return result
 
         # Check if match is already cached (e.g. another chapter of the same group)
+        effective_min_score = args.min_score
         with match_cache_lock:
             cached_match = match_cache.get(match_cache_key)
 
@@ -4718,11 +4723,13 @@ def search_item(
                             f"title={asin_debug.get('audible_title')} "
                             f"mode={asin_debug.get('edit_mode')}"
                         )
-                        if asin_candidate_score >= args.min_score:
+                        _asin_threshold = 0.40
+                        if asin_candidate_score >= _asin_threshold:
                             product = asin_product
                             score = asin_candidate_score
                             used_query = f"ASIN:{existing_asin}"
                             match_ambiguity = None
+                            effective_min_score = _asin_threshold
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
@@ -4820,9 +4827,9 @@ def search_item(
         result.duration_status = duration_status
         result.diff_percent = diff_percent
 
-        if score < args.min_score:
-            reason = f"skipped: score below minimum: {score} < {args.min_score}"
-            log.append(f"  SKIP: score below minimum: {score} < {args.min_score}")
+        if score < effective_min_score:
+            reason = f"skipped: score below minimum: {score} < {effective_min_score}"
+            log.append(f"  SKIP: score below minimum: {score} < {effective_min_score}")
             log.append("")
             result.status = "skipped"
             result.skip_reason = reason
