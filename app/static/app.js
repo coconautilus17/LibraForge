@@ -619,7 +619,7 @@ function renderManualSearchResults(results = []) {
       const index = Number(button.getAttribute('data-manual-apply-index'));
       const mode = $('manualSearchResults').querySelector(`select[data-manual-mode="${index}"]`)?.value || '';
       const replaceCover = $('manualSearchResults').querySelector(`input[data-manual-replace-cover="${index}"]`)?.checked || false;
-      applyManualMatch(results[index], mode, replaceCover);
+      applyManualMatch(results[index], mode, replaceCover, button);
     });
   }
 
@@ -689,39 +689,167 @@ async function searchManualTarget() {
   renderManualSearchResults(data.results || []);
 }
 
-async function applyManualMatch(result, editMode, replaceCover = false) {
-  if (!manualContext?.path) {
-    alert('Load a manual review target first.');
-    return;
-  }
-  if (!editMode) {
-    alert('Choose an apply mode first.');
-    return;
-  }
-  const coverMessage = replaceCover ? '\n\nThe current cover will be overwritten with the selected match cover.' : '';
-  const ok = confirm(`Apply the selected match in ${editMode} mode to:\n${manualContext.display_path || manualContext.path}${coverMessage}`);
-  if (!ok) return;
+function buildManualApplyDialogs() {
+  if ($('manualApplyConfirmDialog')) return;
 
-  const res = await fetch('/api/manual-review/apply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      path: manualContext.path,
-      script_name: $('script').value,
-      selected_result: result,
-      edit_mode: editMode,
-      backup: $('backup').checked,
-      cover_if_missing: false,
-      replace_cover: replaceCover,
-      writer: 'auto',
-    }),
+  const confirmDlg = document.createElement('dialog');
+  confirmDlg.id = 'manualApplyConfirmDialog';
+  confirmDlg.className = 'manual-apply-dialog';
+  confirmDlg.innerHTML = `
+    <h3 class="manual-apply-title">Confirm manual apply override</h3>
+    <p id="manualApplyConfirmBody" class="manual-apply-body"></p>
+    <p id="manualApplyCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+    <div class="manual-apply-actions">
+      <button id="manualApplyCancelBtn" class="secondary">Cancel</button>
+      <button id="manualApplyConfirmBtn">Apply</button>
+    </div>`;
+  document.body.appendChild(confirmDlg);
+
+  const progDlg = document.createElement('dialog');
+  progDlg.id = 'manualApplyProgressDialog';
+  progDlg.className = 'manual-apply-dialog';
+  progDlg.innerHTML = `
+    <h3 class="manual-apply-title" id="manualApplyProgressTitle">Applying…</h3>
+    <div class="manual-apply-progress-bar">
+      <div class="manual-apply-progress-fill indeterminate" id="manualApplyProgressFill"></div>
+    </div>
+    <p id="manualApplyProgressDetail" class="manual-apply-output-detail"></p>
+    <p id="manualApplyProgressResult" class="manual-apply-body" hidden></p>
+    <p id="manualApplyProgressWarning" class="manual-apply-warning" hidden>
+      Apply is still running in the background. You will be notified when it finishes.
+    </p>
+    <div class="manual-apply-actions">
+      <button id="manualApplyDismissBtn" class="secondary">Dismiss</button>
+    </div>`;
+  document.body.appendChild(progDlg);
+}
+
+const MANUAL_APPLY_OUTPUT_DESCRIPTIONS = {
+  tags: 'Written directly into the audio file\'s embedded tags. Used for finalized single-file M4B books.',
+  json_sidecar: 'Saved to a .libraforge.json sidecar file next to the audio. Used for multi-part books or files pending M4B conversion — the M4B Tool picks this up automatically.',
+};
+
+async function applyManualMatch(result, editMode, replaceCover = false, applyBtn = null) {
+  if (!manualContext?.path) { alert('Load a manual review target first.'); return; }
+  if (!editMode) { alert('Choose an apply mode first.'); return; }
+
+  buildManualApplyDialogs();
+  const confirmDlg = $('manualApplyConfirmDialog');
+  const progDlg    = $('manualApplyProgressDialog');
+
+  // -- Confirm dialog --
+  $('manualApplyConfirmBody').textContent =
+    `Apply ${editMode} mode to:\n${manualContext.display_path || manualContext.path}`;
+  $('manualApplyCoverNote').hidden = !replaceCover;
+
+  const confirmed = await new Promise(resolve => {
+    function cleanup(val) {
+      $('manualApplyConfirmBtn').removeEventListener('click', onOk);
+      $('manualApplyCancelBtn').removeEventListener('click', onCancel);
+      confirmDlg.removeEventListener('cancel', onCancel);
+      confirmDlg.close();
+      resolve(val);
+    }
+    const onOk     = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    $('manualApplyConfirmBtn').addEventListener('click', onOk);
+    $('manualApplyCancelBtn').addEventListener('click', onCancel);
+    confirmDlg.addEventListener('cancel', onCancel, { once: true });
+    confirmDlg.showModal();
   });
-  const data = await res.json();
-  if (!res.ok) {
-    alert(data.detail || 'Failed to apply manual match');
-    return;
+
+  if (!confirmed) return;
+
+  // -- Progress dialog --
+  let completed = false;
+  let dismissed = false;
+
+  $('manualApplyProgressTitle').textContent = 'Applying…';
+  $('manualApplyProgressFill').className = 'manual-apply-progress-fill indeterminate';
+  $('manualApplyProgressDetail').innerHTML =
+    `Mode: <strong>${escapeHtml(editMode)}</strong>`;
+  $('manualApplyProgressResult').hidden = true;
+  $('manualApplyProgressWarning').hidden = true;
+  $('manualApplyDismissBtn').textContent = 'Dismiss';
+
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = 'Applying…'; }
+
+  const dismissBtn = $('manualApplyDismissBtn');
+
+  function handleDismiss() {
+    if (!completed) {
+      $('manualApplyProgressWarning').hidden = false;
+      dismissed = true;
+      progDlg.close();
+    } else {
+      progDlg.close();
+    }
   }
-  alert(`Applied manual match in ${data.edit_mode} mode.\nTarget: ${data.target_path}\nOutput: ${data.output_kind}\nSaved to: ${data.output_path}`);
+
+  dismissBtn.addEventListener('click', handleDismiss, { once: true });
+  progDlg.addEventListener('cancel', e => { e.preventDefault(); handleDismiss(); }, { once: true });
+  progDlg.showModal();
+
+  // -- Fire request --
+  try {
+    const res = await fetch('/api/manual-review/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: manualContext.path,
+        script_name: $('script').value,
+        selected_result: result,
+        edit_mode: editMode,
+        backup: $('backup').checked,
+        cover_if_missing: false,
+        replace_cover: replaceCover,
+        writer: 'auto',
+      }),
+    });
+    const data = await res.json();
+    completed = true;
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply this match'; }
+
+    if (!res.ok) {
+      const msg = data.detail || 'Failed to apply manual match';
+      if (dismissed) { alert(`Manual apply failed:\n${msg}`); return; }
+      $('manualApplyProgressTitle').textContent = 'Apply failed';
+      $('manualApplyProgressFill').className = 'manual-apply-progress-fill error';
+      $('manualApplyProgressResult').textContent = msg;
+      $('manualApplyProgressResult').hidden = false;
+      dismissBtn.textContent = 'Close';
+      return;
+    }
+
+    const outputKind  = data.output_kind || 'tags';
+    const outputLabel = outputKind === 'json_sidecar' ? 'sidecar' : 'tags';
+    const desc        = MANUAL_APPLY_OUTPUT_DESCRIPTIONS[outputKind] || '';
+
+    if (dismissed) {
+      alert(`Manual apply complete.\nMode: ${data.edit_mode}  ·  Output: ${outputLabel}\n${data.target_path}`);
+      return;
+    }
+
+    $('manualApplyProgressTitle').textContent = 'Applied successfully';
+    $('manualApplyProgressFill').className = 'manual-apply-progress-fill complete';
+    $('manualApplyProgressDetail').innerHTML =
+      `Mode: <strong>${escapeHtml(data.edit_mode)}</strong> &nbsp;&middot;&nbsp; ` +
+      `Output: <strong>${escapeHtml(outputLabel)}</strong>` +
+      (desc ? `<span class="manual-apply-output-desc">${escapeHtml(desc)}</span>` : '');
+    $('manualApplyProgressResult').textContent = `Target: ${data.target_path}`;
+    $('manualApplyProgressResult').hidden = false;
+    dismissBtn.textContent = 'Done';
+
+  } catch (err) {
+    completed = true;
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = 'Apply this match'; }
+    if (dismissed) { alert('Manual apply encountered an error.'); return; }
+    $('manualApplyProgressTitle').textContent = 'Apply error';
+    $('manualApplyProgressFill').className = 'manual-apply-progress-fill error';
+    $('manualApplyProgressResult').textContent = String(err);
+    $('manualApplyProgressResult').hidden = false;
+    dismissBtn.textContent = 'Close';
+  }
 }
 
 function syncForceOriginal() {
