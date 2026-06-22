@@ -3,7 +3,7 @@
 > **Note:** This tool is in active development. Features and interfaces may change.
 
 Self-hosted Audible metadata matching, M4B conversion, Audiobookshelf-style library
-organisation, and direct Audible downloading — four tools in one Docker container, with
+organisation, and direct Audible downloading - four tools in one Docker container, with
 a vanilla-JS web UI. Every write operation defaults to a dry run.
 
 ---
@@ -45,14 +45,14 @@ destination-structure cache on its own.
 
 ### Library Downloader (`/library`)
 Browse your Audible library and download purchases straight into a mounted folder,
-decrypted to standard **M4B** with chapters, metadata, embedded cover, and ASIN intact —
+decrypted to standard **M4B** with chapters, metadata, embedded cover, and ASIN intact -
 no external tooling. Supports AAX (`activation_bytes`) and AAXC (per-file voucher).
 Books already in your library are flagged as **Owned**; a per-run or per-book rule
 controls duplicate handling (Keep both / Replace), and an optional pass auto-organises
 the downloads when finished.
 
 ### Accounts (`/auth-setup`)
-Guided Audible OAuth sign-in — no CLI tools. Connect **multiple accounts**, each with a
+Guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**, each with a
 recognisable name, and **switch between them in one click**, rename them, or **disconnect**
 cleanly (deregisters the device with Audible, then removes the login; offers retry or
 local-only delete if Audible is unreachable). The active account is shared by every tool.
@@ -67,7 +67,7 @@ This page also configures the Audiobookshelf and abs-agg providers.
 
 ## Install
 
-Requires Docker with the Compose plugin. Clone and start — no config needed:
+Requires Docker with the Compose plugin. Clone and start - no config needed:
 
 ```bash
 git clone https://github.com/coconautilus17/LibraForge.git
@@ -75,7 +75,7 @@ cd LibraForge
 make up
 ```
 
-Then open **http://127.0.0.1:5056**. That's it — `make up` builds the image, creates the
+Then open **http://127.0.0.1:5056**. That's it - `make up` builds the image, creates the
 first-boot data folders, and runs the container as your user so mounted files stay
 writable. Without `make`, `docker compose up -d --build` works too (it falls back to a
 repo-local `./data/` library and UID/GID `1000`).
@@ -109,7 +109,7 @@ Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test
 | Purpose | Path |
 |---|---|
 | Audiobook library | `/audiobooks` |
-| Audible auth directory | `/auth` — active account `/auth/audible-metadata.json`; saved accounts `/auth/accounts/` |
+| Audible auth directory | `/auth` - active account `/auth/audible-metadata.json`; saved accounts `/auth/accounts/` |
 | Scripts | `/app/scripts` |
 | Reports and caches | `/app/reports` |
 
@@ -120,8 +120,8 @@ Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test
 - A dedicated, empty Audible account is recommended for metadata lookups; use a
   real-library account for the downloader.
 - The `/auth` directory is mounted **read-write** so the app can add, switch, and
-  disconnect accounts. Point `AUDIBLE_AUTH_PATH` at a dedicated directory — not your
-  primary audible-cli config — and keep it off untrusted networks.
+  disconnect accounts. Point `AUDIBLE_AUTH_PATH` at a dedicated directory - not your
+  primary audible-cli config - and keep it off untrusted networks.
 - Do not expose LibraForge to an untrusted network. Access control is host-level only;
   anyone who can reach the port can use it.
 
@@ -138,7 +138,7 @@ make restart
 make rebuild
 ```
 
-Static files (`app/static`, `scripts/`) are bind-mounted — HTML, CSS, and JS edits are
+Static files (`app/static`, `scripts/`) are bind-mounted - HTML, CSS, and JS edits are
 live without a restart.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licence information.
