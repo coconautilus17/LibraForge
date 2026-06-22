@@ -217,6 +217,7 @@
   <script>
   (() => {
     const { initFolderBrowser } = window.UiCommon;
+    const esc = s => String(s).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[c]);
     const input = document.getElementById("folderPath");
     const browser = document.getElementById("folderBrowser");
     const browseBtn = document.getElementById("browseBtn");
