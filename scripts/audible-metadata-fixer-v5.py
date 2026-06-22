@@ -179,6 +179,7 @@ class ItemResult:
     metadata_json_done: bool = False
     asin_conflict: bool = False
     error: str = ""
+    source_provider: str = ""  # abs-agg provider id when matched via GA/SBT endpoint
 
 
 def get_marker_path(source: Path) -> Path:
@@ -4540,6 +4541,105 @@ def abs_search(title: str, author: str, provider: str, abs_url: str, abs_api_key
     return products
 
 
+def abs_agg_search(
+    title: str,
+    author: str,
+    provider: str,
+    abs_agg_url: str,
+    limit: int,
+    existing_asin: str = "",
+) -> list[dict]:
+    """Search an abs-agg provider endpoint and normalize results to Audible product shape.
+
+    Calls /{provider}/search?title=...&author=...&limit=... on the abs-agg service.
+    The existing_asin is preserved in the result so tag writes don't clear embedded ASINs.
+    """
+    import urllib.error as _urlerror
+    import urllib.parse as _urlparse
+    import urllib.request as _urlrequest
+
+    params: dict[str, str] = {"title": title, "limit": str(limit)}
+    if author:
+        params["author"] = author
+    url = f"{abs_agg_url.rstrip('/')}/{provider}/search?{_urlparse.urlencode(params)}"
+    try:
+        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+        with _urlrequest.urlopen(req, timeout=15) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except (_urlerror.URLError, OSError) as exc:
+        return []
+    except Exception:
+        return []
+
+    products = []
+    for match in (raw.get("matches", []) or [])[:limit]:
+        series_raw = match.get("series") or []
+        if isinstance(series_raw, list) and series_raw:
+            series_name = series_raw[0].get("series", "")
+            sequence = str(series_raw[0].get("sequence", "") or "")
+        else:
+            series_name, sequence = "", ""
+
+        # Preserve the embedded ASIN so we don't accidentally clear it on write.
+        asin = match.get("asin", "") or existing_asin
+
+        products.append({
+            "asin": asin,
+            "title": match.get("title", "") or "",
+            "subtitle": match.get("subtitle", "") or "",
+            "authors": [{"name": match.get("author", "") or ""}],
+            "narrators": [{"name": match.get("narrator", "") or ""}],
+            "series": [{"title": series_name, "sequence": sequence}] if series_name else [],
+            "publisher_summary": match.get("description", "") or "",
+            "product_images": {"500": match.get("cover", "") or ""},
+            "runtime_length_min": None,  # abs-agg does not return runtime
+            "release_date": str(match.get("publishedYear", "") or ""),
+            "_abs_provider": provider,
+            "_abs_isbn": match.get("isbn", "") or match.get("bookId", "") or "",
+        })
+    return products
+
+
+def detect_special_provider(clues: dict) -> str | None:
+    """Return the abs-agg provider id if the file is a known dramatized production.
+
+    Checks multiple signals so 'Dramatized Adaptation' is an indicator but not
+    the sole trigger -- publisher policy, series name, and raw composer tag are
+    all considered.
+    """
+    # 1. Publisher policy already mapped it
+    special = clues.get("special_publisher_provider") or special_provider_for(clues.get("publisher", ""))
+    if special:
+        return special
+
+    # 2. Series name contains the producer name (e.g. "The Mistborn Saga (GraphicAudio)")
+    series = clues.get("series", "") or ""
+    if "graphicaudio" in series.lower():
+        return "graphicaudio"
+    if "soundbooth" in series.lower():
+        return "soundbooththeater"
+
+    # 3. Composer/writer raw tag (©wrt) -- GraphicAudio embeds its name there
+    raw_tags = clues.get("_raw_tags") or {}
+    for tag_key in ("©wrt", "\xa9wrt"):
+        for val in (raw_tags.get(tag_key) or []):
+            try:
+                text = bytes(val).decode("utf-8", "ignore") if hasattr(val, "__bytes__") else str(val)
+                if "graphicaudio" in text.lower():
+                    return "graphicaudio"
+                if "soundbooth" in text.lower():
+                    return "soundbooththeater"
+            except Exception:
+                pass
+
+    # 4. "[Dramatized Adaptation]" subtitle -- use as signal to try GA first
+    subtitle = clues.get("subtitle", "") or ""
+    if "dramatized" in subtitle.lower() and "adaptation" in subtitle.lower():
+        return "graphicaudio"
+
+    return None
+
+
 _thread_local = threading.local()
 
 
@@ -4709,6 +4809,43 @@ def search_item(
             score = 0.0
             used_query = ""
             match_ambiguity = None
+
+            # Special provider search (GraphicAudio, SoundBooth Theater via abs-agg).
+            # Triggered by publisher policy, series name, composer tag, or dramatized subtitle.
+            # Result competes with Audible: whichever scores higher wins.
+            _abs_agg_url = getattr(args, "abs_agg_url", "")
+            _detected_provider = detect_special_provider(clues)
+            if _detected_provider and _abs_agg_url:
+                _sp_label = SPECIAL_PROVIDERS.get(_detected_provider, _detected_provider)
+                log.append(f"  Trying {_sp_label} source (abs-agg/{_detected_provider})")
+                _sp_products = abs_agg_search(
+                    title=clues.get("title", ""),
+                    author=clues.get("author", ""),
+                    provider=_detected_provider,
+                    abs_agg_url=_abs_agg_url,
+                    limit=args.limit,
+                    existing_asin=clues.get("existing_asin", ""),
+                )
+                log.append(f"  {_sp_label} results: {len(_sp_products)}")
+                if _sp_products:
+                    _sp_candidate, _sp_score, _sp_ambiguity = pick_best_match_for_metadata(
+                        clues, _sp_products, local_duration_minutes
+                    )
+                    if _sp_candidate:
+                        _sp_debug = metadata_from_product(_sp_candidate, clues, _sp_score)
+                        log.append(
+                            f"  {_sp_label} candidate: score={_sp_score} "
+                            f"title={_sp_debug.get('audible_title')} "
+                            f"mode={_sp_debug.get('edit_mode')}"
+                        )
+                        if _sp_score > score:
+                            product = _sp_candidate
+                            score = _sp_score
+                            used_query = f"{_detected_provider}:{clues.get('title','')}"
+                            match_ambiguity = _sp_ambiguity
+                            effective_min_score = min(effective_min_score, 0.40)
+                            queries = []  # skip Audible text search -- special provider matched
+                            result.source_provider = _detected_provider
 
             use_abs = getattr(args, "provider", "audible") == "abs"
 
@@ -4928,22 +5065,23 @@ def search_item(
                 f"existing ASIN {existing_asin} does not match matched ASIN {matched_asin}"
             )
 
-        # Special editions (GraphicAudio / Soundbooth Theater) are dramatized and
-        # not on Audible proper: keep the best-effort match but recommend their
-        # dedicated abs-agg endpoint for a better source.
-        special_provider = clues.get("special_publisher_provider") or special_provider_for(
-            clues.get("publisher", "")
-        )
+        # Special editions (GraphicAudio / Soundbooth Theater).
+        # If we already matched via the abs-agg endpoint, emit SOURCE: for statistics.
+        # Otherwise flag for review suggesting the dedicated endpoint.
+        special_provider = result.source_provider or detect_special_provider(clues)
         if special_provider:
             label = SPECIAL_PROVIDERS.get(special_provider, special_provider)
-            special_note = (
-                f"publisher {label} — consider the {label} abs-agg endpoint "
-                f"({special_provider}) instead of Audible"
-            )
-            review_reasons.append(special_note)
-            # Emit in Pass 1 (under the Processing header) so the report parser can
-            # categorize it to the right book.
-            log.append(f"  {special_note}")
+            if result.source_provider:
+                # Matched via the dedicated endpoint -- emit SOURCE: for the backend parser.
+                log.append(f"  SOURCE: {special_provider}")
+            else:
+                # Fell back to Audible -- flag for manual attention.
+                special_note = (
+                    f"publisher {label} — consider the {label} abs-agg endpoint "
+                    f"({special_provider}) instead of Audible"
+                )
+                review_reasons.append(special_note)
+                log.append(f"  {special_note}")
 
         result.review_reasons = review_reasons
 
@@ -7137,6 +7275,13 @@ def main():
     )
 
     parser.add_argument(
+        "--abs-agg-url",
+        default=os.environ.get("ABS_AGG_URL", "http://abs-agg:3000"),
+        dest="abs_agg_url",
+        help="Base URL of the abs-agg service used for GraphicAudio/SoundBooth Theater searches.",
+    )
+
+    parser.add_argument(
         "--workers",
         type=int,
         default=None,
@@ -7376,6 +7521,8 @@ def main():
                 # status == "matched"
                 w_mode_counts[w_edit_mode] += 1
                 w_duration_counts[result.duration_status] += 1
+                if result.source_provider:
+                    w_mode_counts[result.source_provider] += 1
 
                 if result.duration_review_item:
                     w_duration_review.append(result.duration_review_item)

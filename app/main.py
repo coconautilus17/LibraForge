@@ -240,6 +240,7 @@ MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
 FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
 SPECIAL_PUB_RE = re.compile(r"consider the .+ abs-agg endpoint")
+SOURCE_RE = re.compile(r"^\s+SOURCE:\s+(\S+)\s*$")
 SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
@@ -1144,6 +1145,11 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "review", "special-publisher", state.current_file)
         return
 
+    m = SOURCE_RE.match(line)
+    if m and state.current_file:
+        add_category(state, "provider", m.group(1), state.current_file)
+        return
+
     m = FILL_ITEM_RE.match(line)
     if m and state.current_file:
         filled = m.group(1)
@@ -1356,6 +1362,9 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
             cmd += ["--abs-provider", req.abs_provider]
             cmd += ["--abs-url", _get_abs_url()]
             cmd += ["--abs-api-key", _get_abs_api_key()]
+        # Always pass abs-agg URL so the fixer can auto-detect and search
+        # GraphicAudio / SoundBooth Theater regardless of the selected provider.
+        cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
