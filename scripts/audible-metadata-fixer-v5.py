@@ -7471,9 +7471,10 @@ def main():
                         )
                 break
 
-            # Accumulate this book's output and counters locally so we can
-            # flush everything under the lock in one atomic block.
-            out: list[str] = list(result.log_lines)
+            # Pass 1 already printed result.log_lines in full.
+            # Pass 2 emits only the Processing: header (for write_current tracking)
+            # plus the write-specific lines (APPLIED/PLAN/SOURCE).
+            out: list[str] = [result.log_lines[0]] if result.log_lines else []
             w_matched = 0
             w_skipped = 0
             w_failed = 0
