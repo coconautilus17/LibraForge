@@ -1823,9 +1823,9 @@ def normalize_for_match(value: str) -> str:
     value = re.sub(r"\[[^\]]+\]", " ", value)
     value = re.sub(r"\([^)]*\)", " ", value)
     value = re.sub(r"[_\-:]+", " ", value)
-    value = re.sub(r"\bbook\s+\d+\b", " ", value)
-    value = re.sub(r"\bvolume\s+\d+\b", " ", value)
-    value = re.sub(r"\bvol\.?\s+\d+\b", " ", value)
+    value = re.sub(r"\bbook\s+#?\d+\b", " ", value)
+    value = re.sub(r"\bvolume\s+#?\d+\b", " ", value)
+    value = re.sub(r"\bvol\.?\s+#?\d+\b", " ", value)
     value = re.sub(r"\s+", " ", value)
 
     return value.strip()
@@ -5578,6 +5578,8 @@ def determine_edit_mode(
         and audible_series
         and (
             local_series == audible_series
+            or audible_series in local_series
+            or local_series in audible_series
             or SequenceMatcher(None, local_series, audible_series).ratio() >= 0.88
         )
     )
