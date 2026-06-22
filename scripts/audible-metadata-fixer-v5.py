@@ -7,6 +7,7 @@ import os
 import html
 import io
 import json
+import queue as _queue
 import re
 import signal
 import stat
@@ -7292,217 +7293,269 @@ def main():
         disk_asin_map = build_disk_asin_map(full_library_files, args.asin_scan_workers)
         detect_global_asin_duplicates(all_results, disk_asin_map)
 
-    # Pass 2: stats, manual review, and writes in submission order
-    for result in all_results:
-        file_path = result.file_path
-        clues = result.clues or {}
-        metadata = result.metadata or {}
-        score = result.score
-        edit_mode = result.edit_mode
-        used_query = result.used_query
+    # Pass 2: concurrent writes via a per-book queue.
+    # Each worker pops one book at a time; output and shared counters are
+    # updated under a single lock so stdout lines are never interleaved.
+    _write_q: _queue.Queue = _queue.Queue()
+    for _r in all_results:
+        _write_q.put(_r)
 
-        if result.status == "skipped":
-            skipped += 1
-            if result.add_to_manual_review:
-                reason = result.skip_reason
-                if reason == "skipped: no usable Audible match":
-                    query_str = " | ".join(result.queries)
-                else:
-                    query_str = used_query
-                append_manual_review(
-                    manual_review,
-                    file_path,
-                    [reason],
-                    clues=clues,
-                    metadata=metadata or None,
-                    score=score or None,
-                    mode=edit_mode,
-                    query=query_str,
-                    status="skipped",
-                )
-                # Cache the no-match result so future scans skip the mutagen read.
-                alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-                write_skip_marker(file_path, clues, alone=alone)
-            continue
+    _write_lock = threading.Lock()
+    _cancel_notice_sent = threading.Event()
+    _write_shared: dict = {
+        "matched": 0, "skipped": 0, "failed": 0,
+        "mode_counts": Counter(), "duration_counts": Counter(),
+        "fill_books_filled": 0, "fill_books_complete": 0,
+        "fill_field_counts": Counter(), "smart_skip_count": 0,
+        "duration_review": [], "manual_review": [], "asin_matches": [],
+    }
 
-        if result.status == "failed":
-            failed += 1
-            continue
+    def _write_worker() -> None:
+        while True:
+            try:
+                result = _write_q.get_nowait()
+            except _queue.Empty:
+                break
 
-        # status == "matched"
-        mode_counts[edit_mode] += 1
-        duration_counts[result.duration_status] += 1
+            if _cancel_requested:
+                if not _cancel_notice_sent.is_set() and _cancel_notice_sent.set() is None:
+                    with _write_lock:
+                        print(
+                            f"\n[{result.index}/{total}] Cancelled - stopping cleanly after previous writes.",
+                            flush=True,
+                        )
+                break
 
-        if result.duration_review_item:
-            duration_review.append(result.duration_review_item)
+            # Accumulate this book's output and counters locally so we can
+            # flush everything under the lock in one atomic block.
+            out: list[str] = list(result.log_lines)
+            w_matched = 0
+            w_skipped = 0
+            w_failed = 0
+            w_mode_counts: Counter = Counter()
+            w_duration_counts: Counter = Counter()
+            w_fill_filled = 0
+            w_fill_complete = 0
+            w_fill_field_counts: Counter = Counter()
+            w_smart_skip = 0
+            w_duration_review: list = []
+            w_manual_review: list = []
+            w_asin_matches: list = []
 
-        if result.asin_conflict and result.review_reasons:
-            # Re-emit the Processing line so the backend parser's current_file
-            # is set to this item before the SKIP line that follows.
-            print(f"[{result.index}/{total}] Processing: {result.display_path}", flush=True)
-            for reason in result.review_reasons:
-                if "duplicate Audible ASIN" in reason:
-                    print(f"  SKIP: {reason}", flush=True)
-                    break
-            print()
+            file_path = result.file_path
+            clues = result.clues or {}
+            metadata = result.metadata or {}
+            score = result.score
+            w_edit_mode = result.edit_mode
+            used_query = result.used_query
 
-        if result.review_reasons:
-            append_manual_review(
-                manual_review,
-                file_path,
-                result.review_reasons,
-                clues=clues,
-                metadata=metadata,
-                score=score,
-                mode=edit_mode,
-                query=used_query,
-                status="selected" if not result.asin_conflict else "skipped",
-            )
-
-        asin_matches.append(
-            {
-                "asin": metadata.get("asin", ""),
-                "file_type": get_file_type(file_path),
-                "mode": metadata.get("edit_mode", ""),
-                "path": str(file_path),
-                "local_title": clues.get("title", ""),
-                "local_number": clues.get("book_number", ""),
-                "local_number_source": clues.get("book_number_source", ""),
-                "audible_title": metadata.get("audible_title", ""),
-                "audible_sequence": metadata.get("audible_sequence", ""),
-                "audible_number_candidates": metadata.get("audible_number_candidates", []),
-                "score": score,
-            }
-        )
-
-        if result.asin_conflict:
-            skipped += 1
-            continue
-
-        if _cancel_requested:
-            print(f"\n[{result.index}/{total}] Cancelled - stopping cleanly after previous writes.", flush=True)
-            break
-
-        if not result.write_done:
-            aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
-            mode = "aggressive" if aggressive_edit else "normal"
-            edit_mode = metadata.get("edit_mode", "none") or "none"
-            write_mode = getattr(args, "write_mode", "smart")
-            current_tags = clues.get("_raw_tags") or {}
-            only_json = args.metadata_json_only
-            is_sidecar = should_write_json_sidecar(file_path, clues)
-            alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-
-            # Resolve effective metadata and decide whether the in-file write is a NO-OP.
-            # NO-OP/fill logic applies to single-file books only; loose/multi-file
-            # (sidecar) books always (re)write their merge sidecar.
-            if not is_sidecar:
-                effective_metadata, skip_write, write_note, filled_fields = decide_write(
-                    current_tags, metadata, edit_mode, write_mode
-                )
-                if write_mode == "fill-missing":
-                    if not filled_fields:
-                        fill_books_complete += 1
-                    else:
-                        fill_books_filled += 1
-                        for filled_field in filled_fields:
-                            fill_field_counts[filled_field] += 1
-                elif write_mode == "smart" and skip_write:
-                    smart_skip_count += 1
-            else:
-                effective_metadata, skip_write, write_note = metadata, False, ""
-
-            # metadata.json is always written for matched books, except a fully-NO-OP
-            # book whose metadata.json already exists.
-            meta_target = get_audiobookshelf_metadata_path(file_path, clues, alone)
-            metadata_json_pending = (
-                not result.metadata_json_done
-                and not (skip_write and meta_target.exists())
-            )
-
-            if not args.apply:
-                # Dry-run: report the planned write outcome, touch nothing.
-                plan_parts = []
-                if metadata_json_pending:
-                    plan_parts.append("metadata.json")
-                if not skip_write:
-                    if is_sidecar:
-                        plan_parts.append("json_sidecar")
-                    elif not only_json:
-                        plan_parts.append("tags")
-                if plan_parts:
-                    suffix = f" [{write_note}]" if write_note else ""
-                    print(f"  PLAN: would write {' + '.join(plan_parts)} ({mode}){suffix}")
-                else:
-                    print(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}")
-                print()
-            else:
-                applied_parts: list[str] = []
-                primary_output_kind = "tags"
-
-                # 1. metadata.json (always-on).
-                if metadata_json_pending:
-                    abs_path = write_audiobookshelf_metadata_json(
-                        file_path, effective_metadata, clues, alone
+            if result.status == "skipped":
+                w_skipped = 1
+                if result.add_to_manual_review:
+                    reason = result.skip_reason
+                    query_str = (
+                        " | ".join(result.queries)
+                        if reason == "skipped: no usable Audible match"
+                        else used_query
                     )
-                    applied_parts.append(f"metadata_json={abs_path}")
-                    primary_output_kind = "metadata_json"
+                    _local_mr: list = []
+                    append_manual_review(
+                        _local_mr, file_path, [reason],
+                        clues=clues, metadata=metadata or None,
+                        score=score or None, mode=w_edit_mode,
+                        query=query_str, status="skipped",
+                    )
+                    w_manual_review.extend(_local_mr)
+                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                    write_skip_marker(file_path, clues, alone=_alone)
 
-                # 2. In-file tags / M4B-tool merge sidecar (unless suppressed or NO-OP).
-                if not skip_write:
-                    if not is_sidecar and not args.backup and "backup" not in _load_libraforge_raw(file_path, alone=alone)[1]:
-                        bp = write_original_metadata_backup(file_path, alone=alone)
-                        print(f"  Auto-backup: {bp}")
-                    if is_sidecar:
-                        # Merge sidecar is written even in only-json mode; only the
-                        # in-file single-mp3 tag write is suppressed by only-json.
-                        if is_single_file_mp3(file_path, clues) and not only_json:
-                            writer_used = write_tags(
-                                file_path,
-                                effective_metadata,
-                                backup=args.backup,
-                                writer=args.writer,
-                                cover_if_missing=args.cover_if_missing,
-                                replace_cover=args.replace_cover,
-                            )
-                            update_backup_with_applied_metadata(file_path, effective_metadata)
-                            applied_parts.append(f"writer={writer_used}")
-                        sidecar_path = write_m4b_tool_metadata_sidecar(
-                            file_path, effective_metadata, clues, score
+            elif result.status == "failed":
+                w_failed = 1
+
+            else:
+                # status == "matched"
+                w_mode_counts[w_edit_mode] += 1
+                w_duration_counts[result.duration_status] += 1
+
+                if result.duration_review_item:
+                    w_duration_review.append(result.duration_review_item)
+
+                if result.asin_conflict and result.review_reasons:
+                    out.append(f"[{result.index}/{total}] Processing: {result.display_path}")
+                    for _reason in result.review_reasons:
+                        if "duplicate Audible ASIN" in _reason:
+                            out.append(f"  SKIP: {_reason}")
+                            break
+                    out.append("")
+
+                if result.review_reasons:
+                    _local_mr = []
+                    append_manual_review(
+                        _local_mr, file_path, result.review_reasons,
+                        clues=clues, metadata=metadata, score=score,
+                        mode=w_edit_mode, query=used_query,
+                        status="selected" if not result.asin_conflict else "skipped",
+                    )
+                    w_manual_review.extend(_local_mr)
+
+                w_asin_matches.append({
+                    "asin": metadata.get("asin", ""),
+                    "file_type": get_file_type(file_path),
+                    "mode": metadata.get("edit_mode", ""),
+                    "path": str(file_path),
+                    "local_title": clues.get("title", ""),
+                    "local_number": clues.get("book_number", ""),
+                    "local_number_source": clues.get("book_number_source", ""),
+                    "audible_title": metadata.get("audible_title", ""),
+                    "audible_sequence": metadata.get("audible_sequence", ""),
+                    "audible_number_candidates": metadata.get("audible_number_candidates", []),
+                    "score": score,
+                })
+
+                if result.asin_conflict:
+                    w_skipped += 1
+                elif not result.write_done:
+                    aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
+                    _write_kind = "aggressive" if aggressive_edit else "normal"
+                    w_edit_mode = metadata.get("edit_mode", "none") or "none"
+                    write_mode = getattr(args, "write_mode", "smart")
+                    current_tags = clues.get("_raw_tags") or {}
+                    only_json = args.metadata_json_only
+                    is_sidecar = should_write_json_sidecar(file_path, clues)
+                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+
+                    if not is_sidecar:
+                        effective_metadata, skip_write, write_note, filled_fields = decide_write(
+                            current_tags, metadata, w_edit_mode, write_mode
                         )
-                        applied_parts.append(f"json_sidecar={sidecar_path}")
-                        primary_output_kind = "json_sidecar"
-                    elif not only_json:
-                        writer_used = write_tags(
-                            file_path,
-                            effective_metadata,
-                            backup=args.backup,
-                            writer=args.writer,
-                            cover_if_missing=args.cover_if_missing,
-                            replace_cover=args.replace_cover,
-                        )
-                        update_backup_with_applied_metadata(file_path, effective_metadata)
-                        applied_parts.append(f"writer={writer_used}")
+                        if write_mode == "fill-missing":
+                            if not filled_fields:
+                                w_fill_complete += 1
+                            else:
+                                w_fill_filled += 1
+                                for _ff in filled_fields:
+                                    w_fill_field_counts[_ff] += 1
+                        elif write_mode == "smart" and skip_write:
+                            w_smart_skip += 1
+                    else:
+                        effective_metadata, skip_write, write_note = metadata, False, ""
+
+                    meta_target = get_audiobookshelf_metadata_path(file_path, clues, _alone)
+                    metadata_json_pending = (
+                        not result.metadata_json_done
+                        and not (skip_write and meta_target.exists())
+                    )
+
+                    if not args.apply:
+                        plan_parts = []
+                        if metadata_json_pending:
+                            plan_parts.append("metadata.json")
+                        if not skip_write:
+                            if is_sidecar:
+                                plan_parts.append("json_sidecar")
+                            elif not only_json:
+                                plan_parts.append("tags")
+                        if plan_parts:
+                            _sfx = f" [{write_note}]" if write_note else ""
+                            out.append(f"  PLAN: would write {' + '.join(plan_parts)} ({_write_kind}){_sfx}")
+                        else:
+                            out.append(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}")
+                        out.append("")
+                    else:
+                        applied_parts: list[str] = []
                         primary_output_kind = "tags"
 
-                write_marker(
-                    source=file_path,
-                    metadata=effective_metadata,
-                    clues=clues,
-                    score=score,
-                    mode=mode,
-                    aggressive=aggressive_edit,
-                    output_kind=primary_output_kind,
-                    alone=alone,
-                )
-                suffix = f" [{write_note}]" if write_note else ""
-                if applied_parts:
-                    print(f"  APPLIED ({mode}, {', '.join(applied_parts)}){suffix}")
-                else:
-                    print(f"  {write_note or 'NO-OP'}")
-                print()
+                        if metadata_json_pending:
+                            abs_path = write_audiobookshelf_metadata_json(
+                                file_path, effective_metadata, clues, _alone
+                            )
+                            applied_parts.append(f"metadata_json={abs_path}")
+                            primary_output_kind = "metadata_json"
 
-        matched += 1
+                        if not skip_write:
+                            if (
+                                not is_sidecar
+                                and not args.backup
+                                and "backup" not in _load_libraforge_raw(file_path, alone=_alone)[1]
+                            ):
+                                bp = write_original_metadata_backup(file_path, alone=_alone)
+                                out.append(f"  Auto-backup: {bp}")
+                            if is_sidecar:
+                                if is_single_file_mp3(file_path, clues) and not only_json:
+                                    writer_used = write_tags(
+                                        file_path, effective_metadata,
+                                        backup=args.backup, writer=args.writer,
+                                        cover_if_missing=args.cover_if_missing,
+                                        replace_cover=args.replace_cover,
+                                    )
+                                    update_backup_with_applied_metadata(file_path, effective_metadata)
+                                    applied_parts.append(f"writer={writer_used}")
+                                sidecar_path = write_m4b_tool_metadata_sidecar(
+                                    file_path, effective_metadata, clues, score
+                                )
+                                applied_parts.append(f"json_sidecar={sidecar_path}")
+                                primary_output_kind = "json_sidecar"
+                            elif not only_json:
+                                writer_used = write_tags(
+                                    file_path, effective_metadata,
+                                    backup=args.backup, writer=args.writer,
+                                    cover_if_missing=args.cover_if_missing,
+                                    replace_cover=args.replace_cover,
+                                )
+                                update_backup_with_applied_metadata(file_path, effective_metadata)
+                                applied_parts.append(f"writer={writer_used}")
+                                primary_output_kind = "tags"
+
+                        write_marker(
+                            source=file_path, metadata=effective_metadata,
+                            clues=clues, score=score, mode=_write_kind,
+                            aggressive=aggressive_edit,
+                            output_kind=primary_output_kind, alone=_alone,
+                        )
+                        _sfx = f" [{write_note}]" if write_note else ""
+                        if applied_parts:
+                            out.append(f"  APPLIED ({_write_kind}, {', '.join(applied_parts)}){_sfx}")
+                        else:
+                            out.append(f"  {write_note or 'NO-OP'}")
+                        out.append("")
+
+                w_matched = 1
+
+            # Flush output and merge counters atomically.
+            with _write_lock:
+                for _line in out:
+                    print(_line, flush=True)
+                _write_shared["matched"]           += w_matched
+                _write_shared["skipped"]           += w_skipped
+                _write_shared["failed"]            += w_failed
+                _write_shared["mode_counts"]       += w_mode_counts
+                _write_shared["duration_counts"]   += w_duration_counts
+                _write_shared["fill_books_filled"] += w_fill_filled
+                _write_shared["fill_books_complete"] += w_fill_complete
+                _write_shared["fill_field_counts"] += w_fill_field_counts
+                _write_shared["smart_skip_count"]  += w_smart_skip
+                _write_shared["duration_review"].extend(w_duration_review)
+                _write_shared["manual_review"].extend(w_manual_review)
+                _write_shared["asin_matches"].extend(w_asin_matches)
+
+    _n_write_workers = min(args.workers or 5, 5)
+    with ThreadPoolExecutor(max_workers=_n_write_workers) as _pool:
+        _futs = [_pool.submit(_write_worker) for _ in range(_n_write_workers)]
+        for _f in _futs:
+            _f.result()
+
+    matched           = _write_shared["matched"]
+    skipped           = _write_shared["skipped"]
+    failed            = _write_shared["failed"]
+    mode_counts       = _write_shared["mode_counts"]
+    duration_counts   = _write_shared["duration_counts"]
+    fill_books_filled = _write_shared["fill_books_filled"]
+    fill_books_complete = _write_shared["fill_books_complete"]
+    fill_field_counts = _write_shared["fill_field_counts"]
+    smart_skip_count  = _write_shared["smart_skip_count"]
+    duration_review   = _write_shared["duration_review"]
+    manual_review     = _write_shared["manual_review"]
+    asin_matches      = _write_shared["asin_matches"]
 
     # Learn publishers seen this run that aren't yet in the canonical catalog, so
     # future runs recognize them (and can sanitize/flag them). Done once, serially,
