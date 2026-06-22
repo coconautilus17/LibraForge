@@ -2912,12 +2912,35 @@ _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
 _DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 
 
+def _asin_from_libraforge_json(path: Path) -> bool:
+    """Return True if path is a readable libraforge.json containing a non-empty ASIN."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        asin = (
+            ((data.get("marker") or {}).get("audible") or {}).get("asin")
+            or (data.get("audible") or {}).get("asin")
+            or ""
+        )
+        return bool(str(asin).strip())
+    except Exception:
+        return False
+
+
 def _has_asin(folder: Path, audio_file: Path) -> bool:
-    """Check for an ASIN: sidecar fast-path first, then mutagen."""
+    """Check for an ASIN: sidecar fast-paths first, then mutagen."""
+    # Old-format sidecars: existence means the fixer applied an ASIN match.
     if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
         return True
     if (folder / _FIXER_LEGACY_MARKER).exists():
         return True
+    # New unified libraforge.json: check ASIN field (fixer: marker.audible.asin;
+    # M4B tool: audible.asin). Falls through to mutagen if the field is empty.
+    for sidecar in (
+        audio_file.parent / (audio_file.name + ".libraforge.json"),
+        folder / "libraforge.json",
+    ):
+        if sidecar.is_file():
+            return _asin_from_libraforge_json(sidecar)
     try:
         if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
             tags = MP4(str(audio_file)).tags
