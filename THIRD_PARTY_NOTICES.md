@@ -1,7 +1,13 @@
 # Third Party Notices
 
-LibraForge includes the following third-party Python dependencies in its
-runtime image and test workflow.
+LibraForge is licensed under AGPL-3.0-or-later. This reflects the licenses
+of its direct dependencies: `audible` (AGPL-3.0-only) and `mutagen`
+(GPL-2.0-or-later). AGPL-3.0 is compatible with GPL-2.0-or-later via the
+"or later" clause. Because LibraForge is fully open-source, the AGPL network-
+service provision is automatically satisfied.
+
+The following third-party Python dependencies are included in the runtime
+image and test workflow.
 
 ## Direct Dependencies
 

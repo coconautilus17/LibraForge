@@ -6,6 +6,8 @@ Self-hosted Audible metadata matching, M4B conversion, Audiobookshelf-style libr
 organisation, and direct Audible downloading - four tools in one Docker container, with
 a vanilla-JS web UI. Every write operation defaults to a dry run.
 
+![LibraForge Start Here](docs/start-here.png)
+
 ---
 
 ## Features
@@ -146,4 +148,5 @@ make rebuild
 Static files (`app/static`, `scripts/`) are bind-mounted - HTML, CSS, and JS edits are
 live without a restart.
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licence information.
+LibraForge is licensed under [AGPL-3.0-or-later](LICENSE). See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licence information.
