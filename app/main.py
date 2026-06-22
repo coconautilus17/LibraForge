@@ -543,8 +543,10 @@ def search_audible_candidates(
     direct_query = fixer_module.clean_text(query)
     queries: list[str] = []
     if direct_query:
+        # Explicit query overrides auto-derived ones so editing the field has effect
         queries.append(direct_query)
-    queries.extend(fixer_module.build_search_queries_from_clues(clues))
+    else:
+        queries.extend(fixer_module.build_search_queries_from_clues(clues))
 
     unique_queries: list[str] = []
     seen_queries = set()
