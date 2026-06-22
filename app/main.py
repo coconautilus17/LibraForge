@@ -2920,9 +2920,17 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
 
     Returns True (real ASIN present), False (NOREALASIN sentinel cached),
     or None (field absent/empty -- fall through to mutagen).
+    Checks scan_cache.asin first (isolated from organizer fields), then
+    marker.audible.asin and audible.asin set by the fixer/M4B tool.
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        # Dedicated scan cache key -- written only by _write_scan_asin_cache,
+        # never by the fixer or organizer, so safe to read for scan purposes.
+        scan_asin = str((data.get("scan_cache") or {}).get("asin") or "").strip()
+        if scan_asin:
+            return scan_asin != _NOREALASIN
+        # Fixer / M4B tool fields
         asin = str(
             ((data.get("marker") or {}).get("audible") or {}).get("asin")
             or (data.get("audible") or {}).get("asin")
@@ -2936,20 +2944,24 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
 
 
 def _write_scan_asin_cache(folder: Path, audio_file: Path, asin: str) -> None:
-    """Persist ASIN (or NOREALASIN) in libraforge.json so future scans skip mutagen."""
+    """Cache scan ASIN result in an existing libraforge.json under scan_cache.asin.
+
+    Only updates existing sidecars -- never creates new ones -- to avoid
+    producing thin sidecars that break manual_review_sidecar_context.
+    Writes to a dedicated scan_cache key so organizer fields are untouched.
+    """
     candidates = [
         audio_file.parent / (audio_file.name + ".libraforge.json"),
         folder / "libraforge.json",
     ]
-    sidecar = next((p for p in candidates if p.is_file()), folder / "libraforge.json")
+    sidecar = next((p for p in candidates if p.is_file()), None)
+    if sidecar is None:
+        return  # no existing sidecar -- don't create thin ones
     try:
-        data = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
     except Exception:
-        data = {}
-    if "marker" in data and isinstance((data["marker"] or {}).get("audible"), dict):
-        data["marker"]["audible"]["asin"] = asin
-    else:
-        data.setdefault("audible", {})["asin"] = asin
+        return
+    data.setdefault("scan_cache", {})["asin"] = asin
     try:
         sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     except Exception:
