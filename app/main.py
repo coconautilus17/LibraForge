@@ -573,16 +573,23 @@ def search_audible_candidates(
                 clues, product, clues.get("local_duration_minutes")
             )
             metadata_preview = fixer_module.metadata_from_product(product, clues, score)
+            metadata_by_mode = {
+                mode: fixer_module.metadata_from_product(product, clues, score, requested_edit_mode=mode)
+                for mode in ("full", "series_only")
+            }
+            allowed_edit_modes = ["full"]
+            if metadata_by_mode["series_only"].get("series"):
+                allowed_edit_modes.append("series_only")
             by_asin[asin_key] = {
                 "asin": asin_key,
+                "query": f"ASIN:{asin_upper}",
                 "score": score,
                 "product": product,
                 "metadata": metadata_preview,
+                "metadata_by_mode": metadata_by_mode,
+                "allowed_edit_modes": allowed_edit_modes,
             }
-            return {
-                "results": list(by_asin.values()),
-                "queries": [f"ASIN:{asin_upper}"],
-            }
+            unique_queries = []  # direct hit is definitive, skip text search
 
     for current_query in unique_queries[:5]:
         products = fixer_module.audible_search(client, current_query, max(limit, 10))
