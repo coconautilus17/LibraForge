@@ -5269,6 +5269,7 @@ def score_product_for_metadata(
 
     # Author match.
     author_good = False
+    author_score = 0.0
 
     if local_author and audible_authors:
         author_score = SequenceMatcher(None, local_author, audible_authors).ratio()
@@ -5280,6 +5281,13 @@ def score_product_for_metadata(
             author_good = True
 
         score += author_score * 0.17
+
+        # Hard penalty for clearly wrong author: prevents coincidental duration +
+        # series matches from reaching threshold when the author is completely
+        # different (e.g. "Arthur C. Clarke" vs "Will Wight" for a book whose
+        # title matches a series name owned by a different author).
+        if author_score < 0.25:
+            score -= 0.25
 
     # Narrator match.
     narrator_good = False
