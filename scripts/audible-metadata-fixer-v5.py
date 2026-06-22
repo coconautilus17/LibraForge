@@ -4838,12 +4838,16 @@ def search_item(
                             f"title={_sp_debug.get('audible_title')} "
                             f"mode={_sp_debug.get('edit_mode')}"
                         )
-                        if _sp_score > score:
+                        # Lower threshold for dedicated catalog searches: the endpoint
+                        # is already filtered to that publisher so a title+author match
+                        # is highly reliable even without a duration signal.
+                        _sp_threshold = 0.30
+                        if _sp_score >= _sp_threshold and _sp_score > score:
                             product = _sp_candidate
                             score = _sp_score
                             used_query = f"{_detected_provider}:{clues.get('title','')}"
                             match_ambiguity = _sp_ambiguity
-                            effective_min_score = min(effective_min_score, 0.40)
+                            effective_min_score = min(effective_min_score, _sp_threshold)
                             queries = []  # skip Audible text search -- special provider matched
                             result.source_provider = _detected_provider
 
@@ -5066,22 +5070,18 @@ def search_item(
             )
 
         # Special editions (GraphicAudio / Soundbooth Theater).
-        # If we already matched via the abs-agg endpoint, emit SOURCE: for statistics.
-        # Otherwise flag for review suggesting the dedicated endpoint.
+        # SOURCE: is emitted later in the write phase (Pass 2) once we know the
+        # book was actually written, not just matched. If GA/SBT was detected but
+        # the match came from Audible, flag for manual attention.
         special_provider = result.source_provider or detect_special_provider(clues)
-        if special_provider:
+        if special_provider and not result.source_provider:
             label = SPECIAL_PROVIDERS.get(special_provider, special_provider)
-            if result.source_provider:
-                # Matched via the dedicated endpoint -- emit SOURCE: for the backend parser.
-                log.append(f"  SOURCE: {special_provider}")
-            else:
-                # Fell back to Audible -- flag for manual attention.
-                special_note = (
-                    f"publisher {label} — consider the {label} abs-agg endpoint "
-                    f"({special_provider}) instead of Audible"
-                )
-                review_reasons.append(special_note)
-                log.append(f"  {special_note}")
+            special_note = (
+                f"publisher {label} — consider the {label} abs-agg endpoint "
+                f"({special_provider}) instead of Audible"
+            )
+            review_reasons.append(special_note)
+            log.append(f"  {special_note}")
 
         result.review_reasons = review_reasons
 
@@ -7665,6 +7665,11 @@ def main():
                         else:
                             out.append(f"  {write_note or 'NO-OP'}")
                         out.append("")
+
+                # Emit SOURCE: now that the book is confirmed written (or planned).
+                # Backend parse_line() catches this to add provider:{id} category.
+                if result.source_provider:
+                    out.append(f"  SOURCE: {result.source_provider}")
 
                 w_matched = 1
 
