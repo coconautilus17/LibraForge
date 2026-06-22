@@ -1823,9 +1823,9 @@ def normalize_for_match(value: str) -> str:
     value = re.sub(r"\[[^\]]+\]", " ", value)
     value = re.sub(r"\([^)]*\)", " ", value)
     value = re.sub(r"[_\-:]+", " ", value)
-    value = re.sub(r"\bbook\s+\d+\b", " ", value)
-    value = re.sub(r"\bvolume\s+\d+\b", " ", value)
-    value = re.sub(r"\bvol\.?\s+\d+\b", " ", value)
+    value = re.sub(r"\bbook\s+#?\d+\b", " ", value)
+    value = re.sub(r"\bvolume\s+#?\d+\b", " ", value)
+    value = re.sub(r"\bvol\.?\s+#?\d+\b", " ", value)
     value = re.sub(r"\s+", " ", value)
 
     return value.strip()
@@ -3179,7 +3179,19 @@ def is_invalid_local_title(value: str, author: str = "") -> bool:
     if not title_norm or is_generic_chapter_title(title_norm):
         return True
 
-    return bool(author_norm and title_norm == author_norm)
+    if author_norm and title_norm == author_norm:
+        return True
+
+    # "Author - Title" rip format: embedded title tag contains "Author Name - Book Title".
+    # After normalization the dash becomes a space, so we check whether the title starts
+    # with the author string followed by more text.  Minimum author length of 4 avoids
+    # false positives on very short initials.
+    if author_norm and len(author_norm) >= 4 and title_norm.startswith(author_norm):
+        remainder = title_norm[len(author_norm):].strip()
+        if remainder:
+            return True
+
+    return False
 
 
 def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
@@ -3592,6 +3604,16 @@ def is_generic_chapter_title(value: str) -> bool:
         r"^credits?$",
         r"^(opening|end|ending|outro|intro|closing|beginning)\s+credits?$",
         r"^(intro|outro)$",
+        # Episode/lecture identifiers used as embedded title tags instead of the book title
+        r"^episode\s+\d+(\s+.*)?$",
+        r"^episode\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(\s+.*)?$",
+        r"^lecture\s+\d+(\s+.*)?$",
+        # Word-form chapter titles ("Chapter Forty-Two", "Chapter One")
+        r"^chapter\s+[a-z][\w\s-]*$",
+        # Bonus/filler content tags
+        r"^bloopers?$",
+        r"^bonus\s+(content|material|chapter|story|stories)$",
+        r"^the\s+story\s+continues(\s+.*)?$",
     ]
 
     return any(re.fullmatch(pattern, value) for pattern in patterns)
@@ -5556,6 +5578,8 @@ def determine_edit_mode(
         and audible_series
         and (
             local_series == audible_series
+            or audible_series in local_series
+            or local_series in audible_series
             or SequenceMatcher(None, local_series, audible_series).ratio() >= 0.88
         )
     )
@@ -5567,12 +5591,11 @@ def determine_edit_mode(
             else "none"
         )
 
-    # Large runtime differences remain review-only even when other identity
-    # evidence is strong. This protects incomplete or alternate recordings.
-    diff_percent = (duration_result or {}).get("diff_percent")
-    if duration_status == "mismatch" or (
-        diff_percent is not None and float(diff_percent) > 10.0
-    ):
+    # Only gate to series_only when duration is a genuine mismatch.
+    # "acceptable" status already means the duration difference is within
+    # tolerable range -- adding a separate 10% hard cap was redundant and
+    # overrode confirmed ASIN + title + author + narrator evidence.
+    if duration_status == "mismatch":
         return safe_series_only()
 
     # Omnibus / box-set records can be useful for series grouping,
@@ -5580,7 +5603,7 @@ def determine_edit_mode(
     if is_omnibus_product(product):
         local_omnibus = bool(
             re.search(
-                r"\b(?:complete collection|definitive collection|complete series|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
+                r"\b(?:complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
                 clean_text(clues.get("title", "")),
                 flags=re.IGNORECASE,
             )
