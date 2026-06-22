@@ -4434,15 +4434,33 @@ def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]
 
 
 def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
-    """Direct product lookup by ASIN. Returns the product dict or None on any error."""
+    """Look up a product by ASIN.
+
+    Tries catalog/products/{asin} (direct) first. If that returns nothing,
+    falls back to a keyword search for the ASIN and returns the first result
+    whose ASIN matches exactly. Some ASINs only respond to one of the two
+    endpoints, so both are needed for complete coverage.
+    """
+    asin_upper = asin.strip().upper()
     try:
         response = client.get(
-            f"catalog/products/{asin}",
+            f"catalog/products/{asin_upper}",
             params={"response_groups": RESPONSE_GROUPS},
         )
-        return response.get("product") or None
+        product = response.get("product") or None
+        if product:
+            return product
     except Exception:
-        return None
+        pass
+    # Fallback: keyword search -- some ASINs surface here but not via direct lookup
+    try:
+        results = audible_search(client, asin_upper, 5)
+        for p in results:
+            if str(p.get("asin", "") or "").upper() == asin_upper:
+                return p
+    except Exception:
+        pass
+    return None
 
 
 def abs_search(title: str, author: str, provider: str, abs_url: str, abs_api_key: str, limit: int) -> list[dict]:
