@@ -4828,9 +4828,23 @@ def search_item(
                 )
                 log.append(f"  {_sp_label} results: {len(_sp_products)}")
                 if _sp_products:
-                    _sp_candidate, _sp_score, _sp_ambiguity = pick_best_match_for_metadata(
-                        clues, _sp_products, local_duration_minutes
-                    )
+                    # Temporarily strip book_number so sequence-conflict hard-rejects
+                    # don't eliminate valid GA/SBT results (their catalog sequences
+                    # often differ from what's in local tags, e.g. Alloy of Law is
+                    # sequence 4 in Mistborn overall but Book 1 in Wax & Wayne).
+                    # The composer+title+author check in determine_edit_mode is the
+                    # real safety gate for these dedicated-catalog searches.
+                    _saved_num = clues.pop("book_number", "")
+                    _saved_num_src = clues.pop("book_number_source", "")
+                    try:
+                        _sp_candidate, _sp_score, _sp_ambiguity = pick_best_match_for_metadata(
+                            clues, _sp_products, local_duration_minutes
+                        )
+                    finally:
+                        if _saved_num:
+                            clues["book_number"] = _saved_num
+                        if _saved_num_src:
+                            clues["book_number_source"] = _saved_num_src
                     if _sp_candidate:
                         _sp_debug = metadata_from_product(_sp_candidate, clues, _sp_score)
                         log.append(
