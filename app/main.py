@@ -2912,12 +2912,69 @@ _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
 _DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 
 
+_NOREALASIN = "NOREALASIN"
+
+
+def _asin_from_libraforge_json(path: Path) -> bool | None:
+    """Read ASIN from a libraforge.json sidecar.
+
+    Returns True (real ASIN present), False (NOREALASIN sentinel cached),
+    or None (field absent/empty -- fall through to mutagen).
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        asin = str(
+            ((data.get("marker") or {}).get("audible") or {}).get("asin")
+            or (data.get("audible") or {}).get("asin")
+            or ""
+        ).strip()
+        if not asin:
+            return None
+        return asin != _NOREALASIN
+    except Exception:
+        return None
+
+
+def _write_scan_asin_cache(folder: Path, audio_file: Path, asin: str) -> None:
+    """Persist ASIN (or NOREALASIN) in libraforge.json so future scans skip mutagen."""
+    candidates = [
+        audio_file.parent / (audio_file.name + ".libraforge.json"),
+        folder / "libraforge.json",
+    ]
+    sidecar = next((p for p in candidates if p.is_file()), folder / "libraforge.json")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+    except Exception:
+        data = {}
+    if "marker" in data and isinstance((data["marker"] or {}).get("audible"), dict):
+        data["marker"]["audible"]["asin"] = asin
+    else:
+        data.setdefault("audible", {})["asin"] = asin
+    try:
+        sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _has_asin(folder: Path, audio_file: Path) -> bool:
-    """Check for an ASIN: sidecar fast-path first, then mutagen."""
+    """Check for an ASIN: sidecar fast-paths first, then mutagen (with write-back)."""
+    # Old-format sidecars: existence means the fixer applied an ASIN match.
     if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
         return True
     if (folder / _FIXER_LEGACY_MARKER).exists():
         return True
+    # New unified libraforge.json: True=has ASIN, False=NOREALASIN, None=unknown.
+    for sidecar in (
+        audio_file.parent / (audio_file.name + ".libraforge.json"),
+        folder / "libraforge.json",
+    ):
+        if sidecar.is_file():
+            cached = _asin_from_libraforge_json(sidecar)
+            if cached is not None:
+                return cached
+            break  # file exists but field empty -- fall through to mutagen
+    # Slow path: read audio tags and cache the result for future scans.
+    found: str | None = None
     try:
         if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
             tags = MP4(str(audio_file)).tags
@@ -2930,16 +2987,19 @@ def _has_asin(folder: Path, audio_file: Path) -> bool:
                             bytes(val).decode("utf-8", errors="ignore")
                             if isinstance(val, (bytes, bytearray, MP4FreeForm))
                             else str(val)
-                        )
-                        if text.strip():
-                            return True
+                        ).strip()
+                        if text:
+                            found = text
+                            break
         elif audio_file.suffix.lower() == ".mp3":
             from mutagen.id3 import ID3  # noqa: PLC0415
             t = ID3(str(audio_file))
-            return any("asin" in k.lower() for k in t.keys())
+            if any("asin" in k.lower() for k in t.keys()):
+                found = "HAS_ASIN"
     except Exception:
         pass
-    return False
+    _write_scan_asin_cache(folder, audio_file, found or _NOREALASIN)
+    return found is not None
 
 
 def _book_audio_files(folder: Path) -> list[Path]:

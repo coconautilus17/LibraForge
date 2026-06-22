@@ -308,12 +308,13 @@
           const toggleBtn = document.getElementById("bookListToggleBtn");
           toggleBtn.dataset.count = needsAttention;
           toggleBtn.textContent = `Show ${needsAttention} books needing attention ▾`;
-          // Reset book list
+          // Reset and pre-fetch book list so the toggle is instant
           document.getElementById("bookListBody").hidden = true;
           document.getElementById("bookListScroll").innerHTML = "";
           bookListLoaded = false;
           lastScanPath = input.value.trim();
           scanResults.hidden = false;
+          if (needsAttention > 0) loadBookList(lastScanPath);
         })
         .catch(err => {
           scanError.textContent = typeof err === "string" ? err : "Scan failed - check the path and try again.";
