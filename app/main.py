@@ -560,6 +560,30 @@ def search_audible_candidates(
     client = audible.Client(auth=auth)
 
     by_asin: dict[str, dict[str, Any]] = {}
+
+    # If the user typed a bare ASIN (B0... pattern), try a direct product lookup
+    # first -- Audible's text search does not find books by ASIN string.
+    _asin_re = re.compile(r"^[Bb]0[A-Za-z0-9]{8}$")
+    if direct_query and _asin_re.match(direct_query.strip()):
+        asin_upper = direct_query.strip().upper()
+        product = fixer_module.audible_lookup_by_asin(client, asin_upper)
+        if product:
+            asin_key = str(product.get("asin", "") or asin_upper)
+            score = fixer_module.score_product_for_metadata(
+                clues, product, clues.get("local_duration_minutes")
+            )
+            metadata_preview = fixer_module.metadata_from_product(product, clues, score)
+            by_asin[asin_key] = {
+                "asin": asin_key,
+                "score": score,
+                "product": product,
+                "metadata": metadata_preview,
+            }
+            return {
+                "results": list(by_asin.values()),
+                "queries": [f"ASIN:{asin_upper}"],
+            }
+
     for current_query in unique_queries[:5]:
         products = fixer_module.audible_search(client, current_query, max(limit, 10))
         for product in products:
