@@ -1343,6 +1343,28 @@ def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
 
 
+def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
+    """Write a non-applied marker with NOREALASIN for books that could not be matched.
+
+    This lets the Start Here scanner fast-path skip mutagen on future scans:
+    NOREALASIN means "we tried and found nothing" rather than "unknown".
+    Does not set applied=True, so the fixer will re-process on the next run.
+    """
+    lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
+    payload.setdefault("schema_version", 2)
+    payload.setdefault("tool", "audible-metadata-fixer")
+    payload["marker"] = {
+        **payload.get("marker", {}),
+        "applied": False,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "audible": {
+            **(payload.get("marker", {}).get("audible") or {}),
+            "asin": "NOREALASIN",
+        },
+    }
+    _write_libraforge(lf_path, payload)
+
+
 def is_single_file_mp3(source: Path, clues: dict | None = None) -> bool:
     """True for a standalone single-file .mp3 (not a multi-part folder group)."""
     if source.suffix.lower() != ".mp3":
@@ -7234,6 +7256,9 @@ def main():
                     query=query_str,
                     status="skipped",
                 )
+                # Cache the no-match result so future scans skip the mutagen read.
+                alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                write_skip_marker(file_path, clues, alone=alone)
             continue
 
         if result.status == "failed":
