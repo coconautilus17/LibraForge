@@ -317,6 +317,23 @@ def validate_output_path(raw_path: str) -> Path:
     return path
 
 
+def assert_under_audiobooks(path: Path) -> Path:
+    if path != AUDIOBOOKS_ROOT and AUDIOBOOKS_ROOT not in path.parents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Path must be under: {AUDIOBOOKS_ROOT}",
+        )
+    return path
+
+
+def validate_audiobook_path(raw_path: str) -> Path:
+    return assert_under_audiobooks(validate_existing_path(raw_path))
+
+
+def validate_audiobook_output_path(raw_path: str) -> Path:
+    return assert_under_audiobooks(validate_output_path(raw_path))
+
+
 def datetime_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
 
@@ -1376,7 +1393,7 @@ def save_sidecar_file(
     excluded_paths: set[Path] | None = None,
 ) -> Path:
     if requested_sidecar_path:
-        sidecar_path = validate_output_path(requested_sidecar_path)
+        sidecar_path = validate_audiobook_output_path(requested_sidecar_path)
     else:
         if source_path.is_dir():
             sidecar_path = source_path / "libraforge.json"
@@ -1624,7 +1641,7 @@ def discover_manual_review_targets(
     limit: int = 30,
 ) -> dict[str, Any]:
     script_name = script_name or default_fixer_script()
-    target_path = validate_existing_path(path)
+    target_path = validate_audiobook_path(path)
     fixer_module = load_fixer_module(script_name)
     _files, group_map, processing_items = fixer_processing_context(
         target_path=target_path,
@@ -1937,7 +1954,7 @@ def inspect_manual_review_target(
     script_name: str = "",
 ) -> dict[str, Any]:
     script_name = script_name or default_fixer_script()
-    target_path = validate_existing_path(path)
+    target_path = validate_audiobook_path(path)
     fixer_module = load_fixer_module(script_name)
     sidecar_context = manual_review_sidecar_context(
         target_path=target_path,
@@ -2131,8 +2148,8 @@ def build_m4b_command(
     req: M4BRunRequest,
     temp_dir: Path | None = None,
 ) -> tuple[list[str], list[Path]]:
-    input_path = validate_existing_path(req.input_path)
-    output_path = validate_output_path(req.output_path)
+    input_path = validate_audiobook_path(req.input_path)
+    output_path = validate_audiobook_output_path(req.output_path)
     metadata = normalize_m4b_metadata(req.metadata)
     input_files = resolve_m4b_input_files(
         input_path=input_path,
@@ -2716,8 +2733,8 @@ def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
     progress_thread: threading.Thread | None = None
 
     try:
-        input_path = validate_existing_path(req.input_path)
-        output_path = validate_output_path(req.output_path)
+        input_path = validate_audiobook_path(req.input_path)
+        output_path = validate_audiobook_output_path(req.output_path)
         duration = m4b_input_duration_seconds(input_path, output_path)
         bitrate = int(req.audio_bitrate.removesuffix("k")) * 1000
         expected_bytes = 0.0 if req.no_conversion else duration * bitrate / 8
@@ -4389,7 +4406,7 @@ def start_run(req: RunRequest) -> dict[str, Any]:
 
 @app.post("/api/m4b/metadata/load")
 def load_m4b_metadata(req: M4BLoadRequest) -> dict[str, Any]:
-    path = validate_existing_path(req.path)
+    path = validate_audiobook_path(req.path)
     sidecars = discover_sidecars(path)
     selected = pick_sidecar(path, sidecars)
 
@@ -4462,7 +4479,7 @@ def refresh_m4b_audio_profiles(
 
 @app.post("/api/m4b/metadata/save")
 def save_m4b_metadata(req: M4BSaveRequest) -> dict[str, Any]:
-    source_path = validate_existing_path(req.source_path or req.path)
+    source_path = validate_audiobook_path(req.source_path or req.path)
     sidecar_path = save_sidecar_file(
         source_path=source_path,
         metadata=req.metadata,
