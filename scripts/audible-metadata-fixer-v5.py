@@ -7538,7 +7538,7 @@ def main():
                 _write_shared["manual_review"].extend(w_manual_review)
                 _write_shared["asin_matches"].extend(w_asin_matches)
 
-    _n_write_workers = min(args.workers or 5, 5)
+    _n_write_workers = args.workers or 1
     with ThreadPoolExecutor(max_workers=_n_write_workers) as _pool:
         _futs = [_pool.submit(_write_worker) for _ in range(_n_write_workers)]
         for _f in _futs:
