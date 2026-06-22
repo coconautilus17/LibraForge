@@ -3179,7 +3179,19 @@ def is_invalid_local_title(value: str, author: str = "") -> bool:
     if not title_norm or is_generic_chapter_title(title_norm):
         return True
 
-    return bool(author_norm and title_norm == author_norm)
+    if author_norm and title_norm == author_norm:
+        return True
+
+    # "Author - Title" rip format: embedded title tag contains "Author Name - Book Title".
+    # After normalization the dash becomes a space, so we check whether the title starts
+    # with the author string followed by more text.  Minimum author length of 4 avoids
+    # false positives on very short initials.
+    if author_norm and len(author_norm) >= 4 and title_norm.startswith(author_norm):
+        remainder = title_norm[len(author_norm):].strip()
+        if remainder:
+            return True
+
+    return False
 
 
 def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
@@ -3592,6 +3604,16 @@ def is_generic_chapter_title(value: str) -> bool:
         r"^credits?$",
         r"^(opening|end|ending|outro|intro|closing|beginning)\s+credits?$",
         r"^(intro|outro)$",
+        # Episode/lecture identifiers used as embedded title tags instead of the book title
+        r"^episode\s+\d+(\s+.*)?$",
+        r"^episode\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(\s+.*)?$",
+        r"^lecture\s+\d+(\s+.*)?$",
+        # Word-form chapter titles ("Chapter Forty-Two", "Chapter One")
+        r"^chapter\s+[a-z][\w\s-]*$",
+        # Bonus/filler content tags
+        r"^bloopers?$",
+        r"^bonus\s+(content|material|chapter|story|stories)$",
+        r"^the\s+story\s+continues(\s+.*)?$",
     ]
 
     return any(re.fullmatch(pattern, value) for pattern in patterns)
@@ -5580,7 +5602,7 @@ def determine_edit_mode(
     if is_omnibus_product(product):
         local_omnibus = bool(
             re.search(
-                r"\b(?:complete collection|definitive collection|complete series|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
+                r"\b(?:complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
                 clean_text(clues.get("title", "")),
                 flags=re.IGNORECASE,
             )
