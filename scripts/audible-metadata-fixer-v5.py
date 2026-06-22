@@ -5683,6 +5683,19 @@ def determine_edit_mode(
     if score < AGGRESSIVE_SCORE_THRESHOLD:
         return "none"
 
+    # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
+    # runtime data via abs-agg so duration is always "unknown".  If title and author
+    # match we trust the result from the catalog and allow a full write.
+    if product.get("_abs_provider") in SPECIAL_PROVIDERS:
+        local_title_n = normalize_for_match(clues.get("title", ""))
+        abs_title_n   = normalize_for_match(product.get("title", "") or "")
+        local_author_n = normalize_for_match(clues.get("author", ""))
+        abs_author_n   = normalize_for_match(" ".join(get_people(product, "authors")))
+        title_ok  = bool(local_title_n and (local_title_n == abs_title_n or local_title_n in abs_title_n or abs_title_n in local_title_n))
+        author_ok = bool(local_author_n and abs_author_n and SequenceMatcher(None, local_author_n, abs_author_n).ratio() >= 0.75)
+        if title_ok and author_ok:
+            return "full"
+
     duration_status = (duration_result or {}).get("status", "unknown")
     title_score = title_evidence_score(clues, product)
     series_name, sequence = get_primary_series(product)
