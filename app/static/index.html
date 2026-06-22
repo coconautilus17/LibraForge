@@ -153,6 +153,8 @@
             <option value="audible">Audible (direct)</option>
             <option value="abs">Audiobookshelf (ABS)</option>
             <option value="abs-agg">abs-agg</option>
+            <option value="graphicaudio">GraphicAudio</option>
+            <option value="soundbooththeater">SoundBooth Theater</option>
           </select>
         </label>
         <label id="manualAbsProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf. Audible.com is the default and most complete for audiobooks."></span></span>
@@ -376,6 +378,9 @@
         </label>
         <label>Search query
           <input id="manualQuery" placeholder="Title Author" />
+          <span id="manualProviderHint" style="font-size:0.78rem;font-weight:400;color:var(--muted);margin-top:3px">
+            Searching via <strong id="manualProviderHintName"></strong> &nbsp;·&nbsp; <a href="#" onclick="document.getElementById('manualProvider').scrollIntoView({behavior:'smooth',block:'center'});return false;" style="color:inherit;text-decoration:underline">change ↑</a>
+          </span>
         </label>
         <label>Title clue
           <input id="manualTitle" />
