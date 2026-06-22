@@ -5591,12 +5591,11 @@ def determine_edit_mode(
             else "none"
         )
 
-    # Large runtime differences remain review-only even when other identity
-    # evidence is strong. This protects incomplete or alternate recordings.
-    diff_percent = (duration_result or {}).get("diff_percent")
-    if duration_status == "mismatch" or (
-        diff_percent is not None and float(diff_percent) > 10.0
-    ):
+    # Only gate to series_only when duration is a genuine mismatch.
+    # "acceptable" status already means the duration difference is within
+    # tolerable range -- adding a separate 10% hard cap was redundant and
+    # overrode confirmed ASIN + title + author + narrator evidence.
+    if duration_status == "mismatch":
         return safe_series_only()
 
     # Omnibus / box-set records can be useful for series grouping,
