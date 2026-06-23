@@ -4,7 +4,7 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
 
 async function initProviderSelector() {
   await loadAbsAggProviders($('absAggProvider'));
@@ -190,6 +190,22 @@ function renderAudioProfile(summary = {}) {
   element.innerHTML = `<strong>${escapeHtml(recommendation.label)}.</strong> ${escapeHtml(recommendation.reason)}`;
 }
 
+async function loadSourceCover(sourcePath) {
+  const wrap = $('sourceCoverWrap');
+  const img  = $('sourceCover');
+  if (!wrap || !img || !sourcePath) { if (wrap) wrap.hidden = true; return; }
+  const url = `/api/manual-review/current-cover?path=${encodeURIComponent(sourcePath)}&script_name=${encodeURIComponent($('searchScript').value || '')}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) { wrap.hidden = true; return; }
+    const blob = await res.blob();
+    if (img._coverUrl) URL.revokeObjectURL(img._coverUrl);
+    img._coverUrl = URL.createObjectURL(blob);
+    img.src = img._coverUrl;
+    wrap.hidden = false;
+  } catch { wrap.hidden = true; }
+}
+
 async function loadSidecar() {
   const res = await fetch('/api/m4b/metadata/load', {
     method: 'POST',
@@ -209,6 +225,7 @@ async function loadSidecar() {
   const found = data.selected_sidecar ? `Loaded sidecar: ${data.selected_sidecar}` : 'No sidecar found, form is ready for manual entry.';
   $('loadStatus').textContent = `${found} Source: ${data.source_path || data.path}`;
   renderAudioProfile(data.audio_summary);
+  loadSourceCover(data.source_path || data.path);
 }
 
 function renderDiscoveryResults(data) {
@@ -574,3 +591,23 @@ $('useFilenamesAsChapters').addEventListener('change', updateCommandPreview);
 loadScripts();
 initProviderSelector();
 updateCommandPreview();
+
+(async () => {
+  const prefs = window.LibraForgePrefs?.get() || {};
+  const libraryRoot = prefs.defaultRootPath || '/audiobooks';
+  initFolderBrowser({
+    inputEl: $('sourcePath'),
+    datalistEl: $('sourceSuggestions'),
+    browserEl: $('sourceBrowser'),
+    browseBtnEl: $('sourceBrowseBtn'),
+    listEl: $('sourceFbList'),
+    breadcrumbEl: $('sourceFbBreadcrumb'),
+    upBtnEl: $('sourceFbUp'),
+    homeBtnEl: $('sourceFbHome'),
+    closeBtnEl: $('sourceFbClose'),
+    selectBtnEl: $('sourceFbSelect'),
+    currentLabelEl: $('sourceFbCurrentLabel'),
+    libraryRoot,
+    onSelect: () => { updateCommandPreview(); loadSidecar(); },
+  });
+})();

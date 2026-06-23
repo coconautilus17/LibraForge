@@ -1322,6 +1322,7 @@ def write_marker(
             "series": metadata.get("series", ""),
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
+            "cover_url": metadata.get("cover_url", ""),
             "duration_minutes": metadata.get("audible_duration_minutes"),
             "number_candidates": metadata.get("audible_number_candidates", []),
         },
