@@ -103,12 +103,13 @@
     } catch {}
   }
 
-  async function searchAbsAgg({ query, provider, providerParams = "", baseUrl = "", limit = 10 }) {
+  async function searchAbsAgg({ query, author = "", provider, providerParams = "", baseUrl = "", limit = 10 }) {
     return fetch("/api/abs-agg/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query,
+        author,
         provider,
         provider_params: providerParams,
         limit,

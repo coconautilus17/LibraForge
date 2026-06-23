@@ -45,22 +45,20 @@ class ReportParserCategoryTests(unittest.TestCase):
         self.assertEqual(self._paths(state, "fill:asin"), ["/lib/Book One/book.m4b"])
         self.assertEqual(self._paths(state, "fill:complete"), ["/lib/Book Two/book.m4b"])
 
-    def test_special_publisher_category_and_review(self):
+    def test_ga_source_category_and_provider_breakdown(self):
         lines = [
             "[1/1] Processing: /lib/Dramatized/book.m4b",
             "AUDIBLE MATCH:",
-            "  publisher Graphic Audio — consider the Graphic Audio abs-agg endpoint "
-            "(graphicaudio) instead of Audible",
+            "  Mode:     full",
+            "  SOURCE: graphicaudio",
         ]
         state = run_lines(lines)
         self.assertEqual(
-            [i["path"] for i in state.files_by_category.get("review:special-publisher", [])],
+            [i["path"] for i in state.files_by_category.get("provider:graphicaudio", [])],
             ["/lib/Dramatized/book.m4b"],
         )
-        _items, categories = build_report_items(state.files_by_category)
-        review = derive_manual_review_items(state.stats, state.files_by_category)
-        reasons = {r for item in review for r in item["reasons"]}
-        self.assertIn("special publisher", reasons)
+        self.assertEqual(state.stats["provider_breakdown"].get("graphicaudio"), 1)
+        self.assertNotIn("review:special-publisher", state.files_by_category)
 
     def test_tiebreak_surfaced_in_manual_review(self):
         lines = [
@@ -74,17 +72,17 @@ class ReportParserCategoryTests(unittest.TestCase):
         self.assertIn("duration tie-break", reasons)
 
     def test_report_lines_do_not_misattribute_after_summary(self):
-        # After "Summary:" current_file is cleared, so a report reason line must NOT
-        # add a category to the last processed book.
+        # After "Summary:" current_file is cleared, so a SOURCE: line in the
+        # report section must NOT add a provider category to the last processed book.
         lines = [
             "[1/1] Processing: /lib/Only/book.m4b",
             "AUDIBLE MATCH:",
             "Summary:",
-            "DURATION REVIEW REPORT (> 10% difference):",
-            "    reason: consider the Graphic Audio abs-agg endpoint (graphicaudio) instead of Audible",
+            "MANUAL REVIEW REPORT:",
+            "  SOURCE: graphicaudio",
         ]
         state = run_lines(lines)
-        self.assertNotIn("review:special-publisher", state.files_by_category)
+        self.assertNotIn("provider:graphicaudio", state.files_by_category)
 
 
 if __name__ == "__main__":

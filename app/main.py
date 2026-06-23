@@ -239,7 +239,6 @@ ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
 MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
 FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
-SPECIAL_PUB_RE = re.compile(r"consider the .+ abs-agg endpoint")
 SOURCE_RE = re.compile(r"^\s+SOURCE:\s+(\S+)\s*$")
 SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
@@ -916,6 +915,7 @@ def initial_stats(threshold: float) -> dict[str, Any]:
         "large_duration_items": [],
         "skip_reasons": {},
         "error_count": 0,
+        "provider_breakdown": {},
     }
 
 
@@ -961,13 +961,8 @@ def derive_manual_review_items(
     for path in [item.get("path", "") for item in files_by_category.get("mode:series_only", []) if item.get("path")]:
         ensure(path)["reasons"].append("mode:series_only")
 
-    # Resolved-but-ambiguous matches (duration tie-break) and special-edition
-    # publishers matched the run but still warrant a manual look.
     for path in [item.get("path", "") for item in files_by_category.get("review:duration-tiebreak", []) if item.get("path")]:
         ensure(path)["reasons"].append("duration tie-break")
-
-    for path in [item.get("path", "") for item in files_by_category.get("review:special-publisher", []) if item.get("path")]:
-        ensure(path)["reasons"].append("special publisher")
 
     threshold = stats.get("large_duration_threshold", 10)
     for item in stats.get("large_duration_items", []):
@@ -1141,13 +1136,12 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "review", "duration-tiebreak", state.current_file)
         return
 
-    if state.current_file and SPECIAL_PUB_RE.search(line):
-        add_category(state, "review", "special-publisher", state.current_file)
-        return
-
     m = SOURCE_RE.match(line)
     if m and state.current_file:
-        add_category(state, "provider", m.group(1), state.current_file)
+        provider = m.group(1)
+        add_category(state, "provider", provider, state.current_file)
+        state.stats.setdefault("provider_breakdown", {}).setdefault(provider, 0)
+        state.stats["provider_breakdown"][provider] += 1
         return
 
     m = FILL_ITEM_RE.match(line)

@@ -39,7 +39,8 @@ class PublisherCaptureTests(unittest.TestCase):
     def test_capture_special_provider_flag(self):
         clues = {"author": "Jane Doe"}
         FIXER.capture_publisher_clue(clues, {"publisher": "GraphicAudio"})
-        self.assertEqual(clues.get("special_publisher_provider"), "graphicaudio")
+        self.assertEqual(clues.get("publisher"), "GraphicAudio")
+        self.assertEqual(FIXER.detect_special_provider(clues), "graphicaudio")
 
     def test_publisher_leak_stripped_from_author(self):
         clues = {"author": "Jane Doe, Tantor Audio", "narrator": "Reader"}
@@ -49,8 +50,8 @@ class PublisherCaptureTests(unittest.TestCase):
     def test_capture_from_adjacent_field_when_no_publisher_tag(self):
         clues = {"author": "Jane Doe"}
         FIXER.capture_publisher_clue(clues, {"album_artist": "Soundbooth Theater"})
-        self.assertEqual(clues.get("special_publisher_provider"), "soundbooththeater")
         self.assertEqual(clues["publisher"], "Soundbooth Theater")
+        self.assertEqual(FIXER.detect_special_provider(clues), "soundbooththeater")
 
     def test_format_descriptor_not_recorded_as_publisher(self):
         # A publisher tag that is only "Unabridged" is a format descriptor, not a publisher.
