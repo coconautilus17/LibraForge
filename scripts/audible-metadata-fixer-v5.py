@@ -5372,31 +5372,49 @@ def score_product_for_metadata(
     product: dict,
     local_duration_minutes: float | None = None,
 ) -> float:
-    # Hard reject same-words/different-order titles.
-    # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
-    if has_reordered_title_conflict(clues, product):
-        return 0.0
+    # ASIN identity: embedded ASIN + title + author is bullet-proof confirmation.
+    # When all three match, skip hard-reject guards designed for wrong-book
+    # false positives and guarantee a floor score above the min_score gate.
+    # Duration mismatch still contributes normally (and triggers review), but
+    # sequence/series conflicts cannot veto a directly identified book.
+    _existing_asin = (clues.get("existing_asin") or "").upper().strip()
+    _product_asin  = (product.get("asin") or "").upper().strip()
+    _asin_identity = False
+    if _existing_asin and _product_asin and _existing_asin == _product_asin:
+        _lt = normalize_for_match(clues.get("title", ""))
+        _pt = normalize_for_match(product.get("title", "") or "")
+        _la = normalize_for_match(clues.get("author", ""))
+        _pa = normalize_for_match(" ".join(get_people(product, "authors")))
+        _title_ok = bool(_lt and (_lt == _pt or _lt in _pt or _pt in _lt))
+        _auth_ok  = bool(_la and _pa and SequenceMatcher(None, _la, _pa).ratio() >= 0.75)
+        _asin_identity = _title_ok and _auth_ok
 
-    # Hard reject same-series wrong-book candidates before fuzzy title/duration
-    # bonuses can promote them to perfect matches.
-    # Examples:
-    #   local "The Lost Bloodline 2" must not match Audible "The Lost Bloodline 5"
-    #   local "Overpowered Wizard 3" must not match Audible sequence 1
-    if (
-        has_number_identity_conflict(clues, product)
-        and not strong_identity_overrides_number_conflict(
-            clues,
-            product,
-            local_duration_minutes,
-        )
-    ):
-        return 0.0
+    if not _asin_identity:
+        # Hard reject same-words/different-order titles.
+        # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
+        if has_reordered_title_conflict(clues, product):
+            return 0.0
 
-    # Hard reject only when the sequence conflict is trustworthy.
-    # The has_sequence_conflict() function should ignore weak track-derived numbers,
-    # especially when duration confirms the match.
-    if has_sequence_conflict(clues, product, local_duration_minutes):
-        return 0.0
+        # Hard reject same-series wrong-book candidates before fuzzy title/duration
+        # bonuses can promote them to perfect matches.
+        # Examples:
+        #   local "The Lost Bloodline 2" must not match Audible "The Lost Bloodline 5"
+        #   local "Overpowered Wizard 3" must not match Audible sequence 1
+        if (
+            has_number_identity_conflict(clues, product)
+            and not strong_identity_overrides_number_conflict(
+                clues,
+                product,
+                local_duration_minutes,
+            )
+        ):
+            return 0.0
+
+        # Hard reject only when the sequence conflict is trustworthy.
+        # The has_sequence_conflict() function should ignore weak track-derived numbers,
+        # especially when duration confirms the match.
+        if has_sequence_conflict(clues, product, local_duration_minutes):
+            return 0.0
 
     local_series = normalize_for_match(clues.get("series", ""))
     local_author = normalize_for_match(clues.get("author", ""))
@@ -5456,7 +5474,8 @@ def score_product_for_metadata(
                 sequence_match = True
                 score += 0.18
             elif (
-                local_number_source != "track"
+                not _asin_identity
+                and local_number_source != "track"
                 and not strong_identity_overrides_number_conflict(
                     clues,
                     product,
@@ -5465,6 +5484,8 @@ def score_product_for_metadata(
             ):
                 # Non-track-derived conflicts should already be blocked by
                 # has_sequence_conflict(), but keep this as a safety fallback.
+                # ASIN identity bypasses this: a confirmed ASIN+title+author match
+                # should not be vetoed by a stale or subseries book number.
                 return 0.0
 
     # Author match.
@@ -5543,6 +5564,11 @@ def score_product_for_metadata(
         and (author_good or narrator_good)
     ):
         score = 1.0
+
+    # ASIN identity floor: ASIN+title+author confirmed above -- guarantee this
+    # clears the min_score gate even when duration or series penalised the score.
+    if _asin_identity:
+        score = max(score, 0.75)
 
     return round(min(max(score, 0.0), 1.0), 4)
 
