@@ -2588,3 +2588,114 @@ summary:focus-visible {
   color: var(--text-soft);
   margin: 6px 0 0;
 }
+
+/* Manual apply modal */
+.manual-apply-dialog {
+  width: min(480px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+
+.manual-apply-dialog::backdrop {
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(0.15rem);
+}
+
+.manual-apply-title {
+  margin: 0 0 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.manual-apply-body {
+  margin: 0 0 14px;
+  font-size: 0.875rem;
+  color: var(--text-soft);
+  white-space: pre-line;
+  line-height: 1.55;
+}
+
+.manual-apply-cover-note {
+  margin: 0 0 14px;
+  font-size: 0.82rem;
+  color: var(--warning, #e8a020);
+}
+
+.manual-apply-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 0 0 16px;
+}
+
+.manual-apply-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: rgb(var(--accent-rgb));
+  width: 0;
+  transition: width 280ms ease;
+}
+
+.manual-apply-progress-fill.indeterminate {
+  width: 38%;
+  animation: manual-apply-slide 1.3s ease-in-out infinite;
+}
+
+@keyframes manual-apply-slide {
+  0%   { transform: translateX(-160%); }
+  100% { transform: translateX(380%); }
+}
+
+.manual-apply-progress-fill.complete {
+  width: 100%;
+  background: #34d399;
+  animation: none;
+}
+
+.manual-apply-progress-fill.error {
+  width: 100%;
+  background: #f87171;
+  animation: none;
+}
+
+.manual-apply-output-detail {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.manual-apply-output-detail strong {
+  color: var(--text);
+}
+
+.manual-apply-output-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.manual-apply-warning {
+  margin: 0 0 14px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: rgba(251, 146, 60, 0.1);
+  border: 1px solid rgba(251, 146, 60, 0.28);
+  color: #e89020;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.manual-apply-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
