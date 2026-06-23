@@ -1561,7 +1561,7 @@ def sidecar_to_form(sidecar: dict[str, Any]) -> dict[str, Any]:
         ),
         year=str(book.get("year", "") or audible_meta.get("year", "")),
         summary=book.get("summary", ""),
-        cover_url=book.get("cover_url", ""),
+        cover_url=book.get("cover_url", "") or audible_meta.get("cover_url", ""),
         asin=audible_meta.get("asin", ""),
         local_duration_minutes=local_before.get("local_duration_minutes"),
     )
