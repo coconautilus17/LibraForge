@@ -591,6 +591,6 @@ updateCommandPreview();
     selectBtnEl: $('sourceFbSelect'),
     currentLabelEl: $('sourceFbCurrentLabel'),
     libraryRoot,
-    onSelect: () => updateCommandPreview(),
+    onSelect: () => { updateCommandPreview(); loadSidecar(); },
   });
 })();
