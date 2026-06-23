@@ -3388,8 +3388,6 @@ def capture_publisher_clue(clues: dict, tags: dict) -> dict:
     if raw_publisher:
         clues["publisher"] = raw_publisher
         clues["publisher_verified"] = bool(canonical)
-        if canonical and canonical.get("special_provider"):
-            clues["special_publisher_provider"] = canonical["special_provider"]
 
     # Strip any leaked publisher token from author/narrator without losing real data.
     for field in ("author", "narrator"):
@@ -3804,8 +3802,6 @@ def build_multi_file_search_context(
         clues["publisher"] = group_publisher
         canonical = match_canonical_publisher(group_publisher)
         clues["publisher_verified"] = bool(canonical)
-        if canonical and canonical.get("special_provider"):
-            clues["special_publisher_provider"] = canonical["special_provider"]
 
     queries = build_search_queries_from_clues(clues)
     return queries, clues
@@ -4604,11 +4600,11 @@ def detect_special_provider(clues: dict) -> str | None:
     """Return the abs-agg provider id if the file is a known dramatized production.
 
     Checks multiple signals so 'Dramatized Adaptation' is an indicator but not
-    the sole trigger -- publisher policy, series name, and raw composer tag are
+    the sole trigger -- publisher name, series name, and raw composer tag are
     all considered.
     """
-    # 1. Publisher policy already mapped it
-    special = clues.get("special_publisher_provider") or special_provider_for(clues.get("publisher", ""))
+    # 1. Publisher name matches a known GA/SBT imprint in the catalog
+    special = special_provider_for(clues.get("publisher", ""))
     if special:
         return special
 
@@ -4619,23 +4615,35 @@ def detect_special_provider(clues: dict) -> str | None:
     if "soundbooth" in series.lower():
         return "soundbooththeater"
 
-    # 3. Composer/writer raw tag (©wrt) -- GraphicAudio embeds its name there
+    # 3. Composer/writer raw tag (©wrt / "composer") -- GraphicAudio embeds its name there.
+    #    mutagen uses ©wrt; ffprobe (probe_file fallback) uses the lowercase "composer" key.
     raw_tags = clues.get("_raw_tags") or {}
+    _composer_vals: list[str] = []
     for tag_key in ("©wrt", "\xa9wrt"):
         for val in (raw_tags.get(tag_key) or []):
             try:
-                text = bytes(val).decode("utf-8", "ignore") if hasattr(val, "__bytes__") else str(val)
-                if "graphicaudio" in text.lower():
-                    return "graphicaudio"
-                if "soundbooth" in text.lower():
-                    return "soundbooththeater"
+                _composer_vals.append(
+                    bytes(val).decode("utf-8", "ignore") if hasattr(val, "__bytes__") else str(val)
+                )
             except Exception:
                 pass
+    if not _composer_vals:
+        _ffprobe_comp = str(raw_tags.get("composer", "") or "")
+        if _ffprobe_comp:
+            _composer_vals.append(_ffprobe_comp)
+    for _cv in _composer_vals:
+        if "graphicaudio" in _cv.lower():
+            return "graphicaudio"
+        if "soundbooth" in _cv.lower():
+            return "soundbooththeater"
 
-    # 4. "[Dramatized Adaptation]" subtitle -- use as signal to try GA first
+    # 4. "[Dramatized Adaptation]" in subtitle or narrator tag -- both are used
+    #    by GA/SBT productions; narrator is more common in practice.
     subtitle = clues.get("subtitle", "") or ""
-    if "dramatized" in subtitle.lower() and "adaptation" in subtitle.lower():
-        return "graphicaudio"
+    narrator = clues.get("narrator", "") or ""
+    for _sig in (subtitle, narrator):
+        if "dramatized" in _sig.lower() and "adaptation" in _sig.lower():
+            return "graphicaudio"
 
     return None
 
@@ -4827,15 +4835,44 @@ def search_item(
                     existing_asin=clues.get("existing_asin", ""),
                 )
                 log.append(f"  {_sp_label} results: {len(_sp_products)}")
+                # Collapse results that are the same book in different formats
+                # (e.g. full-length vs individual parts with different ISBNs).
+                # Identical (title, series, sequence) tuples all score the same
+                # against a single consolidated file, so keep only the first.
                 if _sp_products:
-                    # Temporarily strip book_number so sequence-conflict hard-rejects
-                    # don't eliminate valid GA/SBT results (their catalog sequences
-                    # often differ from what's in local tags, e.g. Alloy of Law is
-                    # sequence 4 in Mistborn overall but Book 1 in Wax & Wayne).
+                    _seen_keys: set[tuple[str, str, str]] = set()
+                    _deduped: list[dict] = []
+                    for _p in _sp_products:
+                        _ser, _seq = get_primary_series(_p)
+                        _key = (
+                            (_p.get("title") or "").lower().strip(),
+                            _ser.lower().strip(),
+                            str(_seq).strip(),
+                        )
+                        if _key not in _seen_keys:
+                            _seen_keys.add(_key)
+                            _deduped.append(_p)
+                    if len(_deduped) < len(_sp_products):
+                        log.append(f"  {_sp_label} deduplicated: {len(_sp_products)} -> {len(_deduped)}")
+                    _sp_products = _deduped
+                if _sp_products:
+                    # Temporarily strip book_number AND series-embedded numbers so
+                    # sequence-conflict hard-rejects don't eliminate valid GA/SBT
+                    # results. Dedicated catalog sequences often differ from local
+                    # tags (e.g. Alloy of Law is Mistborn #4 but Wax & Wayne #1).
                     # The composer+title+author check in determine_edit_mode is the
                     # real safety gate for these dedicated-catalog searches.
                     _saved_num = clues.pop("book_number", "")
                     _saved_num_src = clues.pop("book_number_source", "")
+                    _saved_series = clues.get("series", "")
+                    if _saved_series:
+                        _clean_series = re.sub(
+                            r"(?:,\s*)?(?:Book|Vol\.?|Volume|Part)\s*#?\s*\d+",
+                            "",
+                            _saved_series,
+                            flags=re.IGNORECASE,
+                        ).strip(" ,")
+                        clues["series"] = _clean_series
                     try:
                         _sp_candidate, _sp_score, _sp_ambiguity = pick_best_match_for_metadata(
                             clues, _sp_products, local_duration_minutes
@@ -4845,6 +4882,8 @@ def search_item(
                             clues["book_number"] = _saved_num
                         if _saved_num_src:
                             clues["book_number_source"] = _saved_num_src
+                        if _saved_series:
+                            clues["series"] = _saved_series
                     if _sp_candidate:
                         _sp_debug = metadata_from_product(_sp_candidate, clues, _sp_score)
                         log.append(
@@ -4923,12 +4962,13 @@ def search_item(
                             f"mode={asin_debug.get('edit_mode')}"
                         )
                         _asin_threshold = 0.40
-                        if asin_candidate_score >= _asin_threshold:
+                        if asin_candidate_score >= _asin_threshold and asin_candidate_score > score:
                             product = asin_product
                             score = asin_candidate_score
                             used_query = f"ASIN:{existing_asin}"
                             match_ambiguity = None
                             effective_min_score = _asin_threshold
+                            result.source_provider = ""  # ASIN overrides any prior special-provider match
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
@@ -5082,20 +5122,6 @@ def search_item(
             review_reasons.append(
                 f"existing ASIN {existing_asin} does not match matched ASIN {matched_asin}"
             )
-
-        # Special editions (GraphicAudio / Soundbooth Theater).
-        # SOURCE: is emitted later in the write phase (Pass 2) once we know the
-        # book was actually written, not just matched. If GA/SBT was detected but
-        # the match came from Audible, flag for manual attention.
-        special_provider = result.source_provider or detect_special_provider(clues)
-        if special_provider and not result.source_provider:
-            label = SPECIAL_PROVIDERS.get(special_provider, special_provider)
-            special_note = (
-                f"publisher {label} — consider the {label} abs-agg endpoint "
-                f"({special_provider}) instead of Audible"
-            )
-            review_reasons.append(special_note)
-            log.append(f"  {special_note}")
 
         result.review_reasons = review_reasons
 
@@ -5694,13 +5720,11 @@ def determine_edit_mode(
     score: float,
     duration_result: dict | None = None,
 ) -> str:
-    if score < AGGRESSIVE_SCORE_THRESHOLD:
-        return "none"
-
     # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
-    # runtime data via abs-agg so duration is always "unknown".  Verify the local
-    # file's composer (©wrt) tag confirms the production company, then check
-    # title+author match before allowing a full write.
+    # runtime data via abs-agg so duration is always "unknown". Their scores are
+    # structurally low even for perfect matches, so evaluate them before the
+    # general score gate. Verify via the local file's composer (©wrt) tag that
+    # the production company matches, then confirm title+author before writing.
     _sp = product.get("_abs_provider")
     if _sp in SPECIAL_PROVIDERS:
         _COMPOSER_MARKERS: dict[str, str] = {
@@ -5722,6 +5746,8 @@ def determine_edit_mode(
                 break
             if _composer_text:
                 break
+        if not _composer_text:
+            _composer_text = str(_raw_tags.get("composer", "") or "")
         composer_confirmed = bool(_expected and _expected in _composer_text.lower())
         if composer_confirmed:
             local_title_n  = normalize_for_match(clues.get("title", ""))
@@ -5739,6 +5765,9 @@ def determine_edit_mode(
             )
             if title_ok and author_ok:
                 return "full"
+
+    if score < AGGRESSIVE_SCORE_THRESHOLD:
+        return "none"
 
     duration_status = (duration_result or {}).get("status", "unknown")
     title_score = title_evidence_score(clues, product)
@@ -7579,8 +7608,6 @@ def main():
                 # status == "matched"
                 w_mode_counts[w_edit_mode] += 1
                 w_duration_counts[result.duration_status] += 1
-                if result.source_provider:
-                    w_mode_counts[result.source_provider] += 1
 
                 if result.duration_review_item:
                     w_duration_review.append(result.duration_review_item)

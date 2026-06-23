@@ -209,6 +209,7 @@ function formatElapsed(startedAt, finishedAt) {
 function renderStats(stats, startedAt, finishedAt) {
   const mode = stats.mode_breakdown || {};
   const duration = stats.duration_breakdown || {};
+  const provider = stats.provider_breakdown || {};
   const threshold = stats.large_duration_threshold || 10;
   const elapsed = formatElapsed(startedAt, finishedAt);
   const fill = stats.fill_breakdown;
@@ -225,6 +226,8 @@ function renderStats(stats, startedAt, finishedAt) {
     stat('Mode: full', mode.full, 'Full metadata rewrite planned/applied.'),
     stat('Mode: series_only', mode.series_only, 'Only grouping-critical metadata is changed.'),
     stat('Mode: none', mode.none, 'No safe edit selected.'),
+    provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
+    provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -688,7 +691,8 @@ async function searchManualTarget() {
     });
   } else if (provider === 'graphicaudio' || provider === 'soundbooththeater') {
     res = await searchAbsAgg({
-      query: $('manualQuery').value.trim(),
+      query: $('manualTitle').value.trim() || $('manualQuery').value.trim(),
+      author: $('manualAuthor').value.trim(),
       provider,
       limit: 10,
     });
