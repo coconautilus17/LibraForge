@@ -453,7 +453,7 @@ def discover_sidecars(path: Path) -> list[Path]:
     if lf.is_file():
         try:
             payload = json.loads(lf.read_text(encoding="utf-8"))
-            if payload.get("sidecar"):
+            if payload.get("sidecar") or payload.get("marker"):
                 sidecars.append(lf)
         except (OSError, json.JSONDecodeError):
             pass
@@ -1539,21 +1539,23 @@ def normalize_m4b_metadata(metadata: M4BMetadataForm) -> M4BMetadataForm:
 
 
 def sidecar_to_form(sidecar: dict[str, Any]) -> dict[str, Any]:
-    # libraforge.json nests sidecar data under a "sidecar" key
+    # libraforge.json nests sidecar data under a "sidecar" key (m4b-tool format)
     if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
         sidecar = sidecar["sidecar"]
+    # Fixer-generated libraforge.json stores metadata under "marker"
+    marker = sidecar.get("marker", {}) or {} if isinstance(sidecar.get("marker"), dict) else {}
     book = sidecar.get("book", {}) or {}
-    audible_meta = sidecar.get("audible", {}) or {}
-    local_before = sidecar.get("local_before", {}) or {}
+    audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
+    local_before = sidecar.get("local_before", {}) or marker.get("local_before", {}) or {}
 
     metadata = M4BMetadataForm(
         title=book.get("title", "")
         or audible_meta.get("title", "")
         or local_before.get("title", ""),
         subtitle=book.get("subtitle", ""),
-        author=book.get("author", "") or local_before.get("author", ""),
-        narrator=book.get("narrator", "") or local_before.get("narrator", ""),
-        series=book.get("series", "") or local_before.get("series", ""),
+        author=book.get("author", "") or audible_meta.get("author", "") or local_before.get("author", ""),
+        narrator=book.get("narrator", "") or audible_meta.get("narrator", "") or local_before.get("narrator", ""),
+        series=book.get("series", "") or audible_meta.get("series", "") or local_before.get("series", ""),
         sequence=str(
             book.get("sequence", "") or audible_meta.get("sequence", "")
         ),

@@ -190,6 +190,22 @@ function renderAudioProfile(summary = {}) {
   element.innerHTML = `<strong>${escapeHtml(recommendation.label)}.</strong> ${escapeHtml(recommendation.reason)}`;
 }
 
+async function loadSourceCover(sourcePath) {
+  const wrap = $('sourceCoverWrap');
+  const img  = $('sourceCover');
+  if (!wrap || !img || !sourcePath) { if (wrap) wrap.hidden = true; return; }
+  const url = `/api/manual-review/current-cover?path=${encodeURIComponent(sourcePath)}&script_name=${encodeURIComponent($('searchScript').value || '')}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) { wrap.hidden = true; return; }
+    const blob = await res.blob();
+    if (img._coverUrl) URL.revokeObjectURL(img._coverUrl);
+    img._coverUrl = URL.createObjectURL(blob);
+    img.src = img._coverUrl;
+    wrap.hidden = false;
+  } catch { wrap.hidden = true; }
+}
+
 async function loadSidecar() {
   const res = await fetch('/api/m4b/metadata/load', {
     method: 'POST',
@@ -209,6 +225,7 @@ async function loadSidecar() {
   const found = data.selected_sidecar ? `Loaded sidecar: ${data.selected_sidecar}` : 'No sidecar found, form is ready for manual entry.';
   $('loadStatus').textContent = `${found} Source: ${data.source_path || data.path}`;
   renderAudioProfile(data.audio_summary);
+  loadSourceCover(data.source_path || data.path);
 }
 
 function renderDiscoveryResults(data) {
