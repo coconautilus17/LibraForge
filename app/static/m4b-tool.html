@@ -129,8 +129,33 @@
       <h2>Source</h2>
       <div class="grid">
         <label><span class="field-label">Folder or file <span class="info-tip" data-tooltip="Audio file or folder of chapter files to load, inspect, and merge into the output M4B."></span></span>
-          <input id="sourcePath" value="/audiobooks" />
+          <div class="search-row">
+            <input id="sourcePath" list="sourceSuggestions" value="/audiobooks" style="flex:1" />
+            <datalist id="sourceSuggestions"></datalist>
+            <button id="sourceBrowseBtn" class="secondary" type="button" aria-expanded="false" aria-controls="sourceBrowser">Browse</button>
+          </div>
         </label>
+      </div>
+
+      <div id="sourceBrowser" class="folder-browser" hidden aria-label="Folder browser">
+        <div class="fb-bar">
+          <button id="sourceFbUp" class="icon-button small" type="button" aria-label="Go to parent folder">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 15V5M5 10l5-5 5 5"/></svg>
+          </button>
+          <nav id="sourceFbBreadcrumb" class="fb-breadcrumb" aria-label="Current path"></nav>
+          <button id="sourceFbHome" class="icon-button small" type="button" aria-label="Go to library root">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9.5L10 3l7 6.5V17a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5Z"/><path d="M7 18v-6h6v6"/></svg>
+          </button>
+          <button id="sourceFbClose" class="icon-button small" type="button" aria-label="Close browser">×</button>
+        </div>
+        <ul id="sourceFbList" class="fb-list" role="listbox" aria-label="Subdirectories"></ul>
+        <div class="fb-footer">
+          <span id="sourceFbCurrentLabel" class="fb-current-path"></span>
+          <button id="sourceFbSelect" type="button">Select this folder</button>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:12px">
         <label><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used for manual catalog search."></span></span>
           <input id="authFile" value="/auth/audible-metadata.json" />
         </label>

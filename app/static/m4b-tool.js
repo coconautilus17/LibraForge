@@ -4,7 +4,7 @@ let loadedState = null;
 let discoveryCache = null;
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
 
 async function initProviderSelector() {
   await loadAbsAggProviders($('absAggProvider'));
@@ -574,3 +574,23 @@ $('useFilenamesAsChapters').addEventListener('change', updateCommandPreview);
 loadScripts();
 initProviderSelector();
 updateCommandPreview();
+
+(async () => {
+  const prefs = window.LibraForgePrefs?.get() || {};
+  const libraryRoot = prefs.defaultRootPath || '/audiobooks';
+  initFolderBrowser({
+    inputEl: $('sourcePath'),
+    datalistEl: $('sourceSuggestions'),
+    browserEl: $('sourceBrowser'),
+    browseBtnEl: $('sourceBrowseBtn'),
+    listEl: $('sourceFbList'),
+    breadcrumbEl: $('sourceFbBreadcrumb'),
+    upBtnEl: $('sourceFbUp'),
+    homeBtnEl: $('sourceFbHome'),
+    closeBtnEl: $('sourceFbClose'),
+    selectBtnEl: $('sourceFbSelect'),
+    currentLabelEl: $('sourceFbCurrentLabel'),
+    libraryRoot,
+    onSelect: () => updateCommandPreview(),
+  });
+})();
