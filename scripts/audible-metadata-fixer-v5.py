@@ -7425,9 +7425,21 @@ def main():
         type=int,
         default=None,
         help=(
-            "Parallel search workers. 1 = serial (current behavior). "
-            "Recommended 5; max 10 to avoid Audible rate limits. "
+            "Parallel search/match workers. Bottleneck is API latency. "
+            "Recommended 10-20 for fast runs; raise to 50 only if not hitting rate limits. "
             "Defaults to 5 when --metadata-json-only is set, otherwise 1."
+        ),
+    )
+
+    parser.add_argument(
+        "--write-workers",
+        type=int,
+        default=None,
+        dest="write_workers",
+        help=(
+            "Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. "
+            "Defaults to the --workers value. For NAS storage 4-8 is typical; "
+            "local SSD can handle more."
         ),
     )
 
@@ -7443,6 +7455,8 @@ def main():
 
     if args.workers is None:
         args.workers = 5 if args.metadata_json_only else 1
+    if args.write_workers is None:
+        args.write_workers = args.workers
 
     root = Path(args.root).resolve()
 
@@ -7491,7 +7505,8 @@ def main():
     print(f"Mode: {'APPLY' if args.apply else 'DRY RUN'}")
     print(f"Minimum score: {args.min_score}")
     print(f"Writer: {args.writer}")
-    print(f"Workers: {args.workers}")
+    print(f"Search workers: {args.workers}")
+    print(f"Write workers:  {args.write_workers}")
     print()
 
     found = len(processing_items)
@@ -7828,7 +7843,7 @@ def main():
                 _write_shared["manual_review"].extend(w_manual_review)
                 _write_shared["asin_matches"].extend(w_asin_matches)
 
-    _n_write_workers = args.workers or 1
+    _n_write_workers = args.write_workers or 1
     with ThreadPoolExecutor(max_workers=_n_write_workers) as _pool:
         _futs = [_pool.submit(_write_worker) for _ in range(_n_write_workers)]
         for _f in _futs:

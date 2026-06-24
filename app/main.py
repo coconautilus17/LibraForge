@@ -709,6 +709,7 @@ class RunRequest(BaseModel):
     ignored_folders: list[str] = Field(default_factory=list)
 
     workers: int | None = None
+    write_workers: int | None = None
     api_delay_ms: int = 0
     write_mode: str = "smart"
     provider: str = "audible"
@@ -1354,6 +1355,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
     if _fixer_major_version(req.script_name) >= 5:
         if req.workers is not None and req.workers > 0:
             cmd += ["--workers", str(req.workers)]
+        if req.write_workers is not None and req.write_workers > 0:
+            cmd += ["--write-workers", str(req.write_workers)]
         if req.api_delay_ms > 0:
             cmd += ["--api-delay-ms", str(req.api_delay_ms)]
         if req.write_mode and req.write_mode != "smart":
