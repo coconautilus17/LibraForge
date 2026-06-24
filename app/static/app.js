@@ -933,8 +933,11 @@ $('force').addEventListener('change', syncForceOriginal);
 syncForceOriginal();
 
 $('workers').addEventListener('input', () => {
-  const writeEl = $('writeWorkers');
-  writeEl.value = Math.min(parseInt($('workers').value || '1', 10), 30);
+  $('writeWorkers').value = Math.min(parseInt($('workers').value || '1', 10), 30);
+});
+$('writeWorkers').addEventListener('input', () => {
+  const v = parseInt($('writeWorkers').value || '1', 10);
+  if (v > 30) $('writeWorkers').value = 30;
 });
 
 $('startBtn').addEventListener('click', startRun);
