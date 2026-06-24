@@ -214,12 +214,14 @@ function renderStats(stats, startedAt, finishedAt) {
   const threshold = stats.large_duration_threshold || 10;
   const elapsed = formatElapsed(startedAt, finishedAt);
   const fill = stats.fill_breakdown;
+  const manualAppliedCount = (latestState?.files_by_category?.['status:manual_applied'] || []).length;
   $('stats').innerHTML = [
     elapsed ? stat('Run duration', elapsed, 'Total elapsed time for this run.') : '',
     stat('Found', stats.found, 'Supported files discovered before filtering.'),
     stat('Matched', stats.matched, 'Files where the script selected a usable match.'),
     stats.smart_skipped ? stat('Smart-skipped', stats.smart_skipped, 'Tags already matched the planned values — in-file write skipped by smart mode.') : '',
     stat('Skipped', stats.skipped, 'Files intentionally not processed.'),
+    manualAppliedCount ? stat('Manually applied', manualAppliedCount, 'Books previously applied via manual review. Shown with a green badge in the manual review list.') : '',
     stat('Failed', stats.failed, 'Files that hit an error.'),
     fill ? stat('Fill: books filled', fill.filled, 'Fill-missing: books that gained at least one empty field.') : '',
     fill ? stat('Fill: already complete', fill.complete, 'Fill-missing: books where every field was already present (no write).') : '',
