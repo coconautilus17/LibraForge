@@ -404,12 +404,14 @@ function renderManualReviewList() {
     ? manualReviewItems.filter((item) => (item.reasons || []).includes(selected))
     : manualReviewItems;
 
+  const _dangerReasons = new Set(['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none']);
+  const _successReasons = new Set(['manually applied']);
   $('manualReviewList').innerHTML = items.length
     ? items.map((item) => `
       <div class="file-item">
         <div>${escapeHtml(item.path)}</div>
         <div class="reason-badges">
-          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none'].includes(reason) ? 'danger' : ''}">${escapeHtml(reason)}</span>`).join('')}
+          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${_dangerReasons.has(reason) ? 'danger' : _successReasons.has(reason) ? 'recommended' : ''}">${escapeHtml(reason)}</span>`).join('')}
           ${item.diff_percent ? `<span class="reason-badge danger">${escapeHtml(String(item.diff_percent))}% diff</span>` : ''}
         </div>
         <button class="secondary" data-manual-load="${escapeHtml(item.path)}">Load target</button>
@@ -721,20 +723,29 @@ async function searchManualTarget() {
 }
 
 function buildManualApplyDialogs() {
-  if ($('manualApplyConfirmDialog')) return;
+  if ($('manualApplyEditDialog')) return;
 
-  const confirmDlg = document.createElement('dialog');
-  confirmDlg.id = 'manualApplyConfirmDialog';
-  confirmDlg.className = 'manual-apply-dialog';
-  confirmDlg.innerHTML = `
-    <h3 class="manual-apply-title">Confirm manual apply override</h3>
-    <p id="manualApplyConfirmBody" class="manual-apply-body"></p>
-    <p id="manualApplyCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+  const editDlg = document.createElement('dialog');
+  editDlg.id = 'manualApplyEditDialog';
+  editDlg.className = 'manual-apply-dialog manual-apply-edit-dialog';
+  editDlg.innerHTML = `
+    <h3 class="manual-apply-title">Review before applying</h3>
+    <p id="manualApplyEditContext" class="manual-apply-body"></p>
+    <p id="manualApplyEditCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+    <div class="manual-apply-edit-fields">
+      <label>Title<input id="maeTitle" /></label>
+      <label>Author<input id="maeAuthor" /></label>
+      <label>Narrator<input id="maeNarrator" /></label>
+      <label>Series<input id="maeSeries" /></label>
+      <label>Sequence<input id="maeSequence" /></label>
+      <label>Year<input id="maeYear" /></label>
+      <label>ASIN<input id="maeAsin" /></label>
+    </div>
     <div class="manual-apply-actions">
-      <button id="manualApplyCancelBtn" class="secondary">Cancel</button>
-      <button id="manualApplyConfirmBtn">Apply</button>
+      <button id="maeCancelBtn" class="secondary">Cancel</button>
+      <button id="maeConfirmBtn">Confirm &amp; Apply</button>
     </div>`;
-  document.body.appendChild(confirmDlg);
+  document.body.appendChild(editDlg);
 
   const progDlg = document.createElement('dialog');
   progDlg.id = 'manualApplyProgressDialog';
@@ -765,30 +776,50 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   if (!editMode) { alert('Choose an apply mode first.'); return; }
 
   buildManualApplyDialogs();
-  const confirmDlg = $('manualApplyConfirmDialog');
-  const progDlg    = $('manualApplyProgressDialog');
+  const editDlg = $('manualApplyEditDialog');
+  const progDlg = $('manualApplyProgressDialog');
 
-  $('manualApplyConfirmBody').textContent =
-    `Apply ${editMode} mode to:\n${manualContext.display_path || manualContext.path}`;
-  $('manualApplyCoverNote').hidden = !replaceCover;
+  // Pre-fill edit dialog from the chosen result for the selected mode.
+  const chosen = chosenMetadataFor(result, editMode);
+  $('manualApplyEditContext').textContent =
+    `Applying ${editMode} mode to: ${manualContext.display_path || manualContext.path}`;
+  $('manualApplyEditCoverNote').hidden = !replaceCover;
+  $('maeTitle').value    = chosen.title    || '';
+  $('maeAuthor').value   = chosen.author   || '';
+  $('maeNarrator').value = chosen.narrator || '';
+  $('maeSeries').value   = chosen.series   || '';
+  $('maeSequence').value = chosen.sequence || '';
+  $('maeYear').value     = chosen.year     || '';
+  $('maeAsin').value     = chosen.asin     || '';
 
-  const confirmed = await new Promise(resolve => {
+  const editResult = await new Promise(resolve => {
     function cleanup(val) {
-      $('manualApplyConfirmBtn').removeEventListener('click', onOk);
-      $('manualApplyCancelBtn').removeEventListener('click', onCancel);
-      confirmDlg.removeEventListener('cancel', onCancel);
-      confirmDlg.close();
+      $('maeConfirmBtn').removeEventListener('click', onOk);
+      $('maeCancelBtn').removeEventListener('click', onCancel);
+      editDlg.removeEventListener('cancel', onCancel);
+      editDlg.close();
       resolve(val);
     }
     const onOk     = () => cleanup(true);
     const onCancel = () => cleanup(false);
-    $('manualApplyConfirmBtn').addEventListener('click', onOk);
-    $('manualApplyCancelBtn').addEventListener('click', onCancel);
-    confirmDlg.addEventListener('cancel', onCancel, { once: true });
-    confirmDlg.showModal();
+    $('maeConfirmBtn').addEventListener('click', onOk);
+    $('maeCancelBtn').addEventListener('click', onCancel);
+    editDlg.addEventListener('cancel', onCancel, { once: true });
+    editDlg.showModal();
   });
 
-  if (!confirmed) return;
+  if (!editResult) return;
+
+  // Collect any fields the user changed.
+  const metadataOverride = {};
+  const fields = [
+    ['title', 'maeTitle'], ['author', 'maeAuthor'], ['narrator', 'maeNarrator'],
+    ['series', 'maeSeries'], ['sequence', 'maeSequence'], ['year', 'maeYear'], ['asin', 'maeAsin'],
+  ];
+  for (const [key, id] of fields) {
+    const val = $(id).value.trim();
+    if (val !== String(chosen[key] ?? '').trim()) metadataOverride[key] = val;
+  }
 
   let completed = false;
   let dismissed = false;
@@ -831,6 +862,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
         cover_if_missing: false,
         replace_cover: replaceCover,
         writer: 'auto',
+        metadata_override: metadataOverride,
       }),
     });
     const data = await res.json();

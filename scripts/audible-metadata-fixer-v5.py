@@ -1278,6 +1278,8 @@ def should_skip_due_to_marker(
         return False, ""
 
     if marker.get("applied") is True:
+        if marker.get("manually_applied"):
+            return True, "already manually applied"
         try:
             marker_score = float(marker.get("score"))
         except (TypeError, ValueError):
@@ -1306,6 +1308,7 @@ def write_marker(
     payload["marker"] = {
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "applied": True,
+        "manually_applied": mode.startswith("manual_"),
         "mode": mode,
         "edit_mode": metadata.get("edit_mode", mode),
         "aggressive": aggressive,

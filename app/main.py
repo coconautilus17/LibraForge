@@ -785,6 +785,7 @@ class ManualReviewApplyRequest(BaseModel):
     cover_if_missing: bool = False
     replace_cover: bool = False
     writer: str = "auto"
+    metadata_override: dict[str, Any] = Field(default_factory=dict)
 
 
 class M4BRunRequest(BaseModel):
@@ -938,8 +939,9 @@ def derive_manual_review_items(
             continue
         reason = item.get("title", "")
         # Intentional skips (pattern matches and already-processed markers) are
-        # working as designed — they don't belong in manual review.
-        if reason.startswith("matched skip pattern:") or reason == "already processed":
+        # working as designed -- they don't belong in manual review.
+        # "already manually applied" is handled via the status:manual_applied category below.
+        if reason.startswith("matched skip pattern:") or reason in {"already processed", "already manually applied"}:
             continue
         # Map verbose skip reasons to concise UI labels.
         if reason.startswith("duplicate Audible ASIN") or "asin conflict" in reason.lower():
@@ -963,6 +965,9 @@ def derive_manual_review_items(
 
     for path in [item.get("path", "") for item in files_by_category.get("review:duration-tiebreak", []) if item.get("path")]:
         ensure(path)["reasons"].append("duration tie-break")
+
+    for path in [item.get("path", "") for item in files_by_category.get("status:manual_applied", []) if item.get("path")]:
+        ensure(path)["reasons"].append("manually applied")
 
     threshold = stats.get("large_duration_threshold", 10)
     for item in stats.get("large_duration_items", []):
@@ -1120,6 +1125,8 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.stats["skip_reasons"].setdefault(reason, 0)
         state.stats["skip_reasons"][reason] += 1
         add_category(state, "status", "skipped", state.current_file, reason)
+        if reason == "already manually applied":
+            add_category(state, "status", "manual_applied", state.current_file)
         return
 
     m = ERROR_RE.match(line)
@@ -2127,6 +2134,10 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         file_type,
         req.edit_mode,
     )
+
+    for key in ("title", "author", "narrator", "series", "sequence", "year", "asin", "summary"):
+        if key in req.metadata_override and req.metadata_override[key] is not None:
+            metadata[key] = req.metadata_override[key]
 
     if not metadata.get("title") or not metadata.get("author"):
         raise HTTPException(status_code=400, detail="Selected result does not include enough metadata to apply")

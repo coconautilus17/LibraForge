@@ -2699,3 +2699,27 @@ summary:focus-visible {
   gap: 8px;
   margin-top: 6px;
 }
+
+.manual-apply-edit-dialog {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.manual-apply-edit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 16px 0;
+}
+
+.manual-apply-edit-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.manual-apply-edit-fields input {
+  font-size: 0.88rem;
+}
