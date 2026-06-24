@@ -4,6 +4,7 @@ let latestState = null;
 let manualContext = null;
 let manualCurrentCoverUrl = '';
 let manualReviewItems = [];
+let manualSearchResultsCache = [];
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
@@ -578,6 +579,7 @@ function renderCompareTable(index, result, mode) {
 }
 
 function renderManualSearchResults(results = []) {
+  manualSearchResultsCache = results;
   $('manualSearchResults').innerHTML = results.length
     ? results.map((result, index) => {
       const duration = result.duration || {};
@@ -901,6 +903,26 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       alert(`Manual apply complete.\nMode: ${data.edit_mode}  ·  Output: ${outputLabel}\n${data.target_path}`);
       return;
     }
+
+    // Silently refresh the context so compare tables show post-apply values.
+    try {
+      const reloadRes = await fetch('/api/manual-review/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: manualContext.path, script_name: $('script').value }),
+      });
+      if (reloadRes.ok) {
+        const reloadData = await reloadRes.json();
+        manualContext = { ...manualContext, metadata: reloadData.metadata };
+        for (const div of $('manualSearchResults').querySelectorAll('div[data-compare]')) {
+          const idx = Number(div.getAttribute('data-compare'));
+          const mode = $('manualSearchResults').querySelector(`select[data-manual-mode="${idx}"]`)?.value
+            || manualSearchResultsCache[idx]?.recommended_edit_mode
+            || manualSearchResultsCache[idx]?.edit_mode;
+          if (manualSearchResultsCache[idx]) renderCompareTable(idx, manualSearchResultsCache[idx], mode);
+        }
+      }
+    } catch {}
 
     $('manualApplyProgressTitle').textContent = 'Applied successfully';
     $('manualApplyProgressFill').className = 'manual-apply-progress-fill complete';
