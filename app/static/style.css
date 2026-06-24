@@ -2700,6 +2700,17 @@ summary:focus-visible {
   margin-top: 6px;
 }
 
+.provider-query-note {
+  margin: 10px 0 0;
+  padding: 7px 11px;
+  border-radius: 6px;
+  border: 1px solid rgb(242 189 97 / 35%);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .manual-apply-edit-dialog {
   width: min(640px, calc(100vw - 32px));
 }
