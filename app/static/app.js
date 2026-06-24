@@ -674,7 +674,7 @@ async function searchManualTarget() {
   let res;
 
   if (provider === 'abs') {
-    const absRes = await fetch('/api/abs/search', {
+    res = await fetch('/api/abs/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -683,7 +683,6 @@ async function searchManualTarget() {
         limit: 10,
       }),
     });
-    res = await absRes.json();
   } else if (provider === 'abs-agg') {
     res = await searchAbsAgg({
       query: $('manualQuery').value.trim(),
