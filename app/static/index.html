@@ -386,7 +386,6 @@
             Searching via <strong id="manualProviderHintName"></strong> &nbsp;·&nbsp; <a href="#" onclick="document.getElementById('manualProvider').scrollIntoView({behavior:'smooth',block:'center'});return false;" style="color:inherit;text-decoration:underline">change ↑</a>
           </span>
         </label>
-        <p id="manualTitleQueryNote" class="note" hidden style="margin:0 0 4px">For this provider the <strong>Title clue</strong> field below is used as the search query. Put author in Author clue.</p>
         <label>Title clue
           <input id="manualTitle" />
         </label>
@@ -408,6 +407,7 @@
         <button id="manualSearchBtn" class="secondary">Search For Selected Target</button>
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>
       </div>
+      <p id="manualTitleQueryNote" class="note" hidden>Title clue field is used as the search query for this provider. Put author in Author clue.</p>
       <p id="manualCoverStatus" class="note">Load a target to inspect its current cover.</p>
       <p id="manualMeta" class="note"></p>
       <div id="manualSearchResults" class="results-grid"></div>
@@ -419,6 +419,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260624-16"></script>
+  <script src="/static/app.js?v=20260624-17"></script>
 </body>
 </html>

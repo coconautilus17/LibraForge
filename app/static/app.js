@@ -464,6 +464,8 @@ async function loadManualTarget(path) {
   // and switch the provider so the search hits the right endpoint.
   const detectedSeries = (data.metadata?.series || '').toLowerCase();
   const detectedPub   = (data.metadata?.publisher || '').toLowerCase();
+  const isTitleQueryProvider = detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')
+    || detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth');
   if (detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')) {
     $('manualProvider').value = 'graphicaudio';
     toggleManualProviderFields();
@@ -471,6 +473,7 @@ async function loadManualTarget(path) {
     $('manualProvider').value = 'soundbooththeater';
     toggleManualProviderFields();
   }
+  if ($('manualTitleQueryNote')) $('manualTitleQueryNote').hidden = !isTitleQueryProvider;
 
   $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
