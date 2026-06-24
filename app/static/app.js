@@ -466,14 +466,16 @@ async function loadManualTarget(path) {
   const detectedPub   = (data.metadata?.publisher || '').toLowerCase();
   const isTitleQueryProvider = detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')
     || detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth');
+  // Update the hint before calling toggleManualProviderFields -- that function lives
+  // inside an async IIFE and is out of scope here, so the call may throw.
+  if ($('manualTitleQueryNote')) $('manualTitleQueryNote').hidden = !isTitleQueryProvider;
   if (detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')) {
     $('manualProvider').value = 'graphicaudio';
-    toggleManualProviderFields();
+    try { toggleManualProviderFields(); } catch {}
   } else if (detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth')) {
     $('manualProvider').value = 'soundbooththeater';
-    toggleManualProviderFields();
+    try { toggleManualProviderFields(); } catch {}
   }
-  if ($('manualTitleQueryNote')) $('manualTitleQueryNote').hidden = !isTitleQueryProvider;
 
   $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
