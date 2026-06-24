@@ -697,7 +697,7 @@ async function searchManualTarget() {
     });
   } else if (provider === 'graphicaudio' || provider === 'soundbooththeater') {
     res = await searchAbsAgg({
-      query: $('manualTitle').value.trim() || $('manualQuery').value.trim(),
+      query: $('manualQuery').value.trim() || $('manualTitle').value.trim(),
       author: $('manualAuthor').value.trim(),
       provider,
       limit: 10,
