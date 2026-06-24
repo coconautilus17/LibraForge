@@ -2135,7 +2135,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         req.edit_mode,
     )
 
-    for key in ("title", "author", "narrator", "series", "sequence", "year", "asin", "summary"):
+    for key in ("title", "subtitle", "author", "narrator", "series", "sequence", "year", "asin", "publisher", "summary"):
         if key in req.metadata_override and req.metadata_override[key] is not None:
             metadata[key] = req.metadata_override[key]
 

@@ -734,12 +734,15 @@ function buildManualApplyDialogs() {
     <p id="manualApplyEditCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
     <div class="manual-apply-edit-fields">
       <label>Title<input id="maeTitle" /></label>
+      <label>Subtitle<input id="maeSubtitle" /></label>
       <label>Author<input id="maeAuthor" /></label>
       <label>Narrator<input id="maeNarrator" /></label>
       <label>Series<input id="maeSeries" /></label>
       <label>Sequence<input id="maeSequence" /></label>
       <label>Year<input id="maeYear" /></label>
       <label>ASIN<input id="maeAsin" /></label>
+      <label>Publisher<input id="maePublisher" /></label>
+      <label class="mae-full-width">Comment / Summary<textarea id="maeSummary" rows="4"></textarea></label>
     </div>
     <div class="manual-apply-actions">
       <button id="maeCancelBtn" class="secondary">Cancel</button>
@@ -784,13 +787,16 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('manualApplyEditContext').textContent =
     `Applying ${editMode} mode to: ${manualContext.display_path || manualContext.path}`;
   $('manualApplyEditCoverNote').hidden = !replaceCover;
-  $('maeTitle').value    = chosen.title    || '';
-  $('maeAuthor').value   = chosen.author   || '';
-  $('maeNarrator').value = chosen.narrator || '';
-  $('maeSeries').value   = chosen.series   || '';
-  $('maeSequence').value = chosen.sequence || '';
-  $('maeYear').value     = chosen.year     || '';
-  $('maeAsin').value     = chosen.asin     || '';
+  $('maeTitle').value     = chosen.title     || '';
+  $('maeSubtitle').value  = chosen.subtitle  || '';
+  $('maeAuthor').value    = chosen.author    || '';
+  $('maeNarrator').value  = chosen.narrator  || '';
+  $('maeSeries').value    = chosen.series    || '';
+  $('maeSequence').value  = chosen.sequence  || '';
+  $('maeYear').value      = chosen.year      || '';
+  $('maeAsin').value      = chosen.asin      || '';
+  $('maePublisher').value = chosen.publisher || '';
+  $('maeSummary').value   = chosen.summary   || '';
 
   const editResult = await new Promise(resolve => {
     function cleanup(val) {
@@ -810,15 +816,17 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
 
   if (!editResult) return;
 
-  // Collect any fields the user changed.
+  // Collect any fields the user changed. Blank values are ignored (not sent as overrides).
   const metadataOverride = {};
   const fields = [
-    ['title', 'maeTitle'], ['author', 'maeAuthor'], ['narrator', 'maeNarrator'],
-    ['series', 'maeSeries'], ['sequence', 'maeSequence'], ['year', 'maeYear'], ['asin', 'maeAsin'],
+    ['title', 'maeTitle'], ['subtitle', 'maeSubtitle'], ['author', 'maeAuthor'],
+    ['narrator', 'maeNarrator'], ['series', 'maeSeries'], ['sequence', 'maeSequence'],
+    ['year', 'maeYear'], ['asin', 'maeAsin'], ['publisher', 'maePublisher'],
+    ['summary', 'maeSummary'],
   ];
   for (const [key, id] of fields) {
     const val = $(id).value.trim();
-    if (val !== String(chosen[key] ?? '').trim()) metadataOverride[key] = val;
+    if (val && val !== String(chosen[key] ?? '').trim()) metadataOverride[key] = val;
   }
 
   let completed = false;
