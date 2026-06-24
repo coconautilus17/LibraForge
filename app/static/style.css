@@ -2701,7 +2701,13 @@ summary:focus-visible {
 }
 
 .manual-apply-edit-dialog {
-  width: min(600px, calc(100vw - 32px));
+  width: min(640px, calc(100vw - 32px));
+}
+
+.manual-apply-edit-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 4px 0 0;
 }
 
 .manual-apply-edit-fields {

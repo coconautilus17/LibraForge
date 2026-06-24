@@ -732,6 +732,7 @@ function buildManualApplyDialogs() {
     <h3 class="manual-apply-title">Review before applying</h3>
     <p id="manualApplyEditContext" class="manual-apply-body"></p>
     <p id="manualApplyEditCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+    <p class="manual-apply-edit-hint">Blank fields are left as-is in the file.</p>
     <div class="manual-apply-edit-fields">
       <label>Title<input id="maeTitle" /></label>
       <label>Subtitle<input id="maeSubtitle" /></label>
@@ -742,6 +743,7 @@ function buildManualApplyDialogs() {
       <label>Year<input id="maeYear" /></label>
       <label>ASIN<input id="maeAsin" /></label>
       <label>Publisher<input id="maePublisher" /></label>
+      <label>Genre<input id="maeGenre" /></label>
       <label class="mae-full-width">Comment / Summary<textarea id="maeSummary" rows="4"></textarea></label>
     </div>
     <div class="manual-apply-actions">
@@ -796,6 +798,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('maeYear').value      = chosen.year      || '';
   $('maeAsin').value      = chosen.asin      || '';
   $('maePublisher').value = chosen.publisher || '';
+  $('maeGenre').value     = chosen.genre     || '';
   $('maeSummary').value   = chosen.summary   || '';
 
   const editResult = await new Promise(resolve => {
@@ -822,7 +825,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
     ['title', 'maeTitle'], ['subtitle', 'maeSubtitle'], ['author', 'maeAuthor'],
     ['narrator', 'maeNarrator'], ['series', 'maeSeries'], ['sequence', 'maeSequence'],
     ['year', 'maeYear'], ['asin', 'maeAsin'], ['publisher', 'maePublisher'],
-    ['summary', 'maeSummary'],
+    ['genre', 'maeGenre'], ['summary', 'maeSummary'],
   ];
   for (const [key, id] of fields) {
     const val = $(id).value.trim();

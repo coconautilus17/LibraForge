@@ -57,12 +57,14 @@ try:
         ID3,
         ID3NoHeaderError,
         APIC,
+        COMM,
         TALB,
         TCOM,
         TCON,
         TDRC,
         TIT1,
         TIT2,
+        TIT3,
         TPE1,
         TPE2,
         TPUB,
@@ -73,6 +75,7 @@ except Exception:
     ID3 = None
     ID3NoHeaderError = None
     APIC = None
+    COMM = None
     TPUB = None
     TALB = None
     TCOM = None
@@ -80,6 +83,7 @@ except Exception:
     TDRC = None
     TIT1 = None
     TIT2 = None
+    TIT3 = None
     TPE1 = None
     TPE2 = None
     TRCK = None
@@ -982,6 +986,8 @@ def mutagen_write_mp4_tags(
     sequence = metadata.get("sequence", "")
     narrator = metadata.get("narrator", "")
     year = metadata.get("year", "")
+    subtitle = metadata.get("subtitle", "")
+    genre = metadata.get("genre", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
     # Keep album equal to the book title, not the series.
@@ -993,8 +999,12 @@ def mutagen_write_mp4_tags(
     mp4_set_text(tags, "\xa9grp", series)
     mp4_set_text(tags, "\xa9wrt", narrator)
     mp4_set_text(tags, "\xa9day", year)
-    mp4_set_text(tags, "\xa9gen", "Audiobook")
+    if genre:
+        mp4_set_text(tags, "\xa9gen", genre)
     mp4_set_track(tags, sequence)
+
+    if subtitle:
+        mp4_set_freeform(tags, "subtitle", subtitle)
 
     # ffprobe exposes these freeform MP4 tags as mvnm/mvin.
     mp4_set_freeform(tags, "mvnm", series)
@@ -1008,7 +1018,8 @@ def mutagen_write_mp4_tags(
     if publisher:
         mp4_set_freeform(tags, "publisher", publisher)
 
-    # Preserve existing comment/description.
+    if metadata.get("write_summary"):
+        mp4_set_text(tags, "\xa9cmt", metadata.get("summary", ""))
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
         has_cover = mp4_has_cover(tags)
@@ -1081,6 +1092,8 @@ def mutagen_write_mp3_tags(
     sequence = metadata.get("sequence", "")
     narrator = metadata.get("narrator", "")
     year = metadata.get("year", "")
+    subtitle = metadata.get("subtitle", "")
+    genre = metadata.get("genre", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
     id3_set_text(tags, "TIT2", TIT2, title)
@@ -1090,8 +1103,11 @@ def mutagen_write_mp3_tags(
     id3_set_text(tags, "TPE2", TPE2, author)
     id3_set_text(tags, "TCOM", TCOM, narrator)
     id3_set_text(tags, "TDRC", TDRC, year)
-    id3_set_text(tags, "TCON", TCON, "Audiobook")
+    if genre:
+        id3_set_text(tags, "TCON", TCON, genre)
     id3_set_text(tags, "TIT1", TIT1, series)
+    if subtitle and TIT3 is not None:
+        id3_set_text(tags, "TIT3", TIT3, subtitle)
     id3_set_track(tags, sequence)
 
     # TXXX frames give ffprobe/other scanners multiple chances to expose series.
@@ -1108,7 +1124,11 @@ def mutagen_write_mp3_tags(
     if publisher and TPUB is not None:
         id3_set_text(tags, "TPUB", TPUB, publisher)
 
-    # Preserve existing comment/description.
+    if metadata.get("write_summary") and COMM is not None:
+        summary = sanitize_tag(metadata.get("summary", ""))
+        tags.delall("COMM")
+        if summary:
+            tags.add(COMM(encoding=3, lang="eng", desc="", text=[summary]))
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
         has_cover = mp3_has_cover(tags)
@@ -1582,7 +1602,7 @@ def build_m4b_tool_metadata_payload(
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
             "summary": metadata.get("summary", ""),
-            "genre": "Audiobook",
+            "genre": metadata.get("genre", "Audiobook"),
             "cover_url": metadata.get("cover_url", ""),
         },
         "audible": {
@@ -1675,7 +1695,7 @@ def write_audiobookshelf_metadata_json(
         "authors": authors,
         "narrators": narrators,
         "series": series,
-        "genres": ["Audiobook"],
+        "genres": [metadata.get("genre", "Audiobook")],
         "publishedYear": str(metadata.get("year", "") or ""),
         "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
@@ -6087,8 +6107,9 @@ def build_metadata_args(metadata: dict) -> list[str]:
         "mvin": metadata.get("sequence", ""),
         "composer": metadata.get("narrator", ""),
         "date": metadata.get("year", ""),
-        "genre": "Audiobook",
+        "genre": metadata.get("genre", ""),
         "publisher": metadata.get("publisher", ""),
+        "subtitle": metadata.get("subtitle", ""),
     }
 
     if metadata.get("sequence"):
@@ -6096,6 +6117,9 @@ def build_metadata_args(metadata: dict) -> list[str]:
 
     if metadata.get("asin"):
         tag_map["asin"] = metadata["asin"]
+
+    if metadata.get("write_summary") and metadata.get("summary"):
+        tag_map["comment"] = metadata["summary"]
 
     args = []
     for key, value in tag_map.items():

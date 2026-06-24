@@ -2135,9 +2135,11 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         req.edit_mode,
     )
 
-    for key in ("title", "subtitle", "author", "narrator", "series", "sequence", "year", "asin", "publisher", "summary"):
+    for key in ("title", "subtitle", "author", "narrator", "series", "sequence", "year", "asin", "publisher", "genre", "summary"):
         if key in req.metadata_override and req.metadata_override[key] is not None:
             metadata[key] = req.metadata_override[key]
+
+    metadata["write_summary"] = True
 
     if not metadata.get("title") or not metadata.get("author"):
         raise HTTPException(status_code=400, detail="Selected result does not include enough metadata to apply")
