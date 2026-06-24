@@ -932,6 +932,11 @@ function syncForceOriginal() {
 $('force').addEventListener('change', syncForceOriginal);
 syncForceOriginal();
 
+$('workers').addEventListener('input', () => {
+  const writeEl = $('writeWorkers');
+  writeEl.value = Math.min(parseInt($('workers').value || '1', 10), 30);
+});
+
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
 $('script').addEventListener('change', updateV5Fields);

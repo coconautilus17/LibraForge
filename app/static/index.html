@@ -256,8 +256,8 @@
           <label><span class="field-label">Search workers <span class="info-tip" data-tooltip="Parallel search/match workers (Pass 1). Bottleneck is API latency, not CPU. Recommended: 10-20 for fast runs. Raise to 50 only if you're not hitting Audible rate limits. For a low-power homelab (e.g. N100/Pi) start at 5-10; a mid-range server (8+ cores) can handle 20-30 comfortably."></span></span>
             <input id="workers" type="number" min="1" max="50" value="1" />
           </label>
-          <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Defaults to the search worker count. For NAS over SMB 4-8 is typical. Local SSD can handle 10-20+. Raising above your storage throughput ceiling gives no benefit."></span></span>
-            <input id="writeWorkers" type="number" min="1" max="50" value="1" />
+          <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Tracks search workers (capped at 30). For NAS over SMB 4-8 is typical. Local SSD can handle 10-20+. Raising above your storage throughput ceiling gives no benefit."></span></span>
+            <input id="writeWorkers" type="number" min="1" max="30" value="1" />
           </label>
           <label><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
             <input id="apiDelayMs" type="number" min="0" value="0" />
@@ -417,6 +417,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260624-5"></script>
+  <script src="/static/app.js?v=20260624-6"></script>
 </body>
 </html>
