@@ -4549,6 +4549,38 @@ def load_m4b_metadata(req: M4BLoadRequest) -> dict[str, Any]:
         root_file = str((sidecar_section.get("source", {}) or {}).get("root_file", "") or "")
         if root_file:
             source_path = Path(root_file)
+    else:
+        # No sidecar -- read the current embedded tags from the first audio file
+        # so the M4B Tool form is pre-populated instead of blank.
+        try:
+            audio_files = source_audio_files(path)
+            if audio_files:
+                fixer_module = load_fixer_module(default_fixer_script())
+                _, clues, _ = fixer_module.build_search_context(
+                    audio_files[0], {}, use_backup_tags=False
+                )
+                raw_tags = clues.get("_raw_tags") or {}
+                year_val = str(raw_tags.get("date", raw_tags.get("year", "")) or "").strip()
+                year_val = year_val[:4] if len(year_val) >= 4 else year_val
+                summary_val = (
+                    raw_tags.get("comment")
+                    or raw_tags.get("description")
+                    or raw_tags.get("ldes")
+                    or ""
+                )
+                form = normalize_m4b_metadata(M4BMetadataForm(
+                    title=clues.get("title", "") or clues.get("raw_title", ""),
+                    author=clues.get("author", ""),
+                    narrator=clues.get("narrator", ""),
+                    series=clues.get("series", ""),
+                    sequence=str(clues.get("book_number", "") or ""),
+                    year=year_val,
+                    asin=str(raw_tags.get("asin", "") or ""),
+                    summary=summary_val,
+                    local_duration_minutes=clues.get("local_duration_minutes"),
+                )).model_dump()
+        except Exception:
+            pass
 
     source_for_default = source_path if selected else path
     audio_summary = cached_audio_summary(path)
