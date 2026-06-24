@@ -697,7 +697,7 @@ async function searchManualTarget() {
     });
   } else if (provider === 'graphicaudio' || provider === 'soundbooththeater') {
     res = await searchAbsAgg({
-      query: $('manualQuery').value.trim() || $('manualTitle').value.trim(),
+      query: $('manualTitle').value.trim() || $('manualQuery').value.trim(),
       author: $('manualAuthor').value.trim(),
       provider,
       limit: 10,
@@ -1125,6 +1125,12 @@ if ($('targetScanBtn')) {
     // Update provider hint near "Search query"
     if ($('manualProviderHintName')) {
       $('manualProviderHintName').textContent = PROVIDER_LABELS[v] || v;
+    }
+    if ($('manualProviderQueryNote')) {
+      const needsTitleField = v === 'graphicaudio' || v === 'soundbooththeater';
+      $('manualProviderQueryNote').textContent = needsTitleField
+        ? ' · Title field is used as query; put author in Author field'
+        : '';
     }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
