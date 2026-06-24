@@ -914,7 +914,16 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       if (reloadRes.ok) {
         const reloadData = await reloadRes.json();
         manualContext = { ...manualContext, metadata: reloadData.metadata, queries: reloadData.queries };
-        if (reloadData.queries?.[0]) $('manualQuery').value = reloadData.queries[0];
+        // Update clue fields and hint so the user has fresh context, but leave
+        // manualQuery alone so they can freely type a follow-up search query.
+        $('manualTitle').value    = reloadData.metadata?.title    || '';
+        $('manualAuthor').value   = reloadData.metadata?.author   || '';
+        $('manualSeries').value   = reloadData.metadata?.series   || '';
+        $('manualSequence').value = reloadData.metadata?.sequence || '';
+        $('manualNarrator').value = reloadData.metadata?.narrator || '';
+        $('manualMeta').textContent = reloadData.queries?.length
+          ? `Suggested queries: ${reloadData.queries.join(' | ')}`
+          : '';
         for (const div of $('manualSearchResults').querySelectorAll('div[data-compare]')) {
           const idx = Number(div.getAttribute('data-compare'));
           const mode = $('manualSearchResults').querySelector(`select[data-manual-mode="${idx}"]`)?.value
