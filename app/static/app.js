@@ -913,7 +913,8 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       });
       if (reloadRes.ok) {
         const reloadData = await reloadRes.json();
-        manualContext = { ...manualContext, metadata: reloadData.metadata };
+        manualContext = { ...manualContext, metadata: reloadData.metadata, queries: reloadData.queries };
+        if (reloadData.queries?.[0]) $('manualQuery').value = reloadData.queries[0];
         for (const div of $('manualSearchResults').querySelectorAll('div[data-compare]')) {
           const idx = Number(div.getAttribute('data-compare'));
           const mode = $('manualSearchResults').querySelector(`select[data-manual-mode="${idx}"]`)?.value
