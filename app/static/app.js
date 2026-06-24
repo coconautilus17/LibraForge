@@ -1126,11 +1126,8 @@ if ($('targetScanBtn')) {
     if ($('manualProviderHintName')) {
       $('manualProviderHintName').textContent = PROVIDER_LABELS[v] || v;
     }
-    if ($('manualProviderQueryNote')) {
-      const needsTitleField = v === 'graphicaudio' || v === 'soundbooththeater';
-      $('manualProviderQueryNote').textContent = needsTitleField
-        ? ' · Title field is used as query; put author in Author field'
-        : '';
+    if ($('manualTitleQueryNote')) {
+      $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater');
     }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
