@@ -940,8 +940,30 @@ $('writeWorkers').addEventListener('input', () => {
   if (v > 30) $('writeWorkers').value = 30;
 });
 
+async function loadLastReport() {
+  const btn = $('loadLastReportBtn');
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/reports/latest');
+    if (!res.ok) { alert((await res.json()).detail || 'No report found'); return; }
+    const report = await res.json();
+    latestState = report;
+    renderStats(report.stats || {}, report.started_at, report.finished_at);
+    renderCategories(report.files_by_category || {});
+    renderManualReview(report.manual_review_items || []);
+    $('runStatus').textContent = `Last report loaded (${report.status || 'unknown'})`;
+    $('currentFile').textContent = report.id || '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
+$('loadLastReportBtn').addEventListener('click', loadLastReport);
 $('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
 $('manualReviewFilter')?.addEventListener('change', renderManualReviewList);

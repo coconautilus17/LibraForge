@@ -4753,3 +4753,12 @@ def download(run_id: str, kind: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=filename)
+
+
+@app.get("/api/reports/latest")
+def get_latest_report() -> dict[str, Any]:
+    report_files = sorted(REPORTS_DIR.glob("*.report.json"))
+    if not report_files:
+        raise HTTPException(status_code=404, detail="No reports found")
+    report = json.loads(report_files[-1].read_text(encoding="utf-8"))
+    return report_for_api(report)
