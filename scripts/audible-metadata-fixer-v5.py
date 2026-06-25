@@ -34,6 +34,8 @@ try:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
+    from app import debug_trace
+    from app.debug_trace import trace, CHOOSE, ALTER, SCORE
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -44,6 +46,8 @@ except ModuleNotFoundError:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
+    from app import debug_trace
+    from app.debug_trace import trace, CHOOSE, ALTER, SCORE
 
 try:
     from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
@@ -954,6 +958,7 @@ def id3_set_track(tags, value: str) -> None:
         tags.add(TRCK(encoding=3, text=[value]))
 
 
+@trace(ALTER, show_result=False)
 def mutagen_write_mp4_tags(
     source: Path,
     metadata: dict,
@@ -1059,6 +1064,7 @@ def mutagen_write_mp4_tags(
     )
 
 
+@trace(ALTER, show_result=False)
 def mutagen_write_mp3_tags(
     source: Path,
     metadata: dict,
@@ -1748,6 +1754,7 @@ def refresh_multipart_sidecar_audio_profile(
     return lf_path
 
 
+@trace(ALTER)
 def clean_text(value: str) -> str:
     if not value:
         return ""
@@ -1874,6 +1881,7 @@ def remove_parenthetical(value: str) -> str:
     return clean_text(value)
 
 
+@trace(ALTER)
 def clean_author_value(value: str) -> str:
     """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'."""
     return remove_parenthetical(value)
@@ -2375,6 +2383,7 @@ def roman_to_int(value: str) -> str:
     return ""
 
 
+@trace(ALTER)
 def normalize_book_number(value: str) -> str:
     value = str(value or "").strip()
 
@@ -2482,6 +2491,7 @@ def extract_book_number_from_path(file_path: Path) -> str:
     return ""
 
 
+@trace(ALTER)
 def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     """Parse structured file/folder names into series, number, and title.
 
@@ -2647,6 +2657,7 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     return {}
 
 
+@trace(ALTER)
 def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
     """Parse common author/title path names, using known author tags to orient them."""
     value = sanitize_technical_labels(value)
@@ -2778,6 +2789,7 @@ def parse_series_sequence_segment(
     return series, number
 
 
+@trace(ALTER)
 def parse_identity_rich_book_text(value: str) -> dict:
     """Parse explicit folder names containing distinct title, author, and series."""
     value = sanitize_technical_labels(value)
@@ -3002,6 +3014,7 @@ def parse_descriptive_book_from_path(file_path: Path, known_author: str = "") ->
     return {}
 
 
+@trace(CHOOSE)
 def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     """Prefer a clearly structured path over stale embedded tags.
 
@@ -3251,6 +3264,7 @@ def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
     return clues
 
 
+@trace(ALTER)
 def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> dict:
     if tags is None:
         tags = read_file_tags(file_path)
@@ -3503,6 +3517,7 @@ def extract_author_from_title(text: str) -> str:
     return ""
 
 
+@trace(CHOOSE)
 def build_search_queries_from_clues(clues: dict) -> list[str]:
     # Strip search-only noise ("Listening to", trailing "by <author>") so the
     # query carries the real title; recover the author if it was only present
@@ -3723,6 +3738,7 @@ def clean_group_folder_title(value: str, author: str) -> str:
     return sanitize_book_title(cleaned)
 
 
+@trace(ALTER)
 def build_multi_file_search_context(
     file_paths: list[Path],
     use_backup_tags: bool = False,
@@ -4267,6 +4283,7 @@ def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     return not bool(set(local_numbers) & set(audible_numbers))
 
 
+@trace(SCORE)
 def strong_identity_overrides_number_conflict(
     clues: dict,
     product: dict,
@@ -4717,6 +4734,7 @@ def cached_audible_search(
     return results
 
 
+@trace(CHOOSE, show_result=False)
 def search_item(
     index: int,
     file_path: Path,
@@ -4736,6 +4754,8 @@ def search_item(
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
+    # Tag every trace line emitted while handling this book with its display path.
+    debug_trace.set_subject(display_path)
     log.append(f"[{index}/{total}] Processing: {display_path}")
 
     result = ItemResult(
@@ -5391,6 +5411,7 @@ def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
     return sorted(local_tokens) == sorted(audible_tokens)
 
 
+@trace(SCORE, show_result=False)
 def score_product_for_metadata(
     clues: dict,
     product: dict,
@@ -5651,6 +5672,7 @@ def _candidate_duration(
     )
 
 
+@trace(CHOOSE, show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
     products: list[dict],
@@ -5764,6 +5786,7 @@ def is_generic_series_number_title(clues: dict) -> bool:
     return any(re.fullmatch(pattern, title) for pattern in generic_patterns)
 
 
+@trace(CHOOSE)
 def determine_edit_mode(
     product: dict,
     clues: dict,
@@ -5980,6 +6003,7 @@ def get_cover_url(product: dict) -> str:
     return ""
 
 
+@trace(ALTER, show_result=False)
 def metadata_from_product(
     product: dict,
     clues: dict,
@@ -7452,7 +7476,34 @@ def main():
         help="Milliseconds to sleep after each Audible API call per worker.",
     )
 
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Trace data-choosing/altering/scoring functions to a side channel "
+        "(stderr, or --debug-trace-file). Never touches stdout.",
+    )
+    parser.add_argument(
+        "--debug-trace-file",
+        default="",
+        dest="debug_trace_file",
+        help="Write debug trace lines to this file instead of stderr.",
+    )
+    parser.add_argument(
+        "--debug-categories",
+        default="",
+        dest="debug_categories",
+        help="Comma-separated subset of trace categories to keep "
+        "(choose,alter,score). Default: all.",
+    )
+
     args = parser.parse_args()
+
+    # Configure tracing before any work begins so worker threads inherit it.
+    debug_trace.configure(
+        enabled=args.debug,
+        file_path=args.debug_trace_file or None,
+        categories=[c.strip() for c in args.debug_categories.split(",") if c.strip()] or None,
+    )
 
     if args.workers is None:
         args.workers = 5 if args.metadata_json_only else 1
