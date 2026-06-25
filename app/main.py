@@ -4756,7 +4756,7 @@ def start_organizer_run(req: OrganizerRunRequest) -> dict[str, Any]:
 def get_draining() -> dict[str, Any]:
     """Return whether any cancelled run still has live worker threads finishing writes."""
     draining = any(
-        s.status == "cancelled" and s.process is not None and s.process.poll() is None
+        s.status == "cancelled" and s.in_write_phase and s.process is not None and s.process.poll() is None
         for s in runs.values()
     )
     return {"draining": draining}
@@ -4780,6 +4780,7 @@ def get_run(run_id: str) -> dict[str, Any]:
 
     workers_draining = (
         state.status == "cancelled"
+        and state.in_write_phase
         and state.process is not None
         and state.process.poll() is None
     )
