@@ -61,6 +61,18 @@ local-only delete if Audible is unreachable). The active account is shared by ev
 This page also configures the Audiobookshelf and abs-agg providers.
 
 ### Planned
+- **Full debug mode** - toggleable debug overlay surfacing raw API responses, per-file
+  decision traces, and internal state. Requires extracting complex logic into standalone
+  modules first (see below).
+- **Script modularisation** - complex functions split out of `app.js` and `main.py` into
+  dedicated, standardised modules with clean interface contracts. Prerequisite for debug
+  mode and long-term maintainability.
+- **Mobile-friendly web UI** - responsive layout pass so manual review and run controls
+  are usable on a phone.
+- **Full provider validation** - end-to-end tests for the individual sources aggregated
+  by abs-agg (LibriVox, Storytel, BookBeat, Big Finish, and others) and the various
+  Audiobookshelf metadata providers, to confirm every response shape is correctly
+  normalised to the shared metadata schema with no silent field drops.
 - Local agent advisory review (read-only LLM suggestions, no automatic writes).
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
