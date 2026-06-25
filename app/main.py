@@ -871,6 +871,7 @@ class RunState:
     total: int = 0
     percent: float = 0.0
     write_current: int = 0
+    in_write_phase: bool = False
     lines_tail: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
     files_by_category: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -1073,6 +1074,7 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     m = WRITING_RE.match(line)
     if m:
         state.current = state.total  # match phase is done; lock it at 100%
+        state.in_write_phase = True
         state.current_file = m.group(3).strip()
         state.percent = _fixer_percent(state)
         set_run_phase(
@@ -1144,12 +1146,19 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "status", "skipped", state.current_file, reason)
         if reason == "already manually applied":
             add_category(state, "status", "manual_applied", state.current_file)
+        # In write phase, a skip means this item is done (no write needed).
+        if state.in_write_phase and state.total:
+            state.write_current += 1
+            state.percent = _fixer_percent(state)
         return
 
     m = ERROR_RE.match(line)
     if m and state.current_file:
         state.stats["error_count"] += 1
         add_category(state, "status", "error", state.current_file, m.group(1).strip())
+        if state.in_write_phase and state.total:
+            state.write_current += 1
+            state.percent = _fixer_percent(state)
         return
 
     if state.current_file and MATCH_RE.match(line):

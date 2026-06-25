@@ -7684,7 +7684,7 @@ def main():
                     w_duration_review.append(result.duration_review_item)
 
                 if result.asin_conflict and result.review_reasons:
-                    out.append(f"[{result.index}/{total}] Processing: {result.display_path}")
+                    out.append(f"[{result.index}/{total}] Writing: {result.display_path}")
                     for _reason in result.review_reasons:
                         if "duplicate Audible ASIN" in _reason:
                             out.append(f"  SKIP: {_reason}")
