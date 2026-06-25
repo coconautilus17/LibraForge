@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260624-5" />
+  <link rel="stylesheet" href="/static/style.css?v=20260625-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -253,8 +253,8 @@
 
       <div id="v5Fields" style="display:none">
         <div class="grid">
-          <label><span class="field-label">Search workers <span class="info-tip" data-tooltip="Parallel search/match workers (Pass 1). Bottleneck is API latency, not CPU. Recommended: 10-20 for fast runs. Raise to 50 only if you're not hitting Audible rate limits. For a low-power homelab (e.g. N100/Pi) start at 5-10; a mid-range server (8+ cores) can handle 20-30 comfortably."></span></span>
-            <input id="workers" type="number" min="1" max="50" value="1" />
+          <label><span class="field-label">Search workers <span class="info-tip" data-tooltip="Parallel search/match workers (Pass 1). Bottleneck is API latency, not CPU. Recommended: 10-20 for fast runs; 30 is the tested max. For a low-power homelab (e.g. N100/Pi) start at 5-10; a mid-range server (8+ cores) can handle 20-30 comfortably."></span></span>
+            <input id="workers" type="number" min="1" max="30" value="1" />
           </label>
           <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Tracks search workers (capped at 30). For NAS over SMB 4-8 is typical. Local SSD can handle 10-20+. Raising above your storage throughput ceiling gives no benefit."></span></span>
             <input id="writeWorkers" type="number" min="1" max="30" value="1" />
@@ -419,6 +419,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260624-19"></script>
+  <script src="/static/app.js?v=20260625-1"></script>
 </body>
 </html>
