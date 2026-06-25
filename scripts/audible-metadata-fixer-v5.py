@@ -7654,6 +7654,8 @@ def main():
 
             if result.status == "skipped":
                 w_skipped = 1
+                out.append(f"  Write-skip: {result.skip_reason}")
+                out.append("")
                 if result.add_to_manual_review:
                     reason = result.skip_reason
                     query_str = (
@@ -7674,6 +7676,8 @@ def main():
 
             elif result.status == "failed":
                 w_failed = 1
+                out.append(f"  Write-error: {result.error}")
+                out.append("")
 
             else:
                 # status == "matched"

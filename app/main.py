@@ -236,6 +236,7 @@ DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
 SUMMARY_RE = re.compile(r"^\s*(Matched|Skipped|Failed|Smart-skipped):\s+(\d+)\s*$")
 FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+(\d+)\s*$")
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
+WRITE_SKIP_RE = re.compile(r"^\s+Write-(?:skip|error):\s+")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
 MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
@@ -1083,6 +1084,14 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             "Writing metadata",
             f"Writing {state.write_current + 1} of {state.total}",
         )
+        return
+
+    # Pass 2 completion for books that were skipped or failed during Pass 1.
+    # Their skip/error reasons were already counted in Pass 1; here we only
+    # advance write_current so the write bar stays accurate.
+    if WRITE_SKIP_RE.match(line) and state.in_write_phase and state.total:
+        state.write_current += 1
+        state.percent = _fixer_percent(state)
         return
 
     restore = re.match(r"^\[(\d+)/(\d+)\]\s+Restoring:\s+(.+)$", line)
