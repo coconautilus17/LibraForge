@@ -96,6 +96,12 @@ function collectManualMetadata() {
 }
 
 async function startRun() {
+  // Block if a previous run's workers are still draining.
+  const drainCheck = await fetch('/api/runs/draining').then(r => r.json()).catch(() => ({ draining: false }));
+  if (drainCheck.draining) {
+    showWorkerDrainBanner(true);
+    return;
+  }
   const req = collectRequest();
   if (req.cover_if_missing && req.replace_cover) {
     const ok = confirm('Both cover options are enabled. Replace existing cover already covers missing covers too. Continue with replace-cover behavior?');
@@ -132,9 +138,32 @@ async function poll() {
   latestState = state;
   render(state);
   if (['completed', 'failed', 'cancelled'].includes(state.status)) {
+    if (state.workers_draining) {
+      // Workers are still finishing writes -- keep polling, block start.
+      showWorkerDrainBanner(true);
+      return;
+    }
     clearInterval(pollTimer);
+    showWorkerDrainBanner(false);
     $('startBtn').disabled = false;
     $('cancelBtn').disabled = true;
+  }
+}
+
+function showWorkerDrainBanner(visible) {
+  const banner = $('workerDrainBanner');
+  if (!banner) return;
+  banner.hidden = !visible;
+  $('startBtn').disabled = visible;
+  if (visible && !window._drainPollTimer) {
+    window._drainPollTimer = setInterval(async () => {
+      const r = await fetch('/api/runs/draining').then(rr => rr.json()).catch(() => ({ draining: true }));
+      if (!r.draining) {
+        clearInterval(window._drainPollTimer);
+        window._drainPollTimer = null;
+        showWorkerDrainBanner(false);
+      }
+    }, 3000);
   }
 }
 
@@ -962,11 +991,11 @@ $('force').addEventListener('change', syncForceOriginal);
 syncForceOriginal();
 
 $('workers').addEventListener('input', () => {
-  $('writeWorkers').value = Math.min(parseInt($('workers').value || '1', 10), 30);
+  $('writeWorkers').value = Math.min(parseInt($('workers').value || '1', 10), 10);
 });
 $('writeWorkers').addEventListener('input', () => {
   const v = parseInt($('writeWorkers').value || '1', 10);
-  if (v > 30) $('writeWorkers').value = 30;
+  if (v > 10) $('writeWorkers').value = 10;
 });
 
 async function loadLastReport() {
@@ -1001,6 +1030,9 @@ $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());
 $("manualReloadCoverBtn").addEventListener("click", loadManualCurrentCover);
 loadScripts();
+
+// On load: check if a cancelled run from a previous session is still draining.
+fetch('/api/runs/draining').then(r => r.json()).then(d => { if (d.draining) showWorkerDrainBanner(true); }).catch(() => {});
 
 // Target path folder browser + default root from preferences
 (async () => {
