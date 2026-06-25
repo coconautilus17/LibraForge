@@ -2699,3 +2699,55 @@ summary:focus-visible {
   gap: 8px;
   margin-top: 6px;
 }
+
+.provider-query-note {
+  margin: 10px 0 0;
+  padding: 7px 11px;
+  border-radius: 6px;
+  border: 1px solid rgb(242 189 97 / 35%);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.manual-apply-edit-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.manual-apply-edit-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.manual-apply-edit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 16px 0;
+}
+
+.manual-apply-edit-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.manual-apply-edit-fields input,
+.manual-apply-edit-fields textarea {
+  font-size: 0.88rem;
+}
+
+.manual-apply-edit-fields .mae-full-width {
+  grid-column: 1 / -1;
+}
+
+.manual-apply-edit-fields textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}

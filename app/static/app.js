@@ -4,6 +4,7 @@ let latestState = null;
 let manualContext = null;
 let manualCurrentCoverUrl = '';
 let manualReviewItems = [];
+let manualSearchResultsCache = [];
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
@@ -64,6 +65,7 @@ function collectRequest() {
     replace_cover: $('replaceCover').checked,
     metadata_json_only: $('metadataJsonOnly').checked,
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
+    write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchProvider')?.value || 'audible') : 'audible',
@@ -213,12 +215,14 @@ function renderStats(stats, startedAt, finishedAt) {
   const threshold = stats.large_duration_threshold || 10;
   const elapsed = formatElapsed(startedAt, finishedAt);
   const fill = stats.fill_breakdown;
+  const manualAppliedCount = (latestState?.files_by_category?.['status:manual_applied'] || []).length;
   $('stats').innerHTML = [
     elapsed ? stat('Run duration', elapsed, 'Total elapsed time for this run.') : '',
     stat('Found', stats.found, 'Supported files discovered before filtering.'),
     stat('Matched', stats.matched, 'Files where the script selected a usable match.'),
     stats.smart_skipped ? stat('Smart-skipped', stats.smart_skipped, 'Tags already matched the planned values — in-file write skipped by smart mode.') : '',
     stat('Skipped', stats.skipped, 'Files intentionally not processed.'),
+    manualAppliedCount ? stat('Manually applied', manualAppliedCount, 'Books previously applied via manual review. Shown with a green badge in the manual review list.') : '',
     stat('Failed', stats.failed, 'Files that hit an error.'),
     fill ? stat('Fill: books filled', fill.filled, 'Fill-missing: books that gained at least one empty field.') : '',
     fill ? stat('Fill: already complete', fill.complete, 'Fill-missing: books where every field was already present (no write).') : '',
@@ -404,12 +408,14 @@ function renderManualReviewList() {
     ? manualReviewItems.filter((item) => (item.reasons || []).includes(selected))
     : manualReviewItems;
 
+  const _dangerReasons = new Set(['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none']);
+  const _successReasons = new Set(['manually applied']);
   $('manualReviewList').innerHTML = items.length
     ? items.map((item) => `
       <div class="file-item">
         <div>${escapeHtml(item.path)}</div>
         <div class="reason-badges">
-          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none'].includes(reason) ? 'danger' : ''}">${escapeHtml(reason)}</span>`).join('')}
+          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${_dangerReasons.has(reason) ? 'danger' : _successReasons.has(reason) ? 'recommended' : ''}">${escapeHtml(reason)}</span>`).join('')}
           ${item.diff_percent ? `<span class="reason-badge danger">${escapeHtml(String(item.diff_percent))}% diff</span>` : ''}
         </div>
         <button class="secondary" data-manual-load="${escapeHtml(item.path)}">Load target</button>
@@ -458,12 +464,17 @@ async function loadManualTarget(path) {
   // and switch the provider so the search hits the right endpoint.
   const detectedSeries = (data.metadata?.series || '').toLowerCase();
   const detectedPub   = (data.metadata?.publisher || '').toLowerCase();
+  const isTitleQueryProvider = detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')
+    || detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth');
+  // Update the hint before calling toggleManualProviderFields -- that function lives
+  // inside an async IIFE and is out of scope here, so the call may throw.
+  if ($('manualTitleQueryNote')) $('manualTitleQueryNote').hidden = !isTitleQueryProvider;
   if (detectedSeries.includes('graphicaudio') || detectedPub.includes('graphicaudio')) {
     $('manualProvider').value = 'graphicaudio';
-    toggleManualProviderFields();
+    try { toggleManualProviderFields(); } catch {}
   } else if (detectedSeries.includes('soundbooth') || detectedPub.includes('soundbooth')) {
     $('manualProvider').value = 'soundbooththeater';
-    toggleManualProviderFields();
+    try { toggleManualProviderFields(); } catch {}
   }
 
   $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -573,6 +584,7 @@ function renderCompareTable(index, result, mode) {
 }
 
 function renderManualSearchResults(results = []) {
+  manualSearchResultsCache = results;
   $('manualSearchResults').innerHTML = results.length
     ? results.map((result, index) => {
       const duration = result.duration || {};
@@ -671,7 +683,7 @@ async function searchManualTarget() {
   let res;
 
   if (provider === 'abs') {
-    const absRes = await fetch('/api/abs/search', {
+    res = await fetch('/api/abs/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -680,7 +692,6 @@ async function searchManualTarget() {
         limit: 10,
       }),
     });
-    res = await absRes.json();
   } else if (provider === 'abs-agg') {
     res = await searchAbsAgg({
       query: $('manualQuery').value.trim(),
@@ -721,20 +732,34 @@ async function searchManualTarget() {
 }
 
 function buildManualApplyDialogs() {
-  if ($('manualApplyConfirmDialog')) return;
+  if ($('manualApplyEditDialog')) return;
 
-  const confirmDlg = document.createElement('dialog');
-  confirmDlg.id = 'manualApplyConfirmDialog';
-  confirmDlg.className = 'manual-apply-dialog';
-  confirmDlg.innerHTML = `
-    <h3 class="manual-apply-title">Confirm manual apply override</h3>
-    <p id="manualApplyConfirmBody" class="manual-apply-body"></p>
-    <p id="manualApplyCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+  const editDlg = document.createElement('dialog');
+  editDlg.id = 'manualApplyEditDialog';
+  editDlg.className = 'manual-apply-dialog manual-apply-edit-dialog';
+  editDlg.innerHTML = `
+    <h3 class="manual-apply-title">Review before applying</h3>
+    <p id="manualApplyEditContext" class="manual-apply-body"></p>
+    <p id="manualApplyEditCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
+    <p class="manual-apply-edit-hint">Blank fields are left as-is in the file.</p>
+    <div class="manual-apply-edit-fields">
+      <label>Title<input id="maeTitle" /></label>
+      <label>Subtitle<input id="maeSubtitle" /></label>
+      <label>Author<input id="maeAuthor" /></label>
+      <label>Narrator<input id="maeNarrator" /></label>
+      <label>Series<input id="maeSeries" /></label>
+      <label>Sequence<input id="maeSequence" /></label>
+      <label>Year<input id="maeYear" /></label>
+      <label>ASIN<input id="maeAsin" /></label>
+      <label>Publisher<input id="maePublisher" /></label>
+      <label>Genre<input id="maeGenre" /></label>
+      <label class="mae-full-width">Comment / Summary<textarea id="maeSummary" rows="4"></textarea></label>
+    </div>
     <div class="manual-apply-actions">
-      <button id="manualApplyCancelBtn" class="secondary">Cancel</button>
-      <button id="manualApplyConfirmBtn">Apply</button>
+      <button id="maeCancelBtn" class="secondary">Cancel</button>
+      <button id="maeConfirmBtn">Confirm &amp; Apply</button>
     </div>`;
-  document.body.appendChild(confirmDlg);
+  document.body.appendChild(editDlg);
 
   const progDlg = document.createElement('dialog');
   progDlg.id = 'manualApplyProgressDialog';
@@ -765,30 +790,56 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   if (!editMode) { alert('Choose an apply mode first.'); return; }
 
   buildManualApplyDialogs();
-  const confirmDlg = $('manualApplyConfirmDialog');
-  const progDlg    = $('manualApplyProgressDialog');
+  const editDlg = $('manualApplyEditDialog');
+  const progDlg = $('manualApplyProgressDialog');
 
-  $('manualApplyConfirmBody').textContent =
-    `Apply ${editMode} mode to:\n${manualContext.display_path || manualContext.path}`;
-  $('manualApplyCoverNote').hidden = !replaceCover;
+  // Pre-fill edit dialog from the chosen result for the selected mode.
+  const chosen = chosenMetadataFor(result, editMode);
+  $('manualApplyEditContext').textContent =
+    `Applying ${editMode} mode to: ${manualContext.display_path || manualContext.path}`;
+  $('manualApplyEditCoverNote').hidden = !replaceCover;
+  $('maeTitle').value     = chosen.title     || '';
+  $('maeSubtitle').value  = chosen.subtitle  || '';
+  $('maeAuthor').value    = chosen.author    || '';
+  $('maeNarrator').value  = chosen.narrator  || '';
+  $('maeSeries').value    = chosen.series    || '';
+  $('maeSequence').value  = chosen.sequence  || '';
+  $('maeYear').value      = chosen.year      || '';
+  $('maeAsin').value      = chosen.asin      || '';
+  $('maePublisher').value = chosen.publisher || '';
+  $('maeGenre').value     = chosen.genre     || '';
+  $('maeSummary').value   = chosen.summary   || '';
 
-  const confirmed = await new Promise(resolve => {
+  const editResult = await new Promise(resolve => {
     function cleanup(val) {
-      $('manualApplyConfirmBtn').removeEventListener('click', onOk);
-      $('manualApplyCancelBtn').removeEventListener('click', onCancel);
-      confirmDlg.removeEventListener('cancel', onCancel);
-      confirmDlg.close();
+      $('maeConfirmBtn').removeEventListener('click', onOk);
+      $('maeCancelBtn').removeEventListener('click', onCancel);
+      editDlg.removeEventListener('cancel', onCancel);
+      editDlg.close();
       resolve(val);
     }
     const onOk     = () => cleanup(true);
     const onCancel = () => cleanup(false);
-    $('manualApplyConfirmBtn').addEventListener('click', onOk);
-    $('manualApplyCancelBtn').addEventListener('click', onCancel);
-    confirmDlg.addEventListener('cancel', onCancel, { once: true });
-    confirmDlg.showModal();
+    $('maeConfirmBtn').addEventListener('click', onOk);
+    $('maeCancelBtn').addEventListener('click', onCancel);
+    editDlg.addEventListener('cancel', onCancel, { once: true });
+    editDlg.showModal();
   });
 
-  if (!confirmed) return;
+  if (!editResult) return;
+
+  // Collect any fields the user changed. Blank values are ignored (not sent as overrides).
+  const metadataOverride = {};
+  const fields = [
+    ['title', 'maeTitle'], ['subtitle', 'maeSubtitle'], ['author', 'maeAuthor'],
+    ['narrator', 'maeNarrator'], ['series', 'maeSeries'], ['sequence', 'maeSequence'],
+    ['year', 'maeYear'], ['asin', 'maeAsin'], ['publisher', 'maePublisher'],
+    ['genre', 'maeGenre'], ['summary', 'maeSummary'],
+  ];
+  for (const [key, id] of fields) {
+    const val = $(id).value.trim();
+    if (val && val !== String(chosen[key] ?? '').trim()) metadataOverride[key] = val;
+  }
 
   let completed = false;
   let dismissed = false;
@@ -831,6 +882,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
         cover_if_missing: false,
         replace_cover: replaceCover,
         writer: 'auto',
+        metadata_override: metadataOverride,
       }),
     });
     const data = await res.json();
@@ -856,6 +908,26 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       alert(`Manual apply complete.\nMode: ${data.edit_mode}  ·  Output: ${outputLabel}\n${data.target_path}`);
       return;
     }
+
+    // Silently refresh the context so compare tables show post-apply values.
+    try {
+      const reloadRes = await fetch('/api/manual-review/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: manualContext.path, script_name: $('script').value }),
+      });
+      if (reloadRes.ok) {
+        const reloadData = await reloadRes.json();
+        manualContext = { ...manualContext, metadata: reloadData.metadata, queries: reloadData.queries };
+        for (const div of $('manualSearchResults').querySelectorAll('div[data-compare]')) {
+          const idx = Number(div.getAttribute('data-compare'));
+          const mode = $('manualSearchResults').querySelector(`select[data-manual-mode="${idx}"]`)?.value
+            || manualSearchResultsCache[idx]?.recommended_edit_mode
+            || manualSearchResultsCache[idx]?.edit_mode;
+          if (manualSearchResultsCache[idx]) renderCompareTable(idx, manualSearchResultsCache[idx], mode);
+        }
+      }
+    } catch {}
 
     $('manualApplyProgressTitle').textContent = 'Applied successfully';
     $('manualApplyProgressFill').className = 'manual-apply-progress-fill complete';
@@ -889,8 +961,38 @@ function syncForceOriginal() {
 $('force').addEventListener('change', syncForceOriginal);
 syncForceOriginal();
 
+$('workers').addEventListener('input', () => {
+  $('writeWorkers').value = Math.min(parseInt($('workers').value || '1', 10), 30);
+});
+$('writeWorkers').addEventListener('input', () => {
+  const v = parseInt($('writeWorkers').value || '1', 10);
+  if (v > 30) $('writeWorkers').value = 30;
+});
+
+async function loadLastReport() {
+  const btn = $('loadLastReportBtn');
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  try {
+    const res = await fetch('/api/reports/latest');
+    if (!res.ok) { alert((await res.json()).detail || 'No report found'); return; }
+    const report = await res.json();
+    latestState = report;
+    renderStats(report.stats || {}, report.started_at, report.finished_at);
+    renderCategories(report.files_by_category || {});
+    renderManualReview(report.manual_review_items || []);
+    $('runStatus').textContent = `Last report loaded (${report.status || 'unknown'})`;
+    $('currentFile').textContent = report.id || '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
+$('loadLastReportBtn').addEventListener('click', loadLastReport);
 $('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
 $('manualReviewFilter')?.addEventListener('change', renderManualReviewList);
@@ -1028,6 +1130,9 @@ if ($('targetScanBtn')) {
     // Update provider hint near "Search query"
     if ($('manualProviderHintName')) {
       $('manualProviderHintName').textContent = PROVIDER_LABELS[v] || v;
+    }
+    if ($('manualTitleQueryNote')) {
+      $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater');
     }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);

@@ -709,6 +709,7 @@ class RunRequest(BaseModel):
     ignored_folders: list[str] = Field(default_factory=list)
 
     workers: int | None = None
+    write_workers: int | None = None
     api_delay_ms: int = 0
     write_mode: str = "smart"
     provider: str = "audible"
@@ -785,6 +786,7 @@ class ManualReviewApplyRequest(BaseModel):
     cover_if_missing: bool = False
     replace_cover: bool = False
     writer: str = "auto"
+    metadata_override: dict[str, Any] = Field(default_factory=dict)
 
 
 class M4BRunRequest(BaseModel):
@@ -938,8 +940,9 @@ def derive_manual_review_items(
             continue
         reason = item.get("title", "")
         # Intentional skips (pattern matches and already-processed markers) are
-        # working as designed — they don't belong in manual review.
-        if reason.startswith("matched skip pattern:") or reason == "already processed":
+        # working as designed -- they don't belong in manual review.
+        # "already manually applied" is handled via the status:manual_applied category below.
+        if reason.startswith("matched skip pattern:") or reason in {"already processed", "already manually applied"}:
             continue
         # Map verbose skip reasons to concise UI labels.
         if reason.startswith("duplicate Audible ASIN") or "asin conflict" in reason.lower():
@@ -963,6 +966,9 @@ def derive_manual_review_items(
 
     for path in [item.get("path", "") for item in files_by_category.get("review:duration-tiebreak", []) if item.get("path")]:
         ensure(path)["reasons"].append("duration tie-break")
+
+    for path in [item.get("path", "") for item in files_by_category.get("status:manual_applied", []) if item.get("path")]:
+        ensure(path)["reasons"].append("manually applied")
 
     threshold = stats.get("large_duration_threshold", 10)
     for item in stats.get("large_duration_items", []):
@@ -1120,6 +1126,8 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.stats["skip_reasons"].setdefault(reason, 0)
         state.stats["skip_reasons"][reason] += 1
         add_category(state, "status", "skipped", state.current_file, reason)
+        if reason == "already manually applied":
+            add_category(state, "status", "manual_applied", state.current_file)
         return
 
     m = ERROR_RE.match(line)
@@ -1347,6 +1355,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
     if _fixer_major_version(req.script_name) >= 5:
         if req.workers is not None and req.workers > 0:
             cmd += ["--workers", str(req.workers)]
+        if req.write_workers is not None and req.write_workers > 0:
+            cmd += ["--write-workers", str(req.write_workers)]
         if req.api_delay_ms > 0:
             cmd += ["--api-delay-ms", str(req.api_delay_ms)]
         if req.write_mode and req.write_mode != "smart":
@@ -2129,6 +2139,12 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         file_type,
         req.edit_mode,
     )
+
+    for key in ("title", "subtitle", "author", "narrator", "series", "sequence", "year", "asin", "publisher", "genre", "summary"):
+        if key in req.metadata_override and req.metadata_override[key] is not None:
+            metadata[key] = req.metadata_override[key]
+
+    metadata["write_summary"] = True
 
     if not metadata.get("title") or not metadata.get("author"):
         raise HTTPException(status_code=400, detail="Selected result does not include enough metadata to apply")
@@ -4535,6 +4551,38 @@ def load_m4b_metadata(req: M4BLoadRequest) -> dict[str, Any]:
         root_file = str((sidecar_section.get("source", {}) or {}).get("root_file", "") or "")
         if root_file:
             source_path = Path(root_file)
+    else:
+        # No sidecar -- read the current embedded tags from the first audio file
+        # so the M4B Tool form is pre-populated instead of blank.
+        try:
+            audio_files = source_audio_files(path)
+            if audio_files:
+                fixer_module = load_fixer_module(default_fixer_script())
+                _, clues, _ = fixer_module.build_search_context(
+                    audio_files[0], {}, use_backup_tags=False
+                )
+                raw_tags = clues.get("_raw_tags") or {}
+                year_val = str(raw_tags.get("date", raw_tags.get("year", "")) or "").strip()
+                year_val = year_val[:4] if len(year_val) >= 4 else year_val
+                summary_val = (
+                    raw_tags.get("comment")
+                    or raw_tags.get("description")
+                    or raw_tags.get("ldes")
+                    or ""
+                )
+                form = normalize_m4b_metadata(M4BMetadataForm(
+                    title=clues.get("title", "") or clues.get("raw_title", ""),
+                    author=clues.get("author", ""),
+                    narrator=clues.get("narrator", ""),
+                    series=clues.get("series", ""),
+                    sequence=str(clues.get("book_number", "") or ""),
+                    year=year_val,
+                    asin=str(raw_tags.get("asin", "") or ""),
+                    summary=summary_val,
+                    local_duration_minutes=clues.get("local_duration_minutes"),
+                )).model_dump()
+        except Exception:
+            pass
 
     source_for_default = source_path if selected else path
     audio_summary = cached_audio_summary(path)
@@ -4739,3 +4787,17 @@ def download(run_id: str, kind: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=filename)
+
+
+@app.get("/api/reports/latest")
+def get_latest_report() -> dict[str, Any]:
+    report_files = sorted(REPORTS_DIR.glob("*.report.json"), reverse=True)
+    for path in report_files:
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cmd0 = (report.get("command") or [""])[0]
+        if "python" in cmd0 or "fixer" in cmd0:
+            return report_for_api(report)
+    raise HTTPException(status_code=404, detail="No fixer reports found")
