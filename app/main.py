@@ -4718,6 +4718,16 @@ def start_organizer_run(req: OrganizerRunRequest) -> dict[str, Any]:
     return {"id": run_id}
 
 
+@app.get("/api/runs/draining")
+def get_draining() -> dict[str, Any]:
+    """Return whether any cancelled run still has live worker threads finishing writes."""
+    draining = any(
+        s.status == "cancelled" and s.process is not None and s.process.poll() is None
+        for s in runs.values()
+    )
+    return {"draining": draining}
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str) -> dict[str, Any]:
     state = runs.get(run_id)
@@ -4734,6 +4744,11 @@ def get_run(run_id: str) -> dict[str, Any]:
             return result
         raise HTTPException(status_code=404, detail="Run not found")
 
+    workers_draining = (
+        state.status == "cancelled"
+        and state.process is not None
+        and state.process.poll() is None
+    )
     return {
         "id": state.id,
         "status": state.status,
@@ -4755,6 +4770,7 @@ def get_run(run_id: str) -> dict[str, Any]:
         "stats": state.stats,
         "files_by_category": state.files_by_category,
         "manual_review_items": derive_manual_review_items(state.stats, state.files_by_category),
+        "workers_draining": workers_draining,
         "downloads": {
             "log": f"/api/runs/{run_id}/download/log" if state.log_path else None,
             "report": f"/api/runs/{run_id}/download/report" if state.report_path else None,
