@@ -7627,9 +7627,11 @@ def main():
                 break
 
             # Pass 1 already printed result.log_lines in full.
-            # Pass 2 emits only the Processing: header (for write_current tracking)
+            # Pass 2 emits a "Writing:" header (distinct from "Processing:" so the
+            # backend can track write_current without overwriting match current)
             # plus the write-specific lines (APPLIED/PLAN/SOURCE).
-            out: list[str] = [result.log_lines[0]] if result.log_lines else []
+            _p1_header = result.log_lines[0] if result.log_lines else ""
+            out: list[str] = [_p1_header.replace("] Processing:", "] Writing:", 1)] if _p1_header else []
             w_matched = 0
             w_skipped = 0
             w_failed = 0

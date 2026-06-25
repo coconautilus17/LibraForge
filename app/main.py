@@ -228,6 +228,7 @@ _LOCALE_NAMES: dict[str, str] = {
 }
 
 PROCESSING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Processing:\s+(.+)$")
+WRITING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Writing:\s+(.+)$")
 FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
@@ -1026,9 +1027,10 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         elif phase_id == "summarizing":
             state.percent = max(state.percent, 98.0)
 
-    # NO-OP and Smart-skip books complete the write phase without emitting APPLIED.
+    # NO-OP and Smart-skip: tags already matched, no write needed. They only
+    # appear in Pass 2 output, so always count them toward write_current.
     stripped = line.strip()
-    if (stripped.startswith("NO-OP") or stripped.startswith("Smart-skip")) and state.current >= state.total > 0:
+    if stripped.startswith("NO-OP") or stripped.startswith("Smart-skip"):
         state.write_current += 1
         state.percent = _fixer_percent(state)
 
@@ -1064,6 +1066,20 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             "inspecting",
             "Inspecting metadata",
             f"Item {state.current} of {state.total}",
+        )
+        return
+
+    # Pass 2 write header -- distinct from Processing: so match current is not overwritten.
+    m = WRITING_RE.match(line)
+    if m:
+        state.current = state.total  # match phase is done; lock it at 100%
+        state.current_file = m.group(3).strip()
+        state.percent = _fixer_percent(state)
+        set_run_phase(
+            state,
+            "writing",
+            "Writing metadata",
+            f"Writing {state.write_current + 1} of {state.total}",
         )
         return
 
