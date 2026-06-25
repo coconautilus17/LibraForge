@@ -211,13 +211,14 @@ function renderPhaseCounters(state) {
   }
   $('scanCount').textContent = scanDone ? 'done' : (isRunning ? '…' : '-');
 
-  // Match bar
+  // Match bar -- also mark done when we're in the write phase (current locked at total)
   const matchPct = total ? (matchCurrent / total * 100) : 0;
-  const matchDone = total > 0 && matchCurrent >= total;
+  const inWritePhase = ['writing', 'recording'].includes(state.phase);
+  const matchDone = total > 0 && (matchCurrent >= total || inWritePhase);
   const matchFill = $('matchFill');
   matchFill.className = 'phase-fill' + (matchDone ? ' complete' : '');
   if (!matchDone) matchFill.style.width = `${matchPct}%`;
-  $('matchCount').textContent = total ? `${matchCurrent} / ${total}` : '-';
+  $('matchCount').textContent = total ? `${matchDone ? total : matchCurrent} / ${total}` : '-';
 
   // Write bar
   const writePct = total ? Math.min(100, writeCurrent / total * 100) : 0;

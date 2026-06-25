@@ -228,6 +228,7 @@ _LOCALE_NAMES: dict[str, str] = {
 }
 
 PROCESSING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Processing:\s+(.+)$")
+WRITING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Writing:\s+(.+)$")
 FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
@@ -870,6 +871,7 @@ class RunState:
     total: int = 0
     percent: float = 0.0
     write_current: int = 0
+    in_write_phase: bool = False
     lines_tail: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
     files_by_category: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -1026,9 +1028,10 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         elif phase_id == "summarizing":
             state.percent = max(state.percent, 98.0)
 
-    # NO-OP and Smart-skip books complete the write phase without emitting APPLIED.
+    # NO-OP and Smart-skip: tags already matched, no write needed. They only
+    # appear in Pass 2 output, so always count them toward write_current.
     stripped = line.strip()
-    if (stripped.startswith("NO-OP") or stripped.startswith("Smart-skip")) and state.current >= state.total > 0:
+    if stripped.startswith("NO-OP") or stripped.startswith("Smart-skip"):
         state.write_current += 1
         state.percent = _fixer_percent(state)
 
@@ -1064,6 +1067,21 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             "inspecting",
             "Inspecting metadata",
             f"Item {state.current} of {state.total}",
+        )
+        return
+
+    # Pass 2 write header -- distinct from Processing: so match current is not overwritten.
+    m = WRITING_RE.match(line)
+    if m:
+        state.current = state.total  # match phase is done; lock it at 100%
+        state.in_write_phase = True
+        state.current_file = m.group(3).strip()
+        state.percent = _fixer_percent(state)
+        set_run_phase(
+            state,
+            "writing",
+            "Writing metadata",
+            f"Writing {state.write_current + 1} of {state.total}",
         )
         return
 
@@ -1128,12 +1146,19 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "status", "skipped", state.current_file, reason)
         if reason == "already manually applied":
             add_category(state, "status", "manual_applied", state.current_file)
+        # In write phase, a skip means this item is done (no write needed).
+        if state.in_write_phase and state.total:
+            state.write_current += 1
+            state.percent = _fixer_percent(state)
         return
 
     m = ERROR_RE.match(line)
     if m and state.current_file:
         state.stats["error_count"] += 1
         add_category(state, "status", "error", state.current_file, m.group(1).strip())
+        if state.in_write_phase and state.total:
+            state.write_current += 1
+            state.percent = _fixer_percent(state)
         return
 
     if state.current_file and MATCH_RE.match(line):
