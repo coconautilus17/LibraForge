@@ -12,7 +12,6 @@ reports/
 config/title-noise.local.json
 output/
 docker-compose.override.yml
-scripts/audible-metadata-fixer-v5*.py
 HANDOFF.md
 PROJECT_REFERENCE.md
 
