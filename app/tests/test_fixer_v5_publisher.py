@@ -53,6 +53,38 @@ class PublisherCaptureTests(unittest.TestCase):
         self.assertEqual(clues["publisher"], "Soundbooth Theater")
         self.assertEqual(FIXER.detect_special_provider(clues), "soundbooththeater")
 
+    def test_special_provider_from_dramatized_title(self):
+        # The "Dramatized Adaptation" marker commonly sits in the title only
+        # (e.g. "Storm Front (Dramatized Adaptation)"), where the publisher /
+        # series / composer signals never see it. Detection must still fire.
+        clues = {
+            "title": "Storm Front (Dramatized Adaptation)",
+            "author": "Jim Butcher",
+            "series": "The Dresden Files",
+        }
+        self.assertEqual(FIXER.detect_special_provider(clues), "graphicaudio")
+
+    def test_special_provider_from_dramatized_subtitle_still_detected(self):
+        clues = {
+            "title": "Storm Front",
+            "subtitle": "Dramatized Adaptation",
+            "author": "Jim Butcher",
+        }
+        self.assertEqual(FIXER.detect_special_provider(clues), "graphicaudio")
+
+    def test_plain_title_is_not_special_provider(self):
+        clues = {"title": "Storm Front", "author": "Jim Butcher"}
+        self.assertIsNone(FIXER.detect_special_provider(clues))
+
+    def test_full_cast_title_alone_is_not_graphicaudio(self):
+        # "Full-Cast Edition" (Harry Potter / Pottermore) is not a dramatized
+        # adaptation and must not be misrouted to the GraphicAudio endpoint.
+        clues = {
+            "title": "Harry Potter and the Goblet of Fire (Full-Cast Edition)",
+            "author": "J.K. Rowling",
+        }
+        self.assertIsNone(FIXER.detect_special_provider(clues))
+
     def test_format_descriptor_not_recorded_as_publisher(self):
         # A publisher tag that is only "Unabridged" is a format descriptor, not a publisher.
         clues = {"author": "Jane Doe"}
