@@ -1,0 +1,47 @@
+# End-user deployment: pull the published image and run it. The only thing you
+# must provide is the path to your audiobook library; everything else uses
+# named volumes so there is nothing to set up on the host.
+#
+#   AUDIOBOOKS_PATH=/path/to/your/audiobooks \
+#     docker compose -f docker-compose.dist.yml up -d
+#
+# Then open http://127.0.0.1:5056 and (optionally) connect an Audible account on
+# the Accounts page to enable metadata lookups. Run reports and Audible auth
+# persist in the named volumes below across restarts and image upgrades.
+#
+# To upgrade: `docker compose -f docker-compose.dist.yml pull && ... up -d`.
+services:
+  libraforge:
+    image: ghcr.io/coconautilus17/libraforge:latest
+    container_name: libraforge
+    # Run as your host user so files written into the library keep your
+    # ownership. Defaults to 1000:1000; set UID/GID if your user differs.
+    user: "${UID:-1000}:${GID:-1000}"
+    restart: unless-stopped
+    ports:
+      # Localhost-only by default. LibraForge has no built-in auth, so do not
+      # bind it to a public interface without a reverse proxy / VPN in front.
+      - "127.0.0.1:${LIBRAFORGE_PORT:-5056}:5056"
+    environment:
+      - AUDIOBOOKS_ROOT=/audiobooks
+    volumes:
+      # The only required mount: your audiobook library.
+      - ${AUDIOBOOKS_PATH:?Set AUDIOBOOKS_PATH to your audiobook library path}:/audiobooks
+      # Audible auth (accounts you connect in the UI) and run reports persist
+      # here without any host folder setup.
+      - libraforge-auth:/auth
+      - libraforge-reports:/app/reports
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5056/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  libraforge-auth:
+  libraforge-reports:

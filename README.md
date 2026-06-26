@@ -109,6 +109,33 @@ via `docker-compose.override.yml` (git-ignored).
 Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test`
 (run `make help` for the full list).
 
+### Run the published image (no clone)
+
+The image on GitHub Container Registry is self-contained - the only thing you
+provide is the path to your library. Audible auth and run reports persist in
+named volumes, so there is nothing else to set up:
+
+```bash
+docker run -d --name libraforge \
+  --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:5056:5056 \
+  -v /path/to/your/audiobooks:/audiobooks \
+  -v libraforge-auth:/auth \
+  -v libraforge-reports:/app/reports \
+  ghcr.io/coconautilus17/libraforge:latest
+```
+
+Or with Compose - download [`docker-compose.dist.yml`](docker-compose.dist.yml) and run:
+
+```bash
+AUDIOBOOKS_PATH=/path/to/your/audiobooks \
+  docker compose -f docker-compose.dist.yml up -d
+```
+
+Then open **http://127.0.0.1:5056** and connect an Audible account on the
+Accounts page (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
+`docker pull ghcr.io/coconautilus17/libraforge:latest`.
+
 ### Optional companion services
 
 | Service | Purpose | Required? |

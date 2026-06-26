@@ -16,7 +16,18 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 COPY scripts /app/scripts
 COPY config /app/config
-RUN mkdir -p /app/reports
+
+# Create the writable mount points and make them world-writable so the image
+# works for any runtime UID/GID. Named volumes inherit these perms at first
+# creation, so compose/`docker run` with `--user` (or the default 1000) can
+# write reports, auth files, and UI config overrides without a host chown.
+RUN mkdir -p /app/reports /auth \
+    && chmod -R 0777 /app/reports /auth /app/config
+
+# Default to a non-root user so a bare `docker run` (no --user) does not write
+# root-owned files into a mounted library. Compose overrides this with the host
+# UID/GID.
+USER 1000:1000
 
 EXPOSE 5056
 ENTRYPOINT []
