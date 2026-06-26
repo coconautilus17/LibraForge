@@ -15,7 +15,29 @@ function pathDir(p) {
 }
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, statCard: stat } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, statCard: stat, saveActiveRun, clearActiveRun, loadActiveRun } = window.UiCommon;
+const RUN_KEY = 'organizer';
+
+// Re-attach polling/UI to an existing run id (used by start and by reconnect).
+function attachToRun(id) {
+  currentRun = id;
+  saveActiveRun(RUN_KEY, id);
+  $('startBtn').disabled = true;
+  $('cancelBtn').disabled = false;
+  clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 1000);
+  poll();
+}
+
+// On load, resume showing a run that is still going (or just finished) in the
+// background so navigating away and back does not lose it.
+async function resumeActiveRun() {
+  const id = loadActiveRun(RUN_KEY);
+  if (!id) return;
+  const res = await fetch(`/api/runs/${id}`).catch(() => null);
+  if (!res || !res.ok) { clearActiveRun(RUN_KEY); return; }
+  attachToRun(id);
+}
 
 async function loadScripts() {
   const res = await fetch('/api/scripts');
@@ -68,11 +90,7 @@ async function startRun() {
     return;
   }
 
-  currentRun = data.id;
-  $('startBtn').disabled = true;
-  $('cancelBtn').disabled = false;
-  pollTimer = setInterval(poll, 1000);
-  poll();
+  attachToRun(data.id);
 }
 
 async function cancelRun() {
@@ -89,6 +107,7 @@ async function poll() {
   render(state);
   if (['completed', 'failed', 'cancelled'].includes(state.status)) {
     clearInterval(pollTimer);
+    clearActiveRun(RUN_KEY);
     $('startBtn').disabled = false;
     $('cancelBtn').disabled = true;
   }
@@ -214,3 +233,4 @@ $("reviewOnly").addEventListener("change", () => renderMoves(latestMoveItems));
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
 loadScripts();
+resumeActiveRun();

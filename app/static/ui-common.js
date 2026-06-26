@@ -239,10 +239,27 @@
     return { navigate: fbNavigate, close: closeBrowser };
   }
 
+  // Active-run persistence: remember the run id for a page so navigating away
+  // or reloading can re-attach to a run that is still going in the background
+  // (the server keeps the worker thread alive independent of the browser).
+  const RUN_STORAGE_PREFIX = "libraforge:activeRun:";
+  function saveActiveRun(pageKey, runId) {
+    try { localStorage.setItem(RUN_STORAGE_PREFIX + pageKey, runId); } catch (_e) { /* private mode */ }
+  }
+  function clearActiveRun(pageKey) {
+    try { localStorage.removeItem(RUN_STORAGE_PREFIX + pageKey); } catch (_e) { /* private mode */ }
+  }
+  function loadActiveRun(pageKey) {
+    try { return localStorage.getItem(RUN_STORAGE_PREFIX + pageKey) || null; } catch (_e) { return null; }
+  }
+
   window.UiCommon = {
     escapeHtml,
     renderDownloadLinks,
     statCard,
+    saveActiveRun,
+    clearActiveRun,
+    loadActiveRun,
     loadAbsAggProviders,
     getAbsAggProviderParamHint,
     isAbsAggReachable,
