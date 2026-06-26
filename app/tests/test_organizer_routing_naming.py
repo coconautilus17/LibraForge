@@ -76,6 +76,53 @@ class EditionTagDetectionTests(unittest.TestCase):
         self.assertEqual(ORGANIZER.strip_edition_marker("Cradle [Dramatized Adaptation]"), "Cradle")
 
 
+class CanonicalAuthorNameTests(unittest.TestCase):
+    def test_spaced_and_compact_initials_converge(self):
+        a = ORGANIZER.canonical_author_name("J. R. R. Tolkien")
+        b = ORGANIZER.canonical_author_name("J.R.R. Tolkien")
+        self.assertEqual(a, b)
+        self.assertEqual(a, "J.R.R. Tolkien")
+
+    def test_mid_name_initials_collapse(self):
+        self.assertEqual(
+            ORGANIZER.canonical_author_name("George R. R. Martin"),
+            ORGANIZER.canonical_author_name("George R.R. Martin"),
+        )
+
+    def test_lone_initial_gets_a_dot_but_no_merge(self):
+        self.assertEqual(ORGANIZER.canonical_author_name("Iain M Banks"), "Iain M. Banks")
+
+    def test_plain_name_unchanged(self):
+        self.assertEqual(ORGANIZER.canonical_author_name("Brandon Sanderson"), "Brandon Sanderson")
+
+    def test_tolkien_variants_share_one_author_folder(self):
+        spaced = ORGANIZER.build_default_target_dir(
+            Path("/out"),
+            {"author_primary": "J. R. R. Tolkien", "series": "The Lord of the Rings",
+             "title": "The Two Towers", "book_number": "2", "sequence_label": ""},
+        )
+        compact = ORGANIZER.build_default_target_dir(
+            Path("/out"),
+            {"author_primary": "J.R.R. Tolkien", "series": "The Lord of the Rings",
+             "title": "The Fellowship of the Ring", "book_number": "1", "sequence_label": ""},
+        )
+        self.assertEqual(spaced.parts[:3], compact.parts[:3])
+        self.assertIn("J.R.R. Tolkien", spaced.parts)
+
+
+class NoSeriesEditionRoutingTests(unittest.TestCase):
+    def test_no_series_dramatized_suffixes_book_folder(self):
+        target = ORGANIZER.build_default_target_dir(
+            Path("/out"),
+            {"author_primary": "J.R.R. Tolkien", "series": "", "edition_tag": "Dramatized",
+             "title": "The Hobbit", "book_number": "", "sequence_label": ""},
+        )
+        # No bare "[Dramatized]" folder level; tag rides on the book folder.
+        self.assertNotIn("[Dramatized]", target.parts)
+        self.assertEqual(target.parts[-1], "The Hobbit [Dramatized]")
+        self.assertEqual(target.parts[-2], "J.R.R. Tolkien")
+
+
 class EditionRoutingTests(unittest.TestCase):
     def test_dramatized_series_routes_to_imprint_bucket(self):
         with tempfile.TemporaryDirectory() as temp_dir:
