@@ -745,41 +745,118 @@ def looks_like_chapter_part_filename(file_path: Path) -> bool:
     return any(re.search(pattern, name, flags=re.IGNORECASE) for pattern in patterns)
 
 
-def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
-    """Recognize groups named with a shared identity plus `- 01`, `- 02`, etc."""
-    grouped: dict[tuple[str, int], list[tuple[Path, int]]] = {}
-    for file_path in file_paths:
-        match = re.match(r"^(.+?)\s*[-_.]\s*(\d{2,4})$", file_path.stem)
-        if not match:
-            continue
-        prefix = normalize_part_filename(match.group(1))
-        if not prefix:
-            continue
-        number_text = match.group(2)
-        grouped.setdefault((prefix, len(number_text)), []).append(
-            (file_path, int(number_text))
-        )
+# Explicit, high-confidence "this file is one slice of a larger book" markers.
+# Centralised here so new spellings only need adding to this list. A *confident*
+# match (an explicit word, not just a bare trailing number) is strong enough to
+# group files even when they carry their own embedded chapters — a dramatised
+# "Part 1" can legitimately hold 10+ chapters. New patterns must capture the
+# part index as group(1).
+_PART_MARKER_PATTERNS = [
+    re.compile(r"\bpart\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\bpt\.?\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b(?:disc|disk|cd)\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b0*(\d{1,3})\s+of\s+0*\d{1,3}\b", re.IGNORECASE),  # "1 of 3"
+]
 
-    best: set[Path] = set()
+# Lower-confidence fallback: a trailing zero-padded sequence number ("Title - 01").
+# Single digits and unpadded numbers are excluded so a series number like
+# "Mistborn 1" / "Mistborn 2" is not mistaken for parts of one book.
+_TRAILING_PART_NUMBER_RE = re.compile(r"^(.+?)\s*[-_.]\s*(\d{2,4})$")
+
+
+def detect_part_marker(stem: str) -> tuple[str, int] | None:
+    """Return (identity_prefix, part_index) for an explicit multi-part marker.
+
+    Recognises 'Part N', 'Pt N', 'Disc/CD N' and 'N of M' anywhere in the name,
+    including inside parentheses. The last marker wins so a leading series number
+    (e.g. 'LotR1 - ... - Part 2') does not shadow the real part index. Returns
+    None when no confident marker is present.
+    """
+    best: tuple[int, int, int] | None = None  # (start, end, index)
+    for pattern in _PART_MARKER_PATTERNS:
+        for match in pattern.finditer(stem):
+            if best is None or match.start() > best[0]:
+                best = (match.start(), match.end(), int(match.group(1)))
+    if best is None:
+        return None
+    start, end, index = best
+    identity = normalize_part_filename(stem[:start] + " " + stem[end:])
+    return (identity or "_", index)
+
+
+def _part_sequence_key(stem: str) -> tuple[str, int, bool] | None:
+    """Return (identity, index, confident) for a file that looks like one part."""
+    marker = detect_part_marker(stem)
+    if marker is not None:
+        identity, index = marker
+        return (identity, index, True)
+    match = _TRAILING_PART_NUMBER_RE.match(stem)
+    if match:
+        prefix = normalize_part_filename(match.group(1))
+        if prefix:
+            return (prefix, int(match.group(2)), False)
+    return None
+
+
+def analyze_part_sequence(file_paths: list[Path]) -> tuple[set[Path], set[Path]]:
+    """Find the largest contiguous multi-part sequence among the files.
+
+    Returns (sequence_files, confident_files): the files belonging to the best
+    sequence, and the subset whose membership comes from an explicit part marker
+    (as opposed to a bare trailing number). Files with no part marker — e.g. a
+    complete single-file edition sitting alongside the parts — are excluded.
+    """
+    grouped: dict[str, list[tuple[Path, int, bool]]] = {}
+    for file_path in file_paths:
+        key = _part_sequence_key(file_path.stem)
+        if key is None:
+            continue
+        identity, index, confident = key
+        grouped.setdefault(identity, []).append((file_path, index, confident))
+
+    best_files: set[Path] = set()
+    best_confident: set[Path] = set()
     for matches in grouped.values():
-        numbers = sorted(number for _path, number in matches)
+        numbers = sorted(index for _path, index, _confident in matches)
         if (
             len(matches) >= 2
             and len(numbers) == len(set(numbers))
             and numbers[0] in {0, 1}
             and numbers == list(range(numbers[0], numbers[0] + len(numbers)))
         ):
-            candidate = {path for path, _number in matches}
-            if len(candidate) > len(best):
-                best = candidate
-    return best
+            files = {path for path, _index, _confident in matches}
+            if len(files) > len(best_files):
+                best_files = files
+                best_confident = {
+                    path for path, _index, confident in matches if confident
+                }
+    return best_files, best_confident
+
+
+def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Recognize multi-file books named with a shared identity plus a part index.
+
+    Handles explicit part markers ('... Part 1', 'Disc 2', '1 of 3') and trailing
+    zero-padded sequence numbers ('Title - 01'). See analyze_part_sequence.
+    """
+    return analyze_part_sequence(file_paths)[0]
 
 
 def classify_multi_part_file_safety(
     file_path: Path,
     chapter_count: int | None,
     numeric_part_sequence: bool = False,
+    confident_part: bool = False,
 ) -> tuple[bool, str]:
+    # An explicit part marker (Part N, N of M, Disc N) in a contiguous sequence is
+    # strong evidence the file is one slice of a larger book, even when it carries
+    # its own embedded chapters. A dramatised "Part 1" with 12 chapters plus a
+    # "Part 2" with 10 is one book, so this overrides the chapter-count veto below.
+    if confident_part:
+        if chapter_count is None:
+            return True, "explicit part marker (chapter metadata unreadable)"
+        return True, f"explicit part marker overrides embedded chapter count ({chapter_count})"
+
     if chapter_count is None:
         return False, "chapter metadata unreadable"
 
@@ -824,7 +901,7 @@ def validate_multi_part_group_files(
     chapter_count_reader = chapter_count_reader or read_file_chapter_count
     checked = []
     unsafe = []
-    numeric_parts = numeric_part_sequence_files(file_paths)
+    numeric_parts, confident_parts = analyze_part_sequence(file_paths)
 
     for file_path in sorted(file_paths, key=natural_audio_sort_key):
         if not is_chapter_metadata_candidate(file_path):
@@ -835,6 +912,7 @@ def validate_multi_part_group_files(
             file_path=file_path,
             chapter_count=chapter_count,
             numeric_part_sequence=file_path in numeric_parts,
+            confident_part=file_path in confident_parts,
         )
         item = {
             "file": str(file_path),
