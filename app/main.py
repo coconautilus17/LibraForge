@@ -4150,22 +4150,140 @@ def _read_asin_from_audio(audio_file: Path) -> str:
     return ""
 
 
-def _scan_owned_asins(root: Path) -> set[str]:
-    """Collect every ASIN already present under root (tags + [B0XXXXXXXX] filenames)."""
-    owned: set[str] = set()
-    for folder in _find_book_folders(root):
-        try:
-            audio = _book_audio_files(folder)
-        except PermissionError:
-            continue
-        for audio_file in audio:
-            m = _FILENAME_ASIN_RE.search(audio_file.name)
-            if m:
-                owned.add(m.group(1).upper())
-        if audio:
-            asin = _read_asin_from_audio(audio[0])
+def _asin_string_from_libraforge_json(path: Path) -> str:
+    """Return the real ASIN recorded in a libraforge.json sidecar, or ''.
+
+    Reads the same fields as _asin_from_libraforge_json but returns the value so
+    the owned-ASIN scan can avoid opening (and mutagen-parsing) the media file.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    for candidate in (
+        (data.get("scan_cache") or {}).get("asin"),
+        ((data.get("marker") or {}).get("audible") or {}).get("asin"),
+        (data.get("audible") or {}).get("asin"),
+    ):
+        asin = str(candidate or "").strip()
+        if asin and asin != _NOREALASIN:
+            return asin.upper()
+    return ""
+
+
+def _owned_asins_for_folder(folder: Path) -> set[str]:
+    """Resolve a book folder's ASIN(s) using the cheapest source available.
+
+    Order: [B0XXXXXXXX] filename token, then a libraforge.json sidecar, and only
+    as a last resort the embedded media tag (which opens the file -- slow over a
+    network mount). Most organized books resolve without ever opening media.
+    """
+    try:
+        audio = _book_audio_files(folder)
+    except OSError:
+        # Folder vanished or is unreadable mid-scan (libraries change while a
+        # scan runs). Skip it rather than failing the whole scan.
+        return set()
+    if not audio:
+        return set()
+
+    # 1) Filename token -- no file open.
+    owned = {m.group(1).upper() for f in audio if (m := _FILENAME_ASIN_RE.search(f.name))}
+    if owned:
+        return owned
+
+    # 2) libraforge.json sidecar -- small JSON read, no media parse.
+    first = audio[0]
+    for sidecar in (first.parent / (first.name + ".libraforge.json"), folder / "libraforge.json"):
+        if sidecar.is_file():
+            asin = _asin_string_from_libraforge_json(sidecar)
             if asin:
-                owned.add(asin)
+                return {asin}
+
+    # 3) Embedded tag -- opens the media file.
+    asin = _read_asin_from_audio(first)
+    return {asin} if asin else set()
+
+
+def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, str]], list[Path]]:
+    """Single-pass walk of one subtree.
+
+    Collects [B0XXXXXXXX] filename ASINs directly (no second directory listing)
+    and records the dirs that still need a fallback read: those with a
+    libraforge.json sidecar, or those with audio but no cheap ASIN (media open).
+    """
+    owned: set[str] = set()
+    sidecar_dirs: list[tuple[Path, str]] = []
+    media_files: list[Path] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(start)):
+            dirnames[:] = [d for d in dirnames if not any(d.startswith(s) for s in _FS_SKIP_PREFIXES)]
+            dir_found = False
+            sidecar_name: str | None = None
+            first_audio: Path | None = None
+            for f in filenames:
+                hit = _FILENAME_ASIN_RE.search(f)
+                if hit:
+                    owned.add(hit.group(1).upper())
+                    dir_found = True
+                elif sidecar_name is None and (f == "libraforge.json" or f.endswith(".libraforge.json")):
+                    sidecar_name = f
+                if first_audio is None and is_audio_file(Path(dirpath) / f):
+                    first_audio = Path(dirpath) / f
+            if dir_found or first_audio is None:
+                continue  # ASIN already found here, or no audio -> nothing to resolve
+            if sidecar_name:
+                sidecar_dirs.append((Path(dirpath), sidecar_name))
+            else:
+                media_files.append(first_audio)
+    except OSError:
+        pass
+    return owned, sidecar_dirs, media_files
+
+
+def _scan_owned_asins(root: Path) -> set[str]:
+    """Collect every ASIN already present under root (tags + [B0XXXXXXXX] filenames).
+
+    The cost on a network mount is the directory enumeration, so the walk is
+    fanned out across top-level entries (overlapping CIFS round trips) and done
+    in a single pass. Cheap sources win: filename token, then libraforge.json
+    sidecar; the media file is opened only as a last resort.
+    """
+    try:
+        top = [c for c in root.iterdir() if not any(c.name.startswith(s) for s in _FS_SKIP_PREFIXES)]
+    except OSError:
+        return set()
+
+    owned: set[str] = set()
+    # Loose audio files directly under root carry their ASIN in the filename.
+    for c in top:
+        if c.is_file() and (hit := _FILENAME_ASIN_RE.search(c.name)):
+            owned.add(hit.group(1).upper())
+
+    subtrees = [c for c in top if c.is_dir()]
+    sidecar_dirs: list[tuple[Path, str]] = []
+    media_files: list[Path] = []
+    if subtrees:
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for sub_owned, sub_sidecars, sub_media in pool.map(_owned_asins_under_subtree, subtrees):
+                owned |= sub_owned
+                sidecar_dirs.extend(sub_sidecars)
+                media_files.extend(sub_media)
+
+    # Fallback 1: read sidecars (cheap JSON, parallel) for dirs lacking a filename ASIN.
+    if sidecar_dirs:
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for asin in pool.map(lambda item: _asin_string_from_libraforge_json(item[0] / item[1]), sidecar_dirs):
+                if asin:
+                    owned.add(asin)
+
+    # Fallback 2: open the media file (slow) only for the residual dirs.
+    if media_files:
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for asin in pool.map(_read_asin_from_audio, media_files):
+                if asin:
+                    owned.add(asin)
+
     return owned
 
 
