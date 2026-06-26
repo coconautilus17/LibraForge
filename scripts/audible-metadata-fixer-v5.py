@@ -7178,11 +7178,13 @@ def _save_disk_asin_cache(cache: dict[str, dict]) -> None:
 
 
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
-    """Map each ASIN already embedded on disk -> set of file paths that carry it.
+    """Map each ASIN already present on disk -> set of file paths that carry it.
 
-    Reads the ``asin`` format tag from each file. Results are cached locally by
-    path + mtime, so only new or changed files are ffprobed on later runs (the cold
-    scan of a large network library is slow and only paid once). Used by
+    Resolves each file's ASIN from the cheapest source available -- the
+    ``[B0XXXXXXXX]`` filename token, then the ``libraforge.json`` sidecar, and
+    only then the embedded media tag -- so the cold scan of a large network
+    library rarely opens a media file. Results are cached by path + mtime, so
+    only new or changed files are re-resolved on later runs. Used by
     :func:`detect_global_asin_duplicates` to avoid assigning an ASIN that already
     belongs to a different book in the library.
     """
@@ -7205,7 +7207,21 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     if to_probe:
         def read_one(item: tuple[str, float | None]) -> tuple[str, float | None, str]:
             key, mtime = item
-            tags, _ = probe_file(Path(key))
+            fp = Path(key)
+            # Cheap sources first (same idea as the owned-ASIN check): the
+            # [B0XXXXXXXX] filename token, then the libraforge.json sidecar, so
+            # most organized books resolve without opening the media file over
+            # the network mount. Fall back to probing only when neither has it.
+            m = re.search(r"\[(?:ASIN\.)?([Bb]0[A-Z0-9]{8})\]", fp.name, flags=re.IGNORECASE)
+            if m:
+                return key, mtime, m.group(1).upper()
+            try:
+                sidecar_asin = str((load_marker(fp).get("audible") or {}).get("asin") or "").strip().upper()
+                if sidecar_asin and sidecar_asin != "NOREALASIN":
+                    return key, mtime, sidecar_asin
+            except Exception:
+                pass
+            tags, _ = probe_file(fp)
             asin = str((tags or {}).get("asin", "") or "").strip().upper()
             return key, mtime, asin
 
