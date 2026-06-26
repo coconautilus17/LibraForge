@@ -722,6 +722,37 @@ def primary_author(value: str) -> str:
     return sanitize_path_name(value, "Unknown Author")
 
 
+_SINGLE_INITIAL_RE = re.compile(r"[A-Za-z]\.?$")
+
+
+def canonical_author_name(value: str) -> str:
+    """Canonicalize initial spacing so name variants map to one author folder.
+
+    Runs of consecutive single-letter initials are collapsed into a dotted,
+    space-free cluster, so "J. R. R. Tolkien" and "J.R.R. Tolkien" both become
+    "J.R.R. Tolkien" (and "George R. R. Martin" / "George R.R. Martin" both
+    become "George R.R. Martin"). Non-initial tokens are left untouched.
+    """
+    if not value:
+        return value
+    parts = value.split()
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        if _SINGLE_INITIAL_RE.fullmatch(parts[i]):
+            run: list[str] = []
+            while i < len(parts) and _SINGLE_INITIAL_RE.fullmatch(parts[i]):
+                run.append(parts[i][0].upper())
+                i += 1
+            # Two or more adjacent initials collapse to "J.R.R."; a lone initial
+            # just gets a normalizing dot ("J" -> "J.").
+            out.append("".join(letter + "." for letter in run))
+        else:
+            out.append(parts[i])
+            i += 1
+    return " ".join(out)
+
+
 def people_keys(value: str) -> list[str]:
     keys: list[str] = []
     for person in split_people(value):
@@ -2741,7 +2772,7 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         series = clues["series"]
 
     author_full = clean_author_credits(author)
-    author_primary = primary_author(author_full)
+    author_primary = canonical_author_name(primary_author(author_full))
 
     # Dramatized adaptations (GraphicAudio, Soundbooth Theater, generic
     # dramatized editions) share a title and series with the normal recording,
@@ -2877,7 +2908,7 @@ def infer_metadata_from_library_path(item: BookItem, root: Path) -> dict[str, An
     return {
         "title": clean_book_title(title, clean_series, number),
         "author": author_full,
-        "author_primary": primary_author(author_full),
+        "author_primary": canonical_author_name(primary_author(author_full)),
         "series": clean_series,
         "book_number": number,
         "sequence_label": sequence_label,
@@ -2947,15 +2978,20 @@ def build_book_folder_name(metadata: dict[str, Any]) -> str:
 
 
 def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -> Path:
-    author_dir = sanitize_path_name(metadata.get("author_primary") or metadata.get("author"), "Unknown Author")
+    author_dir = sanitize_path_name(
+        canonical_author_name(metadata.get("author_primary") or metadata.get("author")),
+        "Unknown Author",
+    )
     series = metadata.get("series", "")
     book_folder = build_book_folder_name(metadata)
     if series:
         return destination_root / author_dir / series_dir_label(metadata) / book_folder
     if metadata.get("edition_tag"):
-        # No series, but still a dramatized edition: keep it out of the plain
-        # author root by grouping under a "[Imprint]" bucket.
-        return destination_root / author_dir / sanitize_path_name(f"[{metadata['edition_tag']}]", "Dramatized") / book_folder
+        # No series: ride the imprint tag on the book folder itself rather than
+        # inventing a bare "[Imprint]" folder level (e.g.
+        # "The Hobbit [Dramatized]", not "[Dramatized]/The Hobbit").
+        tagged = sanitize_path_name(f"{book_folder} [{metadata['edition_tag']}]", book_folder)
+        return destination_root / author_dir / tagged
     return destination_root / author_dir / book_folder
 
 
