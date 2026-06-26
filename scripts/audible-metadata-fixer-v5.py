@@ -5391,6 +5391,66 @@ def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
     return sorted(local_tokens) == sorted(audible_tokens)
 
 
+def has_author_identity_conflict(clues: dict, product: dict) -> bool:
+    """Detect a confidently-different author between the local book and product.
+
+    Used as a HARD reject: a title can collide across unrelated books (Arthur C.
+    Clarke's "Cradle" vs Will Wight's "Cradle" series), but the author cannot.
+    A different author means it is not the same book, so no duration/title/series
+    coincidence may promote it. ASIN identity is the only bypass (handled by the
+    caller).
+
+    Deliberately conservative -- returns False whenever the comparison is
+    uncertain, so legitimate matches are never blocked:
+      - missing author on either side,
+      - generic/placeholder author values,
+      - high whole-string similarity (formatting differences),
+      - substring containment ("Clarke" vs "Arthur C. Clarke"; co-authors),
+      - any shared name token (co-authors, middle-name variants, translators).
+    Only a complete absence of overlap counts as a conflict.
+    """
+    local_author = normalize_for_match(clean_author_value(clues.get("author", "")))
+    product_author = normalize_for_match(" ".join(get_people(product, "authors")))
+
+    if not local_author or not product_author:
+        return False
+
+    generic = {
+        "unknown",
+        "unknown author",
+        "various",
+        "various authors",
+        "anonymous",
+        "n a",
+        "na",
+    }
+    if local_author in generic or product_author in generic:
+        return False
+
+    # Same author allowing for formatting differences
+    # ("J R R Tolkien" vs "John Ronald Reuel Tolkien").
+    if SequenceMatcher(None, local_author, product_author).ratio() >= 0.70:
+        return False
+
+    # Containment covers short-vs-full names and co-author lists where one side
+    # is a subset of the other ("arthur c clarke gentry lee" contains
+    # "arthur c clarke").
+    if local_author in product_author or product_author in local_author:
+        return False
+
+    # Any shared meaningful name token (>= 3 chars, skipping initials) means we
+    # cannot be sure the authors differ -- shared co-author, alternate spelling,
+    # etc. Only block when there is zero overlap.
+    def name_tokens(value: str) -> set[str]:
+        return {token for token in value.split() if len(token) >= 3}
+
+    if name_tokens(local_author) & name_tokens(product_author):
+        return False
+
+    # No similarity, no containment, no shared name token: confidently different.
+    return True
+
+
 def score_product_for_metadata(
     clues: dict,
     product: dict,
@@ -5414,6 +5474,13 @@ def score_product_for_metadata(
         _asin_identity = _title_ok and _auth_ok
 
     if not _asin_identity:
+        # Hard reject a clearly different author. A title can collide across
+        # unrelated books (Arthur C. Clarke's "Cradle" vs Will Wight's "Cradle"
+        # series), but the author cannot -- a different author is never the same
+        # book, regardless of any duration/title/series coincidence.
+        if has_author_identity_conflict(clues, product):
+            return 0.0
+
         # Hard reject same-words/different-order titles.
         # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
         if has_reordered_title_conflict(clues, product):
