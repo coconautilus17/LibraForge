@@ -3740,6 +3740,16 @@ def abs_save_config(req: AbsSaveConfigRequest) -> dict[str, Any]:
     return {"ok": True, "reachable": reachable, "url": config["url"]}
 
 
+@app.post("/api/abs/disconnect")
+def abs_disconnect() -> dict[str, Any]:
+    """Delete the stored ABS API key (keeps the URL for convenience)."""
+    config = _load_abs_config()
+    config.pop("api_key", None)
+    _save_abs_config(config)
+    # If ABS_API_KEY was set via environment, the UI cannot clear it.
+    return {"ok": True, "env_key_present": bool(_ABS_API_KEY_DEFAULT)}
+
+
 @app.post("/api/abs/search")
 def abs_search(req: AbsSearchRequest) -> dict[str, Any]:
     return search_abs_candidates(
