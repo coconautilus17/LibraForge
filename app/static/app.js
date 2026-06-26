@@ -7,7 +7,29 @@ let manualReviewItems = [];
 let manualSearchResultsCache = [];
 
 const $ = (id) => document.getElementById(id);
-const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
+const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser, saveActiveRun, clearActiveRun, loadActiveRun } = window.UiCommon;
+const RUN_KEY = 'fixer';
+
+// Re-attach polling/UI to an existing run id (used by start and by reconnect).
+function attachToRun(id) {
+  currentRun = id;
+  saveActiveRun(RUN_KEY, id);
+  $('startBtn').disabled = true;
+  $('cancelBtn').disabled = false;
+  clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 1000);
+  poll();
+}
+
+// On load, resume showing a fixer run that is still going (or just finished) in
+// the background so navigating away and back does not lose it.
+async function resumeActiveRun() {
+  const id = loadActiveRun(RUN_KEY);
+  if (!id) return;
+  const res = await fetch(`/api/runs/${id}`).catch(() => null);
+  if (!res || !res.ok) { clearActiveRun(RUN_KEY); return; }
+  attachToRun(id);
+}
 
 const PROVIDER_LABELS = {
   'audible': 'Audible',
@@ -117,11 +139,7 @@ async function startRun() {
     return;
   }
   const data = await res.json();
-  currentRun = data.id;
-  $('startBtn').disabled = true;
-  $('cancelBtn').disabled = false;
-  pollTimer = setInterval(poll, 1000);
-  poll();
+  attachToRun(data.id);
 }
 
 async function cancelRun() {
@@ -144,6 +162,7 @@ async function poll() {
       return;
     }
     clearInterval(pollTimer);
+    clearActiveRun(RUN_KEY);
     showWorkerDrainBanner(false);
     $('startBtn').disabled = false;
     $('cancelBtn').disabled = true;
@@ -1031,6 +1050,7 @@ $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());
 $("manualReloadCoverBtn").addEventListener("click", loadManualCurrentCover);
 loadScripts();
+resumeActiveRun();
 
 // On load: check if a cancelled run from a previous session is still draining.
 fetch('/api/runs/draining').then(r => r.json()).then(d => { if (d.draining) showWorkerDrainBanner(true); }).catch(() => {});
