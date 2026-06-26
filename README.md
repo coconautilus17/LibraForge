@@ -58,7 +58,14 @@ Guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**, each
 recognisable name, and **switch between them in one click**, rename them, or **disconnect**
 cleanly (deregisters the device with Audible, then removes the login; offers retry or
 local-only delete if Audible is unreachable). The active account is shared by every tool.
-This page also configures the Audiobookshelf and abs-agg providers.
+
+This page also configures the **Audiobookshelf** and abs-agg providers. Paste an
+Audiobookshelf API key (create one in ABS Settings → Users → API Keys) into the masked
+field and click **Save and verify**; the key is stored server-side and never shown back in
+the browser. Use **Remove key** to delete it with one click. ABS is also what makes the
+Library Downloader's "already owned" detection instant. The key can alternatively be set
+once via the `ABS_API_KEY` environment variable (an env-set key is managed by the operator
+and cannot be removed from the UI).
 
 ### Planned
 - **Full debug mode** - toggleable debug overlay surfacing raw API responses, per-file
@@ -108,6 +115,33 @@ via `docker-compose.override.yml` (git-ignored).
 
 Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test`
 (run `make help` for the full list).
+
+### Run the published image (no clone)
+
+The image on GitHub Container Registry is self-contained - the only thing you
+provide is the path to your library. Audible auth and run reports persist in
+named volumes, so there is nothing else to set up:
+
+```bash
+docker run -d --name libraforge \
+  --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:5056:5056 \
+  -v /path/to/your/audiobooks:/audiobooks \
+  -v libraforge-auth:/auth \
+  -v libraforge-reports:/app/reports \
+  ghcr.io/coconautilus17/libraforge:latest
+```
+
+Or with Compose - download [`docker-compose.dist.yml`](docker-compose.dist.yml) and run:
+
+```bash
+AUDIOBOOKS_PATH=/path/to/your/audiobooks \
+  docker compose -f docker-compose.dist.yml up -d
+```
+
+Then open **http://127.0.0.1:5056** and connect an Audible account on the
+Accounts page (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
+`docker pull ghcr.io/coconautilus17/libraforge:latest`.
 
 ### Optional companion services
 

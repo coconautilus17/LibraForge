@@ -184,6 +184,7 @@
       </div>
       <div class="actions" style="margin-top:14px">
         <button id="absConnectBtn" type="button">Save and verify</button>
+        <button id="absRemoveBtn" class="secondary" type="button" hidden>Remove key</button>
       </div>
       <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
     </section>
@@ -247,7 +248,7 @@
       const oauthLink = $("oauthLink"), redirectUrl = $("redirectUrl");
       const completeBtn = $("completeBtn"), restartBtn = $("restartBtn"), step2Error = $("step2Error");
       const skipBtn = $("skipBtn");
-      const absConnectBtn = $("absConnectBtn"), absConnectStatus = $("absConnectStatus"), absStatusBadge = $("absStatusBadge");
+      const absConnectBtn = $("absConnectBtn"), absConnectStatus = $("absConnectStatus"), absStatusBadge = $("absStatusBadge"), absRemoveBtn = $("absRemoveBtn");
 
       const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -461,8 +462,27 @@
           absStatusBadge.textContent = "Not configured";
           absStatusBadge.style.cssText = "background:var(--surface-raised);color:var(--muted);font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle";
         }
+        // Offer removal only when a key is actually stored.
+        absRemoveBtn.hidden = !(status.configured || status.reachable);
       }
       fetch("/api/abs/status").then((r) => r.json()).then(renderAbsBadge).catch(() => {});
+
+      absRemoveBtn.addEventListener("click", async () => {
+        if (!confirm("Remove the stored Audiobookshelf API key?")) return;
+        absRemoveBtn.disabled = true; absConnectStatus.textContent = "";
+        try {
+          const res = await fetch("/api/abs/disconnect", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to remove key.");
+          $("absApiKey").value = "";
+          renderAbsBadge({ configured: false, reachable: false });
+          absConnectStatus.textContent = data.env_key_present
+            ? "UI key removed, but ABS_API_KEY is still set via environment."
+            : "API key removed.";
+          absConnectStatus.style.color = "var(--muted)";
+        } catch (err) { absConnectStatus.textContent = err.message; absConnectStatus.style.color = "var(--danger)"; }
+        finally { absRemoveBtn.disabled = false; }
+      });
 
       absConnectBtn.addEventListener("click", async () => {
         const url = $("absUrl").value.trim();
@@ -473,7 +493,7 @@
           const res = await fetch("/api/abs/save-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, api_key: key }) });
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to save.");
-          renderAbsBadge(data);
+          renderAbsBadge({ ...data, configured: true });
           absConnectStatus.textContent = data.reachable ? "Connected successfully. ABS providers are now available." : "Key saved, but ABS is not reachable at the given URL. Check that the service is running.";
           absConnectStatus.style.color = data.reachable ? "var(--success)" : "var(--warning,#e8a020)";
         } catch (err) { absConnectStatus.textContent = err.message; absConnectStatus.style.color = "var(--danger)"; }
