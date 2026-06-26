@@ -333,10 +333,24 @@ def strip_edition_descriptors(value: str) -> str:
     return value.strip(" -_.:,")
 
 
+# An ASIN (B0XXXXXXXX) or the fixer's "NOREALASIN" placeholder written for files
+# with no real Audible ASIN. Neither may ever survive as a title or book name.
+_NOREALASIN_RE = re.compile(r"no[\s._-]*real[\s._-]*asin", re.IGNORECASE)
+_ASIN_TOKEN_RE = re.compile(r"(?:asin[\s._:-]*)?B0[A-Z0-9]{7,}", re.IGNORECASE)
+
+
+def is_asin_like_token(value: str) -> bool:
+    """True when the value is nothing but an ASIN or the NOREALASIN placeholder."""
+    token = clean_text(value).strip("[](){} ")
+    if not token:
+        return False
+    return bool(_NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token))
+
+
 def is_release_bracket_token(value: str) -> bool:
     """Return True for bracketed release metadata that should not become titles.
 
-    Examples: [2025], [ENG], [ASIN.B0F94LCVMP], [128].
+    Examples: [2025], [ENG], [ASIN.B0F94LCVMP], [128], [NOREALASIN].
     We intentionally keep meaningful edition labels such as [Booktrack Edition].
     """
     token = clean_text(value).strip("[](){} ")
@@ -351,7 +365,7 @@ def is_release_bracket_token(value: str) -> bool:
         return True
     if re.fullmatch(r"(?:eng|en|english|heb|he|jpn|jp|ja|japanese)", token, flags=re.IGNORECASE):
         return True
-    if re.fullmatch(r"(?:asin[\s._:-]*)?B0[A-Z0-9]{7,}", token, flags=re.IGNORECASE):
+    if _NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token):
         return True
     if normalized in {
         "retail", "web", "webrip", "audible", "audiobook", "unabridged",
@@ -375,6 +389,48 @@ def strip_release_bracket_tokens(value: str) -> str:
     value = re.sub(r"\{\s*([^{}]+?)\s*\}", replace, value)
     value = re.sub(r"\s+", " ", value)
     return value.strip(" -_.:,")
+
+
+# Dramatized / full-cast special editions are shelved separately from the normal
+# recordings of the same series ("Author / Series [Tag] / book") so the two
+# editions never collide in one folder. The tag is the known imprint when one is
+# identifiable, otherwise the generic "Dramatized" label.
+_GRAPHICAUDIO_RE = re.compile(r"graphic\s*audio", re.IGNORECASE)
+_SOUNDBOOTH_RE = re.compile(r"soundbooth(?:\s*theater)?", re.IGNORECASE)
+_DRAMATIZED_RE = re.compile(r"dramati[sz]ed(?:\s+adaptation)?", re.IGNORECASE)
+_EDITION_MARKER_RE = re.compile(
+    r"\s*[\[(\{]\s*"
+    r"(?:graphic\s*audio|soundbooth(?:\s*theater)?|dramati[sz]ed(?:\s+adaptation)?)"
+    r"\s*[\])\}]",
+    re.IGNORECASE,
+)
+
+
+def detect_edition_tag(*texts: str) -> str:
+    """Return the special-edition tag for a dramatized/imprint production, or ''.
+
+    Known imprints win over the generic label so GraphicAudio and Soundbooth
+    Theater editions get their own named shelf; any other explicit "Dramatized
+    Adaptation" marker falls back to "Dramatized".
+    """
+    blob = " ".join(t for t in texts if t)
+    if not blob:
+        return ""
+    if _GRAPHICAUDIO_RE.search(blob):
+        return "GraphicAudio"
+    if _SOUNDBOOTH_RE.search(blob):
+        return "Soundbooth Theater"
+    if _DRAMATIZED_RE.search(blob):
+        return "Dramatized"
+    return ""
+
+
+def strip_edition_marker(value: str) -> str:
+    """Remove a bracketed imprint/dramatized marker so it does not pollute the
+    series or title (it is carried separately as the edition tag)."""
+    if not value:
+        return value
+    return clean_text(_EDITION_MARKER_RE.sub(" ", value))
 
 
 GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
@@ -2253,6 +2309,12 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
             title = audible_data.get("chosen_title") or audible_data.get("title") or ""
             series = audible_data.get("series", "")
             author = audible_data.get("author", "")
+            # Skip skeletal markers that carry only an ASIN placeholder (e.g.
+            # {"asin": "NOREALASIN"}) and no real book data. Returning them here
+            # would shadow the correct embedded ffprobe tags with empty fields
+            # and let the messy filename drive author/title inference.
+            if not title and not author and not series:
+                continue
             filename_author = author_from_marker_filename(path.name, series)
             if filename_author and author_is_probably_bad_for_series(author, series):
                 author = filename_author
@@ -2680,6 +2742,25 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
 
     author_full = clean_author_credits(author)
     author_primary = primary_author(author_full)
+
+    # Dramatized adaptations (GraphicAudio, Soundbooth Theater, generic
+    # dramatized editions) share a title and series with the normal recording,
+    # so they must route to "Series [Imprint]" to avoid colliding with the
+    # straight reading. Detect the imprint from every raw signal before the
+    # series/title cleaners strip the marker parenthetical.
+    edition_tag = detect_edition_tag(
+        metadata_title,
+        series,
+        title,
+        narrator,
+        clues.get("series", ""),
+        clues.get("parent_series", ""),
+        clues.get("publisher", ""),
+        item.source_path.name,
+    )
+    series = strip_edition_marker(series)
+    title = strip_edition_marker(title)
+    metadata_title = strip_edition_marker(metadata_title)
     clean_series = clean_series_name(series)
 
     if not book_number:
@@ -2739,6 +2820,7 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         "author": author_full,
         "author_primary": author_primary,
         "series": clean_series,
+        "edition_tag": edition_tag,
         "book_number": book_number,
         "sequence_label": sequence_label,
         "narrator": sanitize_path_name(narrator, "") if narrator else "",
@@ -2806,9 +2888,28 @@ def infer_metadata_from_library_path(item: BookItem, root: Path) -> dict[str, An
     }
 
 
+def series_dir_label(metadata: dict[str, Any]) -> str:
+    """Series folder name, suffixed with the dramatized imprint when present.
+
+    Dramatized adaptations route to "Series [GraphicAudio]" / "[Dramatized]"
+    so they never merge into the straight-reading series folder.
+    """
+    series = sanitize_path_name(metadata.get("series", ""), "Unknown Series")
+    tag = metadata.get("edition_tag", "")
+    if tag:
+        return sanitize_path_name(f"{series} [{tag}]", "Unknown Series")
+    return series
+
+
 def build_book_folder_name(metadata: dict[str, Any]) -> str:
-    title = sanitize_path_name(metadata.get("title", ""), "Unknown Title")
+    raw_title = metadata.get("title", "")
     series = metadata.get("series", "")
+    if is_asin_like_token(raw_title):
+        # An ASIN / NOREALASIN must never become a book folder name on its own.
+        # Fall back to the series so the sequence logic below collapses it to
+        # "Book N"; otherwise leave it blank for the Unknown Title placeholder.
+        raw_title = series
+    title = sanitize_path_name(raw_title, "Unknown Title")
     number = metadata.get("book_number", "")
     sequence_label = metadata.get("sequence_label", "")
 
@@ -2850,7 +2951,11 @@ def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -
     series = metadata.get("series", "")
     book_folder = build_book_folder_name(metadata)
     if series:
-        return destination_root / author_dir / sanitize_path_name(series, "Unknown Series") / book_folder
+        return destination_root / author_dir / series_dir_label(metadata) / book_folder
+    if metadata.get("edition_tag"):
+        # No series, but still a dramatized edition: keep it out of the plain
+        # author root by grouping under a "[Imprint]" bucket.
+        return destination_root / author_dir / sanitize_path_name(f"[{metadata['edition_tag']}]", "Dramatized") / book_folder
     return destination_root / author_dir / book_folder
 
 
@@ -3000,6 +3105,30 @@ def entry_matches_series(entry: dict[str, Any], series: str) -> bool:
     return False
 
 
+def authors_compatible(local_author: str, other_author: str) -> bool:
+    """Loose author-identity check used to veto cross-author cache merges.
+
+    Returns True when the two author strings plausibly refer to the same
+    person (shared normalized name key, containment, or high similarity), and
+    False only when they are clearly different people. Empty/generic authors
+    are treated as compatible so we never block on missing data.
+    """
+    local_norm = normalize_for_compare(local_author)
+    other_norm = normalize_for_compare(other_author)
+    if not local_norm or not other_norm:
+        return True
+    generic = {"unknown", "unknownauthor", "various", "variousauthors", "anonymous"}
+    if local_norm in generic or other_norm in generic:
+        return True
+    local_keys = people_keys(local_author)
+    other_keys = people_keys(other_author)
+    if any(keys_match(a, b) for a in local_keys for b in other_keys):
+        return True
+    if local_norm in other_norm or other_norm in local_norm:
+        return True
+    return SequenceMatcher(None, local_norm, other_norm).ratio() >= 0.70
+
+
 def resolve_series_directory(cache: dict[str, Any], metadata: dict[str, Any]) -> tuple[Path | None, str, dict[str, Any] | None]:
     series = metadata.get("series", "")
     if not series:
@@ -3024,6 +3153,19 @@ def resolve_series_directory(cache: dict[str, Any], metadata: dict[str, Any]) ->
         author_matches or candidates,
         key=lambda entry: (-int(entry.get("book_count", 0)), entry.get("path", "")),
     )
+
+    # If the series name matched but no cached entry shares this author, do not
+    # blindly merge into a same-named series owned by a clearly different
+    # author (e.g. Arthur C. Clarke's "Cradle" vs Will Wight's "Cradle").
+    local_author = metadata.get("author", "")
+    if (
+        author_keys
+        and not author_matches
+        and not author_is_probably_bad_for_series(metadata.get("author_primary", "") or local_author, series)
+        and not authors_compatible(local_author, ranked[0].get("canonical_author", ""))
+    ):
+        return None, "new", None
+
     if len(ranked) > 1:
         top_count = int(ranked[0].get("book_count", 0))
         second_count = int(ranked[1].get("book_count", 0))
@@ -3053,6 +3195,11 @@ def apply_cache_to_metadata(metadata: dict[str, Any], cache_entry: dict[str, Any
 
 
 def build_cached_target_dir(destination_root: Path, metadata: dict[str, Any], cache: dict[str, Any]) -> tuple[Path, str, dict[str, Any]]:
+    # Dramatized adaptations never merge into an existing straight-reading
+    # series folder; they always route to their own "Series [Imprint]" bucket.
+    if metadata.get("edition_tag"):
+        return build_default_target_dir(destination_root, metadata), "new", metadata
+
     series_dir, status, entry = resolve_series_directory(cache, metadata)
     effective_metadata = apply_cache_to_metadata(metadata, entry)
     book_folder = build_book_folder_name(effective_metadata)
@@ -3114,6 +3261,19 @@ def apply_cache_prefix_fallback(metadata: dict[str, Any], item: BookItem, cache:
         return metadata
 
     _score, entry, _alias, rest = best
+
+    # Do not adopt a cached series whose canonical author clearly differs from a
+    # known local author. The prefix match alone is not enough to overwrite a
+    # real author (e.g. Arthur C. Clarke's "Cradle" must not become Will Wight).
+    local_author = metadata.get("author", "")
+    local_primary = metadata.get("author_primary", "") or local_author
+    if (
+        people_keys(local_author)
+        and not author_is_probably_bad_for_series(local_primary, str(entry.get("series", "")))
+        and not authors_compatible(local_author, str(entry.get("canonical_author", "")))
+    ):
+        return metadata
+
     metadata = dict(metadata)
     reasons = list(metadata.get("review_reasons", []))
     reason = "series inferred from existing library prefix"
