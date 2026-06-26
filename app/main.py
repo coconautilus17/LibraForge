@@ -4287,7 +4287,78 @@ def _scan_owned_asins(root: Path) -> set[str]:
     return owned
 
 
+def _abs_owned_asins() -> set[str] | None:
+    """Owned ASINs from Audiobookshelf's indexed library.
+
+    Returns the set of ASINs ABS already knows about (a few paginated API
+    calls, ~instant and authoritative), or None when ABS is not configured or
+    unreachable so the caller can fall back to the local index/scan.
+    """
+    if not _get_abs_api_key():
+        return None
+    try:
+        libs_raw = _abs_request("/api/libraries", {})
+        libraries = libs_raw.get("libraries", []) if isinstance(libs_raw, dict) else (libs_raw or [])
+        book_libs = [lib for lib in libraries if lib.get("mediaType") == "book"] or libraries
+        if not book_libs:
+            return None
+        asins: set[str] = set()
+        for lib in book_libs:
+            lib_id = lib.get("id")
+            if not lib_id:
+                continue
+            page = 0
+            while True:
+                data = _abs_request(f"/api/libraries/{lib_id}/items", {"limit": "1000", "page": str(page)})
+                results = data.get("results", []) if isinstance(data, dict) else []
+                total = int(data.get("total", 0) or 0) if isinstance(data, dict) else 0
+                for item in results:
+                    asin = str(((item.get("media") or {}).get("metadata") or {}).get("asin") or "").strip()
+                    if asin:
+                        asins.add(asin.upper())
+                page += 1
+                if not results or page * 1000 >= total:
+                    break
+        return asins
+    except Exception:
+        return None
+
+
+# Persistent owned-ASIN index so the (slow) filesystem fallback runs at most
+# once per library state and survives container restarts. Keyed by root path.
+_OWNED_INDEX_PATH = REPORTS_DIR / "owned-asin-index.json"
+
+
+def _load_owned_index() -> dict[str, Any]:
+    try:
+        return json.loads(_OWNED_INDEX_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _store_owned_asins(root: Path, asins: set[str], fingerprint: str) -> None:
+    """Update the in-memory cache and the persistent index for a root."""
+    with _OWNED_ASIN_LOCK:
+        _OWNED_ASIN_CACHE[str(root)] = (time.monotonic(), fingerprint, asins)
+    index = _load_owned_index()
+    record = {"fingerprint": fingerprint, "asins": sorted(asins), "built_at": time.time()}
+    if index.get(str(root), {}).get("fingerprint") == fingerprint and set(index.get(str(root), {}).get("asins", [])) == asins:
+        return  # unchanged -- skip the disk write
+    index[str(root)] = record
+    try:
+        _OWNED_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _OWNED_INDEX_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_OWNED_INDEX_PATH)
+    except Exception:
+        pass
+
+
 def _owned_asins_cached(root: Path) -> set[str]:
+    """Owned ASINs for a root via the filesystem, with memory + disk caching.
+
+    Used only as the fallback when Audiobookshelf is unavailable.
+    """
     key = str(root)
     fingerprint = _library_fingerprint(root)
     with _OWNED_ASIN_LOCK:
@@ -4296,9 +4367,16 @@ def _owned_asins_cached(root: Path) -> set[str]:
             ts, cached_fp, data = entry
             if time.monotonic() - ts < _OWNED_ASIN_CACHE_TTL and cached_fp == fingerprint:
                 return data
+    # Persistent index survives restarts, so a matching fingerprint avoids the
+    # expensive walk entirely (e.g. after a container restart or 30-min idle).
+    record = _load_owned_index().get(key)
+    if isinstance(record, dict) and record.get("fingerprint") == fingerprint and isinstance(record.get("asins"), list):
+        data = {str(a).upper() for a in record["asins"]}
+        with _OWNED_ASIN_LOCK:
+            _OWNED_ASIN_CACHE[key] = (time.monotonic(), fingerprint, data)
+        return data
     data = _scan_owned_asins(root)
-    with _OWNED_ASIN_LOCK:
-        _OWNED_ASIN_CACHE[key] = (time.monotonic(), fingerprint, data)
+    _store_owned_asins(root, data, fingerprint)
     return data
 
 
@@ -4365,8 +4443,19 @@ def library_owned_asins(root: str) -> dict[str, Any]:
     p = Path(root)
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {root}")
+    # Prefer Audiobookshelf's indexed library (authoritative, ~instant). It maps
+    # to the same files as `root`, so its ASINs answer "already owned" directly.
+    abs_asins = _abs_owned_asins()
+    if abs_asins is not None:
+        # Persist a snapshot so a later ABS outage falls back instantly instead
+        # of re-walking the mount.
+        try:
+            _store_owned_asins(p, abs_asins, _library_fingerprint(p))
+        except Exception:
+            pass
+        return {"root": str(p), "asins": sorted(abs_asins), "count": len(abs_asins), "source": "abs"}
     asins = sorted(_owned_asins_cached(p))
-    return {"root": str(p), "asins": asins, "count": len(asins)}
+    return {"root": str(p), "asins": asins, "count": len(asins), "source": "filesystem"}
 
 
 def _safe_component(text: str) -> str:
