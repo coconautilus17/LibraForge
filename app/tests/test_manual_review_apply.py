@@ -39,6 +39,13 @@ class ManualReviewApplyTests(unittest.TestCase):
             written["score"] = score
             return Path("/library/Book/Book.m4b-tool-metadata.json")
 
+        def write_meta_json(source, metadata, clues, alone, fill_missing=False):
+            written["meta_json_alone"] = alone
+            return Path("/library/Book/metadata.json")
+
+        def write_marker(**kwargs):
+            written["marker_alone"] = kwargs.get("alone")
+
         fixer = SimpleNamespace(
             clean_text=lambda value: value,
             clean_author_value=lambda value: value,
@@ -47,8 +54,10 @@ class ManualReviewApplyTests(unittest.TestCase):
                 clues.get("group_search", {}).get("applied")
             ),
             write_m4b_tool_metadata_sidecar=write_sidecar,
+            write_audiobookshelf_metadata_json=write_meta_json,
+            write_original_metadata_backup=lambda *a, **k: Path("/library/Book/libraforge.json"),
             write_tags=lambda *args, **kwargs: self.fail("grouped apply wrote tags"),
-            write_marker=lambda **kwargs: None,
+            write_marker=write_marker,
         )
         selected_result = {
             "score": 1.0,
@@ -86,6 +95,11 @@ class ManualReviewApplyTests(unittest.TestCase):
             written["clues"]["group_search"]["files"],
             chapter_files,
         )
+        # A grouped book routes folder-level (alone=False; the group_search clue
+        # forces folder placement) and still writes a metadata.json.
+        self.assertFalse(written["marker_alone"])
+        self.assertFalse(written["meta_json_alone"])
+        self.assertEqual(result["metadata_json_path"], "/library/Book/metadata.json")
 
 
 if __name__ == "__main__":
