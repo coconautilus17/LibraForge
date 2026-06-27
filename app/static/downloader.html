@@ -24,9 +24,7 @@
     .lib-badge { display:inline-block; font-size:0.7em; padding:1px 6px; border-radius:99px; background:var(--border); color:var(--text-soft); margin-top:5px; }
     .lib-badge.owned { background:#3a2f12; color:#e9c46a; }
     .lib-check { position:absolute; top:8px; right:8px; }
-    .lib-override { margin-top:6px; font-size:0.78em; }
-    .lib-dup { display:none; gap:6px; margin-top:6px; font-size:0.76em; align-items:center; }
-    .lib-card.override .lib-dup { display:flex; }
+    .lib-dup { display:flex; gap:6px; margin-top:6px; font-size:0.76em; align-items:center; }
     .lib-empty { padding:24px; color:var(--muted); text-align:center; }
     .prog-line { font-family:var(--font-mono); font-size:0.8em; white-space:pre-wrap; max-height:240px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:10px; }
   </style>
@@ -175,6 +173,7 @@
         <button id="downloadBtn" type="button" disabled>Download selected</button>
       </div>
       <p style="margin:2px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--text-soft)"><span class="lib-badge owned" style="margin:0;font-size:0.82em;padding:3px 11px">Owned</span> This title is already in your library. Selecting it downloads another copy.</p>
+      <p class="note" style="margin:-6px 0 12px;color:var(--text-soft)">Owned detection matches each title by its ASIN tag, so it is only as accurate as your library's ASIN tagging. Books missing or with incorrect ASINs will not be flagged as owned. Run the Metadata Forge to fix ASINs first for reliable results.</p>
       <p id="libMeta" class="note" style="margin:0 0 8px"></p>
       <div id="libGrid" class="lib-grid"></div>
     </div>
@@ -210,7 +209,7 @@
     let libraryRoot = "/audiobooks";
     let ownedAsins = new Set();
     let ownedPending = false; // true while the owned-ASIN scan of the library folder runs
-    let library = [];        // [{asin,title,author,...,owned,selected,override,dupAction}]
+    let library = [];        // [{asin,title,author,...,owned,selected,dupAction}]
 
     // ── Folder browser + config ────────────────────────────────────────────
     function setupBrowser(root) {
@@ -272,8 +271,7 @@
             ...it,
             owned: false,
             selected: false,
-            override: false,
-            dupAction: "new",
+            dupAction: "keep_both",
           }));
           ownedPending = true;
           document.getElementById("libSection").hidden = false;
@@ -343,8 +341,7 @@
         ? `${esc(it.series_title)}${it.series_sequence ? " #" + esc(it.series_sequence) : ""}` : "";
       const runtime = fmtRuntime(it.runtime_minutes);
       const sub = [series, runtime].filter(Boolean).join(" · ");
-      const checkable = !it.owned || it.override;
-      const cls = `lib-card${it.selected ? " selected" : ""}${it.owned ? " owned" : ""}${it.override ? " override" : ""}`;
+      const cls = `lib-card${it.selected ? " selected" : ""}${it.owned ? " owned" : ""}`;
       const cover = it.cover_url
         ? `<img class="lib-cover" src="${esc(it.cover_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=\\'lib-cover lib-cover-ph\\'>♪</div>'" />`
         : `<div class="lib-cover lib-cover-ph">♪</div>`;
@@ -356,7 +353,6 @@
             ${author ? `<div class="lib-author">${esc(author)}</div>` : ""}
             ${sub ? `<div class="lib-sub">${sub}</div>` : ""}
             ${it.owned ? `<span class="lib-badge owned">Owned</span>` : ""}
-            ${it.owned && !it.override ? `<div class="lib-override"><a href="#" data-act="override" data-asin="${esc(it.asin)}">Download anyway →</a></div>` : ""}
             ${(dupMode() === "per_item" && it.owned) ? `<div class="lib-dup">
               <span>If exists:</span>
               <select data-act="dup" data-asin="${esc(it.asin)}">
@@ -366,21 +362,13 @@
             </div>` : ""}
           </div>
           <input class="lib-check" type="checkbox" data-act="select" data-asin="${esc(it.asin)}"
-                 ${it.selected ? "checked" : ""} ${checkable ? "" : "disabled"}
+                 ${it.selected ? "checked" : ""}
                  aria-label="Select ${esc(it.title)}" />
         </div>`;
     }
 
     function byAsin(asin) { return library.find(i => i.asin === asin); }
 
-    grid.addEventListener("click", e => {
-      const override = e.target.closest('[data-act="override"]');
-      if (override) {
-        e.preventDefault();
-        const it = byAsin(override.dataset.asin);
-        if (it) { it.override = true; it.dupAction = "keep_both"; renderLibrary(); }
-      }
-    });
     grid.addEventListener("change", e => {
       const sel = e.target.closest('[data-act="select"]');
       if (sel) {
@@ -401,14 +389,7 @@
       const items = visibleItems();
       if (!items.length) return;
       const allSel = items.every(it => it.selected);
-      items.forEach(it => {
-        it.selected = !allSel;
-        // Selecting an owned title opts it in for a duplicate download (same as "Download anyway").
-        if (it.owned) {
-          if (!allSel) { it.override = true; if (it.dupAction === "new") it.dupAction = "keep_both"; }
-          else { it.override = false; it.dupAction = "new"; }
-        }
-      });
+      items.forEach(it => { it.selected = !allSel; });
       renderLibrary();
     });
 
@@ -487,7 +468,7 @@
               ownedAsins = new Set((owned.asins || []).map(a => a.toUpperCase()));
               library.forEach(it => {
                 it.owned = ownedAsins.has((it.asin || "").toUpperCase());
-                if (it.owned) { it.selected = false; it.override = false; }
+                if (it.owned) { it.selected = false; }
               });
               renderLibrary();
             }).catch(() => {});
