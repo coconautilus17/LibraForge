@@ -2213,19 +2213,43 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
     output_kind = "tags"
     output_path = str(source_path)
 
+    # Follow the same sidecar placement as the rest of the script: a single file
+    # alone in its folder (or a grouped multi-file book) gets a folder-level
+    # libraforge.json + metadata.json; a loose file sharing its folder gets per-file
+    # companions. Grouped books are already routed folder-level via the group_search
+    # clue; for a single file we detect "alone" by counting sibling audio files.
+    grouped = bool((clues.get("group_search") or {}).get("applied"))
+    if grouped:
+        alone = False
+    else:
+        folder = source_path.parent
+        try:
+            alone = sum(1 for x in folder.iterdir() if x.is_file() and is_audio_file(x)) <= 1
+        except OSError:
+            alone = True
+
     if fixer_module.should_write_json_sidecar(source_path, clues):
         output_kind = "json_sidecar"
         sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(source_path, metadata, clues, score)
         output_path = str(sidecar_path)
     else:
+        # Back up explicitly so the backup lands in the same (alone-aware)
+        # libraforge.json the marker will use, instead of a split per-file copy.
+        if req.backup:
+            fixer_module.write_original_metadata_backup(source_path, alone=alone)
         fixer_module.write_tags(
             source_path,
             metadata,
-            backup=req.backup,
+            backup=False,
             writer=req.writer,
             cover_if_missing=req.cover_if_missing,
             replace_cover=req.replace_cover,
         )
+
+    # Audiobookshelf metadata.json, placed by the same alone/group rules.
+    metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
+        source_path, metadata, clues, alone
+    )
 
     fixer_module.write_marker(
         source=source_path,
@@ -2235,6 +2259,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         mode=f"manual_{req.edit_mode}",
         aggressive=False,
         output_kind=output_kind,
+        alone=alone,
     )
 
     return {
@@ -2243,6 +2268,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         "source_path": context["source_path"],
         "output_kind": output_kind,
         "output_path": output_path,
+        "metadata_json_path": str(metadata_json_path),
         "edit_mode": req.edit_mode,
         "metadata_preview": metadata,
     }
