@@ -3056,50 +3056,181 @@ def _write_scan_asin_cache(folder: Path, audio_file: Path, asin: str) -> None:
         pass
 
 
-def _has_asin(folder: Path, audio_file: Path) -> bool:
-    """Check for an ASIN: sidecar fast-paths first, then mutagen (with write-back)."""
-    # Old-format sidecars: existence means the fixer applied an ASIN match.
-    if (audio_file.parent / f"{audio_file.name}{_FIXER_SIDECAR_SUFFIX}").exists():
-        return True
-    if (folder / _FIXER_LEGACY_MARKER).exists():
-        return True
-    # New unified libraforge.json: True=has ASIN, False=NOREALASIN, None=unknown.
-    for sidecar in (
-        audio_file.parent / (audio_file.name + ".libraforge.json"),
-        folder / "libraforge.json",
-    ):
-        if sidecar.is_file():
-            cached = _asin_from_libraforge_json(sidecar)
-            if cached is not None:
-                return cached
-            break  # file exists but field empty -- fall through to mutagen
-    # Slow path: read audio tags and cache the result for future scans.
-    found: str | None = None
+# Core metadata fields the scan requires for a book to count as "complete".
+# A book is complete only when it has a real ASIN AND each of these. Series and
+# sequence are intentionally excluded (standalone books legitimately lack them);
+# year is treated as optional for the same reason.
+_CORE_FIELDS = ("title", "author", "narrator")
+_CORE_MP4_KEYS = {
+    "title": ("\xa9nam",),
+    "author": ("\xa9ART", "aART"),
+    "narrator": ("\xa9wrt",),  # the fixer writes narrator to the composer atom
+}
+_CORE_ID3_KEYS = {
+    "title": ("TIT2",),
+    "author": ("TPE1",),
+    "narrator": ("TCOM",),
+}
+_SCAN_AUDIO_EXTS = (".m4b", ".m4a", ".mp3", ".mp4")
+
+
+def _probe_book_metadata(audio_file: Path) -> dict:
+    """Read the ASIN and core fields from an audio file in a single tag load.
+
+    Returns ``{"asin": <str>, "fields": {"title": bool, "author": bool,
+    "narrator": bool}}`` -- ``asin`` is "" when absent.
+    """
+    fields = {f: False for f in _CORE_FIELDS}
+    asin = ""
     try:
-        if audio_file.suffix.lower() in (".m4b", ".m4a", ".mp4"):
-            tags = MP4(str(audio_file)).tags
-            if tags:
-                for key in _ASIN_TAG_KEYS:
-                    raw = tags.get(key, [])
-                    if raw:
-                        val = raw[0]
-                        text = (
-                            bytes(val).decode("utf-8", errors="ignore")
-                            if isinstance(val, (bytes, bytearray, MP4FreeForm))
-                            else str(val)
-                        ).strip()
-                        if text:
-                            found = text
-                            break
-        elif audio_file.suffix.lower() == ".mp3":
+        suffix = audio_file.suffix.lower()
+        if suffix in (".m4b", ".m4a", ".mp4"):
+            tags = MP4(str(audio_file)).tags or {}
+            for key in _ASIN_TAG_KEYS:
+                raw = tags.get(key, [])
+                if raw:
+                    val = raw[0]
+                    text = (
+                        bytes(val).decode("utf-8", errors="ignore")
+                        if isinstance(val, (bytes, bytearray, MP4FreeForm))
+                        else str(val)
+                    ).strip()
+                    if text:
+                        asin = text
+                        break
+            for field, keys in _CORE_MP4_KEYS.items():
+                for k in keys:
+                    raw = tags.get(k)
+                    if raw and str(raw[0]).strip():
+                        fields[field] = True
+                        break
+        elif suffix == ".mp3":
             from mutagen.id3 import ID3  # noqa: PLC0415
             t = ID3(str(audio_file))
             if any("asin" in k.lower() for k in t.keys()):
-                found = "HAS_ASIN"
+                asin = "HAS_ASIN"
+            for field, keys in _CORE_ID3_KEYS.items():
+                for k in keys:
+                    frame = t.get(k)
+                    if frame and str(frame).strip():
+                        fields[field] = True
+                        break
     except Exception:
         pass
-    _write_scan_asin_cache(folder, audio_file, found or _NOREALASIN)
-    return found is not None
+    return {"asin": asin, "fields": fields}
+
+
+def _scan_sidecar_target(audio_files: list[Path], book_dir: Path, audio_file: Path) -> Path:
+    """Canonical libraforge.json path for the scan to create, matching the fixer.
+
+    Multi-file books and single files alone in their folder use a folder-level
+    ``libraforge.json``; a single file sharing its folder with other books uses a
+    per-file ``<name>.libraforge.json``.
+    """
+    if len(audio_files) > 1:
+        return book_dir / "libraforge.json"
+    folder = audio_file.parent
+    try:
+        audio_count = sum(
+            1 for x in folder.iterdir()
+            if x.is_file() and x.suffix.lower() in _SCAN_AUDIO_EXTS
+        )
+    except OSError:
+        audio_count = 1
+    if audio_count <= 1:
+        return folder / "libraforge.json"
+    return audio_file.with_name(audio_file.name + ".libraforge.json")
+
+
+def _ensure_scan_sidecar(
+    audio_files: list[Path], book_dir: Path, audio_file: Path, asin: str, fields: dict
+) -> None:
+    """Persist the probe result to a libraforge.json, creating it if needed.
+
+    Reuses an existing sidecar (folder-level preferred) to avoid duplicates;
+    otherwise creates one at the canonical path. The audio file's mtime is stored
+    so a later tag change invalidates the cache.
+    """
+    existing = next(
+        (c for c in (
+            book_dir / "libraforge.json",
+            audio_file.with_name(audio_file.name + ".libraforge.json"),
+        ) if c.is_file()),
+        None,
+    )
+    target = existing or _scan_sidecar_target(audio_files, book_dir, audio_file)
+    payload: dict = {}
+    if target.is_file():
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("schema_version", 2)
+    payload.setdefault("tool", "audible-metadata-fixer")
+    try:
+        mtime = audio_file.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    payload["scan_cache"] = {
+        **(payload.get("scan_cache") or {}),
+        "asin": asin or _NOREALASIN,
+        "fields": fields,
+        "mtime": mtime,
+    }
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, dict] | None:
+    """Return cached ``(asin_present, fields)`` from a fresh scan_cache, or None.
+
+    None means no usable cache (absent, old asin-only cache, or stale because the
+    audio file changed) -- the caller should re-probe.
+    """
+    for sidecar in (
+        audio_file.parent / (audio_file.name + ".libraforge.json"),
+        book_dir / "libraforge.json",
+    ):
+        if not sidecar.is_file():
+            continue
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        sc = data.get("scan_cache") or {}
+        fields = sc.get("fields")
+        if not isinstance(fields, dict) or "asin" not in sc:
+            return None  # old asin-only cache -- need a full probe
+        try:
+            cur_mtime = audio_file.stat().st_mtime_ns
+        except OSError:
+            cur_mtime = None
+        if sc.get("mtime") != cur_mtime:
+            return None  # file changed since cached -- re-probe
+        asin_present = str(sc.get("asin") or "").strip() not in ("", _NOREALASIN)
+        return asin_present, {f: bool(fields.get(f)) for f in _CORE_FIELDS}
+    return None
+
+
+def _book_metadata_state(book_dir: Path, audio_files: list[Path]) -> tuple[bool, dict]:
+    """Return ``(asin_present, {field: present})`` for a book, reading the embedded
+    tags (cached in a libraforge.json scan_cache). Probes real tags rather than
+    trusting a marker's recorded ASIN, so the state reflects the actual file."""
+    audio_file = audio_files[0]
+    cached = _scan_cache_from_sidecar(audio_file, book_dir)
+    if cached is not None:
+        return cached
+    probe = _probe_book_metadata(audio_file)
+    asin_present = bool(probe["asin"]) and probe["asin"] != _NOREALASIN
+    _ensure_scan_sidecar(audio_files, book_dir, audio_file, probe["asin"], probe["fields"])
+    return asin_present, probe["fields"]
 
 
 def _book_audio_files(folder: Path) -> list[Path]:
@@ -3194,9 +3325,11 @@ def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
 def _categorise_book_unit(audio: list[Path], book_dir: Path, scan_root: Path) -> str:
     if not audio:
         return "skip"
-    has_asin = _has_asin(book_dir, audio[0])
+    # A book is "complete" only with a real ASIN AND every core field present.
+    asin_present, fields = _book_metadata_state(book_dir, audio)
+    complete = asin_present and all(fields.get(f) for f in _CORE_FIELDS)
     single_m4b = len(audio) == 1 and audio[0].suffix.lower() == ".m4b"
-    if not has_asin:
+    if not complete:
         return "needs_metadata"
     if not single_m4b:
         return "needs_conversion"
