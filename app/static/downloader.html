@@ -173,7 +173,7 @@
         <button id="downloadBtn" type="button" disabled>Download selected</button>
       </div>
       <p style="margin:2px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--text-soft)"><span class="lib-badge owned" style="margin:0;font-size:0.82em;padding:3px 11px">Owned</span> This title is already in your library. Selecting it downloads another copy.</p>
-      <p class="note" style="margin:-6px 0 12px;color:var(--text-soft)">Owned detection matches each title by its ASIN tag, so it is only as accurate as your library's ASIN tagging. Books missing or with incorrect ASINs will not be flagged as owned. Run the Metadata Forge to fix ASINs first for reliable results.</p>
+      <p class="note" style="margin:-6px 0 12px;color:var(--text-soft)">Owned detection comes from Audiobookshelf: a title is flagged Owned when its ASIN is already in your Audiobookshelf library. Fixing a book's ASIN tag is only the first step. Audiobookshelf has to re-scan the file and pick up the new ASIN before the title shows as Owned here, so a freshly fixed book can stay un-owned until Audiobookshelf re-indexes it. Books that Audiobookshelf has not indexed, or that are missing or have an incorrect ASIN, will not be flagged. Run the Metadata Forge to fix ASINs, let Audiobookshelf re-scan, then refresh. (If Audiobookshelf is not connected, owned detection falls back to reading ASIN tags directly from your library files.)</p>
       <p id="libMeta" class="note" style="margin:0 0 8px"></p>
       <div id="libGrid" class="lib-grid"></div>
     </div>
