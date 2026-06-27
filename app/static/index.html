@@ -206,14 +206,14 @@
       <div id="fixerScanResults" hidden style="margin:8px 0 4px">
         <div class="stage-grid" style="--stage-cols:3">
           <div class="stage-card stage-danger">
-            <div class="stage-label">Needs metadata</div>
+            <div class="stage-label">Incomplete metadata</div>
             <div id="fixerCountMetadata" class="stage-count">0</div>
-            <p class="stage-desc">No marker yet. Fixer hasn't processed these.</p>
+            <p class="stage-desc">Missing an ASIN or a core tag (title, author, or narrator). Run the fixer to fill these in.</p>
           </div>
           <div class="stage-card stage-success">
-            <div class="stage-label">Already processed</div>
+            <div class="stage-label">Complete metadata</div>
             <div id="fixerCountProcessed" class="stage-count">0</div>
-            <p class="stage-desc">Marker present. Use Force to reprocess.</p>
+            <p class="stage-desc">Has an ASIN and all core tags. Use Force to reprocess.</p>
           </div>
           <div class="stage-card stage-warning">
             <div class="stage-label">Needs conversion</div>

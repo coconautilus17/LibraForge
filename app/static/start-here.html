@@ -137,9 +137,9 @@
         </div>
         <div class="stage-grid">
           <div class="stage-card stage-danger">
-            <div class="stage-label">Needs metadata</div>
+            <div class="stage-label">Incomplete metadata</div>
             <div id="countMetadata" class="stage-count">0</div>
-            <p class="stage-desc">No ASIN match yet, or flagged for manual review.</p>
+            <p class="stage-desc">Missing an ASIN or a core tag (title, author, or narrator). The Metadata Forge fills these in.</p>
             <a class="stage-link" href="/forge">Review in Metadata Forge →</a>
           </div>
           <div class="stage-card stage-warning">
@@ -371,7 +371,7 @@
                 <div class="book-title">${esc(book.title)}</div>
                 ${book.author ? `<div class="book-author">${esc(book.author)}</div>` : ""}
               </div>
-              <span class="book-category-dot ${dotClass}" title="${book.category === 'needs_metadata' ? 'Needs metadata' : 'Needs conversion'}"></span>
+              <span class="book-category-dot ${dotClass}" title="${book.category === 'needs_metadata' ? 'Incomplete metadata' : 'Needs conversion'}"></span>
               <button class="book-copy-btn" type="button" data-path="${esc(book.path)}" aria-label="Copy path">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                   <rect x="5" y="5" width="9" height="9" rx="1.5"/>
