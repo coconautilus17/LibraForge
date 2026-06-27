@@ -173,6 +173,7 @@
         <button id="downloadBtn" type="button" disabled>Download selected</button>
       </div>
       <p style="margin:2px 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--text-soft)"><span class="lib-badge owned" style="margin:0;font-size:0.82em;padding:3px 11px">Owned</span> This title is already in your library. Selecting it downloads another copy.</p>
+      <p class="note" style="margin:-6px 0 12px;color:var(--text-soft)">Owned detection matches each title by its ASIN tag, so it is only as accurate as your library's ASIN tagging. Books missing or with incorrect ASINs will not be flagged as owned. Run the Metadata Forge to fix ASINs first for reliable results.</p>
       <p id="libMeta" class="note" style="margin:0 0 8px"></p>
       <div id="libGrid" class="lib-grid"></div>
     </div>
