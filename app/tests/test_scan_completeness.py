@@ -12,6 +12,7 @@ from pathlib import Path
 from app.main import (
     _CORE_FIELDS,
     _ensure_scan_sidecar,
+    _marker_says_no_asin,
     _probe_book_metadata,
     _scan_cache_from_sidecar,
     _scan_sidecar_target,
@@ -118,6 +119,54 @@ class ScanCacheReadTests(unittest.TestCase):
     def test_old_asin_only_cache_returns_none(self):
         self._write({"asin": "B0REAL11111"})  # no fields -> needs full probe
         self.assertIsNone(_scan_cache_from_sidecar(self.audio, self.audio.parent))
+
+
+class MarkerNoAsinTests(unittest.TestCase):
+    def test_marker_says_no_asin(self):
+        self.assertTrue(_marker_says_no_asin({"marker": {"audible": {"asin": "NOREALASIN"}}}))
+        self.assertFalse(_marker_says_no_asin({"marker": {"audible": {"asin": "B0REAL11111"}}}))
+        self.assertFalse(_marker_says_no_asin({"marker": {"audible": {}}}))
+        self.assertFalse(_marker_says_no_asin({}))
+
+
+class ScanCacheAsinSatisfiedTests(unittest.TestCase):
+    """asin is 'satisfied' by a real embedded tag OR a confirmed NOREALASIN marker,
+    but never by a marker that merely *claims* a real ASIN."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.audio = self.root / "Book" / "Book.m4b"
+        self.audio.parent.mkdir(parents=True)
+        self.audio.write_bytes(b"x")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, payload):
+        (self.audio.parent / "libraforge.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def _scan_cache(self, asin):
+        return {"asin": asin, "fields": {f: True for f in _CORE_FIELDS},
+                "mtime": self.audio.stat().st_mtime_ns}
+
+    def test_norealasin_marker_satisfies_asin(self):
+        self._write({"scan_cache": self._scan_cache("NOREALASIN"),
+                     "marker": {"audible": {"asin": "NOREALASIN"}}})
+        satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
+        self.assertTrue(satisfied)
+
+    def test_marker_claiming_real_asin_does_not_satisfy(self):
+        # marker claims a real ASIN but the embedded tag (scan_cache) is absent.
+        self._write({"scan_cache": self._scan_cache("NOREALASIN"),
+                     "marker": {"audible": {"asin": "B0CLAIM1234"}}})
+        satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
+        self.assertFalse(satisfied)
+
+    def test_embedded_asin_satisfies(self):
+        self._write({"scan_cache": self._scan_cache("B0EMBED1234")})
+        satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
+        self.assertTrue(satisfied)
 
 
 class ProbeGracefulTests(unittest.TestCase):

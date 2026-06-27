@@ -3188,11 +3188,38 @@ def _ensure_scan_sidecar(
         pass
 
 
-def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, dict] | None:
-    """Return cached ``(asin_present, fields)`` from a fresh scan_cache, or None.
+def _marker_says_no_asin(data: dict) -> bool:
+    """True iff the fixer's marker records NOREALASIN -- a confirmed determination
+    that no Audible match exists. A marker that names a *real* ASIN is ignored
+    here (the embedded tag is the source of truth for a real ASIN), so a book
+    whose marker claims an ASIN it never wrote stays Incomplete."""
+    asin = str(((data.get("marker") or {}).get("audible") or {}).get("asin") or "").strip().upper()
+    return asin == _NOREALASIN
 
-    None means no usable cache (absent, old asin-only cache, or stale because the
-    audio file changed) -- the caller should re-probe.
+
+def _sidecar_marker_no_asin(audio_file: Path, book_dir: Path) -> bool:
+    """Read the fixer's NOREALASIN determination from a libraforge.json sidecar."""
+    for sidecar in (
+        audio_file.parent / (audio_file.name + ".libraforge.json"),
+        book_dir / "libraforge.json",
+    ):
+        if sidecar.is_file():
+            try:
+                if _marker_says_no_asin(json.loads(sidecar.read_text(encoding="utf-8"))):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, dict] | None:
+    """Return cached ``(asin_satisfied, fields)`` from a fresh scan_cache, or None.
+
+    ``asin_satisfied`` is True when a real ASIN is embedded OR the fixer confirmed
+    NOREALASIN (no Audible match exists). The NOREALASIN determination is re-read
+    from the marker on every call -- it is cheap and can change without the audio
+    file changing -- while the (expensive) field/ASIN probe stays mtime-cached.
+    None means no usable cache (absent, old asin-only cache, or stale) -- re-probe.
     """
     for sidecar in (
         audio_file.parent / (audio_file.name + ".libraforge.json"),
@@ -3214,23 +3241,29 @@ def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, di
             cur_mtime = None
         if sc.get("mtime") != cur_mtime:
             return None  # file changed since cached -- re-probe
-        asin_present = str(sc.get("asin") or "").strip() not in ("", _NOREALASIN)
-        return asin_present, {f: bool(fields.get(f)) for f in _CORE_FIELDS}
+        asin_embedded = str(sc.get("asin") or "").strip() not in ("", _NOREALASIN)
+        asin_satisfied = asin_embedded or _marker_says_no_asin(data)
+        return asin_satisfied, {f: bool(fields.get(f)) for f in _CORE_FIELDS}
     return None
 
 
 def _book_metadata_state(book_dir: Path, audio_files: list[Path]) -> tuple[bool, dict]:
-    """Return ``(asin_present, {field: present})`` for a book, reading the embedded
-    tags (cached in a libraforge.json scan_cache). Probes real tags rather than
-    trusting a marker's recorded ASIN, so the state reflects the actual file."""
+    """Return ``(asin_satisfied, {field: present})`` for a book.
+
+    Reads the embedded tags (cached in a libraforge.json scan_cache). ASIN is
+    "satisfied" when a real ASIN is embedded OR the fixer marked NOREALASIN, so a
+    book that genuinely has no Audible match stops being flagged Incomplete once
+    its core fields are present. A marker's *claimed* real ASIN is not trusted --
+    only the actual embedded tag counts for a real ASIN."""
     audio_file = audio_files[0]
     cached = _scan_cache_from_sidecar(audio_file, book_dir)
     if cached is not None:
         return cached
     probe = _probe_book_metadata(audio_file)
-    asin_present = bool(probe["asin"]) and probe["asin"] != _NOREALASIN
+    asin_embedded = bool(probe["asin"]) and probe["asin"] != _NOREALASIN
+    asin_satisfied = asin_embedded or _sidecar_marker_no_asin(audio_file, book_dir)
     _ensure_scan_sidecar(audio_files, book_dir, audio_file, probe["asin"], probe["fields"])
-    return asin_present, probe["fields"]
+    return asin_satisfied, probe["fields"]
 
 
 def _book_audio_files(folder: Path) -> list[Path]:
