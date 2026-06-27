@@ -70,19 +70,26 @@ class EnsureSidecarTests(unittest.TestCase):
         self.assertEqual(sc["fields"], fields)
         self.assertIsNotNone(sc["mtime"])
 
-    def test_reuses_existing_sidecar_no_duplicate(self):
+    def test_shared_folder_uses_per_file_not_folder_level(self):
+        # A and B are distinct books sharing one folder. A stray folder-level
+        # libraforge.json (e.g. belonging to a real multi-part book, or left over)
+        # must NOT be adopted for A -- that is exactly the clobber that funnelled
+        # Iron Guild's three books into one corrupt sidecar. A gets its own per-file
+        # sidecar and the folder-level file is left untouched.
         a = self.root / "Shared" / "A.m4b"
         a.parent.mkdir(parents=True)
         a.write_bytes(b"")
         (self.root / "Shared" / "B.m4b").write_bytes(b"")
-        # An existing folder-level sidecar should be reused even though A shares its folder.
         (a.parent / "libraforge.json").write_text('{"marker": {"applied": true}}', encoding="utf-8")
         _ensure_scan_sidecar([a], a.parent, a, "B0BBBB2222", {f: True for f in _CORE_FIELDS})
-        # No per-file sidecar created; the existing folder-level one gained scan_cache.
-        self.assertFalse((a.with_name(a.name + ".libraforge.json")).is_file())
-        data = json.loads((a.parent / "libraforge.json").read_text())
-        self.assertEqual(data["scan_cache"]["asin"], "B0BBBB2222")
-        self.assertTrue(data["marker"]["applied"])  # existing content preserved
+        # A's own per-file sidecar was created with the scan_cache.
+        per_file = a.with_name(a.name + ".libraforge.json")
+        self.assertTrue(per_file.is_file())
+        self.assertEqual(json.loads(per_file.read_text())["scan_cache"]["asin"], "B0BBBB2222")
+        # The folder-level file was not adopted or polluted with A's scan_cache.
+        folder = json.loads((a.parent / "libraforge.json").read_text())
+        self.assertNotIn("scan_cache", folder)
+        self.assertTrue(folder["marker"]["applied"])
 
 
 class ScanCacheReadTests(unittest.TestCase):
