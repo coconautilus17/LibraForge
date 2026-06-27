@@ -184,6 +184,7 @@ class ItemResult:
     asin_conflict: bool = False
     error: str = ""
     source_provider: str = ""  # abs-agg provider id when matched via GA/SBT endpoint
+    from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
 
 
 def get_marker_path(source: Path) -> Path:
@@ -1312,6 +1313,63 @@ def should_skip_due_to_marker(
     return False, ""
 
 
+# Fields the fixer fills into file tags / metadata.json, in report order.
+FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin")
+
+
+def marker_real_asin(marker: dict) -> str:
+    """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
+    asin = str((marker.get("audible") or {}).get("asin") or "").strip().upper()
+    return "" if (not asin or asin == "NOREALASIN") else asin
+
+
+def metadata_from_marker(marker: dict) -> dict:
+    """Rebuild a fill-metadata dict from a marker's stored Audible match.
+
+    Lets a previously-applied book be re-filled with the *same* match it got
+    before, without a fresh Audible lookup. NOREALASIN is treated as no ASIN.
+    """
+    a = marker.get("audible") or {}
+    return {
+        "asin": marker_real_asin(marker),
+        "title": a.get("chosen_title") or a.get("title") or "",
+        "audible_title": a.get("title") or "",
+        "author": a.get("author") or "",
+        "narrator": a.get("narrator") or "",
+        "series": a.get("series") or "",
+        "sequence": a.get("sequence") or "",
+        "audible_sequence": a.get("sequence") or "",
+        "year": a.get("year") or "",
+        "cover_url": a.get("cover_url") or "",
+        "audible_duration_minutes": a.get("duration_minutes"),
+        "audible_number_candidates": a.get("number_candidates") or [],
+        "edit_mode": marker.get("edit_mode") or marker.get("mode") or "full",
+        "duration": marker.get("duration") or {},
+    }
+
+
+def marker_skip_is_clean(
+    source: Path, marker: dict, alone: bool, meta_target: Path
+) -> bool:
+    """True when an applied-marker book needs no maintenance and can be skipped fast.
+
+    Uses only cheap filesystem stats (no media probe). A book is clean when its
+    ASIN is recorded as written (or there is no real ASIN to write), its
+    metadata.json already exists, and its sidecar is already at the final
+    consolidated location. Anything else routes to the recovery path so missing
+    tags / metadata.json / sidecars get repaired. Legacy markers (no
+    ``written_fields``) are never clean, so they are repaired once and then
+    stamped, after which they short-circuit here.
+    """
+    if marker_real_asin(marker) and "asin" not in set(marker.get("written_fields") or []):
+        return False
+    if not meta_target.exists():
+        return False
+    if alone and source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}").is_file():
+        return False
+    return True
+
+
 def write_marker(
     source: Path,
     metadata: dict,
@@ -1321,10 +1379,15 @@ def write_marker(
     aggressive: bool,
     output_kind: str = "tags",
     alone: bool = False,
+    written_fields: list[str] | None = None,
 ) -> None:
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
+    existing_marker = payload.get("marker") or {}
+    # Preserve any previously-recorded written fields so a fill-missing run that
+    # adds one field doesn't erase the record of fields written by an earlier run.
+    merged_written = sorted(set(existing_marker.get("written_fields") or []) | set(written_fields or []))
     payload["marker"] = {
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "applied": True,
@@ -1335,6 +1398,7 @@ def write_marker(
         "score": score,
         "source_file": source.name,
         "output_kind": output_kind,
+        "written_fields": merged_written,
         "duration": metadata.get("duration", {}),
         "audible": {
             "asin": metadata.get("asin", ""),
@@ -1659,6 +1723,7 @@ def write_audiobookshelf_metadata_json(
     metadata: dict,
     clues: dict | None = None,
     alone_in_folder: bool = False,
+    fill_missing: bool = False,
 ) -> Path:
     """Write an Audiobookshelf-compatible metadata.json for the book.
 
@@ -1666,6 +1731,10 @@ def write_audiobookshelf_metadata_json(
     multi-file book or a single file alone in its folder gets folder/metadata.json;
     a loose single file sharing its folder gets a collision-safe companion
     <file>.metadata.json (the organizer renames it to metadata.json post-move).
+
+    When ``fill_missing`` is True and a metadata.json already exists, only empty
+    fields in the existing file are populated; values already present are kept.
+    This mirrors the fill-missing tag policy so we never clobber good data.
     """
     if source.is_dir():
         # Fallback for directory source — shouldn't happen in normal flow
@@ -1705,6 +1774,25 @@ def write_audiobookshelf_metadata_json(
         "language": None,
         "explicit": False,
     }
+
+    if fill_missing and target.is_file():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+        if isinstance(existing, dict):
+            # Keep any non-empty existing value; only fill where the file is blank.
+            def _blank(v) -> bool:
+                return v in (None, "", [], {}) or (isinstance(v, str) and not v.strip())
+
+            for key, new_value in payload.items():
+                old_value = existing.get(key, None)
+                if not _blank(old_value):
+                    payload[key] = old_value
+            # Preserve any extra keys the existing file carried (e.g. language, tags).
+            for key, old_value in existing.items():
+                if key not in payload:
+                    payload[key] = old_value
 
     content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     try:
@@ -4760,12 +4848,19 @@ def search_item(
             force=args.force,
             minimum_score=args.min_score,
         )
+        recovering_from_marker = False
         if skip_due_to_marker:
-            log.append(f"  SKIP: {marker_reason}")
-            log.append("")
-            result.status = "skipped"
-            result.skip_reason = marker_reason
-            return result
+            _rec_alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+            _rec_meta_target = get_audiobookshelf_metadata_path(file_path, None, _rec_alone)
+            if marker_skip_is_clean(file_path, existing_marker, _rec_alone, _rec_meta_target):
+                log.append(f"  SKIP: {marker_reason}")
+                log.append("")
+                result.status = "skipped"
+                result.skip_reason = marker_reason
+                return result
+            # Otherwise: re-apply the marker's stored match (fill-missing only writes
+            # gaps) and ensure metadata.json / sidecar are in order — no fresh lookup.
+            recovering_from_marker = True
 
         match_cache_key = get_search_context_cache_key(file_path, multi_part_group_map)
         with search_context_lock:
@@ -4788,6 +4883,25 @@ def search_item(
 
         result.queries = queries
         result.clues = clues
+
+        if recovering_from_marker:
+            rec_md = metadata_from_marker(existing_marker)
+            try:
+                rec_score = float(existing_marker.get("score"))
+            except (TypeError, ValueError):
+                rec_score = 1.0
+            result.status = "matched"
+            result.from_marker = True
+            result.metadata = rec_md
+            result.score = rec_score
+            result.edit_mode = rec_md.get("edit_mode", "full")
+            result.duration_status = "unknown"
+            _rec_asin = rec_md.get("asin") or "none"
+            log.append(
+                f"  RECOVER: re-applying stored match from marker "
+                f"(score={rec_score:g}, asin={_rec_asin})"
+            )
+            return result
 
         skip_due_to_folder, skip_folder = matches_ignored_folders(
             file_path=file_path,
@@ -5201,7 +5315,8 @@ def search_item(
                 log.append(f"  {write_note} (metadata.json unchanged)")
             else:
                 abs_path = write_audiobookshelf_metadata_json(
-                    file_path, effective_metadata, clues, alone
+                    file_path, effective_metadata, clues, alone,
+                    fill_missing=(write_mode != "overwrite"),
                 )
                 suffix = f" [{write_note}]" if write_note else ""
                 log.append(f"  APPLIED ({mode}, metadata_json={abs_path}){suffix}")
@@ -7778,11 +7893,12 @@ def main():
                                 plan_parts.append("json_sidecar")
                             elif not only_json:
                                 plan_parts.append("tags")
+                        _rec = " [recovered from marker]" if result.from_marker else ""
                         if plan_parts:
                             _sfx = f" [{write_note}]" if write_note else ""
-                            out.append(f"  PLAN: would write {' + '.join(plan_parts)} ({_write_kind}){_sfx}")
+                            out.append(f"  PLAN: would write {' + '.join(plan_parts)} ({_write_kind}){_sfx}{_rec}")
                         else:
-                            out.append(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}")
+                            out.append(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}{_rec}")
                         out.append("")
                     else:
                         applied_parts: list[str] = []
@@ -7790,7 +7906,8 @@ def main():
 
                         if metadata_json_pending:
                             abs_path = write_audiobookshelf_metadata_json(
-                                file_path, effective_metadata, clues, _alone
+                                file_path, effective_metadata, clues, _alone,
+                                fill_missing=(write_mode != "overwrite"),
                             )
                             applied_parts.append(f"metadata_json={abs_path}")
                             primary_output_kind = "metadata_json"
@@ -7829,17 +7946,30 @@ def main():
                                 applied_parts.append(f"writer={writer_used}")
                                 primary_output_kind = "tags"
 
+                        # Record which fields are now in the file tags so future runs
+                        # can trust the marker and skip re-probing. Only claim tag
+                        # fields when we actually write tags (not metadata-json-only,
+                        # not a multi-part sidecar without a single-file tag write).
+                        _wrote_tags = (not only_json) and (
+                            (not is_sidecar) or is_single_file_mp3(file_path, clues)
+                        )
+                        _written_fields = (
+                            [f for f in FILL_FIELDS if str((effective_metadata or {}).get(f) or "").strip()]
+                            if _wrote_tags else None
+                        )
                         write_marker(
                             source=file_path, metadata=effective_metadata,
                             clues=clues, score=score, mode=_write_kind,
                             aggressive=aggressive_edit,
                             output_kind=primary_output_kind, alone=_alone,
+                            written_fields=_written_fields,
                         )
                         _sfx = f" [{write_note}]" if write_note else ""
+                        _rec = " [recovered from marker]" if result.from_marker else ""
                         if applied_parts:
-                            out.append(f"  APPLIED ({_write_kind}, {', '.join(applied_parts)}){_sfx}")
+                            out.append(f"  APPLIED ({_write_kind}, {', '.join(applied_parts)}){_sfx}{_rec}")
                         else:
-                            out.append(f"  {write_note or 'NO-OP'}")
+                            out.append(f"  {write_note or 'NO-OP'}{_rec}")
                         out.append("")
 
                 # Emit SOURCE: now that the book is confirmed written (or planned).
