@@ -1100,10 +1100,11 @@ if ($('targetScanBtn')) {
     results.hidden = true;
     err.hidden = true;
     try {
+      const scanPrefs = window.LibraForgePrefs?.get() || {};
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, ignored_folders: (scanPrefs.ignoredFolders || []) }),
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Scan failed'); }
       const data = await res.json();

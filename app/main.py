@@ -506,6 +506,28 @@ def load_fixer_module(script_name: str = ""):
     return module
 
 
+# Loading the fixer re-execs the module, which is too costly to repeat per book
+# during a scan. Cache it keyed by the live script's path + mtime so edits to the
+# bind-mounted script are still picked up, but a single scan reuses one instance.
+_scan_fixer_cache: dict[tuple[str, int], Any] = {}
+
+
+def scan_fixer_module():
+    """Return the active fixer module, cached for the duration of a scan."""
+    path = live_script_path(default_fixer_script(), "fixer")
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    key = (str(path), mtime)
+    module = _scan_fixer_cache.get(key)
+    if module is None:
+        module = load_fixer_module(default_fixer_script())
+        _scan_fixer_cache.clear()  # only keep the current script version
+        _scan_fixer_cache[key] = module
+    return module
+
+
 def build_context_clues(
     fixer_module,
     metadata: dict[str, Any] | None,
@@ -2987,6 +3009,7 @@ def fs_ls(path: str = "/") -> dict[str, Any]:
 
 class ScanRequest(BaseModel):
     path: str
+    ignored_folders: list[str] = Field(default_factory=list)
 
 
 _ASIN_TAG_KEYS = (
@@ -3120,45 +3143,53 @@ def _probe_book_metadata(audio_file: Path) -> dict:
     return {"asin": asin, "fields": fields}
 
 
-def _scan_sidecar_target(audio_files: list[Path], book_dir: Path, audio_file: Path) -> Path:
-    """Canonical libraforge.json path for the scan to create, matching the fixer.
+def _scan_sidecar_target(
+    audio_files: list[Path], book_dir: Path, audio_file: Path, fixer=None
+) -> Path:
+    """Canonical libraforge.json path for the scan, decided by the fixer itself.
 
-    Multi-file books and single files alone in their folder use a folder-level
-    ``libraforge.json``; a single file sharing its folder with other books uses a
-    per-file ``<name>.libraforge.json``.
+    Delegates to the fixer's ``get_libraforge_path`` so the scan and a real run
+    always agree on placement: multi-file (grouped) books and single files alone
+    in their folder use a folder-level ``libraforge.json``; a single file sharing
+    its folder with other books uses a per-file ``<name>.libraforge.json``.
     """
-    if len(audio_files) > 1:
-        return book_dir / "libraforge.json"
-    folder = audio_file.parent
-    try:
-        audio_count = sum(
-            1 for x in folder.iterdir()
-            if x.is_file() and x.suffix.lower() in _SCAN_AUDIO_EXTS
-        )
-    except OSError:
-        audio_count = 1
-    if audio_count <= 1:
-        return folder / "libraforge.json"
-    return audio_file.with_name(audio_file.name + ".libraforge.json")
+    fixer = fixer or scan_fixer_module()
+    grouped = len(audio_files) > 1
+    if grouped:
+        alone = False
+    else:
+        try:
+            alone = sum(
+                1 for x in audio_file.parent.iterdir()
+                if x.is_file() and x.suffix.lower() in _SCAN_AUDIO_EXTS
+            ) <= 1
+        except OSError:
+            alone = True
+    clues = {"group_search": {"applied": grouped}}
+    return fixer.get_libraforge_path(audio_file, clues, alone)
 
 
 def _ensure_scan_sidecar(
-    audio_files: list[Path], book_dir: Path, audio_file: Path, asin: str, fields: dict
+    audio_files: list[Path], book_dir: Path, audio_file: Path, asin: str, fields: dict,
+    fixer=None,
 ) -> None:
-    """Persist the probe result to a libraforge.json, creating it if needed.
+    """Persist the probe result to the canonical libraforge.json, in the fixer's format.
 
-    Reuses an existing sidecar (folder-level preferred) to avoid duplicates;
-    otherwise creates one at the canonical path. The audio file's mtime is stored
-    so a later tag change invalidates the cache.
+    Writes only to the path the fixer would use (``get_libraforge_path``) and only
+    the ``scan_cache`` key, using the fixer's own writer for byte-for-byte format
+    parity. It never adopts a folder-level file for a per-file book, so distinct
+    single-file books sharing a folder can no longer clobber one shared sidecar.
+    The audio file's mtime is stored so a later tag change invalidates the cache.
     """
-    existing = next(
-        (c for c in (
-            book_dir / "libraforge.json",
-            audio_file.with_name(audio_file.name + ".libraforge.json"),
-        ) if c.is_file()),
-        None,
-    )
-    target = existing or _scan_sidecar_target(audio_files, book_dir, audio_file)
+    fixer = fixer or scan_fixer_module()
+    target = _scan_sidecar_target(audio_files, book_dir, audio_file, fixer)
+    # If the canonical file is missing but this book's own per-file sidecar exists
+    # (e.g. a pending fixer file->folder migration for a now-alone book), update it
+    # in place rather than create a duplicate. Never reach for a folder-level file.
+    if not target.is_file():
+        own_file_lf = audio_file.with_name(audio_file.name + ".libraforge.json")
+        if target == book_dir / "libraforge.json" and own_file_lf.is_file():
+            target = own_file_lf
     payload: dict = {}
     if target.is_file():
         try:
@@ -3181,9 +3212,7 @@ def _ensure_scan_sidecar(
     }
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        fixer._write_libraforge(target, payload)
     except Exception:
         pass
 
@@ -3355,6 +3384,37 @@ def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     return out
 
 
+def _filter_ignored_units(
+    units: list[tuple[Path, list[Path], Path]],
+    scan_root: Path,
+    ignored_folders: list[str],
+    fixer=None,
+) -> list[tuple[Path, list[Path], Path]]:
+    """Drop units under an ignored folder, reusing the fixer's matcher.
+
+    Matching is relative to ``scan_root`` so the same configured folder (e.g.
+    ``_unorganized``) is skipped during a library-root scan but still scanned when
+    the user targets it directly. This keeps the scanner from touching, and
+    creating sidecars in, folders the fixer is told to ignore.
+    """
+    folders = [f.strip() for f in (ignored_folders or []) if f and f.strip()]
+    if not folders:
+        return units
+    fixer = fixer or scan_fixer_module()
+    kept: list[tuple[Path, list[Path], Path]] = []
+    for unit in units:
+        ref, audio, book_dir = unit
+        probe = audio[0] if audio else (book_dir or ref)
+        try:
+            rel = Path(probe).relative_to(scan_root)
+        except ValueError:
+            rel = Path(probe)
+        skip, _ = fixer.matches_ignored_folders(rel, folders)
+        if not skip:
+            kept.append(unit)
+    return kept
+
+
 def _categorise_book_unit(audio: list[Path], book_dir: Path, scan_root: Path) -> str:
     if not audio:
         return "skip"
@@ -3402,13 +3462,25 @@ def _library_fingerprint(root: Path) -> str:
     return "|".join(parts)
 
 
-def _store_scan_cache(path: Path, results: list[tuple[Path, str]]) -> None:
+def _scan_cache_key(path: Path, ignored: list[str] | None = None) -> str:
+    """Cache key includes the ignored-folder set so a changed filter forces a rescan."""
+    sig = ",".join(sorted(f.strip().lower() for f in (ignored or []) if f and f.strip()))
+    return f"{path}|{sig}"
+
+
+def _store_scan_cache(
+    path: Path, results: list[tuple[Path, str]], ignored: list[str] | None = None
+) -> None:
     fp = _library_fingerprint(path)
-    _scan_cache[str(path)] = (time.monotonic(), fp, [(str(f), c) for f, c in results])
+    _scan_cache[_scan_cache_key(path, ignored)] = (
+        time.monotonic(), fp, [(str(f), c) for f, c in results]
+    )
 
 
-def _load_scan_cache(path: Path) -> list[tuple[str, str]] | None:
-    entry = _scan_cache.get(str(path))
+def _load_scan_cache(
+    path: Path, ignored: list[str] | None = None
+) -> list[tuple[str, str]] | None:
+    entry = _scan_cache.get(_scan_cache_key(path, ignored))
     if not entry:
         return None
     ts, cached_fp, data = entry
@@ -3444,7 +3516,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     t0 = time.monotonic()
 
     # Fast cache check: fingerprint (~100 stat calls, <500ms) before full os.walk
-    cached = _load_scan_cache(p)
+    cached = _load_scan_cache(p, req.ignored_folders)
     if cached is not None:
         needs_metadata = sum(1 for _, c in cached if c == "needs_metadata")
         needs_conversion = sum(1 for _, c in cached if c == "needs_conversion")
@@ -3464,7 +3536,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     # Full scan — fingerprint changed or no cache yet. Count book units the way a
     # real run does (multi-part grouping), so a folder of several standalone books
     # counts each separately and a folder of chapter files counts as one.
-    units = _scan_book_units(p)
+    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
 
     def categorise(unit: tuple[Path, list[Path], Path]) -> str:
         _ref, audio, book_dir = unit
@@ -3491,7 +3563,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
             elif category == "organized":
                 organized += 1
 
-    _store_scan_cache(p, book_results)
+    _store_scan_cache(p, book_results, req.ignored_folders)
 
     total = needs_metadata + needs_conversion + ready_to_organize + organized
     return {
@@ -3573,7 +3645,7 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
 
-    cached = _load_scan_cache(p)
+    cached = _load_scan_cache(p, req.ignored_folders)
     if cached is not None:
         # Fast path: categories already known, only do cover checks for needs-attention books
         attention = [(Path(f), c) for f, c in cached if c in ("needs_metadata", "needs_conversion")]
@@ -3594,7 +3666,7 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
         return {"books": books, "total": len(books)}
 
     # Slow fallback when no scan cache (user navigated directly to books without scanning first)
-    units = _scan_book_units(p)
+    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
 
     def make_book_entry(unit: tuple[Path, list[Path], Path]) -> dict[str, Any] | None:
         ref, audio, book_dir = unit

@@ -284,10 +284,11 @@
       scanResults.hidden = true;
       scanError.hidden = true;
 
+      const scanPrefs = window.LibraForgePrefs?.get() || {};
       fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, ignored_folders: (scanPrefs.ignoredFolders || []) }),
       })
         .then(r => {
           if (!r.ok) return r.json().then(e => Promise.reject(e.detail || "Scan failed"));
@@ -349,10 +350,11 @@
     function loadBookList(path) {
       const scroll = document.getElementById("bookListScroll");
       scroll.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading…</div>';
+      const scanPrefs = window.LibraForgePrefs?.get() || {};
       fetch("/api/scan/books", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, ignored_folders: (scanPrefs.ignoredFolders || []) }),
       })
         .then(r => r.json())
         .then(data => {
