@@ -189,6 +189,12 @@
             <select id="batchAbsProvider"></select>
           </label>
         </div>
+        <div class="goodreads-fallback-row">
+          <div class="checks goodreads-fallback-check">
+            <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads via abs-tract when Audible does not return a confident full match."></span></label>
+          </div>
+          <div class="inline-warning">Goodreads rate-limits aggressively. Use only 5 search workers when enabling this fallback.</div>
+        </div>
       </div>
 
       <div class="checks">
@@ -321,7 +327,7 @@
         <button id="manualSearchBtn" class="secondary">Search For Selected Target</button>
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>
       </div>
-      <p id="manualTitleQueryNote" class="provider-query-note" hidden>&#9432; For this provider the <strong>Title clue</strong> field is used as the search query. Put author in the Author clue field.</p>
+      <p id="manualTitleQueryNote" class="provider-query-note" hidden>&#9432; For this provider, construct the search with the book title in <strong>Title clue</strong> and the author in <strong>Author clue</strong>. Do not repeat the author in the title query.</p>
       <p id="manualCoverStatus" class="note">Load a target to inspect its current cover.</p>
       <p id="manualMeta" class="note"></p>
       <div id="manualSearchResults" class="results-grid"></div>

@@ -296,6 +296,28 @@ class GoodreadsEditModeGateTests(unittest.TestCase):
         )
         self.assertEqual(mode, "full")
 
+    def test_full_when_first_book_uses_unnumbered_series_title(self):
+        # Some catalogs title book 1 by the bare series name. Local metadata may
+        # still include the sequence in the title ("Dream Master 1").
+        clues = {"title": "Dream Master 1", "author": "Logan Jacobs",
+                 "series": "Dream Master", "book_number": "1"}
+        self.assertTrue(fixer.is_generic_series_number_title(clues))
+        mode = fixer.determine_edit_mode(
+            self._product("Dream Master", "Logan Jacobs"),
+            clues,
+            0.2,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_full_when_goodreads_omits_book_label_in_title(self):
+        mode = fixer.determine_edit_mode(
+            self._product("Between Heaven and Hell 1", "Dante King"),
+            {"title": "Between Heaven and Hell, Book 1", "author": "Dante King",
+             "series": "Between Heaven and Hell", "book_number": "1"},
+            0.2,
+        )
+        self.assertEqual(mode, "full")
+
     def test_none_on_wrong_book_same_author_unrelated_title(self):
         mode = fixer.determine_edit_mode(
             self._product("The Glade of Dreams 1", "Logan Jacobs"),

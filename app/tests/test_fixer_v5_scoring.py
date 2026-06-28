@@ -132,6 +132,11 @@ class QueryBuildTests(unittest.TestCase):
         self.assertTrue(queries)
         self.assertFalse(any("bbc" in q.lower() for q in queries))
 
+    def test_goodreads_query_prefers_number_without_book_label(self):
+        queries = FIXER.goodreads_title_query_variants("Between Heaven and Hell, Book 1")
+        self.assertEqual(queries[0], "Between Heaven and Hell 1")
+        self.assertIn("Between Heaven and Hell, Book 1", queries)
+
 
 class SequenceLeniencyTests(unittest.TestCase):
     def setUp(self):
@@ -212,6 +217,35 @@ class OmnibusRangeTests(unittest.TestCase):
         self.assertEqual(FIXER.parse_book_number_range("11 to 12"), (11, 12))
         self.assertEqual(FIXER.parse_book_number_range("Books 011 012"), (11, 12))
         self.assertIsNone(FIXER.parse_book_number_range("Just a Title"))
+
+    def test_local_omnibus_title_can_full_match_omnibus_product(self):
+        clues = {
+            "title": "After the End Omnibus",
+            "raw_title": "After the End Omnibus: Books 1-3 [B0DMTPP1V8]",
+            "series": "Dante King - After the End",
+            "author": "Dante King",
+            "narrator": "Melanie Hastings, Jonathan Waters",
+            "book_number": "1",
+            "book_number_source": "path",
+        }
+        candidate = product(
+            asin="B0DMTQ1FK7",
+            title="After the End Omnibus",
+            subtitle="Books 1-3",
+            series="After the End",
+            sequence="1-3",
+            authors=("Dante King",),
+            narrators=("Melanie Hastings", "Jonathan Waters"),
+            minutes=2088,
+        )
+        duration = FIXER.compare_duration(2088.34, candidate["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, candidate, 2088.34)
+
+        self.assertEqual(score, 1.0)
+        self.assertEqual(
+            FIXER.determine_edit_mode(candidate, clues, score, duration),
+            "full",
+        )
 
 
 class TieBreakTests(unittest.TestCase):

@@ -104,8 +104,8 @@ def _save_abs_agg_config(config: dict[str, Any]) -> None:
     )
 
 
-# abs-tract (Goodreads/Kindle) is a separate service from abs-agg. Empty url by
-# default so the Goodreads fallback stays off until the user configures it.
+# abs-tract (Goodreads/Kindle) is a separate service from abs-agg. Empty URL by
+# default. Batch Goodreads fallback also requires an explicit per-run flag.
 ABS_TRACT_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-tract.json"
 
 
@@ -348,6 +348,7 @@ _LOCALE_NAMES: dict[str, str] = {
 
 PROCESSING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Processing:\s+(.+)$")
 WRITING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Writing:\s+(.+)$")
+PASS1_PROGRESS_RE = re.compile(r"^PASS 1 PROGRESS:\s+completed\s+(\d+)/(\d+)\s*$")
 FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
@@ -860,6 +861,7 @@ class RunRequest(BaseModel):
     write_mode: str = "smart"
     provider: str = "audible"
     abs_provider: str = "audible"
+    enable_goodreads_fallback: bool = False
 
 
 class M4BMetadataForm(BaseModel):
@@ -1201,17 +1203,37 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         )
         return
 
-    m = PROCESSING_RE.match(line)
+    m = PASS1_PROGRESS_RE.match(line)
     if m:
+        state.parser_state["pass1_progress_mode"] = True
         state.current = int(m.group(1))
         state.total = int(m.group(2))
-        state.current_file = m.group(3).strip()
         state.percent = _fixer_percent(state)
+        set_run_phase(
+            state,
+            "matching",
+            "Matching metadata",
+            f"Completed {state.current} of {state.total}",
+        )
+        return
+
+    m = PROCESSING_RE.match(line)
+    if m:
+        item_index = int(m.group(1))
+        total = int(m.group(2))
+        state.total = total
+        state.current_file = m.group(3).strip()
+        if state.parser_state.get("pass1_progress_mode"):
+            detail = f"Completed {state.current} of {state.total} · result item {item_index}"
+        else:
+            state.current = item_index
+            state.percent = _fixer_percent(state)
+            detail = f"Item {state.current} of {state.total}"
         set_run_phase(
             state,
             "inspecting",
             "Inspecting metadata",
-            f"Item {state.current} of {state.total}",
+            detail,
         )
         return
 
@@ -1547,10 +1569,12 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         # Always pass abs-agg URL so the fixer can auto-detect and search
         # GraphicAudio / SoundBooth Theater regardless of the selected provider.
         cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
-        # abs-tract (Goodreads/Kindle) fallback: only pass the URL when the user
-        # has configured one, so the fallback stays off until opted in.
+        # abs-tract (Goodreads/Kindle): pass the URL when configured so the fixer
+        # can use it only when the explicit Goodreads fallback flag is set.
         _abs_tract_cfg = _load_abs_tract_config()
         _abs_tract_url = (_abs_tract_cfg.get("url") or "").strip()
+        if req.enable_goodreads_fallback:
+            cmd.append("--enable-goodreads-fallback")
         if _abs_tract_url:
             cmd += ["--abs-tract-url", _abs_tract_url]
             _region = (_abs_tract_cfg.get("kindle_region") or "").strip()

@@ -248,8 +248,8 @@
 
     <!-- abs-tract (Goodreads/Kindle) -->
     <section id="abs-tract" class="card settings-card">
-      <h2>Goodreads / Kindle fallback</h2>
-      <p>Optional. When a book has no acceptable Audible match, LibraForge can fall back to a Goodreads search via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Kindle is used only for a high-quality cover (its ebook ASIN is never written). Leave the URL blank to disable.</p>
+      <h2>Goodreads / Kindle</h2>
+      <p>Optional. LibraForge can search Goodreads and Kindle via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Manual searches use this URL directly. Batch Goodreads fallback also requires enabling the fallback checkbox on the run screen; use only 5 search workers when enabling it because Goodreads rate-limits aggressively. Kindle is used only for high-quality cover art and its ebook ASIN is never written.</p>
       <div class="grid" style="--grid-cols:1;margin-top:14px">
         <label>
           <span class="field-label">abs-tract URL</span>
@@ -651,7 +651,7 @@
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to save.");
-          absTractStatus.textContent = data.url ? "Saved. Goodreads fallback enabled." : "Saved. Goodreads fallback disabled (no URL).";
+          absTractStatus.textContent = data.url ? "Saved. abs-tract available for manual search and per-run batch fallback." : "Saved. abs-tract URL cleared.";
           absTractStatus.style.color = "var(--muted)";
         } catch (err) { absTractStatus.textContent = err.message; absTractStatus.style.color = "var(--danger)"; }
         finally { absTractSaveBtn.disabled = false; }
