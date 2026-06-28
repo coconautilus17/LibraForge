@@ -937,7 +937,8 @@ textarea {
   background: var(--danger-soft);
 }
 
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   width: 17px;
   height: 17px;
   min-height: 0;
