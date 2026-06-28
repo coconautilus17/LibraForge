@@ -44,6 +44,7 @@
       <a href="#library">Library</a>
       <a href="#accounts">Accounts</a>
       <a href="#absSection">Audiobookshelf</a>
+      <a href="#abs-tract">Goodreads/Kindle</a>
       <a href="#developer">Developer</a>
       <a href="#cleanup" class="danger">Danger zone</a>
     </aside>
@@ -243,6 +244,26 @@
         <button id="absRemoveBtn" class="secondary" type="button" hidden>Remove key</button>
       </div>
       <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
+    </section>
+
+    <!-- abs-tract (Goodreads/Kindle) -->
+    <section id="abs-tract" class="card settings-card">
+      <h2>Goodreads / Kindle fallback</h2>
+      <p>Optional. When a book has no acceptable Audible match, LibraForge can fall back to a Goodreads search via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Kindle is used only for a high-quality cover (its ebook ASIN is never written). Leave the URL blank to disable.</p>
+      <div class="grid" style="--grid-cols:1;margin-top:14px">
+        <label>
+          <span class="field-label">abs-tract URL</span>
+          <input id="absTractUrl" placeholder="http://abs-tract:5555" style="font-family:var(--font-mono);font-size:0.85em" />
+        </label>
+        <label>
+          <span class="field-label">Kindle region</span>
+          <input id="absTractRegion" placeholder="us" style="font-family:var(--font-mono);font-size:0.85em;max-width:120px" />
+        </label>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="absTractSaveBtn" type="button">Save</button>
+      </div>
+      <p id="absTractStatus" class="note" style="margin-top:10px"></p>
     </section>
 
     <!-- Developer -->
@@ -612,6 +633,28 @@
           absConnectStatus.style.color = data.reachable ? "var(--success)" : "var(--warning,#e8a020)";
         } catch (err) { absConnectStatus.textContent = err.message; absConnectStatus.style.color = "var(--danger)"; }
         finally { absConnectBtn.disabled = false; absConnectBtn.textContent = "Save and verify"; }
+      });
+
+      // ── abs-tract (Goodreads/Kindle) ──────────────────────────────────────
+      const absTractUrl = $("absTractUrl"), absTractRegion = $("absTractRegion");
+      const absTractSaveBtn = $("absTractSaveBtn"), absTractStatus = $("absTractStatus");
+      fetch("/api/abs-tract/settings").then((r) => r.json()).then((d) => {
+        absTractUrl.value = d.url || "";
+        absTractRegion.value = d.kindle_region || "us";
+      }).catch(() => {});
+      absTractSaveBtn.addEventListener("click", async () => {
+        absTractSaveBtn.disabled = true; absTractStatus.textContent = "";
+        try {
+          const res = await fetch("/api/abs-tract/settings", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: absTractUrl.value.trim(), kindle_region: absTractRegion.value.trim() || "us" }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to save.");
+          absTractStatus.textContent = data.url ? "Saved. Goodreads fallback enabled." : "Saved. Goodreads fallback disabled (no URL).";
+          absTractStatus.style.color = "var(--muted)";
+        } catch (err) { absTractStatus.textContent = err.message; absTractStatus.style.color = "var(--danger)"; }
+        finally { absTractSaveBtn.disabled = false; }
       });
 
       // ── Clean up sidecars ─────────────────────────────────────────────────

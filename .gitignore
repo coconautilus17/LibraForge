@@ -15,6 +15,7 @@ data/*/*
 config/title-noise.local.json
 config/publishers.local.json
 config/abs-agg.json
+config/abs-tract.json
 config/abs.json
 archive/
 output/

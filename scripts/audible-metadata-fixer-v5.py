@@ -2799,10 +2799,13 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
         else ""
     )
     known_author_norm = normalize_for_match(clean_author_value(known_author))
-    if (
+    series_number_series_ok = bool(
         series_number_title
         and series_number_title.group("series").strip().lower()
         not in {"book", "books", "volume", "volumes", "vol", "vols", "side story"}
+    )
+    if (
+        series_number_series_ok
         and not (
             trailing_title_norm
             and known_author_norm
@@ -2817,6 +2820,29 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
             "series": clean_series_value(series_number_title.group("series").strip()),
             "book_number": normalize_book_number(series_number_title.group("number")),
             "title": sanitize_book_title(series_number_title.group("title")),
+        }
+
+    # "Series N - Author Name" (e.g. a grouped folder "Backyard Dungeon 18 -
+    # Logan Jacobs"): the trailing segment is *the author itself*, not the title.
+    # Salvage the valuable series/number and omit the title so the caller falls
+    # back to a cleaned folder/tag title instead of stamping the author name as
+    # the book title. The trailing must equal the known author (or be one entry
+    # of a multi-author list); an author merely *embedded* in a longer title
+    # (e.g. "Arcane Artificer {Gary Furlong}") is left to the later parsers.
+    if (
+        series_number_series_ok
+        and trailing_title_norm
+        and known_author_norm
+        and (
+            trailing_title_norm == known_author_norm
+            or trailing_title_norm in known_author_norm
+        )
+        and looks_like_person_name(series_number_title.group("title"))
+    ):
+        return {
+            "raw_title": value,
+            "series": clean_series_value(series_number_title.group("series").strip()),
+            "book_number": normalize_book_number(series_number_title.group("number")),
         }
 
     year_title = re.match(
@@ -3952,10 +3978,19 @@ def build_multi_file_search_context(
     ]
     folder = file_paths[0].parent
     folder_name = sanitize_technical_labels(folder.name)
-    folder_structured = parse_structured_book_text(folder_name)
+    path_author, path_series = infer_group_identity_from_path(folder)
+    # Feed a known author into the structured parse so a "Series N - Author Name"
+    # folder is read as series + number (not author-as-title). Prefer the tag
+    # author shared across the group, then the path-inferred author.
+    group_known_author = (
+        pick_most_common_value([clues.get("author", "") for clues in clues_list])
+        or path_author
+    )
+    folder_structured = parse_structured_book_text(
+        folder_name, known_author=group_known_author
+    )
     folder_descriptive = parse_descriptive_book_text(folder_name)
     folder_identity = parse_identity_rich_book_text(folder_name)
-    path_author, path_series = infer_group_identity_from_path(folder)
 
     specific_titles = [
         clues.get("title", "")
@@ -4804,30 +4839,92 @@ def abs_agg_search(
 
     products = []
     for match in (raw.get("matches", []) or [])[:limit]:
-        series_raw = match.get("series") or []
-        if isinstance(series_raw, list) and series_raw:
-            series_name = series_raw[0].get("series", "")
-            sequence = str(series_raw[0].get("sequence", "") or "")
-        else:
-            series_name, sequence = "", ""
-
         # Preserve the embedded ASIN so we don't accidentally clear it on write.
         asin = match.get("asin", "") or existing_asin
+        products.append(_abs_match_to_product(match, provider, asin))
+    return products
 
-        products.append({
-            "asin": asin,
-            "title": match.get("title", "") or "",
-            "subtitle": match.get("subtitle", "") or "",
-            "authors": [{"name": match.get("author", "") or ""}],
-            "narrators": [{"name": match.get("narrator", "") or ""}],
-            "series": [{"title": series_name, "sequence": sequence}] if series_name else [],
-            "publisher_summary": match.get("description", "") or "",
-            "product_images": {"500": match.get("cover", "") or ""},
-            "runtime_length_min": None,  # abs-agg does not return runtime
-            "release_date": str(match.get("publishedYear", "") or ""),
-            "_abs_provider": provider,
-            "_abs_isbn": match.get("isbn", "") or match.get("bookId", "") or "",
-        })
+
+def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
+    """Normalize one ABS-custom-provider ``match`` to the Audible product shape.
+
+    Shared by abs-agg and abs-tract (both speak the Audiobookshelf custom
+    metadata provider format). ``asin`` is supplied by the caller so each source
+    can decide whether to trust the match's own ASIN.
+    """
+    series_raw = match.get("series") or []
+    if isinstance(series_raw, list) and series_raw:
+        series_name = series_raw[0].get("series", "")
+        sequence = str(series_raw[0].get("sequence", "") or "")
+    else:
+        series_name, sequence = "", ""
+
+    return {
+        "asin": asin,
+        "title": match.get("title", "") or "",
+        "subtitle": match.get("subtitle", "") or "",
+        "authors": [{"name": match.get("author", "") or ""}],
+        "narrators": [{"name": match.get("narrator", "") or ""}],
+        "series": [{"title": series_name, "sequence": sequence}] if series_name else [],
+        "publisher_summary": match.get("description", "") or "",
+        "product_images": {"500": match.get("cover", "") or ""},
+        "runtime_length_min": None,  # these sources do not return runtime
+        "release_date": str(match.get("publishedYear", "") or ""),
+        "_abs_provider": provider,
+        "_abs_isbn": match.get("isbn", "") or match.get("bookId", "") or "",
+    }
+
+
+def abs_tract_search(
+    title: str,
+    author: str,
+    provider: str,
+    abs_tract_url: str,
+    limit: int,
+    existing_asin: str = "",
+    kindle_region: str = "us",
+) -> list[dict]:
+    """Search an abs-tract provider (Goodreads/Kindle) and normalize results.
+
+    abs-tract is a standalone Audiobookshelf custom metadata provider, separate
+    from abs-agg. Endpoints:
+      goodreads -> /goodreads/search?query=...&author=...
+      kindle    -> /kindle/<region>/search?query=...&author=...
+
+    Kindle Store ASINs are *ebook* ASINs, not Audible audiobook ASINs, so the
+    Kindle match's ASIN is never adopted as the book's ASIN (we keep any existing
+    one). Kindle is useful here for its high-quality cover, not identity.
+    """
+    import urllib.error as _urlerror
+    import urllib.parse as _urlparse
+    import urllib.request as _urlrequest
+
+    if not abs_tract_url:
+        return []
+    if provider == "kindle":
+        path = f"kindle/{kindle_region.strip('/')}/search"
+    else:
+        path = f"{provider}/search"
+    params: dict[str, str] = {"query": title}
+    if author:
+        params["author"] = author
+    url = f"{abs_tract_url.rstrip('/')}/{path}?{_urlparse.urlencode(params)}"
+    try:
+        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+        with _urlrequest.urlopen(req, timeout=15) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except (_urlerror.URLError, OSError):
+        return []
+    except Exception:
+        return []
+
+    products = []
+    for match in (raw.get("matches", []) or [])[:limit]:
+        if provider == "kindle":
+            asin = existing_asin  # never trust a Kindle ebook ASIN as the audiobook ASIN
+        else:
+            asin = match.get("asin", "") or existing_asin
+        products.append(_abs_match_to_product(match, provider, asin))
     return products
 
 
@@ -5280,6 +5377,78 @@ def search_item(
 
                 if candidate_score >= args.min_score:
                     break
+
+            # Goodreads fallback (abs-tract): fires whenever Audible + ASIN did
+            # not yield a confident *full* match. That covers three cases: no
+            # match, a match below the score gate, and a match that only resolves
+            # the series (series_only) without confidently identifying the book
+            # (e.g. an omnibus matched in place of a missing standalone). No
+            # duration/composer is available, so acceptance is gated on a strong
+            # title+author match (determine_edit_mode -> "full"). The Audible
+            # result is preserved unless Goodreads returns a genuinely valid full
+            # match. Kindle then enriches the cover only; its ebook ASIN is never
+            # used.
+            abs_tract_url = getattr(args, "abs_tract_url", "")
+            audible_edit_mode = (
+                metadata_from_product(product, clues, score).get("edit_mode", "none")
+                if product else "none"
+            )
+            audible_is_full = (
+                bool(product) and score >= args.min_score and audible_edit_mode == "full"
+            )
+            if abs_tract_url and clues.get("title") and not audible_is_full:
+                if product:
+                    log.append(
+                        f"  Audible match not full (score={score:.4f}, "
+                        f"mode={audible_edit_mode}) -> trying Goodreads (abs-tract)"
+                    )
+                else:
+                    log.append("  No Audible match -> trying Goodreads (abs-tract)")
+                gr_products = abs_tract_search(
+                    title=clues.get("title", ""),
+                    author=clues.get("author", ""),
+                    provider="goodreads",
+                    abs_tract_url=abs_tract_url,
+                    limit=args.limit,
+                    existing_asin=clues.get("existing_asin", ""),
+                )
+                log.append(f"  Goodreads results: {len(gr_products)}")
+                if gr_products:
+                    gr_candidate, gr_score, gr_ambiguity = pick_best_match_for_metadata(
+                        clues, gr_products, local_duration_minutes
+                    )
+                    if gr_candidate:
+                        gr_md = metadata_from_product(gr_candidate, clues, gr_score)
+                        log.append(
+                            f"  Goodreads candidate: title={gr_md.get('audible_title')} "
+                            f"mode={gr_md.get('edit_mode')}"
+                        )
+                        if gr_md.get("edit_mode") == "full":
+                            # Enrich the cover from Kindle (high quality; ASIN ignored).
+                            k_products = abs_tract_search(
+                                title=clues.get("title", ""),
+                                author=clues.get("author", ""),
+                                provider="kindle",
+                                abs_tract_url=abs_tract_url,
+                                limit=args.limit,
+                                existing_asin=clues.get("existing_asin", ""),
+                                kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
+                            )
+                            k_cover = ""
+                            if k_products:
+                                k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
+                                    clues, k_products, local_duration_minutes
+                                )
+                                k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
+                            if k_cover:
+                                gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
+                                log.append("  Kindle cover enrichment applied")
+                            product = gr_candidate
+                            score = gr_score
+                            used_query = f"goodreads:{clues.get('title','')}"
+                            match_ambiguity = gr_ambiguity
+                            result.source_provider = "goodreads"
+                            effective_min_score = min(effective_min_score, gr_score)
 
             # Store in match_cache; if another thread beat us, use its result
             with match_cache_lock:
@@ -6053,6 +6222,26 @@ def determine_edit_mode(
             )
             if title_ok and author_ok:
                 return "full"
+
+    # Goodreads (abs-tract) fallback: no narrator, no duration, no composer
+    # signal, and scores are structurally low. Accept only on a strong title +
+    # author identity match -- that is the "enough metadata was found" bar -- and
+    # write full; otherwise reject (leave as a manual-review miss).
+    if product.get("_abs_provider") == "goodreads":
+        gr_local_title = normalize_for_match(clues.get("title", ""))
+        gr_title = normalize_for_match(product.get("title", "") or "")
+        gr_local_author = normalize_for_match(clues.get("author", ""))
+        gr_author = normalize_for_match(" ".join(get_people(product, "authors")))
+        gr_title_ok = bool(gr_local_title and (
+            gr_local_title == gr_title
+            or gr_local_title in gr_title
+            or gr_title in gr_local_title
+        ))
+        gr_author_ok = bool(
+            gr_local_author and gr_author
+            and SequenceMatcher(None, gr_local_author, gr_author).ratio() >= 0.80
+        )
+        return "full" if (gr_title_ok and gr_author_ok) else "none"
 
     if score < AGGRESSIVE_SCORE_THRESHOLD:
         return "none"
@@ -7673,6 +7862,23 @@ def main():
         default=os.environ.get("ABS_AGG_URL", "http://abs-agg:3000"),
         dest="abs_agg_url",
         help="Base URL of the abs-agg service used for GraphicAudio/SoundBooth Theater searches.",
+    )
+
+    parser.add_argument(
+        "--abs-tract-url",
+        default=os.environ.get("ABS_TRACT_URL", ""),
+        dest="abs_tract_url",
+        help=(
+            "Base URL of the abs-tract service (Goodreads/Kindle). When set, books "
+            "with no acceptable Audible match fall back to a Goodreads search. "
+            "Empty disables the fallback."
+        ),
+    )
+    parser.add_argument(
+        "--abs-tract-kindle-region",
+        default=os.environ.get("ABS_TRACT_KINDLE_REGION", "us"),
+        dest="abs_tract_kindle_region",
+        help="Kindle store region for abs-tract cover enrichment (us, uk, de, ...).",
     )
 
     parser.add_argument(
