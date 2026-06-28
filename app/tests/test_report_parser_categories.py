@@ -60,6 +60,23 @@ class ReportParserCategoryTests(unittest.TestCase):
         self.assertEqual(state.stats["provider_breakdown"].get("graphicaudio"), 1)
         self.assertNotIn("review:special-publisher", state.files_by_category)
 
+    def test_goodreads_header_counts_as_matched_with_provider(self):
+        lines = [
+            "[1/1] Processing: /lib/Unmatched/book.m4b",
+            "GOODREADS MATCH:",
+            "  Mode:     full",
+            "  SOURCE: goodreads",
+        ]
+        state = run_lines(lines)
+        self.assertEqual(
+            self._paths(state, "status:matched"), ["/lib/Unmatched/book.m4b"]
+        )
+        self.assertEqual(
+            [i["path"] for i in state.files_by_category.get("provider:goodreads", [])],
+            ["/lib/Unmatched/book.m4b"],
+        )
+        self.assertEqual(state.stats["provider_breakdown"].get("goodreads"), 1)
+
     def test_tiebreak_surfaced_in_manual_review(self):
         lines = [
             "[1/1] Processing: /lib/Book One/book.m4b",

@@ -2063,6 +2063,37 @@ def clean_author_value(value: str) -> str:
     return remove_parenthetical(value)
 
 
+def _split_author_names(value: str) -> list[str]:
+    """Split a credit string into individual normalized author names."""
+    value = clean_author_value(value or "")
+    parts = re.split(r"\s*(?:,|;|&|/|\band\b|\bwith\b)\s*", value, flags=re.IGNORECASE)
+    return [n for n in (normalize_for_match(p) for p in parts) if n]
+
+
+def _authors_compatible(local: str, candidate: str) -> bool | None:
+    """Whether two author credits refer to the same author(s).
+
+    Returns True/False, or None when either side has no usable name (the caller
+    decides how to treat 'unknown'). Tolerant of multi-author ordering and of one
+    source listing only the primary author of a co-authored book: a single shared
+    author name is enough. Containment is length-guarded to avoid tiny matches.
+    """
+    local_names = _split_author_names(local)
+    cand_names = _split_author_names(candidate)
+    if not local_names or not cand_names:
+        return None
+    for c in cand_names:
+        for l in local_names:
+            if c == l:
+                return True
+            shorter, longer = (c, l) if len(c) <= len(l) else (l, c)
+            if len(shorter) >= 6 and shorter in longer:
+                return True
+            if SequenceMatcher(None, c, l).ratio() >= 0.85:
+                return True
+    return False
+
+
 def _initials_dedup_key(name: str) -> str:
     """Dedup key that collapses initial-format variants.
     'L.M. Kerr', 'L. M. Kerr', 'L M Kerr' all map to 'l m kerr'."""
@@ -4875,6 +4906,34 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
     }
 
 
+# abs-tract scrapes Goodreads/Amazon live. Under sustained mixed load the
+# upstream sites start blocking, after which every request hangs until timeout.
+# A naive per-call retry then makes a long run pathologically slow (every book
+# burns retries * timeout). This circuit breaker trips after a few consecutive
+# persistent failures and short-circuits further calls for a cooldown, so one
+# upstream block doesn't tax the rest of the run.
+_ABS_TRACT_BREAKER_LOCK = threading.Lock()
+_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
+_ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
+_ABS_TRACT_BREAKER_COOLDOWN = 600.0   # seconds to stay open once tripped (block lasts minutes)
+
+
+def _abs_tract_breaker_is_open() -> bool:
+    with _ABS_TRACT_BREAKER_LOCK:
+        return time.time() < _ABS_TRACT_BREAKER["open_until"]
+
+
+def _abs_tract_breaker_record(success: bool) -> None:
+    with _ABS_TRACT_BREAKER_LOCK:
+        if success:
+            _ABS_TRACT_BREAKER["consecutive_failures"] = 0
+            _ABS_TRACT_BREAKER["logged_open"] = False
+            return
+        _ABS_TRACT_BREAKER["consecutive_failures"] += 1
+        if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
+            _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
+
+
 def abs_tract_search(
     title: str,
     author: str,
@@ -4883,6 +4942,9 @@ def abs_tract_search(
     limit: int,
     existing_asin: str = "",
     kindle_region: str = "us",
+    timeout: int = 20,
+    retries: int = 2,
+    log: list | None = None,
 ) -> list[dict]:
     """Search an abs-tract provider (Goodreads/Kindle) and normalize results.
 
@@ -4901,6 +4963,21 @@ def abs_tract_search(
 
     if not abs_tract_url:
         return []
+
+    # If the breaker is open (upstream is blocking us), skip the call entirely
+    # rather than hang for the full timeout on every remaining book.
+    if _abs_tract_breaker_is_open():
+        if log is not None:
+            with _ABS_TRACT_BREAKER_LOCK:
+                _already = _ABS_TRACT_BREAKER["logged_open"]
+                _ABS_TRACT_BREAKER["logged_open"] = True
+            if not _already:
+                log.append(
+                    "  abs-tract circuit open (upstream blocking) -> skipping "
+                    "Goodreads/Kindle for the cooldown window"
+                )
+        return []
+
     if provider == "kindle":
         path = f"kindle/{kindle_region.strip('/')}/search"
     else:
@@ -4909,15 +4986,43 @@ def abs_tract_search(
     if author:
         params["author"] = author
     url = f"{abs_tract_url.rstrip('/')}/{path}?{_urlparse.urlencode(params)}"
-    try:
-        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
-        with _urlrequest.urlopen(req, timeout=15) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except (_urlerror.URLError, OSError):
-        return []
-    except Exception:
+
+    # abs-tract scrapes Goodreads/Amazon live, so a single request can fail
+    # transiently (timeout, rate-limit, scraper hiccup) especially during a long
+    # batch run. Swallowing those as [] makes a book that *is* on Goodreads look
+    # like a genuine miss. Retry transient failures with backoff and surface a
+    # distinct log line so a real "no results" is distinguishable from an error.
+    _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
+    raw = None
+    last_err = ""
+    for _attempt in range(max(1, retries)):
+        try:
+            req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+            with _urlrequest.urlopen(req, timeout=timeout) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            break
+        except _urlerror.HTTPError as exc:
+            last_err = f"HTTP {exc.code}"
+            if exc.code not in _RETRYABLE_HTTP:
+                break
+        except (_urlerror.URLError, OSError, TimeoutError) as exc:
+            last_err = type(exc).__name__
+        except Exception as exc:  # malformed JSON etc.
+            last_err = type(exc).__name__
+            break
+        if _attempt < max(1, retries) - 1:
+            time.sleep(0.75 * (2 ** _attempt))  # 0.75s, 1.5s, 3s ...
+
+    if raw is None:
+        _abs_tract_breaker_record(success=False)
+        if log is not None:
+            log.append(
+                f"  {provider} request failed after {max(1, retries)} tries "
+                f"({last_err or 'unknown error'}) -> treated as no result"
+            )
         return []
 
+    _abs_tract_breaker_record(success=True)
     products = []
     for match in (raw.get("matches", []) or [])[:limit]:
         if provider == "kindle":
@@ -5411,6 +5516,7 @@ def search_item(
                     abs_tract_url=abs_tract_url,
                     limit=args.limit,
                     existing_asin=clues.get("existing_asin", ""),
+                    log=log,
                 )
                 log.append(f"  Goodreads results: {len(gr_products)}")
                 if gr_products:
@@ -5424,25 +5530,33 @@ def search_item(
                             f"mode={gr_md.get('edit_mode')}"
                         )
                         if gr_md.get("edit_mode") == "full":
-                            # Enrich the cover from Kindle (high quality; ASIN ignored).
-                            k_products = abs_tract_search(
-                                title=clues.get("title", ""),
-                                author=clues.get("author", ""),
-                                provider="kindle",
-                                abs_tract_url=abs_tract_url,
-                                limit=args.limit,
-                                existing_asin=clues.get("existing_asin", ""),
-                                kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
-                            )
-                            k_cover = ""
-                            if k_products:
-                                k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
-                                    clues, k_products, local_duration_minutes
+                            # Enrich the cover from Kindle (high quality; ASIN
+                            # ignored) only when the run is actually writing a
+                            # cover. Without a cover flag the Kindle scrape is
+                            # wasted work (and an extra slow abs-tract round-trip),
+                            # so skip it.
+                            if getattr(args, "cover_if_missing", False) or getattr(
+                                args, "replace_cover", False
+                            ):
+                                k_products = abs_tract_search(
+                                    title=clues.get("title", ""),
+                                    author=clues.get("author", ""),
+                                    provider="kindle",
+                                    abs_tract_url=abs_tract_url,
+                                    limit=args.limit,
+                                    existing_asin=clues.get("existing_asin", ""),
+                                    kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
+                                    log=log,
                                 )
-                                k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
-                            if k_cover:
-                                gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
-                                log.append("  Kindle cover enrichment applied")
+                                k_cover = ""
+                                if k_products:
+                                    k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
+                                        clues, k_products, local_duration_minutes
+                                    )
+                                    k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
+                                if k_cover:
+                                    gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
+                                    log.append("  Kindle cover enrichment applied")
                             product = gr_candidate
                             score = gr_score
                             used_query = f"goodreads:{clues.get('title','')}"
@@ -5482,7 +5596,10 @@ def search_item(
         buf = io.StringIO()
         with _print_plan_lock:
             with contextlib.redirect_stdout(buf):
-                print_plan(file_path, used_query, score, metadata, clues)
+                print_plan(
+                    file_path, used_query, score, metadata, clues,
+                    source_provider=result.source_provider,
+                )
         for line in buf.getvalue().rstrip("\n").split("\n"):
             log.append(line)
 
@@ -6230,18 +6347,40 @@ def determine_edit_mode(
     if product.get("_abs_provider") == "goodreads":
         gr_local_title = normalize_for_match(clues.get("title", ""))
         gr_title = normalize_for_match(product.get("title", "") or "")
-        gr_local_author = normalize_for_match(clues.get("author", ""))
-        gr_author = normalize_for_match(" ".join(get_people(product, "authors")))
         gr_title_ok = bool(gr_local_title and (
             gr_local_title == gr_title
             or gr_local_title in gr_title
             or gr_title in gr_local_title
         ))
-        gr_author_ok = bool(
-            gr_local_author and gr_author
-            and SequenceMatcher(None, gr_local_author, gr_author).ratio() >= 0.80
+        # Series + sequence identity is an alternative to title-string identity:
+        # Goodreads often titles a book by its series ("Beast Shifter 3") while
+        # the local title is the actual book name ("The Primal Talisman").
+        gr_cand_series, gr_cand_seq = get_primary_series(product)
+        gr_local_series = normalize_for_match(clues.get("series", ""))
+        gr_cand_series_n = normalize_for_match(gr_cand_series)
+        gr_series_ok = bool(gr_local_series and gr_cand_series_n and (
+            gr_local_series == gr_cand_series_n
+            or gr_local_series in gr_cand_series_n
+            or gr_cand_series_n in gr_local_series
+        ))
+        gr_seq_ok = sequence_values_equal(clues.get("book_number", ""), gr_cand_seq)
+        gr_identity_ok = gr_title_ok or (gr_series_ok and gr_seq_ok)
+
+        # Author check, tolerant of multi-author credits and ordering. Goodreads
+        # frequently lists only the primary author of a co-authored book, so
+        # match per-name (subset), not on the whole concatenated string.
+        gr_author_compat = _authors_compatible(
+            clues.get("author", ""), " ".join(get_people(product, "authors"))
         )
-        return "full" if (gr_title_ok and gr_author_ok) else "none"
+        if gr_author_compat is True:
+            gr_author_ok = True
+        elif gr_author_compat is None:
+            # Author unknown on one side (e.g. a missing local author tag). Only
+            # safe to accept on an exact title match, not a loose containment.
+            gr_author_ok = bool(gr_local_title and gr_local_title == gr_title)
+        else:
+            gr_author_ok = False
+        return "full" if (gr_identity_ok and gr_author_ok) else "none"
 
     if score < AGGRESSIVE_SCORE_THRESHOLD:
         return "none"
@@ -6895,7 +7034,8 @@ def collect_audio_files(root: Path) -> list[Path]:
 
 
 def print_plan(
-    file_path: Path, query: str, score: float, metadata: dict, clues: dict
+    file_path: Path, query: str, score: float, metadata: dict, clues: dict,
+    source_provider: str = "",
 ) -> None:
     print("FILE:")
     print(f"  {file_path}")
@@ -6951,7 +7091,12 @@ def print_plan(
     print("SEARCH:")
     print(f"  {query}")
 
-    print("AUDIBLE MATCH:")
+    _match_header = {
+        "goodreads": "GOODREADS MATCH:",
+        "graphicaudio": "GRAPHICAUDIO MATCH:",
+        "soundbooththeater": "SOUNDBOOTH THEATER MATCH:",
+    }.get(source_provider, "AUDIBLE MATCH:")
+    print(_match_header)
     print(f"  Score:    {score}")
     print(f"  Mode:     {metadata.get('edit_mode', '-')}")
     print(f"  ASIN:     {metadata['asin']}")

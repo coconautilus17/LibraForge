@@ -231,6 +231,103 @@ def search_abs_agg_candidates(
     return {"queries": [query], "results": results}
 
 
+def search_abs_tract_candidates(
+    *,
+    query: str,
+    author: str = "",
+    base_url: str,
+    provider: str,
+    kindle_region: str = "us",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Manual search against an abs-tract provider (Goodreads / Kindle).
+
+    abs-tract returns the same ABS-standard {matches:[...]} shape as abs-agg, so
+    the result rows match the abs-agg format the manual-search UI renders. Kindle
+    Store ASINs are *ebook* ASINs (not Audible audiobook ASINs), so a Kindle
+    candidate never carries an ASIN — it is useful for its cover only.
+    """
+    import urllib.error as _urlerror
+    import urllib.parse as _urlparse
+
+    if provider == "kindle":
+        path = f"kindle/{kindle_region.strip('/')}/search"
+    else:
+        path = f"{provider}/search"
+    qs = _urlparse.urlencode({"query": query, **({"author": author} if author else {})})
+    search_url = f"{base_url.rstrip('/')}/{path}?{qs}"
+
+    try:
+        req = urllib.request.Request(
+            search_url,
+            headers={"Accept": "application/json", "User-Agent": "LibraForge/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except _urlerror.URLError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"abs-tract unreachable at {base_url}: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"abs-tract search failed: {exc}") from exc
+
+    is_kindle = provider == "kindle"
+    results: list[dict[str, Any]] = []
+    for i, match in enumerate(data.get("matches", [])[:limit]):
+        series_list = match.get("series") or []
+        series_name = series_list[0].get("series", "") if series_list else ""
+        sequence = str(series_list[0].get("sequence", "") or "") if series_list else ""
+        m_author = match.get("author", "") or ""
+        narrator = match.get("narrator", "") or ""
+        year = str(match.get("publishedYear", "") or "")
+        cover_url = match.get("cover", "") or ""
+        summary = match.get("description", "") or ""
+        title = match.get("title", "") or ""
+        subtitle = match.get("subtitle", "") or ""
+        # Never surface a Kindle ebook ASIN as the audiobook ASIN.
+        asin = "" if is_kindle else (match.get("asin", "") or "")
+        display_key = asin or f"abs-tract-{provider}-{i}"
+
+        full_meta = {
+            "title": title, "subtitle": subtitle, "author": m_author,
+            "narrator": narrator, "series": series_name, "sequence": sequence,
+            "year": year, "cover_url": cover_url, "asin": asin, "summary": summary,
+        }
+        series_only_meta = {
+            "title": "", "subtitle": "", "author": "", "narrator": "",
+            "series": series_name, "sequence": sequence, "year": "",
+            "cover_url": "", "asin": asin, "summary": "",
+        }
+        allowed_modes = ["full"] + (["series_only"] if series_name else [])
+
+        results.append({
+            "asin": asin,
+            "display_key": display_key,
+            "query": query,
+            "score": None,
+            "edit_mode": "full",
+            "recommended_edit_mode": "full",
+            "allowed_edit_modes": allowed_modes,
+            "title": title,
+            "subtitle": subtitle,
+            "authors": [m_author] if m_author else [],
+            "narrators": [narrator] if narrator else [],
+            "series": series_name,
+            "sequence": sequence,
+            "duration_minutes": None,
+            "year": year,
+            "cover_url": cover_url,
+            "summary": summary,
+            "chosen_metadata": full_meta,
+            "chosen_metadata_by_mode": {"full": full_meta, "series_only": series_only_meta},
+            "duration": {},
+            "provider": "abs-tract",
+            "abs_tract_provider": provider,
+        })
+
+    return {"queries": [query], "results": results}
+
+
 # In-memory state for the in-progress OAuth login (single-user homelab — no sessions needed).
 _pending_login_lock = threading.Lock()
 _pending_login: dict | None = None
@@ -260,7 +357,10 @@ FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
 WRITE_SKIP_RE = re.compile(r"^\s+Write-(?:skip|error):\s+")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
-MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
+# The plan header names the source ("AUDIBLE MATCH:", "GOODREADS MATCH:",
+# "GRAPHICAUDIO MATCH:", ...). Match any provider header so non-Audible matches
+# are still categorized as matched.
+MATCH_RE = re.compile(r"^[A-Z][A-Z ]*MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
 FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
 SOURCE_RE = re.compile(r"^\s+SOURCE:\s+(\S+)\s*$")
@@ -3947,6 +4047,33 @@ def abs_agg_search(req: AbsAggSearchRequest) -> dict[str, Any]:
         base_url=base_url,
         provider=req.provider,
         provider_params=req.provider_params,
+        limit=req.limit,
+    )
+
+
+class AbsTractSearchRequest(BaseModel):
+    query: str
+    author: str = ""
+    provider: str = "goodreads"  # "goodreads" | "kindle"
+    limit: int = 10
+
+
+@app.post("/api/abs-tract/search")
+def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
+    cfg = _load_abs_tract_config()
+    base_url = (cfg.get("url") or "").strip()
+    if not base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="abs-tract URL not configured. Set it in Settings → Goodreads/Kindle fallback.",
+        )
+    provider = req.provider if req.provider in {"goodreads", "kindle"} else "goodreads"
+    return search_abs_tract_candidates(
+        query=req.query,
+        author=req.author,
+        base_url=base_url,
+        provider=provider,
+        kindle_region=(cfg.get("kindle_region") or "us").strip() or "us",
         limit=req.limit,
     )
 

@@ -37,6 +37,8 @@ const PROVIDER_LABELS = {
   'abs-agg': 'abs-agg',
   'graphicaudio': 'GraphicAudio',
   'soundbooththeater': 'SoundBooth Theater',
+  'goodreads': 'Goodreads',
+  'kindle': 'Kindle (cover)',
 };
 
 function fixerMajorVersion(scriptName) {
@@ -281,6 +283,7 @@ function renderStats(stats, startedAt, finishedAt) {
     stat('Mode: none', mode.none, 'No safe edit selected.'),
     provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
+    provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -655,7 +658,11 @@ function renderManualSearchResults(results = []) {
                 : '<p class="note">No current cover</p>'}
             </div>
             <div>
-              <strong>${result.provider === 'abs-agg' ? (PROVIDER_LABELS[result.abs_agg_provider] || result.abs_agg_provider || 'abs-agg') : 'Audible'}</strong>
+              <strong>${
+                result.provider === 'abs-agg' ? (PROVIDER_LABELS[result.abs_agg_provider] || result.abs_agg_provider || 'abs-agg')
+                : result.provider === 'abs-tract' ? (result.abs_tract_provider === 'kindle' ? 'Kindle (cover)' : 'Goodreads')
+                : 'Audible'
+              }</strong>
               ${result.cover_url
                 ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="Match cover" />`
                 : '<p class="note">No cover</p>'}
@@ -755,6 +762,17 @@ async function searchManualTarget() {
       author: $('manualAuthor').value.trim(),
       provider,
       limit: 10,
+    });
+  } else if (provider === 'goodreads' || provider === 'kindle') {
+    res = await fetch('/api/abs-tract/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: $('manualTitle').value.trim() || $('manualQuery').value.trim(),
+        author: $('manualAuthor').value.trim(),
+        provider,
+        limit: 10,
+      }),
     });
   } else {
     const payload = {
@@ -1186,7 +1204,7 @@ if ($('targetScanBtn')) {
       $('manualProviderHintName').textContent = PROVIDER_LABELS[v] || v;
     }
     if ($('manualTitleQueryNote')) {
-      $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater');
+      $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater' || v === 'goodreads' || v === 'kindle');
     }
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
