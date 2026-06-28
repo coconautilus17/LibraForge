@@ -2799,10 +2799,13 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
         else ""
     )
     known_author_norm = normalize_for_match(clean_author_value(known_author))
-    if (
+    series_number_series_ok = bool(
         series_number_title
         and series_number_title.group("series").strip().lower()
         not in {"book", "books", "volume", "volumes", "vol", "vols", "side story"}
+    )
+    if (
+        series_number_series_ok
         and not (
             trailing_title_norm
             and known_author_norm
@@ -2817,6 +2820,29 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
             "series": clean_series_value(series_number_title.group("series").strip()),
             "book_number": normalize_book_number(series_number_title.group("number")),
             "title": sanitize_book_title(series_number_title.group("title")),
+        }
+
+    # "Series N - Author Name" (e.g. a grouped folder "Backyard Dungeon 18 -
+    # Logan Jacobs"): the trailing segment is *the author itself*, not the title.
+    # Salvage the valuable series/number and omit the title so the caller falls
+    # back to a cleaned folder/tag title instead of stamping the author name as
+    # the book title. The trailing must equal the known author (or be one entry
+    # of a multi-author list); an author merely *embedded* in a longer title
+    # (e.g. "Arcane Artificer {Gary Furlong}") is left to the later parsers.
+    if (
+        series_number_series_ok
+        and trailing_title_norm
+        and known_author_norm
+        and (
+            trailing_title_norm == known_author_norm
+            or trailing_title_norm in known_author_norm
+        )
+        and looks_like_person_name(series_number_title.group("title"))
+    ):
+        return {
+            "raw_title": value,
+            "series": clean_series_value(series_number_title.group("series").strip()),
+            "book_number": normalize_book_number(series_number_title.group("number")),
         }
 
     year_title = re.match(
@@ -3952,10 +3978,19 @@ def build_multi_file_search_context(
     ]
     folder = file_paths[0].parent
     folder_name = sanitize_technical_labels(folder.name)
-    folder_structured = parse_structured_book_text(folder_name)
+    path_author, path_series = infer_group_identity_from_path(folder)
+    # Feed a known author into the structured parse so a "Series N - Author Name"
+    # folder is read as series + number (not author-as-title). Prefer the tag
+    # author shared across the group, then the path-inferred author.
+    group_known_author = (
+        pick_most_common_value([clues.get("author", "") for clues in clues_list])
+        or path_author
+    )
+    folder_structured = parse_structured_book_text(
+        folder_name, known_author=group_known_author
+    )
     folder_descriptive = parse_descriptive_book_text(folder_name)
     folder_identity = parse_identity_rich_book_text(folder_name)
-    path_author, path_series = infer_group_identity_from_path(folder)
 
     specific_titles = [
         clues.get("title", "")
@@ -5343,13 +5378,32 @@ def search_item(
                 if candidate_score >= args.min_score:
                     break
 
-            # Goodreads fallback (abs-tract): only when Audible + ASIN produced
-            # no acceptable match. No duration/composer, so acceptance is gated
-            # on a strong title+author match (determine_edit_mode -> "full").
-            # Kindle then enriches the cover only; its ebook ASIN is never used.
+            # Goodreads fallback (abs-tract): fires whenever Audible + ASIN did
+            # not yield a confident *full* match. That covers three cases: no
+            # match, a match below the score gate, and a match that only resolves
+            # the series (series_only) without confidently identifying the book
+            # (e.g. an omnibus matched in place of a missing standalone). No
+            # duration/composer is available, so acceptance is gated on a strong
+            # title+author match (determine_edit_mode -> "full"). The Audible
+            # result is preserved unless Goodreads returns a genuinely valid full
+            # match. Kindle then enriches the cover only; its ebook ASIN is never
+            # used.
             abs_tract_url = getattr(args, "abs_tract_url", "")
-            if abs_tract_url and clues.get("title") and (not product or score < args.min_score):
-                log.append("  No acceptable Audible match -> trying Goodreads (abs-tract)")
+            audible_edit_mode = (
+                metadata_from_product(product, clues, score).get("edit_mode", "none")
+                if product else "none"
+            )
+            audible_is_full = (
+                bool(product) and score >= args.min_score and audible_edit_mode == "full"
+            )
+            if abs_tract_url and clues.get("title") and not audible_is_full:
+                if product:
+                    log.append(
+                        f"  Audible match not full (score={score:.4f}, "
+                        f"mode={audible_edit_mode}) -> trying Goodreads (abs-tract)"
+                    )
+                else:
+                    log.append("  No Audible match -> trying Goodreads (abs-tract)")
                 gr_products = abs_tract_search(
                     title=clues.get("title", ""),
                     author=clues.get("author", ""),

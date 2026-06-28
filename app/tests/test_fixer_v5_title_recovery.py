@@ -199,5 +199,52 @@ class TitleSeriesBareNumberParseTests(unittest.TestCase):
         self.assertNotEqual(result.get("series"), "Some Title")
 
 
+class SeriesNumberAuthorParseTests(unittest.TestCase):
+    """`Series N - Author Name` (e.g. grouped folders) must not stamp the
+    author as the book title; series/number are salvaged instead."""
+
+    def test_trailing_author_dropped_as_title(self):
+        result = fixer.parse_structured_book_text(
+            "Backyard Dungeon 18 - Logan Jacobs", known_author="Logan Jacobs"
+        )
+        self.assertEqual(result.get("series"), "Backyard Dungeon")
+        self.assertEqual(result.get("book_number"), "18")
+        self.assertFalse(result.get("title"))
+
+    def test_multi_author_trailing_dropped(self):
+        # Trailing is one entry of a multi-author tag string.
+        result = fixer.parse_structured_book_text(
+            "Dungeon Explorers 3 - Alex Prone",
+            known_author="Alex Prone, Marcus Sloss",
+        )
+        self.assertEqual(result.get("series"), "Dungeon Explorers")
+        self.assertEqual(result.get("book_number"), "3")
+        self.assertFalse(result.get("title"))
+
+    def test_real_title_preserved_with_known_author(self):
+        # A genuine title is kept even when the author is known.
+        result = fixer.parse_structured_book_text(
+            "Saving Supervillains 2 - The Reckoning", known_author="Bruce Sentar"
+        )
+        self.assertEqual(result.get("series"), "Saving Supervillains")
+        self.assertEqual(result.get("book_number"), "2")
+        self.assertEqual(result.get("title"), "The Reckoning")
+
+    def test_embedded_author_in_title_not_dropped(self):
+        # Author merely embedded in a longer trailing title -> later parser wins,
+        # the title is not collapsed to the author.
+        result = fixer.parse_structured_book_text(
+            "2025 - Book 1 - Arcane Artificer {Gary Furlong}",
+            known_author="Gary Furlong",
+        )
+        self.assertIn("Arcane Artificer", result.get("title", ""))
+
+    def test_no_known_author_unchanged(self):
+        # Without a known author the legacy behaviour is preserved.
+        result = fixer.parse_structured_book_text("Backyard Dungeon 18 - Logan Jacobs")
+        self.assertEqual(result.get("series"), "Backyard Dungeon")
+        self.assertEqual(result.get("title"), "Logan Jacobs")
+
+
 if __name__ == "__main__":
     unittest.main()
