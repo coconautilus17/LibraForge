@@ -3731,6 +3731,103 @@ def book_cover(path: str) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# Sidecar cleanup: remove the JSON files the fixer/library writes alongside
+# audio. "libraforge" mode removes all internal libraforge state; the optional
+# metadata.json removal also clears the Audiobookshelf-facing metadata.json
+# (folder-level and per-file companions), regardless of whether we wrote it or
+# it shipped with the download. Audio files are never touched.
+# ---------------------------------------------------------------------------
+
+def _libraforge_state_suffixes(fixer_module: Any) -> tuple[set[str], set[str]]:
+    """Return (exact_names, name_suffixes) identifying internal libraforge files.
+
+    Sourced from the fixer's own constants so the cleanup never drifts from the
+    names the fixer actually writes.
+    """
+    suffixes = {
+        getattr(fixer_module, "LIBRAFORGE_SUFFIX", ".libraforge.json"),
+        getattr(fixer_module, "M4B_TOOL_METADATA_SUFFIX", ".m4b-tool-metadata.json"),
+        getattr(fixer_module, "CHAPTER_COUNT_CACHE_SUFFIX", ".chapter-count-cache.json"),
+        getattr(fixer_module, "METADATA_BACKUP_SUFFIX", ".metadata-backup.json"),
+        getattr(fixer_module, "MARKER_SUFFIX", ".audible-metadata-fixer.json"),
+    }
+    return {"libraforge.json"}, suffixes
+
+
+def _classify_sidecar(path: Path, state_names: set[str], state_suffixes: set[str]) -> str | None:
+    """Return "libraforge", "metadata_json", or None for a given file."""
+    name = path.name
+    if name in state_names or any(name.endswith(suffix) for suffix in state_suffixes):
+        return "libraforge"
+    # metadata.json must be checked after the libraforge suffixes so that e.g.
+    # ".metadata-backup.json" is classified as libraforge, not metadata.json.
+    if name == "metadata.json" or name.endswith(".metadata.json"):
+        return "metadata_json"
+    return None
+
+
+def collect_cleanup_targets(
+    root: Path, include_metadata_json: bool, fixer_module: Any
+) -> dict[str, list[Path]]:
+    """Find sidecar files under `root` grouped by category."""
+    state_names, state_suffixes = _libraforge_state_suffixes(fixer_module)
+    found: dict[str, list[Path]] = {"libraforge": [], "metadata_json": []}
+    walk_root = root if root.is_dir() else root.parent
+    for path in walk_root.rglob("*.json"):
+        if not path.is_file():
+            continue
+        category = _classify_sidecar(path, state_names, state_suffixes)
+        if category == "libraforge":
+            found["libraforge"].append(path)
+        elif category == "metadata_json" and include_metadata_json:
+            found["metadata_json"].append(path)
+    return found
+
+
+class SidecarCleanupRequest(BaseModel):
+    path: str
+    include_metadata_json: bool = False
+    dry_run: bool = True
+
+
+@app.post("/api/cleanup/sidecars")
+def cleanup_sidecars(req: SidecarCleanupRequest) -> dict[str, Any]:
+    target = assert_under_audiobooks(validate_existing_path(req.path))
+    fixer_module = load_fixer_module(default_fixer_script())
+    found = collect_cleanup_targets(target, req.include_metadata_json, fixer_module)
+
+    libraforge_files = found["libraforge"]
+    metadata_files = found["metadata_json"]
+    all_files = libraforge_files + metadata_files
+    total_bytes = sum(f.stat().st_size for f in all_files if f.exists())
+
+    deleted = 0
+    errors: list[str] = []
+    if not req.dry_run:
+        for path in all_files:
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError as exc:
+                errors.append(f"{path}: {exc}")
+
+    return {
+        "path": str(target),
+        "dry_run": req.dry_run,
+        "include_metadata_json": req.include_metadata_json,
+        "counts": {
+            "libraforge": len(libraforge_files),
+            "metadata_json": len(metadata_files),
+            "total": len(all_files),
+        },
+        "total_bytes": total_bytes,
+        "deleted": deleted,
+        "errors": errors,
+        "sample": [str(p) for p in all_files[:10]],
+    }
+
+
+# ---------------------------------------------------------------------------
 # abs-agg metadata provider
 # ---------------------------------------------------------------------------
 
