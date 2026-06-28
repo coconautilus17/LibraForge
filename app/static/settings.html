@@ -36,13 +36,25 @@
   </header>
 
   <main class="shell" id="main-content">
-    <div class="page-head" style="max-width:760px;margin:0 auto 8px">
+   <div class="settings-layout">
+    <aside class="settings-side-nav" aria-label="Settings sections">
+      <a href="#appearance">Appearance</a>
+      <a href="#title-noise">Title noise</a>
+      <a href="#publishers">Publishers</a>
+      <a href="#library">Library</a>
+      <a href="#accounts">Accounts</a>
+      <a href="#absSection">Audiobookshelf</a>
+      <a href="#developer">Developer</a>
+      <a href="#cleanup" class="danger">Danger zone</a>
+    </aside>
+    <div class="settings-content">
+    <div class="page-head">
       <span class="eyebrow">Global preferences</span>
       <h1 style="margin:4px 0 0">Settings</h1>
     </div>
 
     <!-- Appearance -->
-    <section class="card" style="max-width:760px;margin:18px auto 0">
+    <section id="appearance" class="card settings-card">
       <h2>Appearance</h2>
       <div class="settings-grid">
         <label class="preference-field">Appearance
@@ -61,7 +73,7 @@
     </section>
 
     <!-- Title noise -->
-    <section class="card" style="max-width:760px;margin:18px auto 0">
+    <section id="title-noise" class="card settings-card">
       <h2>Title noise patterns</h2>
       <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
       <div id="titleNoiseDefaults" class="pattern-list"></div>
@@ -82,7 +94,7 @@
     </section>
 
     <!-- Publishers -->
-    <section class="card" style="max-width:760px;margin:18px auto 0">
+    <section id="publishers" class="card settings-card">
       <h2>Publishers</h2>
       <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
       <div id="publisherDefaults" class="pattern-list"></div>
@@ -107,7 +119,7 @@
     </section>
 
     <!-- Library -->
-    <section class="card" style="max-width:760px;margin:18px auto 0">
+    <section id="library" class="card settings-card">
       <h2>Library</h2>
       <label class="preference-field">Default root path
         <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
@@ -127,7 +139,7 @@
     </section>
 
     <!-- Audible accounts -->
-    <section class="card" id="accounts" style="max-width:760px;margin:28px auto 0">
+    <section class="card settings-card" id="accounts">
       <h2>Audible accounts</h2>
       <p>LibraForge uses Audible to look up book metadata and (optionally) download your purchases. Connect one or more accounts and switch between them whenever you like.</p>
 
@@ -206,7 +218,7 @@
     </section>
 
     <!-- ABS API key section -->
-    <section class="card" style="max-width:760px;margin:24px auto 0" id="absSection">
+    <section class="card settings-card" id="absSection">
       <h2>Audiobookshelf connection <span id="absStatusBadge" style="font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle"></span></h2>
       <p>LibraForge can use your Audiobookshelf instance as a metadata provider — no Audible account required. It supports Audible (via ABS's own connection), Google Books, iTunes, Open Library, and more.</p>
 
@@ -233,42 +245,59 @@
       <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
     </section>
 
-    <!-- Clean up sidecars -->
-    <section class="card" id="cleanup" style="max-width:760px;margin:24px auto 0">
-      <h2>Clean up sidecars</h2>
-      <p>Remove the JSON files LibraForge writes next to your audio. Use this to clear orphaned sidecars left behind when a folder's layout changes (for example, per-file files that are now grouped into one book). <strong>Audio files are never touched.</strong></p>
-      <label class="preference-field">Target folder
-        <input id="cleanupPath" value="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
-      </label>
-      <fieldset style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:14px">
-        <legend style="padding:0 6px;font-size:0.85em;color:var(--text-soft)">What to remove</legend>
-        <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
-          <input type="radio" name="cleanupMode" value="libraforge" checked style="margin-top:3px" />
-          <span><strong>libraforge files only</strong><br><span style="font-size:0.85em;color:var(--muted)">All internal libraforge state: <code>libraforge.json</code>, <code>*.libraforge.json</code>, m4b-tool metadata, chapter-count caches, and legacy markers. Leaves <code>metadata.json</code>.</span></span>
-        </label>
-        <label style="display:flex;align-items:flex-start;gap:8px">
-          <input type="radio" name="cleanupMode" value="metadata" style="margin-top:3px" />
-          <span><strong>libraforge files + metadata.json</strong><br><span style="font-size:0.85em;color:var(--muted)">Also deletes the Audiobookshelf <code>metadata.json</code> and per-file <code>*.metadata.json</code> companions, whether LibraForge wrote them or they shipped with the download.</span></span>
-        </label>
-      </fieldset>
-      <div class="actions" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
-        <button id="cleanupPreviewBtn" class="secondary" type="button">Preview</button>
-        <button id="cleanupDeleteBtn" class="btn-danger" type="button" disabled>Delete</button>
-      </div>
-      <p id="cleanupStatus" class="note" style="margin-top:10px"></p>
-    </section>
-
     <!-- Developer -->
-    <section class="card" style="max-width:760px;margin:24px auto 40px">
+    <section id="developer" class="card settings-card">
       <h2>Developer</h2>
       <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
       <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
         <a href="/api/config">App config (JSON) →</a>
       </div>
     </section>
+
+    <!-- Danger zone -->
+    <section id="cleanup" class="card settings-card danger-zone">
+      <span class="danger-eyebrow">Danger zone</span>
+      <h2>Clean up sidecars</h2>
+      <p>Permanently delete the JSON files LibraForge writes next to your audio (orphaned sidecars left when a folder's layout changes). <strong>Audio files are never touched.</strong></p>
+      <label class="preference-field">Target folder
+        <input id="cleanupPath" value="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <div class="cleanup-modes" role="radiogroup" aria-label="What to remove">
+        <label><input type="radio" name="cleanupMode" value="libraforge" checked /> libraforge files</label>
+        <label><input type="radio" name="cleanupMode" value="metadata" /> + metadata.json</label>
+      </div>
+      <p class="note" style="margin:0 0 12px">First option removes all internal libraforge state (<code>*.libraforge.json</code>, m4b-tool metadata, chapter-count caches, legacy markers). Second also deletes the Audiobookshelf <code>metadata.json</code> and per-file companions.</p>
+      <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap">
+        <button id="cleanupPreviewBtn" class="secondary" type="button">Preview</button>
+        <button id="cleanupDeleteBtn" class="btn-danger" type="button" disabled>Delete</button>
+      </div>
+      <p id="cleanupStatus" class="note" style="margin-top:10px"></p>
+    </section>
+    </div>
+   </div>
   </main>
 
   <style>
+    /* Settings layout: sticky left nav + content column */
+    .settings-layout { max-width: 1040px; margin: 0 auto; display: flex; gap: 28px; align-items: flex-start; }
+    .settings-side-nav { position: sticky; top: 16px; flex: 0 0 176px; display: flex; flex-direction: column; gap: 2px; }
+    .settings-side-nav a { padding: 7px 12px; border-radius: 8px; color: var(--text-soft); text-decoration: none; font-size: 0.9em; border-left: 2px solid transparent; }
+    .settings-side-nav a:hover { background: var(--surface-hover); color: var(--text); }
+    .settings-side-nav a.danger { color: var(--danger); }
+    .settings-side-nav a.danger:hover { background: rgb(var(--danger-rgb, 239 68 68) / 12%); }
+    .settings-content { flex: 1 1 auto; min-width: 0; }
+    .settings-card { margin: 0 0 18px; scroll-margin-top: 16px; }
+    @media (max-width: 760px) {
+      .settings-layout { flex-direction: column; }
+      .settings-side-nav { position: static; flex-direction: row; flex-wrap: wrap; flex-basis: auto; }
+    }
+    /* Danger zone + compact cleanup selector */
+    .danger-zone { border-color: rgb(var(--danger-rgb, 239 68 68) / 40%); }
+    .danger-eyebrow { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); margin-bottom: 4px; }
+    .cleanup-modes { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 10px; }
+    .cleanup-modes label { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.88em; cursor: pointer; }
+    .cleanup-modes label:hover { border-color: var(--border-strong); }
+    .cleanup-modes label:has(input:checked) { border-color: var(--accent); background: var(--surface-raised); }
     .callout-warning {
       background: var(--warning-soft);
       border: 1px solid rgb(var(--warning-rgb, 242 189 97) / 30%);
