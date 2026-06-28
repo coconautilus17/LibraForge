@@ -1994,10 +1994,19 @@ def sanitize_technical_labels(value: str) -> str:
 
     def strip_bracketed(match: re.Match) -> str:
         inner = match.group(1)
-        return " " if is_technical_label_block(inner) else match.group(0)
+        if is_technical_label_block(inner):
+            return " "
+        # Strip "[Series N - PartN]" part-indicator brackets, e.g. "[Rise, My
+        # Minions 3 - 1]". These appear in filenames like "Author - [Series N -
+        # 1] - Title" and are redundant with the title that follows.
+        if re.search(r"-\s*\d+\s*$", inner):
+            return " "
+        return match.group(0)
 
     value = re.sub(r"[\[({]\s*([^])}]+?)\s*[\])}]", strip_bracketed, value)
     value = re.sub(r"[\[({]\s*[\])}]", " ", value)
+    # A stripped bracket between two " - " separators leaves " -  - "; collapse.
+    value = re.sub(r"\s+-\s+-\s+", " - ", value)
 
     parts = re.split(r"(\s+[-–—|:]\s+)", value)
     while len(parts) >= 3 and is_technical_label_block(parts[-1]):
@@ -4958,7 +4967,14 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
 _ABS_TRACT_BREAKER_LOCK = threading.Lock()
 _ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
 _ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
-_ABS_TRACT_BREAKER_COOLDOWN = 600.0   # seconds to stay open once tripped (block lasts minutes)
+_ABS_TRACT_BREAKER_COOLDOWN = 180.0   # seconds to stay open; measured recovery is ~90-105s
+
+# Throttle: enforce a minimum gap between any two abs-tract requests so
+# sustained parallel batches don't hit upstream rate limits. With 5 workers
+# all needing Goodreads simultaneously the burst would otherwise be 5x.
+_ABS_TRACT_THROTTLE_LOCK = threading.Lock()
+_ABS_TRACT_LAST_REQUEST_TIME: list[float] = [0.0]
+_ABS_TRACT_THROTTLE_DELAY = 0.5  # seconds between requests (global, across all workers)
 
 
 def _abs_tract_breaker_is_open() -> bool:
@@ -4975,6 +4991,19 @@ def _abs_tract_breaker_record(success: bool) -> None:
         _ABS_TRACT_BREAKER["consecutive_failures"] += 1
         if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
             _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
+
+
+def _abs_tract_throttle() -> None:
+    """Block until at least _ABS_TRACT_THROTTLE_DELAY seconds have passed since
+    the last request.  Serializes across all worker threads so 5 concurrent
+    workers don't fire simultaneously and trigger upstream rate limits.
+    """
+    with _ABS_TRACT_THROTTLE_LOCK:
+        now = time.time()
+        gap = _ABS_TRACT_LAST_REQUEST_TIME[0] + _ABS_TRACT_THROTTLE_DELAY - now
+        if gap > 0:
+            time.sleep(gap)
+        _ABS_TRACT_LAST_REQUEST_TIME[0] = time.time()
 
 
 def abs_tract_search(
@@ -5020,6 +5049,8 @@ def abs_tract_search(
                     "Goodreads/Kindle for the cooldown window"
                 )
         return []
+
+    _abs_tract_throttle()
 
     if provider == "kindle":
         path = f"kindle/{kindle_region.strip('/')}/search"
