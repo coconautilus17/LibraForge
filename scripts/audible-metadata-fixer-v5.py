@@ -4883,6 +4883,9 @@ def abs_tract_search(
     limit: int,
     existing_asin: str = "",
     kindle_region: str = "us",
+    timeout: int = 20,
+    retries: int = 3,
+    log: list | None = None,
 ) -> list[dict]:
     """Search an abs-tract provider (Goodreads/Kindle) and normalize results.
 
@@ -4909,13 +4912,39 @@ def abs_tract_search(
     if author:
         params["author"] = author
     url = f"{abs_tract_url.rstrip('/')}/{path}?{_urlparse.urlencode(params)}"
-    try:
-        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
-        with _urlrequest.urlopen(req, timeout=15) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except (_urlerror.URLError, OSError):
-        return []
-    except Exception:
+
+    # abs-tract scrapes Goodreads/Amazon live, so a single request can fail
+    # transiently (timeout, rate-limit, scraper hiccup) especially during a long
+    # batch run. Swallowing those as [] makes a book that *is* on Goodreads look
+    # like a genuine miss. Retry transient failures with backoff and surface a
+    # distinct log line so a real "no results" is distinguishable from an error.
+    _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
+    raw = None
+    last_err = ""
+    for _attempt in range(max(1, retries)):
+        try:
+            req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+            with _urlrequest.urlopen(req, timeout=timeout) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            break
+        except _urlerror.HTTPError as exc:
+            last_err = f"HTTP {exc.code}"
+            if exc.code not in _RETRYABLE_HTTP:
+                break
+        except (_urlerror.URLError, OSError, TimeoutError) as exc:
+            last_err = type(exc).__name__
+        except Exception as exc:  # malformed JSON etc.
+            last_err = type(exc).__name__
+            break
+        if _attempt < max(1, retries) - 1:
+            time.sleep(0.75 * (2 ** _attempt))  # 0.75s, 1.5s, 3s ...
+
+    if raw is None:
+        if log is not None:
+            log.append(
+                f"  {provider} request failed after {max(1, retries)} tries "
+                f"({last_err or 'unknown error'}) -> treated as no result"
+            )
         return []
 
     products = []
@@ -5411,6 +5440,7 @@ def search_item(
                     abs_tract_url=abs_tract_url,
                     limit=args.limit,
                     existing_asin=clues.get("existing_asin", ""),
+                    log=log,
                 )
                 log.append(f"  Goodreads results: {len(gr_products)}")
                 if gr_products:
@@ -5440,6 +5470,7 @@ def search_item(
                                     limit=args.limit,
                                     existing_asin=clues.get("existing_asin", ""),
                                     kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
+                                    log=log,
                                 )
                                 k_cover = ""
                                 if k_products:

@@ -52,6 +52,68 @@ def fake_urlopen_for(payload, captured):
     return _open
 
 
+class AbsTractRetryTests(unittest.TestCase):
+    """Transient abs-tract failures retry and are logged distinctly from a real
+    empty result (a book that *is* on Goodreads must not look like a miss)."""
+
+    def test_retries_transient_then_succeeds(self):
+        payload = {"matches": [{"title": "T", "author": "A"}]}
+        calls = {"n": 0}
+
+        def flaky(req, timeout=20):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise TimeoutError("boom")
+            return _FakeResp(payload)
+
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", flaky):
+            products = fixer.abs_tract_search(
+                "T", "A", "goodreads", "http://abs-tract:5555", 10, retries=3,
+            )
+        self.assertEqual(calls["n"], 3)
+        self.assertEqual(len(products), 1)
+
+    def test_exhausted_retries_logs_failure(self):
+        def always_fail(req, timeout=20):
+            raise TimeoutError("boom")
+
+        log: list[str] = []
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", always_fail):
+            products = fixer.abs_tract_search(
+                "T", "A", "goodreads", "http://abs-tract:5555", 10,
+                retries=3, log=log,
+            )
+        self.assertEqual(products, [])
+        self.assertTrue(any("request failed after 3 tries" in line for line in log))
+
+    def test_real_empty_is_not_logged_as_failure(self):
+        log: list[str] = []
+        with patch("urllib.request.urlopen", fake_urlopen_for({"matches": []}, {})):
+            products = fixer.abs_tract_search(
+                "T", "A", "goodreads", "http://abs-tract:5555", 10, log=log,
+            )
+        self.assertEqual(products, [])
+        self.assertEqual(log, [])  # genuine no-result, no error line
+
+    def test_non_retryable_http_stops_immediately(self):
+        import urllib.error as _e
+        calls = {"n": 0}
+
+        def http404(req, timeout=20):
+            calls["n"] += 1
+            raise _e.HTTPError(req.full_url, 404, "nf", {}, None)
+
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", http404):
+            products = fixer.abs_tract_search(
+                "T", "A", "goodreads", "http://abs-tract:5555", 10, retries=3,
+            )
+        self.assertEqual(products, [])
+        self.assertEqual(calls["n"], 1)  # 404 is not retried
+
+
 class AbsTractClientTests(unittest.TestCase):
     def test_goodreads_url_and_normalization(self):
         payload = {"matches": [{
