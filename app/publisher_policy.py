@@ -61,6 +61,16 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
 
 
+def normalize_publisher_key(value: str) -> str:
+    """Normalized comparison key for a publisher/person name.
+
+    Lowercases and collapses everything non-alphanumeric to single spaces, so
+    "William D. Arand" and "William D Arand" compare equal. Used to keep learned
+    publishers from absorbing names that are actually authors/narrators.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
 def _normalize_entry(item: dict[str, Any], source: str, enabled: bool) -> dict[str, Any] | None:
     name = str(item.get("name") or "").strip()
     if not name:
@@ -280,12 +290,21 @@ def special_provider_for(text: str) -> str | None:
     return None
 
 
-def learn_publishers(names: list[str]) -> dict[str, Any] | None:
+def learn_publishers(
+    names: list[str], exclude_names: list[str] | None = None
+) -> dict[str, Any] | None:
     """Append unseen publisher names to the local catalog as ``learned`` entries.
 
-    Deduplicated against existing names/aliases. Returns the refreshed policy when
-    anything was added, else None. Call this serially (not from worker threads).
+    Deduplicated against existing names/aliases. ``exclude_names`` (e.g. the
+    authors/narrators seen in the run) are skipped: a "publisher" tag that is
+    really a person's name — common on self-published books — must not be learned
+    as a publisher. This guard applies to learning only; manual additions via the
+    Settings API are left untouched. Returns the refreshed policy when anything
+    was added, else None. Call this serially (not from worker threads).
     """
+    exclude_keys = {
+        key for name in (exclude_names or []) if (key := normalize_publisher_key(name))
+    }
     candidates = []
     seen_local: set[str] = set()
     for name in names:
@@ -296,6 +315,8 @@ def learn_publishers(names: list[str]) -> dict[str, Any] | None:
         if key in seen_local:
             continue
         seen_local.add(key)
+        if normalize_publisher_key(name) in exclude_keys:
+            continue  # this "publisher" is actually an author/narrator name
         candidates.append(name)
     if not candidates:
         return None
