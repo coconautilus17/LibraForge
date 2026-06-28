@@ -77,6 +77,26 @@ class ReportParserCategoryTests(unittest.TestCase):
         )
         self.assertEqual(state.stats["provider_breakdown"].get("goodreads"), 1)
 
+    def test_pass1_progress_counts_completed_out_of_order_results(self):
+        lines = [
+            "Found 3 supported files.",
+            "PASS 1 PROGRESS: completed 1/3",
+            "[3/3] Processing: /lib/Slow-order/book3.m4b",
+            "AUDIBLE MATCH:",
+            "PASS 1 PROGRESS: completed 2/3",
+            "[1/3] Processing: /lib/Slow-order/book1.m4b",
+            "AUDIBLE MATCH:",
+        ]
+        state = run_lines(lines)
+        self.assertEqual(state.current, 2)
+        self.assertEqual(state.total, 3)
+        self.assertEqual(state.phase_detail, "Completed 2 of 3 · result item 1")
+        self.assertGreater(state.percent, 5.0)
+        self.assertEqual(
+            self._paths(state, "status:matched"),
+            ["/lib/Slow-order/book3.m4b", "/lib/Slow-order/book1.m4b"],
+        )
+
     def test_tiebreak_surfaced_in_manual_review(self):
         lines = [
             "[1/1] Processing: /lib/Book One/book.m4b",

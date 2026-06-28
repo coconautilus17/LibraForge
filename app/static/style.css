@@ -937,6 +937,32 @@ textarea {
   background: var(--danger-soft);
 }
 
+.goodreads-fallback-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.goodreads-fallback-check {
+  grid-template-columns: minmax(230px, 320px);
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
+.inline-warning {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid rgb(242 189 97 / 45%);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
 input[type="checkbox"],
 input[type="radio"] {
   width: 17px;
@@ -1874,6 +1900,15 @@ summary:focus-visible {
 
   .checks {
     gap: 7px;
+  }
+
+  .goodreads-fallback-row {
+    flex-direction: column;
+  }
+
+  .goodreads-fallback-check {
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .progress-wrap {

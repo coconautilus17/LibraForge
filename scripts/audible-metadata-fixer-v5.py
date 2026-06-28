@@ -16,7 +16,7 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import Counter
@@ -3853,6 +3853,49 @@ def build_search_queries_from_clues(clues: dict) -> list[str]:
     return clean_queries
 
 
+def goodreads_title_query_variants(title: str) -> list[str]:
+    """Return Goodreads-friendly title query variants.
+
+    abs-tract/Goodreads often ranks "Series 1" correctly while "Series Book 1"
+    drifts to omnibuses or unrelated subtitle matches.
+    """
+    variants: list[str] = []
+    title = clean_text(title)
+    if title:
+        no_book_label = re.sub(
+            r"\bbook\s+0*(\d+(?:\.\d+)?)\b",
+            r"\1",
+            title,
+            flags=re.IGNORECASE,
+        )
+        no_book_label = no_book_label.replace(",", " ")
+        no_book_label = re.sub(r"\s+", " ", no_book_label).strip(" ,")
+        if no_book_label and no_book_label != title:
+            variants.append(no_book_label)
+        variants.append(title)
+
+    seen = set()
+    unique: list[str] = []
+    for variant in variants:
+        key = normalize_for_match(variant)
+        if key and key not in seen:
+            unique.append(variant)
+            seen.add(key)
+    return unique
+
+
+def normalize_book_label_for_match(value: str) -> str:
+    value = clean_text(value)
+    value = re.sub(
+        r"\bbook\s+0*(\d+(?:\.\d+)?)\b",
+        r"\1",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = value.replace(",", " ")
+    return normalize_for_match(re.sub(r"\s+", " ", value).strip())
+
+
 def strip_leading_sequence_from_title(value: str) -> str:
     """Remove an ordering prefix while preserving the separately stored number."""
     value = clean_text(value)
@@ -5494,6 +5537,9 @@ def search_item(
             # match. Kindle then enriches the cover only; its ebook ASIN is never
             # used.
             abs_tract_url = getattr(args, "abs_tract_url", "")
+            goodreads_fallback_enabled = bool(
+                getattr(args, "enable_goodreads_fallback", False)
+            )
             audible_edit_mode = (
                 metadata_from_product(product, clues, score).get("edit_mode", "none")
                 if product else "none"
@@ -5501,7 +5547,12 @@ def search_item(
             audible_is_full = (
                 bool(product) and score >= args.min_score and audible_edit_mode == "full"
             )
-            if abs_tract_url and clues.get("title") and not audible_is_full:
+            if (
+                goodreads_fallback_enabled
+                and abs_tract_url
+                and clues.get("title")
+                and not audible_is_full
+            ):
                 if product:
                     log.append(
                         f"  Audible match not full (score={score:.4f}, "
@@ -5509,60 +5560,73 @@ def search_item(
                     )
                 else:
                     log.append("  No Audible match -> trying Goodreads (abs-tract)")
-                gr_products = abs_tract_search(
-                    title=clues.get("title", ""),
-                    author=clues.get("author", ""),
-                    provider="goodreads",
-                    abs_tract_url=abs_tract_url,
-                    limit=args.limit,
-                    existing_asin=clues.get("existing_asin", ""),
-                    log=log,
-                )
-                log.append(f"  Goodreads results: {len(gr_products)}")
-                if gr_products:
-                    gr_candidate, gr_score, gr_ambiguity = pick_best_match_for_metadata(
-                        clues, gr_products, local_duration_minutes
+                gr_queries = goodreads_title_query_variants(clues.get("title", ""))
+                if (
+                    is_generic_series_number_title(clues)
+                    and clean_sequence(clues.get("book_number", "")) == "1"
+                    and clues.get("series", "")
+                ):
+                    gr_queries.extend(goodreads_title_query_variants(clues.get("series", "")))
+                gr_queries = list(dict.fromkeys(q for q in gr_queries if q))
+
+                for gr_query in gr_queries:
+                    gr_products = abs_tract_search(
+                        title=gr_query,
+                        author=clues.get("author", ""),
+                        provider="goodreads",
+                        abs_tract_url=abs_tract_url,
+                        limit=args.limit,
+                        existing_asin=clues.get("existing_asin", ""),
+                        log=log,
                     )
-                    if gr_candidate:
-                        gr_md = metadata_from_product(gr_candidate, clues, gr_score)
-                        log.append(
-                            f"  Goodreads candidate: title={gr_md.get('audible_title')} "
-                            f"mode={gr_md.get('edit_mode')}"
+                    log.append(f"  Goodreads results: {len(gr_products)}")
+                    if gr_products:
+                        gr_candidate, gr_score, gr_ambiguity = pick_best_match_for_metadata(
+                            clues, gr_products, local_duration_minutes
                         )
-                        if gr_md.get("edit_mode") == "full":
-                            # Enrich the cover from Kindle (high quality; ASIN
-                            # ignored) only when the run is actually writing a
-                            # cover. Without a cover flag the Kindle scrape is
-                            # wasted work (and an extra slow abs-tract round-trip),
-                            # so skip it.
-                            if getattr(args, "cover_if_missing", False) or getattr(
-                                args, "replace_cover", False
-                            ):
-                                k_products = abs_tract_search(
-                                    title=clues.get("title", ""),
-                                    author=clues.get("author", ""),
-                                    provider="kindle",
-                                    abs_tract_url=abs_tract_url,
-                                    limit=args.limit,
-                                    existing_asin=clues.get("existing_asin", ""),
-                                    kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
-                                    log=log,
-                                )
-                                k_cover = ""
-                                if k_products:
-                                    k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
-                                        clues, k_products, local_duration_minutes
+                        if gr_candidate:
+                            gr_md = metadata_from_product(gr_candidate, clues, gr_score)
+                            log.append(
+                                f"  Goodreads candidate: title={gr_md.get('audible_title')} "
+                                f"mode={gr_md.get('edit_mode')}"
+                            )
+                            if gr_md.get("edit_mode") == "full":
+                                # Enrich the cover from Kindle (high quality; ASIN
+                                # ignored) only when the run is actually writing a
+                                # cover. Without a cover flag the Kindle scrape is
+                                # wasted work (and an extra slow abs-tract round-trip),
+                                # so skip it.
+                                if getattr(args, "cover_if_missing", False) or getattr(
+                                    args, "replace_cover", False
+                                ):
+                                    k_products = abs_tract_search(
+                                        title=gr_query,
+                                        author=clues.get("author", ""),
+                                        provider="kindle",
+                                        abs_tract_url=abs_tract_url,
+                                        limit=args.limit,
+                                        existing_asin=clues.get("existing_asin", ""),
+                                        kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
+                                        log=log,
                                     )
-                                    k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
-                                if k_cover:
-                                    gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
-                                    log.append("  Kindle cover enrichment applied")
-                            product = gr_candidate
-                            score = gr_score
-                            used_query = f"goodreads:{clues.get('title','')}"
-                            match_ambiguity = gr_ambiguity
-                            result.source_provider = "goodreads"
-                            effective_min_score = min(effective_min_score, gr_score)
+                                    k_cover = ""
+                                    if k_products:
+                                        k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
+                                            clues, k_products, local_duration_minutes
+                                        )
+                                        k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
+                                    if k_cover:
+                                        gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
+                                        log.append("  Kindle cover enrichment applied")
+                                product = gr_candidate
+                                score = gr_score
+                                used_query = f"goodreads:{gr_query}"
+                                match_ambiguity = gr_ambiguity
+                                result.source_provider = "goodreads"
+                                effective_min_score = min(effective_min_score, gr_score)
+                                break
+                    if result.source_provider == "goodreads":
+                        break
 
             # Store in match_cache; if another thread beat us, use its result
             with match_cache_lock:
@@ -5884,6 +5948,66 @@ def significant_title_tokens(value: str) -> list[str]:
     return tokens
 
 
+def has_author_identity_conflict(clues: dict, product: dict) -> bool:
+    """Detect a confidently-different author between the local book and product.
+
+    Used as a HARD reject: a title can collide across unrelated books (Arthur C.
+    Clarke's "Cradle" vs Will Wight's "Cradle" series), but the author cannot.
+    A different author means it is not the same book, so no duration/title/series
+    coincidence may promote it. ASIN identity is the only bypass (handled by the
+    caller).
+
+    Deliberately conservative -- returns False whenever the comparison is
+    uncertain, so legitimate matches are never blocked:
+      - missing author on either side,
+      - generic/placeholder author values,
+      - high whole-string similarity (formatting differences),
+      - substring containment ("Clarke" vs "Arthur C. Clarke"; co-authors),
+      - any shared name token (co-authors, middle-name variants, translators).
+    Only a complete absence of overlap counts as a conflict.
+    """
+    local_author = normalize_for_match(clean_author_value(clues.get("author", "")))
+    product_author = normalize_for_match(" ".join(get_people(product, "authors")))
+
+    if not local_author or not product_author:
+        return False
+
+    generic = {
+        "unknown",
+        "unknown author",
+        "various",
+        "various authors",
+        "anonymous",
+        "n a",
+        "na",
+    }
+    if local_author in generic or product_author in generic:
+        return False
+
+    # Same author allowing for formatting differences
+    # ("J R R Tolkien" vs "John Ronald Reuel Tolkien").
+    if SequenceMatcher(None, local_author, product_author).ratio() >= 0.70:
+        return False
+
+    # Containment covers short-vs-full names and co-author lists where one side
+    # is a subset of the other ("arthur c clarke gentry lee" contains
+    # "arthur c clarke").
+    if local_author in product_author or product_author in local_author:
+        return False
+
+    # Any shared meaningful name token (>= 3 chars, skipping initials) means we
+    # cannot be sure the authors differ -- shared co-author, alternate spelling,
+    # etc. Only block when there is zero overlap.
+    def name_tokens(value: str) -> set[str]:
+        return {token for token in value.split() if len(token) >= 3}
+
+    if name_tokens(local_author) & name_tokens(product_author):
+        return False
+
+    # No similarity, no containment, no shared name token: confidently different.
+    return True
+
+
 def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
     """Detect same-keywords/different-order title mismatches.
 
@@ -5938,6 +6062,13 @@ def score_product_for_metadata(
         _asin_identity = _title_ok and _auth_ok
 
     if not _asin_identity:
+        # Hard reject a clearly different author. A title can collide across
+        # unrelated books (Arthur C. Clarke's "Cradle" vs Will Wight's "Cradle"
+        # series), but the author cannot -- a different author is never the same
+        # book, regardless of any duration/title/series coincidence.
+        if has_author_identity_conflict(clues, product):
+            return 0.0
+
         # Hard reject same-words/different-order titles.
         # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
         if has_reordered_title_conflict(clues, product):
@@ -6347,8 +6478,11 @@ def determine_edit_mode(
     if product.get("_abs_provider") == "goodreads":
         gr_local_title = normalize_for_match(clues.get("title", ""))
         gr_title = normalize_for_match(product.get("title", "") or "")
+        gr_local_title_bookless = normalize_book_label_for_match(clues.get("title", ""))
+        gr_title_bookless = normalize_book_label_for_match(product.get("title", "") or "")
         gr_title_ok = bool(gr_local_title and (
             gr_local_title == gr_title
+            or gr_local_title_bookless == gr_title_bookless
             or gr_local_title in gr_title
             or gr_title in gr_local_title
         ))
@@ -6442,10 +6576,16 @@ def determine_edit_mode(
     # Omnibus / box-set records can be useful for series grouping,
     # but should not overwrite individual book titles or track numbers.
     if is_omnibus_product(product):
+        local_omnibus_text = clean_text(
+            " ".join(
+                str(clues.get(key, "") or "")
+                for key in ("title", "raw_title", "album", "series")
+            )
+        )
         local_omnibus = bool(
             re.search(
-                r"\b(?:complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
-                clean_text(clues.get("title", "")),
+                r"\b(?:omnibus|complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
+                local_omnibus_text,
                 flags=re.IGNORECASE,
             )
         )
@@ -8014,9 +8154,19 @@ def main():
         default=os.environ.get("ABS_TRACT_URL", ""),
         dest="abs_tract_url",
         help=(
-            "Base URL of the abs-tract service (Goodreads/Kindle). When set, books "
-            "with no acceptable Audible match fall back to a Goodreads search. "
-            "Empty disables the fallback."
+            "Base URL of the abs-tract service (Goodreads/Kindle). Used only when "
+            "--enable-goodreads-fallback is set, or for Kindle cover enrichment "
+            "after a Goodreads match."
+        ),
+    )
+    parser.add_argument(
+        "--enable-goodreads-fallback",
+        action="store_true",
+        dest="enable_goodreads_fallback",
+        help=(
+            "Allow automatic Goodreads fallback via abs-tract when Audible does not "
+            "return a confident full match. Goodreads rate-limits aggressively; use "
+            "--workers 5 or lower when enabling this."
         ),
     )
     parser.add_argument(
@@ -8113,6 +8263,16 @@ def main():
     print(f"Writer: {args.writer}")
     print(f"Search workers: {args.workers}")
     print(f"Write workers:  {args.write_workers}")
+    if args.enable_goodreads_fallback:
+        if args.abs_tract_url:
+            print("Goodreads fallback: ENABLED via abs-tract")
+            if args.workers > 5:
+                print(
+                    "WARNING: Goodreads fallback is rate-limited; use 5 search "
+                    f"workers or fewer when enabling it (current: {args.workers})."
+                )
+        else:
+            print("Goodreads fallback: requested but disabled because --abs-tract-url is empty")
     print()
 
     found = len(processing_items)
@@ -8142,9 +8302,8 @@ def main():
     match_cache_lock = threading.Lock()
     total = len(processing_items)
 
-    # Scatter phase submits all items; gather phase consumes futures in submission
-    # order inside the same `with` block so output streams as workers complete
-    # instead of waiting for every worker to finish before printing anything.
+    # Scatter phase submits all items; gather phase consumes futures as they
+    # complete so one slow book cannot stall visible progress for later workers.
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [
             executor.submit(
@@ -8170,12 +8329,20 @@ def main():
 
         # Pass 1: stream log output as futures complete; collect results
         all_results: list[ItemResult] = []
-        for future in futures:
+        completed = 0
+        for future in as_completed(futures):
             result = future.result()
+            completed += 1
+            print(
+                f"PASS 1 PROGRESS: completed {completed}/{total}",
+                flush=True,
+            )
             for line in result.log_lines:
                 print(line, flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
+
+    all_results.sort(key=lambda result: result.index)
 
     # Detect same-series ASIN conflicts across all results before writing.
     # Must run outside the ThreadPoolExecutor block (workers have finished).
