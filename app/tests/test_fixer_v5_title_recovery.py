@@ -170,5 +170,34 @@ class NormalizeBookNumberStripTests(unittest.TestCase):
         self.assertEqual(result, "dune")
 
 
+class TitleSeriesBareNumberParseTests(unittest.TestCase):
+    """`Title - Series, N` filename parsing (bare trailing number, no "Book")."""
+
+    def test_title_series_bare_number(self):
+        result = fixer.parse_structured_book_text("The Primal Talisman - Beast Shifter, 3")
+        self.assertEqual(result.get("series"), "Beast Shifter")
+        self.assertEqual(result.get("book_number"), "3")
+        self.assertEqual(result.get("title"), "The Primal Talisman")
+
+    def test_existing_book_keyword_format_still_parses(self):
+        # Regression guard: the "Book N - Author" variant is unchanged.
+        result = fixer.parse_structured_book_text(
+            "The Primal Talisman - Beast Shifter, Book 1 - Dante King"
+        )
+        self.assertEqual(result.get("series"), "Beast Shifter")
+        self.assertEqual(result.get("book_number"), "1")
+        self.assertEqual(result.get("title"), "The Primal Talisman")
+
+    def test_year_suffix_not_treated_as_book_number(self):
+        # A 4-digit trailing number (year) must not be parsed as "Series, N".
+        result = fixer.parse_structured_book_text("Some Title - Some Series, 2021")
+        self.assertNotEqual(result.get("book_number"), "2021")
+
+    def test_plain_dash_title_not_misparsed(self):
+        # No trailing ", N" -> the bare-number rule must not fire.
+        result = fixer.parse_structured_book_text("Author Name - Some Title")
+        self.assertNotEqual(result.get("series"), "Some Title")
+
+
 if __name__ == "__main__":
     unittest.main()

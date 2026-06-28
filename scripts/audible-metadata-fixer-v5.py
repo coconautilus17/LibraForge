@@ -2761,6 +2761,33 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
             "title": sanitize_book_title(title_series_author.group("title")),
         }
 
+    # "Title - Series, N": bare trailing book number, no "Book" keyword and no
+    # trailing author. e.g. "The Primal Talisman - Beast Shifter, 3". Placed
+    # after the Book-keyword / author variants so it only catches that leftover
+    # case. The series segment must be comma-free and the number small (a book
+    # index, not a year) so this does not eat titles that merely end in ", <n>".
+    title_series_bare_number = re.match(
+        r"^(?P<title>.+?)\s*-\s*(?P<series>[^,]+?)\s*,\s*(?P<number>\d{1,3})$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if title_series_bare_number:
+        _ts_series = title_series_bare_number.group("series").strip()
+        _ts_title = title_series_bare_number.group("title").strip()
+        if (
+            _ts_title
+            and _ts_series
+            and _ts_series.lower() not in {
+                "book", "books", "vol", "vols", "volume", "volumes", "part", "parts"
+            }
+        ):
+            return {
+                "raw_title": value,
+                "series": clean_series_value(_ts_series),
+                "book_number": normalize_book_number(title_series_bare_number.group("number")),
+                "title": sanitize_book_title(_ts_title),
+            }
+
     series_number_title = re.match(
         r"^(?P<series>.+?)\s+(?P<number>\d{1,3}(?:\.\d+)?)\s*-\s*(?P<title>.+)$",
         value,
