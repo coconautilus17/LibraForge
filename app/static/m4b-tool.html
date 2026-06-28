@@ -27,90 +27,15 @@
         <a class="site-nav-link active" href="/m4b-tool" aria-current="page">M4B Tool</a>
         <a class="site-nav-link" href="/organizer">Folder Forge</a>
         <a class="site-nav-link" href="/library">Library</a>
-        <a class="site-nav-link" href="/auth-setup">Accounts</a>
       </nav>
       <div class="topbar-actions">
         <button id="explanationsToggle" class="header-action" type="button" aria-pressed="false">Collapse explanations</button>
-        <button id="settingsToggle" class="icon-button" type="button" aria-label="Open global settings" aria-expanded="false" aria-controls="globalSettings">
+        <a id="settingsToggle" class="icon-button" href="/settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
-        </button>
+        </a>
       </div>
     </div>
   </header>
-
-  <div id="globalSettings" class="settings-panel" hidden>
-    <div class="settings-panel-head">
-      <div><span class="eyebrow">Global preferences</span><h2>Settings</h2></div>
-      <button id="settingsClose" class="icon-button small" type="button" aria-label="Close global settings">×</button>
-    </div>
-    <div class="settings-grid">
-      <label class="preference-field">Appearance
-        <select id="uiTheme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
-      </label>
-      <label class="preference-field">Surface palette<select id="uiSurface"></select></label>
-      <label class="preference-field">Accent color
-        <select id="uiAccent"><option value="sky">Sky</option><option value="violet">Violet</option><option value="emerald">Emerald</option><option value="amber">Amber</option></select>
-      </label>
-      <label class="preference-field">Display density<select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
-    </div>
-    <section class="settings-section">
-      <h3>Title noise patterns</h3>
-      <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
-      <div id="titleNoiseDefaults" class="pattern-list"></div>
-      <div class="pattern-editor">
-        <label>Custom pattern label<input id="titleNoiseLabel" placeholder="Generic academy LitRPG subtitle" /></label>
-        <label>Regular expression<input id="titleNoisePattern" placeholder="(?:a|an)\s+.*\bacademy\s+litrpg\b" /></label>
-        <button id="titleNoiseAddBtn" class="secondary" type="button">Add pattern</button>
-      </div>
-      <div id="titleNoiseCustom" class="pattern-list"></div>
-      <div class="actions"><button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button></div>
-      <p id="titleNoiseStatus" class="note"></p>
-    </section>
-    <section class="settings-section">
-      <h3>Publishers</h3>
-      <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
-      <div id="publisherDefaults" class="pattern-list"></div>
-      <div class="pattern-editor">
-        <label>Publisher name
-          <input id="publisherName" placeholder="Tantor Audio" />
-        </label>
-        <label>Special endpoint
-          <select id="publisherSpecial">
-            <option value="">None</option>
-            <option value="graphicaudio">Graphic Audio</option>
-            <option value="soundbooththeater">Soundbooth Theater</option>
-          </select>
-        </label>
-        <button id="publisherAddBtn" class="secondary" type="button">Add publisher</button>
-      </div>
-      <div id="publisherCustom" class="pattern-list"></div>
-      <div class="actions">
-        <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
-      </div>
-      <p id="publisherStatus" class="note"></p>
-    </section>
-    <section class="settings-section">
-      <h3>Library</h3>
-      <label class="preference-field">Default root path
-        <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
-      </label>
-      <div style="margin-top:12px">
-        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
-        <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
-        <div style="display:flex;gap:6px">
-          <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
-          <button id="ignoredFoldersAdd" type="button" class="secondary">Add</button>
-        </div>
-      </div>
-    </section>
-    <section class="settings-section">
-      <h3>Developer</h3>
-      <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
-      <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
-        <a href="/auth-setup">Auth &amp; provider setup →</a>
-      </div>
-    </section>
-  </div>
 
   <main class="shell" id="main-content">
 
@@ -212,7 +137,7 @@
         <label id="absProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf."></span></span>
           <select id="absProvider"></select>
         </label>
-        <p id="absWarning" class="note" hidden style="color:var(--warning,#e8a020)">Audiobookshelf is not connected. <a href="/auth-setup" style="color:inherit;text-decoration:underline">Set up ABS connection →</a></p>
+        <p id="absWarning" class="note" hidden style="color:var(--warning,#e8a020)">Audiobookshelf is not connected. <a href="/settings#accounts" style="color:inherit;text-decoration:underline">Set up ABS connection →</a></p>
         <label id="absAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
           <select id="absAggProvider"></select>
         </label>

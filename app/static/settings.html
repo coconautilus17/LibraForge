@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LibraForge - Audible Sign In</title>
+  <title>LibraForge - Settings</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260621-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
-<body data-page="auth-setup">
+<body data-page="settings">
   <a class="skip-link" href="#main-content">Skip to content</a>
   <header class="topbar">
     <div class="topbar-inner">
@@ -26,64 +26,108 @@
         <a class="site-nav-link" href="/m4b-tool">M4B Tool</a>
         <a class="site-nav-link" href="/organizer">Folder Forge</a>
         <a class="site-nav-link" href="/library">Library</a>
-        <a class="site-nav-link active" href="/auth-setup" aria-current="page">Accounts</a>
       </nav>
       <div class="topbar-actions">
-        <button id="settingsToggle" class="icon-button" type="button" aria-label="Open global settings" aria-expanded="false" aria-controls="globalSettings">
+        <a id="settingsToggle" class="icon-button active" href="/settings" aria-current="page" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
-        </button>
+        </a>
       </div>
     </div>
   </header>
 
-  <div id="globalSettings" class="settings-panel" hidden>
-    <div class="settings-panel-head">
-      <div>
-        <span class="eyebrow">Global preferences</span>
-        <h2>Settings</h2>
+  <main class="shell" id="main-content">
+    <div class="page-head" style="max-width:760px;margin:0 auto 8px">
+      <span class="eyebrow">Global preferences</span>
+      <h1 style="margin:4px 0 0">Settings</h1>
+    </div>
+
+    <!-- Appearance -->
+    <section class="card" style="max-width:760px;margin:18px auto 0">
+      <h2>Appearance</h2>
+      <div class="settings-grid">
+        <label class="preference-field">Appearance
+          <select id="uiTheme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
+        </label>
+        <label class="preference-field">Surface palette
+          <select id="uiSurface"></select>
+        </label>
+        <label class="preference-field">Accent color
+          <select id="uiAccent"><option value="sky">Sky</option><option value="violet">Violet</option><option value="emerald">Emerald</option><option value="amber">Amber</option></select>
+        </label>
+        <label class="preference-field">Display density
+          <select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
+        </label>
       </div>
-      <button id="settingsClose" class="icon-button small" type="button" aria-label="Close global settings">×</button>
-    </div>
-    <div class="settings-grid">
-      <label class="preference-field">Appearance
-        <select id="uiTheme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
-      </label>
-      <label class="preference-field">Surface palette
-        <select id="uiSurface"></select>
-      </label>
-      <label class="preference-field">Accent color
-        <select id="uiAccent"><option value="sky">Sky</option><option value="violet">Violet</option><option value="emerald">Emerald</option><option value="amber">Amber</option></select>
-      </label>
-      <label class="preference-field">Display density
-        <select id="uiDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
-      </label>
-    </div>
-    <section class="settings-section">
-      <h3>Library</h3>
+    </section>
+
+    <!-- Title noise -->
+    <section class="card" style="max-width:760px;margin:18px auto 0">
+      <h2>Title noise patterns</h2>
+      <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
+      <div id="titleNoiseDefaults" class="pattern-list"></div>
+      <div class="pattern-editor">
+        <label>Custom pattern label
+          <input id="titleNoiseLabel" placeholder="Generic academy LitRPG subtitle" />
+        </label>
+        <label>Noise phrase
+          <input id="titleNoisePattern" placeholder="A Slice-of-Life LitRPG" />
+        </label>
+        <button id="titleNoiseAddBtn" class="secondary" type="button">Add pattern</button>
+      </div>
+      <div id="titleNoiseCustom" class="pattern-list"></div>
+      <div class="actions">
+        <button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button>
+      </div>
+      <p id="titleNoiseStatus" class="note"></p>
+    </section>
+
+    <!-- Publishers -->
+    <section class="card" style="max-width:760px;margin:18px auto 0">
+      <h2>Publishers</h2>
+      <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
+      <div id="publisherDefaults" class="pattern-list"></div>
+      <div class="pattern-editor">
+        <label>Publisher name
+          <input id="publisherName" placeholder="Tantor Audio" />
+        </label>
+        <label>Special endpoint
+          <select id="publisherSpecial">
+            <option value="">None</option>
+            <option value="graphicaudio">Graphic Audio</option>
+            <option value="soundbooththeater">Soundbooth Theater</option>
+          </select>
+        </label>
+        <button id="publisherAddBtn" class="secondary" type="button">Add publisher</button>
+      </div>
+      <div id="publisherCustom" class="pattern-list"></div>
+      <div class="actions">
+        <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
+      </div>
+      <p id="publisherStatus" class="note"></p>
+    </section>
+
+    <!-- Library -->
+    <section class="card" style="max-width:760px;margin:18px auto 0">
+      <h2>Library</h2>
       <label class="preference-field">Default root path
         <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
       </label>
       <div style="margin-top:12px">
-        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name — e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name, e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
         <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
         <div style="display:flex;gap:6px">
           <input id="ignoredFoldersInput" placeholder="folder name or prefix" style="flex:1;font-family:var(--font-mono);font-size:0.85em" />
           <button id="ignoredFoldersAdd" type="button" class="secondary">Add</button>
         </div>
       </div>
-    </section>
-    <section class="settings-section">
-      <h3>Developer</h3>
-      <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
-      <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
-        <a href="/auth-setup">Auth &amp; provider setup →</a>
+      <div style="margin-top:16px">
+        <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Persistent skip patterns <span style="color:var(--muted);font-size:0.9em">(one per line, merged into the run when "Include persistent patterns" is checked on the Forge page)</span></p>
+        <textarea id="persistentSkipPatterns" rows="4" placeholder="Casual Farming&#10;Sample Chapter" style="font-family:var(--font-mono);font-size:0.85em;width:100%;box-sizing:border-box"></textarea>
       </div>
     </section>
-  </div>
 
-  <main class="shell" id="main-content">
-
-    <section class="card" style="max-width:640px;margin:0 auto">
+    <!-- Audible accounts -->
+    <section class="card" id="accounts" style="max-width:760px;margin:28px auto 0">
       <h2>Audible accounts</h2>
       <p>LibraForge uses Audible to look up book metadata and (optionally) download your purchases. Connect one or more accounts and switch between them whenever you like.</p>
 
@@ -162,7 +206,7 @@
     </section>
 
     <!-- ABS API key section -->
-    <section class="card" style="max-width:640px;margin:24px auto 0" id="absSection">
+    <section class="card" style="max-width:760px;margin:24px auto 0" id="absSection">
       <h2>Audiobookshelf connection <span id="absStatusBadge" style="font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle"></span></h2>
       <p>LibraForge can use your Audiobookshelf instance as a metadata provider — no Audible account required. It supports Audible (via ABS's own connection), Google Books, iTunes, Open Library, and more.</p>
 
@@ -187,6 +231,40 @@
         <button id="absRemoveBtn" class="secondary" type="button" hidden>Remove key</button>
       </div>
       <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
+    </section>
+
+    <!-- Clean up sidecars -->
+    <section class="card" id="cleanup" style="max-width:760px;margin:24px auto 0">
+      <h2>Clean up sidecars</h2>
+      <p>Remove the JSON files LibraForge writes next to your audio. Use this to clear orphaned sidecars left behind when a folder's layout changes (for example, per-file files that are now grouped into one book). <strong>Audio files are never touched.</strong></p>
+      <label class="preference-field">Target folder
+        <input id="cleanupPath" value="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <fieldset style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:14px">
+        <legend style="padding:0 6px;font-size:0.85em;color:var(--text-soft)">What to remove</legend>
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
+          <input type="radio" name="cleanupMode" value="libraforge" checked style="margin-top:3px" />
+          <span><strong>libraforge files only</strong><br><span style="font-size:0.85em;color:var(--muted)">All internal libraforge state: <code>libraforge.json</code>, <code>*.libraforge.json</code>, m4b-tool metadata, chapter-count caches, and legacy markers. Leaves <code>metadata.json</code>.</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px">
+          <input type="radio" name="cleanupMode" value="metadata" style="margin-top:3px" />
+          <span><strong>libraforge files + metadata.json</strong><br><span style="font-size:0.85em;color:var(--muted)">Also deletes the Audiobookshelf <code>metadata.json</code> and per-file <code>*.metadata.json</code> companions, whether LibraForge wrote them or they shipped with the download.</span></span>
+        </label>
+      </fieldset>
+      <div class="actions" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button id="cleanupPreviewBtn" class="secondary" type="button">Preview</button>
+        <button id="cleanupDeleteBtn" class="btn-danger" type="button" disabled>Delete</button>
+      </div>
+      <p id="cleanupStatus" class="note" style="margin-top:10px"></p>
+    </section>
+
+    <!-- Developer -->
+    <section class="card" style="max-width:760px;margin:24px auto 40px">
+      <h2>Developer</h2>
+      <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
+      <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
+        <a href="/api/config">App config (JSON) →</a>
+      </div>
     </section>
   </main>
 
@@ -498,6 +576,44 @@
           absConnectStatus.style.color = data.reachable ? "var(--success)" : "var(--warning,#e8a020)";
         } catch (err) { absConnectStatus.textContent = err.message; absConnectStatus.style.color = "var(--danger)"; }
         finally { absConnectBtn.disabled = false; absConnectBtn.textContent = "Save and verify"; }
+      });
+
+      // ── Clean up sidecars ─────────────────────────────────────────────────
+      const cleanupPath = $("cleanupPath"), cleanupStatus = $("cleanupStatus");
+      const cleanupPreviewBtn = $("cleanupPreviewBtn"), cleanupDeleteBtn = $("cleanupDeleteBtn");
+      const cleanupMode = () => (document.querySelector('input[name="cleanupMode"]:checked') || {}).value || "libraforge";
+
+      function cleanupRequest(dryRun) {
+        return api("POST", "/api/cleanup/sidecars", {
+          path: cleanupPath.value.trim(),
+          include_metadata_json: cleanupMode() === "metadata",
+          dry_run: dryRun,
+        });
+      }
+      function setCleanupStatus(msg, color) { cleanupStatus.textContent = msg; cleanupStatus.style.color = color || "var(--muted)"; }
+
+      cleanupPreviewBtn.addEventListener("click", async () => {
+        if (!cleanupPath.value.trim()) { setCleanupStatus("Enter a target folder first.", "var(--danger)"); return; }
+        cleanupDeleteBtn.disabled = true;
+        setCleanupStatus("Scanning…");
+        const res = await cleanupRequest(true);
+        if (!res.ok) { setCleanupStatus(typeof res.data.detail === "string" ? res.data.detail : "Preview failed.", "var(--danger)"); return; }
+        const c = res.data.counts;
+        const kb = (res.data.total_bytes / 1024).toFixed(0);
+        const meta = res.data.include_metadata_json ? `, ${c.metadata_json} metadata.json` : "";
+        if (c.total === 0) { setCleanupStatus("Nothing to remove here."); cleanupDeleteBtn.disabled = true; return; }
+        setCleanupStatus(`${c.total} file(s) to delete (${c.libraforge} libraforge${meta}) · ${kb} KB. Click Delete to remove them.`);
+        cleanupDeleteBtn.disabled = false;
+      });
+
+      cleanupDeleteBtn.addEventListener("click", async () => {
+        if (!confirm(`Permanently delete the previewed sidecar files under ${cleanupPath.value.trim()}? Audio files are not touched.`)) return;
+        cleanupDeleteBtn.disabled = true;
+        setCleanupStatus("Deleting…");
+        const res = await cleanupRequest(false);
+        if (!res.ok) { setCleanupStatus(typeof res.data.detail === "string" ? res.data.detail : "Delete failed.", "var(--danger)"); return; }
+        const extra = res.data.errors && res.data.errors.length ? ` ${res.data.errors.length} error(s).` : "";
+        setCleanupStatus(`Deleted ${res.data.deleted} file(s).${extra}`, "var(--success)");
       });
     })();
   </script>

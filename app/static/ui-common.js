@@ -23,8 +23,8 @@
     return `<div class="stat"><small>${label}</small><strong>${value ?? 0}</strong><small>${help || ""}</small></div>`;
   }
 
-  // Redirect to /auth-setup if the auth file is missing on pages that need it,
-  // unless the user explicitly skipped Audible setup or debug mode is on.
+  // Redirect to the Settings Accounts section if the auth file is missing on
+  // pages that need it, unless the user explicitly skipped Audible setup or debug mode is on.
   const _AUTH_PAGES = new Set(["fixer", "m4b-tool"]);
   const _page = document.body.dataset.page;
   function _isDebugMode() {
@@ -35,7 +35,7 @@
       .then((r) => r.json())
       .then((data) => {
         if (!data.auth_ok) {
-          window.location.href = "/auth-setup";
+          window.location.href = "/settings#accounts";
         }
       })
       .catch(() => {});
