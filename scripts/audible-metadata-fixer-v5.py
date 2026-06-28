@@ -2041,7 +2041,7 @@ def normalize_for_match(value: str) -> str:
     value = sanitize_book_title(value).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
     value = re.sub(r"\([^)]*\)", " ", value)
-    value = re.sub(r"[_\-:]+", " ", value)
+    value = re.sub(r"[_\-:!?]+", " ", value)
     value = re.sub(r"\bbook\s+#?\d+\b", " ", value)
     value = re.sub(r"\bvolume\s+#?\d+\b", " ", value)
     value = re.sub(r"\bvol\.?\s+#?\d+\b", " ", value)
@@ -4991,6 +4991,9 @@ def _abs_tract_breaker_record(success: bool) -> None:
         _ABS_TRACT_BREAKER["consecutive_failures"] += 1
         if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
             _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
+            # Reset counter so the cooldown window gets a clean slate: after 180s recovery
+            # the first new failure won't immediately re-trip the breaker.
+            _ABS_TRACT_BREAKER["consecutive_failures"] = 0
 
 
 def _abs_tract_throttle() -> None:
