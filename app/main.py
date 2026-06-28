@@ -260,7 +260,10 @@ FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
 WRITE_SKIP_RE = re.compile(r"^\s+Write-(?:skip|error):\s+")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
-MATCH_RE = re.compile(r"^AUDIBLE MATCH:")
+# The plan header names the source ("AUDIBLE MATCH:", "GOODREADS MATCH:",
+# "GRAPHICAUDIO MATCH:", ...). Match any provider header so non-Audible matches
+# are still categorized as matched.
+MATCH_RE = re.compile(r"^[A-Z][A-Z ]*MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
 FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
 SOURCE_RE = re.compile(r"^\s+SOURCE:\s+(\S+)\s*$")

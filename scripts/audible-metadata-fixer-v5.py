@@ -5424,25 +5424,32 @@ def search_item(
                             f"mode={gr_md.get('edit_mode')}"
                         )
                         if gr_md.get("edit_mode") == "full":
-                            # Enrich the cover from Kindle (high quality; ASIN ignored).
-                            k_products = abs_tract_search(
-                                title=clues.get("title", ""),
-                                author=clues.get("author", ""),
-                                provider="kindle",
-                                abs_tract_url=abs_tract_url,
-                                limit=args.limit,
-                                existing_asin=clues.get("existing_asin", ""),
-                                kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
-                            )
-                            k_cover = ""
-                            if k_products:
-                                k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
-                                    clues, k_products, local_duration_minutes
+                            # Enrich the cover from Kindle (high quality; ASIN
+                            # ignored) only when the run is actually writing a
+                            # cover. Without a cover flag the Kindle scrape is
+                            # wasted work (and an extra slow abs-tract round-trip),
+                            # so skip it.
+                            if getattr(args, "cover_if_missing", False) or getattr(
+                                args, "replace_cover", False
+                            ):
+                                k_products = abs_tract_search(
+                                    title=clues.get("title", ""),
+                                    author=clues.get("author", ""),
+                                    provider="kindle",
+                                    abs_tract_url=abs_tract_url,
+                                    limit=args.limit,
+                                    existing_asin=clues.get("existing_asin", ""),
+                                    kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
                                 )
-                                k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
-                            if k_cover:
-                                gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
-                                log.append("  Kindle cover enrichment applied")
+                                k_cover = ""
+                                if k_products:
+                                    k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
+                                        clues, k_products, local_duration_minutes
+                                    )
+                                    k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
+                                if k_cover:
+                                    gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
+                                    log.append("  Kindle cover enrichment applied")
                             product = gr_candidate
                             score = gr_score
                             used_query = f"goodreads:{clues.get('title','')}"
@@ -5482,7 +5489,10 @@ def search_item(
         buf = io.StringIO()
         with _print_plan_lock:
             with contextlib.redirect_stdout(buf):
-                print_plan(file_path, used_query, score, metadata, clues)
+                print_plan(
+                    file_path, used_query, score, metadata, clues,
+                    source_provider=result.source_provider,
+                )
         for line in buf.getvalue().rstrip("\n").split("\n"):
             log.append(line)
 
@@ -6895,7 +6905,8 @@ def collect_audio_files(root: Path) -> list[Path]:
 
 
 def print_plan(
-    file_path: Path, query: str, score: float, metadata: dict, clues: dict
+    file_path: Path, query: str, score: float, metadata: dict, clues: dict,
+    source_provider: str = "",
 ) -> None:
     print("FILE:")
     print(f"  {file_path}")
@@ -6951,7 +6962,12 @@ def print_plan(
     print("SEARCH:")
     print(f"  {query}")
 
-    print("AUDIBLE MATCH:")
+    _match_header = {
+        "goodreads": "GOODREADS MATCH:",
+        "graphicaudio": "GRAPHICAUDIO MATCH:",
+        "soundbooththeater": "SOUNDBOOTH THEATER MATCH:",
+    }.get(source_provider, "AUDIBLE MATCH:")
+    print(_match_header)
     print(f"  Score:    {score}")
     print(f"  Mode:     {metadata.get('edit_mode', '-')}")
     print(f"  ASIN:     {metadata['asin']}")

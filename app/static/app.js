@@ -281,6 +281,7 @@ function renderStats(stats, startedAt, finishedAt) {
     stat('Mode: none', mode.none, 'No safe edit selected.'),
     provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
+    provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
