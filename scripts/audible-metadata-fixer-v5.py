@@ -8114,6 +8114,18 @@ def main():
     # Learn publishers seen this run that aren't yet in the canonical catalog, so
     # future runs recognize them (and can sanitize/flag them). Done once, serially,
     # to avoid worker write races; learned entries are editable in Settings.
+    # Names that appear as an author/narrator anywhere in this run. A "publisher"
+    # tag equal to one of these is a mis-tag (common on self-published books where
+    # the publisher field holds the author's name), so it must not be learned.
+    run_person_names: set[str] = set()
+    for result in all_results:
+        clues = result.clues or {}
+        for field in ("author", "narrator"):
+            for part in re.split(r"[,;&/]| and ", str(clues.get(field, "") or "")):
+                part = part.strip()
+                if part:
+                    run_person_names.add(part)
+
     learned_candidates = sorted(
         {
             str((result.clues or {}).get("publisher", "")).strip()
@@ -8124,7 +8136,7 @@ def main():
     )
     if learned_candidates:
         try:
-            if learn_publishers(learned_candidates):
+            if learn_publishers(learned_candidates, exclude_names=run_person_names):
                 print(f"  Learned {len(learned_candidates)} new publisher(s) for future runs.")
         except Exception as error:
             print(f"  WARNING: could not update publisher catalog: {error}")

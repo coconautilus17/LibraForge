@@ -64,6 +64,36 @@ class PublisherPolicyTests(unittest.TestCase):
         learned = [e for e in pp.load_publisher_policy()["custom_publishers"] if e["source"] == "learned"]
         self.assertEqual([e["name"] for e in learned], ["Acme Audio"])
 
+    def test_learn_skips_names_that_are_authors(self):
+        # "publisher" tags that are really author/narrator names must not be learned.
+        result = pp.learn_publishers(
+            ["Acme Audio", "William D Arand", "Logan Jacobs"],
+            exclude_names=["William D. Arand", "Logan Jacobs"],
+        )
+        self.assertIsNotNone(result)
+        learned = [e["name"] for e in pp.load_publisher_policy()["custom_publishers"] if e["source"] == "learned"]
+        self.assertEqual(learned, ["Acme Audio"])
+        # The author names were not added even with punctuation/spacing differences.
+        self.assertIsNone(pp.match_canonical_publisher("William D Arand"))
+        self.assertIsNone(pp.match_canonical_publisher("Logan Jacobs"))
+
+    def test_learn_keeps_author_named_company(self):
+        # A real publisher that merely contains an author's name (with a company
+        # suffix) is still learned -- only an exact name match is excluded.
+        result = pp.learn_publishers(
+            ["Michael Chatfield Publications Inc."],
+            exclude_names=["Michael Chatfield"],
+        )
+        self.assertIsNotNone(result)
+        learned = [e["name"] for e in pp.load_publisher_policy()["custom_publishers"] if e["source"] == "learned"]
+        self.assertEqual(learned, ["Michael Chatfield Publications Inc."])
+
+    def test_normalize_publisher_key_ignores_punctuation(self):
+        self.assertEqual(
+            pp.normalize_publisher_key("William D. Arand"),
+            pp.normalize_publisher_key("William D Arand"),
+        )
+
     def test_save_roundtrips_disabled_and_custom(self):
         pp.save_publisher_policy(
             disabled_defaults=["tantor-audio"],
