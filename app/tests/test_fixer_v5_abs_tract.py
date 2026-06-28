@@ -52,9 +52,18 @@ def fake_urlopen_for(payload, captured):
     return _open
 
 
+def _reset_breaker():
+    fixer._ABS_TRACT_BREAKER.update(
+        {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
+    )
+
+
 class AbsTractRetryTests(unittest.TestCase):
     """Transient abs-tract failures retry and are logged distinctly from a real
     empty result (a book that *is* on Goodreads must not look like a miss)."""
+
+    def setUp(self):
+        _reset_breaker()
 
     def test_retries_transient_then_succeeds(self):
         payload = {"matches": [{"title": "T", "author": "A"}]}
@@ -114,7 +123,59 @@ class AbsTractRetryTests(unittest.TestCase):
         self.assertEqual(calls["n"], 1)  # 404 is not retried
 
 
+class AbsTractBreakerTests(unittest.TestCase):
+    """Circuit breaker: when upstream blocks (persistent failures), further calls
+    short-circuit for a cooldown instead of hanging on every book."""
+
+    def setUp(self):
+        _reset_breaker()
+
+    def test_breaker_opens_after_threshold_and_short_circuits(self):
+        calls = {"n": 0}
+
+        def always_fail(req, timeout=20):
+            calls["n"] += 1
+            raise TimeoutError("blocked")
+
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", always_fail):
+            # Two persistent failures (threshold=2) trip the breaker.
+            for _ in range(fixer._ABS_TRACT_BREAKER_THRESHOLD):
+                fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+            calls_after_trip = calls["n"]
+            # Next call must short-circuit without hitting the network.
+            log: list[str] = []
+            out = fixer.abs_tract_search(
+                "t", "a", "goodreads", "http://x:5555", 10, log=log
+            )
+        self.assertEqual(out, [])
+        self.assertEqual(calls["n"], calls_after_trip)  # no new network call
+        self.assertTrue(any("circuit open" in line for line in log))
+
+    def test_success_resets_failure_counter(self):
+        payload = {"matches": [{"title": "T", "author": "A"}]}
+        seq = [TimeoutError("x"), payload]
+
+        def flaky(req, timeout=20):
+            item = seq.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return _FakeResp(item)
+
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", flaky):
+            # retries=1 so the first call is a single persistent failure,
+            # the second call succeeds and resets the counter.
+            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10, retries=1)
+            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10, retries=1)
+        self.assertEqual(fixer._ABS_TRACT_BREAKER["consecutive_failures"], 0)
+        self.assertFalse(fixer._abs_tract_breaker_is_open())
+
+
 class AbsTractClientTests(unittest.TestCase):
+    def setUp(self):
+        _reset_breaker()
+
     def test_goodreads_url_and_normalization(self):
         payload = {"matches": [{
             "title": "The Primal Talisman", "author": "Dante King",

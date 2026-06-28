@@ -4875,6 +4875,34 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
     }
 
 
+# abs-tract scrapes Goodreads/Amazon live. Under sustained mixed load the
+# upstream sites start blocking, after which every request hangs until timeout.
+# A naive per-call retry then makes a long run pathologically slow (every book
+# burns retries * timeout). This circuit breaker trips after a few consecutive
+# persistent failures and short-circuits further calls for a cooldown, so one
+# upstream block doesn't tax the rest of the run.
+_ABS_TRACT_BREAKER_LOCK = threading.Lock()
+_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
+_ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
+_ABS_TRACT_BREAKER_COOLDOWN = 600.0   # seconds to stay open once tripped (block lasts minutes)
+
+
+def _abs_tract_breaker_is_open() -> bool:
+    with _ABS_TRACT_BREAKER_LOCK:
+        return time.time() < _ABS_TRACT_BREAKER["open_until"]
+
+
+def _abs_tract_breaker_record(success: bool) -> None:
+    with _ABS_TRACT_BREAKER_LOCK:
+        if success:
+            _ABS_TRACT_BREAKER["consecutive_failures"] = 0
+            _ABS_TRACT_BREAKER["logged_open"] = False
+            return
+        _ABS_TRACT_BREAKER["consecutive_failures"] += 1
+        if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
+            _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
+
+
 def abs_tract_search(
     title: str,
     author: str,
@@ -4884,7 +4912,7 @@ def abs_tract_search(
     existing_asin: str = "",
     kindle_region: str = "us",
     timeout: int = 20,
-    retries: int = 3,
+    retries: int = 2,
     log: list | None = None,
 ) -> list[dict]:
     """Search an abs-tract provider (Goodreads/Kindle) and normalize results.
@@ -4904,6 +4932,21 @@ def abs_tract_search(
 
     if not abs_tract_url:
         return []
+
+    # If the breaker is open (upstream is blocking us), skip the call entirely
+    # rather than hang for the full timeout on every remaining book.
+    if _abs_tract_breaker_is_open():
+        if log is not None:
+            with _ABS_TRACT_BREAKER_LOCK:
+                _already = _ABS_TRACT_BREAKER["logged_open"]
+                _ABS_TRACT_BREAKER["logged_open"] = True
+            if not _already:
+                log.append(
+                    "  abs-tract circuit open (upstream blocking) -> skipping "
+                    "Goodreads/Kindle for the cooldown window"
+                )
+        return []
+
     if provider == "kindle":
         path = f"kindle/{kindle_region.strip('/')}/search"
     else:
@@ -4940,6 +4983,7 @@ def abs_tract_search(
             time.sleep(0.75 * (2 ** _attempt))  # 0.75s, 1.5s, 3s ...
 
     if raw is None:
+        _abs_tract_breaker_record(success=False)
         if log is not None:
             log.append(
                 f"  {provider} request failed after {max(1, retries)} tries "
@@ -4947,6 +4991,7 @@ def abs_tract_search(
             )
         return []
 
+    _abs_tract_breaker_record(success=True)
     products = []
     for match in (raw.get("matches", []) or [])[:limit]:
         if provider == "kindle":
