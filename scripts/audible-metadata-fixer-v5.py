@@ -2063,6 +2063,37 @@ def clean_author_value(value: str) -> str:
     return remove_parenthetical(value)
 
 
+def _split_author_names(value: str) -> list[str]:
+    """Split a credit string into individual normalized author names."""
+    value = clean_author_value(value or "")
+    parts = re.split(r"\s*(?:,|;|&|/|\band\b|\bwith\b)\s*", value, flags=re.IGNORECASE)
+    return [n for n in (normalize_for_match(p) for p in parts) if n]
+
+
+def _authors_compatible(local: str, candidate: str) -> bool | None:
+    """Whether two author credits refer to the same author(s).
+
+    Returns True/False, or None when either side has no usable name (the caller
+    decides how to treat 'unknown'). Tolerant of multi-author ordering and of one
+    source listing only the primary author of a co-authored book: a single shared
+    author name is enough. Containment is length-guarded to avoid tiny matches.
+    """
+    local_names = _split_author_names(local)
+    cand_names = _split_author_names(candidate)
+    if not local_names or not cand_names:
+        return None
+    for c in cand_names:
+        for l in local_names:
+            if c == l:
+                return True
+            shorter, longer = (c, l) if len(c) <= len(l) else (l, c)
+            if len(shorter) >= 6 and shorter in longer:
+                return True
+            if SequenceMatcher(None, c, l).ratio() >= 0.85:
+                return True
+    return False
+
+
 def _initials_dedup_key(name: str) -> str:
     """Dedup key that collapses initial-format variants.
     'L.M. Kerr', 'L. M. Kerr', 'L M Kerr' all map to 'l m kerr'."""
@@ -6316,18 +6347,40 @@ def determine_edit_mode(
     if product.get("_abs_provider") == "goodreads":
         gr_local_title = normalize_for_match(clues.get("title", ""))
         gr_title = normalize_for_match(product.get("title", "") or "")
-        gr_local_author = normalize_for_match(clues.get("author", ""))
-        gr_author = normalize_for_match(" ".join(get_people(product, "authors")))
         gr_title_ok = bool(gr_local_title and (
             gr_local_title == gr_title
             or gr_local_title in gr_title
             or gr_title in gr_local_title
         ))
-        gr_author_ok = bool(
-            gr_local_author and gr_author
-            and SequenceMatcher(None, gr_local_author, gr_author).ratio() >= 0.80
+        # Series + sequence identity is an alternative to title-string identity:
+        # Goodreads often titles a book by its series ("Beast Shifter 3") while
+        # the local title is the actual book name ("The Primal Talisman").
+        gr_cand_series, gr_cand_seq = get_primary_series(product)
+        gr_local_series = normalize_for_match(clues.get("series", ""))
+        gr_cand_series_n = normalize_for_match(gr_cand_series)
+        gr_series_ok = bool(gr_local_series and gr_cand_series_n and (
+            gr_local_series == gr_cand_series_n
+            or gr_local_series in gr_cand_series_n
+            or gr_cand_series_n in gr_local_series
+        ))
+        gr_seq_ok = sequence_values_equal(clues.get("book_number", ""), gr_cand_seq)
+        gr_identity_ok = gr_title_ok or (gr_series_ok and gr_seq_ok)
+
+        # Author check, tolerant of multi-author credits and ordering. Goodreads
+        # frequently lists only the primary author of a co-authored book, so
+        # match per-name (subset), not on the whole concatenated string.
+        gr_author_compat = _authors_compatible(
+            clues.get("author", ""), " ".join(get_people(product, "authors"))
         )
-        return "full" if (gr_title_ok and gr_author_ok) else "none"
+        if gr_author_compat is True:
+            gr_author_ok = True
+        elif gr_author_compat is None:
+            # Author unknown on one side (e.g. a missing local author tag). Only
+            # safe to accept on an exact title match, not a loose containment.
+            gr_author_ok = bool(gr_local_title and gr_local_title == gr_title)
+        else:
+            gr_author_ok = False
+        return "full" if (gr_identity_ok and gr_author_ok) else "none"
 
     if score < AGGRESSIVE_SCORE_THRESHOLD:
         return "none"

@@ -224,9 +224,12 @@ class AbsTractClientTests(unittest.TestCase):
 
 
 class GoodreadsEditModeGateTests(unittest.TestCase):
-    def _product(self, title, author):
-        return {"_abs_provider": "goodreads", "title": title,
-                "authors": [{"name": author}], "series": []}
+    def _product(self, title, author, series="", sequence=""):
+        p = {"_abs_provider": "goodreads", "title": title,
+             "authors": [{"name": author}], "series": []}
+        if series:
+            p["series"] = [{"title": series, "sequence": sequence}]
+        return p
 
     def test_full_on_strong_title_and_author(self):
         mode = fixer.determine_edit_mode(
@@ -248,6 +251,56 @@ class GoodreadsEditModeGateTests(unittest.TestCase):
         mode = fixer.determine_edit_mode(
             self._product("A Totally Different Book", "Dante King"),
             {"title": "The Primal Talisman", "author": "Dante King"},
+            0.2,
+        )
+        self.assertEqual(mode, "none")
+
+    def test_full_when_goodreads_lists_only_primary_of_coauthored(self):
+        # Local credit has two authors; Goodreads lists only the primary.
+        mode = fixer.determine_edit_mode(
+            self._product("Secret Alchemist 2", "Dante King"),
+            {"title": "Secret Alchemist 2", "author": "Dante King, Neil Bimbeau",
+             "series": "Secret Alchemist", "book_number": "2"},
+            0.2,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_full_on_missing_local_author_with_exact_title(self):
+        # No local author tag -> accept only on an exact title match.
+        mode = fixer.determine_edit_mode(
+            self._product("Shadow Slave Volume 4", "Guiltythree"),
+            {"title": "Shadow Slave Volume 4", "author": "",
+             "series": "Shadow Slave", "book_number": "4"},
+            0.2,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_none_on_missing_local_author_with_loose_title(self):
+        # Missing author + only a loose title containment must NOT pass.
+        mode = fixer.determine_edit_mode(
+            self._product("Shadow Slave Volume 4: Dread Night", "Guiltythree"),
+            {"title": "Shadow Slave", "author": ""},
+            0.2,
+        )
+        self.assertEqual(mode, "none")
+
+    def test_full_on_series_sequence_identity_when_title_differs(self):
+        # Goodreads titles by series ("Beast Shifter 3"); local has the real
+        # book name. Series + sequence identity carries it.
+        mode = fixer.determine_edit_mode(
+            self._product("Beast Shifter 3", "Dante King",
+                          series="Beast Shifter", sequence="3"),
+            {"title": "The Primal Talisman", "author": "Dante King",
+             "series": "Beast Shifter", "book_number": "3"},
+            0.2,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_none_on_wrong_book_same_author_unrelated_title(self):
+        mode = fixer.determine_edit_mode(
+            self._product("The Glade of Dreams 1", "Logan Jacobs"),
+            {"title": "Monster Tamer 1", "author": "Logan Jacobs",
+             "series": "Monster Tamer", "book_number": "1"},
             0.2,
         )
         self.assertEqual(mode, "none")
