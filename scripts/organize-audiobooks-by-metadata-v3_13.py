@@ -53,7 +53,10 @@ except ModuleNotFoundError:
     )
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
-MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".m4a", ".m4b"}
+# Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
+# grouped (e.g. a folder of per-chapter .ogg files) is recognized as one
+# multi-file book here too.
+MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg", ".m4a", ".m4b"}
 CHAPTER_METADATA_EXTENSIONS = {".m4a", ".m4b", ".mp4"}
 MAX_CHAPTERS_PER_MULTI_PART_FILE = 1
 MAX_LOW_EMBEDDED_CHAPTERS_PER_NAMED_PART_FILE = 3

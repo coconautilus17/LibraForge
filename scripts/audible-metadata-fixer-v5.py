@@ -127,9 +127,12 @@ except (ValueError, OSError):
 MUTAGEN_MP4_EXTENSIONS = {".m4b", ".m4a", ".mp4"}
 MUTAGEN_MP3_EXTENSIONS = {".mp3"}
 # Formats that should be treated as a single audiobook when multiple files
-# exist in the same folder. MP3/OPUS were already supported; M4A/M4B are
-# included for chapter-split MP4 audiobook containers.
-MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".m4a", ".m4b"}
+# exist in the same folder. MP3/OPUS/OGG were already supported for tagging;
+# M4A/M4B are included for chapter-split MP4 audiobook containers. OGG behaves
+# like OPUS here (no embedded MP4 chapters, no in-place mutagen tagging), so a
+# folder of per-chapter OGG files (e.g. "1301.ogg".."1900.ogg") groups as one
+# book and is written via an m4b-tool sidecar.
+MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg", ".m4a", ".m4b"}
 
 # Formats that can commonly contain embedded chapter metadata. When these
 # appear in a multi-file folder, validate that each file is really a chapter
@@ -141,10 +144,11 @@ MAX_CHAPTERS_PER_MULTI_PART_FILE = 1
 # chapters as safe only when the filename itself looks like a chapter part.
 MAX_LOW_EMBEDDED_CHAPTERS_PER_NAMED_PART_FILE = 3
 
-# Keep the previous behavior for MP3/OPUS: write a sidecar for m4b-tool instead
-# of tagging the source file directly. For M4A/M4B this is only used when the
-# file is part of an accepted multi-file group.
-SIDECAR_OUTPUT_AUDIO_EXTENSIONS = {".mp3", ".opus"}
+# Keep the previous behavior for MP3/OPUS/OGG: write a sidecar for m4b-tool
+# instead of tagging the source file directly (none are tagged in-place by
+# mutagen here). For M4A/M4B this is only used when the file is part of an
+# accepted multi-file group.
+SIDECAR_OUTPUT_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg"}
 
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
 
