@@ -56,13 +56,15 @@
         <label><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
-        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service."></span></span>
+        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads/Kindle: via abs-tract (configure its URL in Settings); Goodreads for metadata, Kindle for cover art only."></span></span>
           <select id="manualProvider">
             <option value="audible">Audible (direct)</option>
             <option value="abs">Audiobookshelf (ABS)</option>
             <option value="abs-agg">abs-agg</option>
             <option value="graphicaudio">GraphicAudio</option>
             <option value="soundbooththeater">SoundBooth Theater</option>
+            <option value="goodreads">Goodreads (abs-tract)</option>
+            <option value="kindle">Kindle cover (abs-tract)</option>
           </select>
         </label>
         <label id="manualAbsProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf. Audible.com is the default and most complete for audiobooks."></span></span>
@@ -331,6 +333,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260620-2"></script>
-  <script src="/static/app.js?v=20260628-2"></script>
+  <script src="/static/app.js?v=20260628-3"></script>
 </body>
 </html>
