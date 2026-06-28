@@ -138,6 +138,51 @@ class QueryBuildTests(unittest.TestCase):
         self.assertIn("Between Heaven and Hell, Book 1", queries)
 
 
+class PartBracketStripTests(unittest.TestCase):
+    """sanitize_technical_labels should strip "[Series N - PartN]" brackets."""
+
+    def _sanitize(self, value: str) -> str:
+        return FIXER.sanitize_technical_labels(value)
+
+    def test_strips_part_indicator_bracket_between_dashes(self):
+        result = self._sanitize(
+            "Logan Jacobs - [Rise, My Minions 3 - 1] - Rise, My Minions 3"
+        )
+        self.assertEqual(result, "Logan Jacobs - Rise, My Minions 3")
+
+    def test_strips_bracket_without_series_number(self):
+        result = self._sanitize(
+            "Logan Jacobs - [Kingdom of the Dragon Crystals - 1] - Kingdom of the Dragon Crystals"
+        )
+        self.assertEqual(result, "Logan Jacobs - Kingdom of the Dragon Crystals")
+
+    def test_does_not_strip_narrator_brackets(self):
+        # "Hel Rose, Will Rose" ends in a name, not "- N"
+        result = self._sanitize("First Leash {Hel Rose, Will Rose}")
+        self.assertIn("Hel Rose", result)
+
+    def test_does_not_strip_asin_brackets(self):
+        # ASIN brackets don't end in "- N" so they are not touched by the new rule
+        result = self._sanitize("A Modern Mage 3 [B0H12BTSRK]")
+        self.assertIn("B0H12BTSRK", result)
+
+    def test_parse_rise_my_minions_extracts_correct_title(self):
+        result = FIXER.parse_descriptive_book_text(
+            "Logan Jacobs - [Rise, My Minions 3 - 1] - Rise, My Minions 3",
+            known_author="Logan Jacobs",
+        )
+        self.assertEqual(result.get("title"), "Rise, My Minions 3")
+        self.assertEqual(result.get("author"), "Logan Jacobs")
+
+    def test_parse_kingdom_extracts_correct_title(self):
+        result = FIXER.parse_descriptive_book_text(
+            "Logan Jacobs - [Kingdom of the Dragon Crystals - 1] - Kingdom of the Dragon Crystals",
+            known_author="Logan Jacobs",
+        )
+        self.assertEqual(result.get("title"), "Kingdom of the Dragon Crystals")
+        self.assertEqual(result.get("author"), "Logan Jacobs")
+
+
 class SequenceLeniencyTests(unittest.TestCase):
     def setUp(self):
         self.clues = {
