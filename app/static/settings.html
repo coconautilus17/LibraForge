@@ -263,10 +263,15 @@
         <input id="cleanupPath" value="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
       </label>
       <div class="cleanup-modes" role="radiogroup" aria-label="What to remove">
-        <label><input type="radio" name="cleanupMode" value="libraforge" checked /> libraforge files</label>
-        <label><input type="radio" name="cleanupMode" value="metadata" /> + metadata.json</label>
+        <label class="cleanup-mode">
+          <input type="radio" name="cleanupMode" value="libraforge" checked />
+          <span><strong>libraforge files</strong><span class="cleanup-mode-desc">All internal libraforge state: <code>libraforge.json</code>, <code>*.libraforge.json</code>, m4b-tool metadata, chapter-count caches, and legacy markers. Leaves <code>metadata.json</code>.</span></span>
+        </label>
+        <label class="cleanup-mode">
+          <input type="radio" name="cleanupMode" value="metadata" />
+          <span><strong>libraforge files + metadata.json</strong><span class="cleanup-mode-desc">Also deletes the Audiobookshelf <code>metadata.json</code> and per-file <code>*.metadata.json</code> companions, whether LibraForge wrote them or they shipped with the download.</span></span>
+        </label>
       </div>
-      <p class="note" style="margin:0 0 12px">First option removes all internal libraforge state (<code>*.libraforge.json</code>, m4b-tool metadata, chapter-count caches, legacy markers). Second also deletes the Audiobookshelf <code>metadata.json</code> and per-file companions.</p>
       <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap">
         <button id="cleanupPreviewBtn" class="secondary" type="button">Preview</button>
         <button id="cleanupDeleteBtn" class="btn-danger" type="button" disabled>Delete</button>
@@ -294,10 +299,12 @@
     /* Danger zone + compact cleanup selector */
     .danger-zone { border-color: rgb(var(--danger-rgb, 239 68 68) / 40%); }
     .danger-eyebrow { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); margin-bottom: 4px; }
-    .cleanup-modes { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 10px; }
-    .cleanup-modes label { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.88em; cursor: pointer; }
-    .cleanup-modes label:hover { border-color: var(--border-strong); }
-    .cleanup-modes label:has(input:checked) { border-color: var(--accent); background: var(--surface-raised); }
+    .cleanup-modes { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 14px; }
+    .cleanup-mode { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.9em; cursor: pointer; }
+    .cleanup-mode:hover { border-color: var(--border-strong); }
+    .cleanup-mode:has(input:checked) { border-color: var(--accent); background: var(--surface-raised); }
+    .cleanup-mode input { margin-top: 2px; }
+    .cleanup-mode-desc { display: block; font-size: 0.82em; color: var(--muted); margin-top: 3px; }
     .callout-warning {
       background: var(--warning-soft);
       border: 1px solid rgb(var(--warning-rgb, 242 189 97) / 30%);
