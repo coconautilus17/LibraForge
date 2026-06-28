@@ -144,6 +144,16 @@ MAX_CHAPTERS_PER_MULTI_PART_FILE = 1
 # chapters as safe only when the filename itself looks like a chapter part.
 MAX_LOW_EMBEDDED_CHAPTERS_PER_NAMED_PART_FILE = 3
 
+# Leading-ordinal chapter splits (e.g. "0. Opening Credits - Book - Narrator",
+# "1. Time Starts Now - ...") number each slice at the *front* of the filename.
+# Grouping these is only safe when the folder clearly holds one book cut into
+# many parts, so require a decent number of parts and a shared trailing identity
+# (book/narrator suffix) before treating leading ordinals as a part sequence.
+# Distinct full books that merely share a folder are still rejected by the
+# embedded-chapter-count check in classify_multi_part_file_safety.
+MIN_LEADING_ORDINAL_PARTS = 3
+MIN_SHARED_IDENTITY_TOKENS = 2
+
 # Keep the previous behavior for MP3/OPUS/OGG: write a sidecar for m4b-tool
 # instead of tagging the source file directly (none are tagged in-place by
 # mutagen here). For M4A/M4B this is only used when the file is part of an
@@ -780,6 +790,88 @@ def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
     return best
 
 
+# Leading ordinal: a number at the *start* of the name followed by a separator
+# and a title, e.g. "0. Opening Credits ...", "10. Suspect Alchemy ...",
+# "001 - ...". Leading zeros are tolerated; the captured value is the index.
+_LEADING_ORDINAL_RE = re.compile(r"^\s*0*(\d{1,4})\s*[.)\]_-]\s+(?=\S)")
+
+
+def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
+    """Longest run of tokens shared at the END of every token list."""
+    if not token_lists:
+        return []
+    common = list(token_lists[0])
+    for tokens in token_lists[1:]:
+        shared = 0
+        while (
+            shared < len(common)
+            and shared < len(tokens)
+            and common[-1 - shared] == tokens[-1 - shared]
+        ):
+            shared += 1
+        common = common[len(common) - shared:] if shared else []
+        if not common:
+            break
+    return common
+
+
+def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Recognize ONE book split into many leading-ordinal-numbered parts.
+
+    Example: "0. Opening Credits - The Book - Narrator", "1. Time Starts Now -
+    The Book - Narrator", ... "71. ...". The chapter title varies per file, so
+    these cannot be grouped by a shared prefix the way trailing "- 01" numbering
+    is; instead group them when:
+      * every matched ordinal is unique and they form a contiguous run from 0/1,
+      * there are at least MIN_LEADING_ORDINAL_PARTS of them,
+      * the parts share a common trailing identity (the book/narrator suffix).
+    Distinct full books that happen to be leading-numbered in one folder are
+    still rejected by the embedded-chapter-count check in
+    classify_multi_part_file_safety (a real book carries many chapters).
+    """
+    indexed: list[tuple[Path, int, list[str]]] = []
+    for file_path in file_paths:
+        match = _LEADING_ORDINAL_RE.match(file_path.stem)
+        if not match:
+            continue
+        rest = normalize_part_filename(file_path.stem[match.end():])
+        indexed.append((file_path, int(match.group(1)), rest.split()))
+
+    if len(indexed) < MIN_LEADING_ORDINAL_PARTS:
+        return set()
+
+    by_number: dict[int, tuple[Path, list[str]]] = {}
+    for file_path, number, tokens in indexed:
+        if number in by_number:
+            return set()  # duplicate index (e.g. two encodings of the same part)
+        by_number[number] = (file_path, tokens)
+
+    numbers = sorted(by_number)
+    if numbers[0] not in {0, 1}:
+        return set()
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return set()
+
+    token_lists = [by_number[n][1] for n in numbers]
+    if len(_common_trailing_tokens(token_lists)) < MIN_SHARED_IDENTITY_TOKENS:
+        return set()
+
+    return {by_number[n][0] for n in numbers}
+
+
+def part_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Files that belong to a recognized numbered part sequence.
+
+    Prefers trailing "- 01" numbering (shared-prefix groups); falls back to
+    leading-ordinal chapter splits. Used both to choose grouping candidates and
+    to mark a file as a safe chapter part during validation.
+    """
+    return (
+        numeric_part_sequence_files(file_paths)
+        or leading_ordinal_sequence_files(file_paths)
+    )
+
+
 def classify_multi_part_file_safety(
     file_path: Path,
     chapter_count: int | None,
@@ -829,7 +921,7 @@ def validate_multi_part_group_files(
     chapter_count_reader = chapter_count_reader or read_file_chapter_count
     checked = []
     unsafe = []
-    numeric_parts = numeric_part_sequence_files(file_paths)
+    numeric_parts = part_sequence_files(file_paths)
 
     for file_path in sorted(file_paths, key=natural_audio_sort_key):
         if not is_chapter_metadata_candidate(file_path):
@@ -3942,7 +4034,7 @@ def build_multi_part_group_map(
         if len(group_files) <= 1:
             continue
 
-        numeric_parts = numeric_part_sequence_files(group_files)
+        numeric_parts = part_sequence_files(group_files)
         candidate_files = (
             sorted(numeric_parts, key=natural_audio_sort_key)
             if len(numeric_parts) >= 2
