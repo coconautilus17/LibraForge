@@ -104,6 +104,28 @@ def _save_abs_agg_config(config: dict[str, Any]) -> None:
     )
 
 
+# abs-tract (Goodreads/Kindle) is a separate service from abs-agg. Empty url by
+# default so the Goodreads fallback stays off until the user configures it.
+ABS_TRACT_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-tract.json"
+
+
+def _load_abs_tract_config() -> dict[str, Any]:
+    try:
+        if ABS_TRACT_CONFIG_FILE.exists():
+            return json.loads(ABS_TRACT_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"url": "", "kindle_region": "us"}
+
+
+def _save_abs_tract_config(config: dict[str, Any]) -> None:
+    ABS_TRACT_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ABS_TRACT_CONFIG_FILE.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def search_abs_agg_candidates(
     *,
     query: str,
@@ -1425,6 +1447,15 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         # Always pass abs-agg URL so the fixer can auto-detect and search
         # GraphicAudio / SoundBooth Theater regardless of the selected provider.
         cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
+        # abs-tract (Goodreads/Kindle) fallback: only pass the URL when the user
+        # has configured one, so the fallback stays off until opted in.
+        _abs_tract_cfg = _load_abs_tract_config()
+        _abs_tract_url = (_abs_tract_cfg.get("url") or "").strip()
+        if _abs_tract_url:
+            cmd += ["--abs-tract-url", _abs_tract_url]
+            _region = (_abs_tract_cfg.get("kindle_region") or "").strip()
+            if _region:
+                cmd += ["--abs-tract-kindle-region", _region]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
@@ -3882,6 +3913,23 @@ def get_abs_agg_settings() -> dict[str, Any]:
 def save_abs_agg_settings(req: AbsAggSettingsRequest) -> dict[str, Any]:
     config = {"url": req.url}
     _save_abs_agg_config(config)
+    return config
+
+
+class AbsTractSettingsRequest(BaseModel):
+    url: str = ""
+    kindle_region: str = "us"
+
+
+@app.get("/api/abs-tract/settings")
+def get_abs_tract_settings() -> dict[str, Any]:
+    return _load_abs_tract_config()
+
+
+@app.put("/api/abs-tract/settings")
+def save_abs_tract_settings(req: AbsTractSettingsRequest) -> dict[str, Any]:
+    config = {"url": req.url.strip(), "kindle_region": (req.kindle_region or "us").strip()}
+    _save_abs_tract_config(config)
     return config
 
 
