@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 import audible
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
 from pydantic import BaseModel, Field
@@ -4125,9 +4125,15 @@ def abs_search(req: AbsSearchRequest) -> dict[str, Any]:
 # Auth setup
 # ---------------------------------------------------------------------------
 
-@app.get("/auth-setup", response_class=HTMLResponse)
-def auth_setup_page() -> HTMLResponse:
-    return HTMLResponse((STATIC_DIR / "auth-setup.html").read_text(encoding="utf-8"))
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "settings.html").read_text(encoding="utf-8"))
+
+
+@app.get("/auth-setup")
+def auth_setup_page() -> RedirectResponse:
+    # Accounts moved into the consolidated Settings page.
+    return RedirectResponse(url="/settings#accounts", status_code=302)
 
 
 # ---------------------------------------------------------------------------
