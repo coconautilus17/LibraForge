@@ -1883,8 +1883,23 @@ def write_audiobookshelf_metadata_json(
 
             for key, new_value in payload.items():
                 old_value = existing.get(key, None)
-                if not _blank(old_value):
-                    payload[key] = old_value
+                if _blank(old_value):
+                    continue
+                # For the series list: don't preserve a fraction sequence (e.g. "1/1"
+                # written by Audible's old catalog data) when the fresh value has a
+                # clean numeric sequence for the same series.
+                if key == "series" and isinstance(new_value, list) and isinstance(old_value, list):
+                    old_fractions = [
+                        s.get("sequence", "") for s in old_value
+                        if isinstance(s, dict) and "/" in str(s.get("sequence", ""))
+                    ]
+                    new_valid = [
+                        s.get("sequence", "") for s in new_value
+                        if isinstance(s, dict) and is_single_numeric_sequence(str(s.get("sequence", "")))
+                    ]
+                    if old_fractions and new_valid:
+                        continue  # use the fresh value instead of preserving the fraction
+                payload[key] = old_value
             # Preserve any extra keys the existing file carried (e.g. language, tags).
             for key, old_value in existing.items():
                 if key not in payload:
