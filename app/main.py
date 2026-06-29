@@ -53,6 +53,17 @@ AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
+_GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
+
+
+def _pick_genre(genres: list[str]) -> str:
+    """Return the first genre that isn't a generic format label, or ''."""
+    for g in genres:
+        if g.strip().lower() not in _GENRE_BLOCKLIST:
+            return g.strip()
+    return ""
+
+
 M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
 M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
@@ -177,8 +188,7 @@ def search_abs_agg_candidates(
         asin = match.get("asin", "") or f"abs-agg-{provider}-{i}"
         duration_seconds = match.get("duration") or 0
         duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
-        genres_raw = match.get("genres") or []
-        genre = genres_raw[0] if genres_raw else "Audiobook"
+        genre = _pick_genre(match.get("genres") or [])
 
         full_meta = {
             "title": title,
@@ -292,8 +302,7 @@ def search_abs_tract_candidates(
         asin = "" if is_kindle else (match.get("asin", "") or "")
         display_key = asin or f"abs-tract-{provider}-{i}"
 
-        genres_raw = match.get("genres") or []
-        genre = genres_raw[0] if genres_raw else "Audiobook"
+        genre = _pick_genre(match.get("genres") or [])
 
         full_meta = {
             "title": title, "subtitle": subtitle, "author": m_author,
@@ -820,7 +829,7 @@ def search_audible_candidates(
                     "summary": metadata_preview.get("summary", ""),
                     "cover_url": metadata_preview.get("cover_url", ""),
                     "asin": metadata_preview.get("asin", ""),
-                    "genre": metadata_preview.get("genre", "Audiobook"),
+                    "genre": metadata_preview.get("genre", ""),
                 },
                 "chosen_metadata_by_mode": {
                     mode: {
@@ -834,7 +843,7 @@ def search_audible_candidates(
                         "summary": preview.get("summary", ""),
                         "cover_url": preview.get("cover_url", ""),
                         "asin": preview.get("asin", ""),
-                        "genre": preview.get("genre", "Audiobook"),
+                        "genre": preview.get("genre", ""),
                     }
                     for mode, preview in item["metadata_by_mode"].items()
                 },
@@ -4208,8 +4217,7 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
         duration_minutes = round(float(duration_minutes_raw), 2) if duration_minutes_raw else None
         region = match.get("region", "") or ""
 
-        genres_raw = match.get("genres") or []
-        genre = genres_raw[0] if genres_raw else "Audiobook"
+        genre = _pick_genre(match.get("genres") or [])
 
         full_meta = {
             "title": title_val, "subtitle": subtitle, "author": author_val,
