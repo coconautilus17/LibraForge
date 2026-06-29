@@ -1951,7 +1951,8 @@ UNAMBIGUOUS_TECHNICAL_LABEL_RE = re.compile(
     r"mpeg[\s._-]*4[\s._-]*aac|"
     r"e[\s._-]*ac[\s._-]*3|"
     r"ac[\s._-]*3|"
-    r"dolby[\s._-]*digital(?:[\s._-]*plus)?"
+    r"dolby[\s._-]*digital(?:[\s._-]*plus)?|"
+    r"audio[\s._-]*immersion(?:[\s._-]*tunnel)?"
     r")\b",
     re.IGNORECASE,
 )
@@ -4453,6 +4454,12 @@ def extract_title_identity_number(value: str) -> str:
         if re.fullmatch(r"(?:19|20)\d{2}", candidate):
             continue
 
+        # Reject chapter-level numbers like "Chapter 10" or "Episode 5".
+        # These appear in individual chapter filenames and are not book sequence numbers.
+        prefix = cleaned[: match.start(1)]
+        if re.search(r"\b(?:chapter|ch|episode|ep)\b\.?\s*$", prefix, re.IGNORECASE):
+            continue
+
         return candidate
 
     return ""
@@ -5592,12 +5599,19 @@ def search_item(
                 else:
                     log.append("  No Audible match -> trying Goodreads (abs-tract)")
                 gr_queries = goodreads_title_query_variants(clues.get("title", ""))
+                _gr_series = clues.get("series", "")
+                _gr_number = clues.get("book_number", "")
                 if (
                     is_generic_series_number_title(clues)
-                    and clean_sequence(clues.get("book_number", "")) == "1"
-                    and clues.get("series", "")
+                    and clean_sequence(_gr_number) == "1"
+                    and _gr_series
                 ):
-                    gr_queries.extend(goodreads_title_query_variants(clues.get("series", "")))
+                    gr_queries.extend(goodreads_title_query_variants(_gr_series))
+                # When the title looks like a subtitle (different from series+N),
+                # also try "Series N" directly - often better-indexed on Goodreads.
+                if _gr_series and _gr_number and not is_generic_series_number_title(clues):
+                    _sn_query = f"{_gr_series} {_gr_number}"
+                    gr_queries.extend(goodreads_title_query_variants(_sn_query))
                 gr_queries = list(dict.fromkeys(q for q in gr_queries if q))
 
                 for gr_query in gr_queries:
@@ -5891,11 +5905,13 @@ def title_evidence_score(clues: dict, product: dict) -> float:
             distinctive_containment = 0.75
 
     audible_in_local = 0.0
-    audible_title_tokens = significant_title_tokens(product.get("title", "") or "")
     if (
         audible_title
         and audible_title in title_to_check
-        and len(audible_title_tokens) >= 2
+        # Count tokens of the *normalized* title (after book-N stripping), not the
+        # raw Audible title. "Arena Book 4" normalizes to "arena" (1 token) -- that
+        # single word being contained in "arena road 4" should NOT score 1.0.
+        and len(significant_title_tokens(audible_title)) >= 2
     ):
         audible_in_local = 1.0
 
@@ -6013,6 +6029,12 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
         "na",
     }
     if local_author in generic or product_author in generic:
+        return False
+
+    # "Audio Versee", "Audio Version", etc. are garbled production-format labels
+    # that sometimes end up in the embedded author tag. Treat them as unknown.
+    _format_tokens = {"audio", "audiobook", "unabridged", "narrated"}
+    if set(local_author.split()) & _format_tokens:
         return False
 
     # Same author allowing for formatting differences
@@ -6145,6 +6167,7 @@ def score_product_for_metadata(
     )
 
     score = 0.0
+    _series_token_jaccard = 0.0  # set in series block, reused for sequence gating
 
     # Duration is the strongest confirmation signal.
     if duration_result["status"] == "perfect":
@@ -6163,7 +6186,15 @@ def score_product_for_metadata(
         series_score = SequenceMatcher(None, local_series, audible_series_norm).ratio()
 
         if local_series in audible_series_norm or audible_series_norm in local_series:
-            series_score = 1.0
+            # Only boost to 1.0 when the series names substantially overlap by
+            # token content. "Arena" being a substring of "Arena Road" does NOT
+            # mean they are the same series -- Logan Jacobs has both.
+            _ls_toks = set(significant_title_tokens(local_series))
+            _as_toks = set(significant_title_tokens(audible_series_norm))
+            _union = _ls_toks | _as_toks
+            _series_token_jaccard = len(_ls_toks & _as_toks) / len(_union) if _union else 1.0
+            if _series_token_jaccard >= 0.65:
+                series_score = 1.0
 
         if series_score >= 0.85:
             series_match = True
@@ -6181,8 +6212,19 @@ def score_product_for_metadata(
 
         if local_sequence_number is not None and audible_sequence_number is not None:
             if audible_sequence_number == local_sequence_number:
-                sequence_match = True
-                score += 0.18
+                # Only credit the sequence bonus when the series names are
+                # compatible. Book 3 in "Arena Road" matching Book 3 in "Arena"
+                # is a coincidence (same author, different series); the shared
+                # number should not boost the score.
+                _seq_series_ok = (
+                    not local_series
+                    or not audible_series_norm
+                    or series_match
+                    or _series_token_jaccard >= 0.65
+                )
+                if _seq_series_ok:
+                    sequence_match = True
+                    score += 0.18
             elif (
                 not _asin_identity
                 and local_number_source != "track"

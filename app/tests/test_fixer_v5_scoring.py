@@ -345,5 +345,111 @@ class TieBreakTests(unittest.TestCase):
         self.assertIsNone(ambiguity)
 
 
+class CrossSeriesSameAuthorTests(unittest.TestCase):
+    """Arena Road 3-5 matched Arena, Book 3-5 -- same author, different series.
+
+    "Arena" is a substring of "Arena Road", so the series containment check
+    was setting series_score = 1.0, and book numbers coincidentally aligned.
+    The combined score was ~0.94-1.0 (above the 0.70 gate).
+    """
+
+    def _arena_road_clues(self, n: int) -> dict:
+        return {
+            "title": f"Arena Road {n}",
+            "raw_title": f"Arena Road {n}",
+            "series": "Arena Road",
+            "author": "Logan Jacobs",
+            "narrator": "",
+            "book_number": str(n),
+            "book_number_source": "path",
+        }
+
+    # (local_minutes, audible_minutes) from the 20260629 run report
+    _ARENA_ROAD_DURATIONS = {
+        3: (453.0, 513.0),   # 11.67% diff -> acceptable
+        4: (631.0, 547.0),   # 13.3%  diff -> acceptable
+        5: (590.0, 487.0),   # 17.4%  diff -> acceptable
+    }
+
+    def _arena_product(self, n: int, comma: bool = True) -> dict:
+        title = f"Arena, Book {n}" if comma else f"Arena Book {n}"
+        _local, aud_min = self._ARENA_ROAD_DURATIONS[n]
+        return product(
+            asin=f"B0ARENA{n:02d}",
+            title=title,
+            series="Arena",
+            sequence=str(n),
+            authors=("Logan Jacobs",),
+            narrators=("Joshua Story",),
+            minutes=aud_min,
+        )
+
+    def test_arena_road_3_does_not_match_arena_book_3(self):
+        local_min, _ = self._ARENA_ROAD_DURATIONS[3]
+        score = FIXER.score_product_for_metadata(
+            self._arena_road_clues(3), self._arena_product(3, comma=True), local_min
+        )
+        self.assertLess(score, 0.70, f"Arena Road 3 should not match Arena, Book 3 (score={score})")
+
+    def test_arena_road_4_does_not_match_arena_book_4(self):
+        local_min, _ = self._ARENA_ROAD_DURATIONS[4]
+        score = FIXER.score_product_for_metadata(
+            self._arena_road_clues(4), self._arena_product(4, comma=False), local_min
+        )
+        self.assertLess(score, 0.70, f"Arena Road 4 should not match Arena Book 4 (score={score})")
+
+    def test_arena_road_5_does_not_match_arena_book_5(self):
+        local_min, _ = self._ARENA_ROAD_DURATIONS[5]
+        score = FIXER.score_product_for_metadata(
+            self._arena_road_clues(5), self._arena_product(5, comma=True), local_min
+        )
+        self.assertLess(score, 0.70, f"Arena Road 5 should not match Arena, Book 5 (score={score})")
+
+    def test_arena_book_1_still_matches_arena_1(self):
+        """Actual Arena series books should still match the Arena series."""
+        clues = {
+            "title": "Arena 1",
+            "raw_title": "Arena 1",
+            "series": "Arena",
+            "author": "Logan Jacobs",
+            "narrator": "",
+            "book_number": "1",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B0ARENA01",
+            title="Arena",
+            series="Arena",
+            sequence="1",
+            authors=("Logan Jacobs",),
+            minutes=520,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 520.0)
+        self.assertGreaterEqual(score, 0.70, f"Arena 1 should match Arena series (score={score})")
+
+    def test_the_prefix_does_not_break_series_match(self):
+        """'Iron Teeth' local vs 'The Iron Teeth' Audible should still match."""
+        clues = {
+            "title": "Iron Teeth 3",
+            "raw_title": "Iron Teeth 3",
+            "series": "Iron Teeth",
+            "author": "C. Stelter",
+            "narrator": "Narrator",
+            "book_number": "3",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B0IRON03",
+            title="Iron Teeth 3",
+            series="The Iron Teeth",
+            sequence="3",
+            authors=("C. Stelter",),
+            narrators=("Narrator",),
+            minutes=600,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 600.0)
+        self.assertGreaterEqual(score, 0.70, f"Iron Teeth 3 should still match The Iron Teeth 3 (score={score})")
+
+
 if __name__ == "__main__":
     unittest.main()
