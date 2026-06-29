@@ -74,7 +74,7 @@ class DecideWriteTests(unittest.TestCase):
             "title": "The Book",
             "artist": "Jane Doe",
             "grouping": "The Series",
-            "genre": "Audiobook",
+            "genre": "",
             "asin": "B0ABCDEF12",
             "track": "2",
             "composer": "Reader",

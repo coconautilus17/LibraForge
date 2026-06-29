@@ -2840,6 +2840,31 @@ summary:focus-visible {
 .match-provider-badge { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
 
 /* Card list: 2-column grid */
+.mrep-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+.mrep-controls input[type=search] {
+  flex: 1;
+  min-width: 0;
+}
+.mrep-controls select {
+  flex: 0 0 160px;
+}
+.mrep-query {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 6px 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mrep-query span {
+  font-style: italic;
+}
+
 #matchReportList {
   display: grid;
   grid-template-columns: 1fr 1fr;

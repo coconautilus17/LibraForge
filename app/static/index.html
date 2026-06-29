@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260629-4" />
+  <link rel="stylesheet" href="/static/style.css?v=20260629-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -279,6 +279,16 @@
       </div>
       <div id="matchReportWidget" hidden>
         <p class="note" style="margin-top:10px">Per-book results from the last run. Covers on the left are local (folder cover.jpg), covers on the right are from the match provider.</p>
+        <div class="mrep-controls">
+          <input id="matchReportSearch" type="search" placeholder="Filter by title, author, series, path..." />
+          <select id="matchReportFilter">
+            <option value="">All statuses</option>
+            <option value="matched">Matched</option>
+            <option value="skipped">Skipped</option>
+            <option value="error">Error</option>
+            <option value="unmatched">Not Matched</option>
+          </select>
+        </div>
         <div id="matchReportList"></div>
       </div>
     </section>
