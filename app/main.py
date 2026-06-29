@@ -1513,7 +1513,10 @@ def _fixer_major_version(script_name: str) -> int:
 def build_command(req: RunRequest) -> tuple[list[str], float]:
     script_path = live_script_path(req.script_name, "fixer")
 
-    cmd = ["python", "-u", str(script_path), req.target_path]
+    target = req.target_path
+    if target and not Path(target).is_absolute():
+        target = str(AUDIOBOOKS_ROOT / target)
+    cmd = ["python", "-u", str(script_path), target]
 
     if req.restore_metadata:
         cmd.append("--restore-metadata")
