@@ -7247,6 +7247,45 @@ def collect_audio_files(root: Path) -> list[Path]:
     return find_audio_files(root)
 
 
+def _build_report_item(result: "ItemResult") -> dict:
+    clues = result.clues or {}
+    meta = result.metadata or {}
+    duration = meta.get("duration") or {}
+    item: dict = {
+        "path": str(result.file_path),
+        "status": result.status,
+        "skip_reason": result.skip_reason,
+        "score": result.score,
+        "mode": result.edit_mode,
+        "duration_status": result.duration_status,
+        "provider": result.source_provider,
+        "local": {
+            "title": clues.get("title") or clues.get("raw_title") or "",
+            "author": clues.get("author") or "",
+            "series": clues.get("series") or "",
+            "sequence": str(clues.get("book_number") or ""),
+            "narrator": clues.get("narrator") or "",
+            "duration_minutes": clues.get("local_duration_minutes"),
+        },
+    }
+    if meta:
+        item["match"] = {
+            "title": meta.get("title") or "",
+            "subtitle": meta.get("subtitle") or "",
+            "author": meta.get("author") or "",
+            "narrator": meta.get("narrator") or "",
+            "series": meta.get("series") or "",
+            "sequence": meta.get("sequence") or "",
+            "year": meta.get("year") or "",
+            "asin": meta.get("asin") or "",
+            "cover_url": meta.get("cover_url") or "",
+            "duration_minutes": meta.get("audible_duration_minutes"),
+            "duration_local": duration.get("local_minutes"),
+            "duration_diff_pct": duration.get("diff_percent"),
+        }
+    return item
+
+
 def print_plan(
     file_path: Path, query: str, score: float, metadata: dict, clues: dict,
     source_provider: str = "",
@@ -8413,6 +8452,7 @@ def main():
             )
             for line in result.log_lines:
                 print(line, flush=True)
+            print(f"REPORT_ITEM_JSON: {json.dumps(_build_report_item(result))}", flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
 
