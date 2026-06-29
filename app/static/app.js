@@ -582,7 +582,7 @@ function chosenMetadataFor(result, mode) {
       year: result.year,
       asin: result.asin,
       summary: result.summary,
-      genre: 'Audiobook',
+      genre: '',
     };
 }
 
@@ -877,7 +877,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('maeYear').value      = chosen.year      || '';
   $('maeAsin').value      = chosen.asin      || '';
   $('maePublisher').value = chosen.publisher || '';
-  $('maeGenre').value     = chosen.genre     || 'Audiobook';
+  $('maeGenre').value     = chosen.genre     || '';
   $('maeSummary').value   = chosen.summary   || '';
 
   const editResult = await new Promise(resolve => {
