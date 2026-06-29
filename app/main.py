@@ -177,6 +177,8 @@ def search_abs_agg_candidates(
         asin = match.get("asin", "") or f"abs-agg-{provider}-{i}"
         duration_seconds = match.get("duration") or 0
         duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
+        genres_raw = match.get("genres") or []
+        genre = genres_raw[0] if genres_raw else "Audiobook"
 
         full_meta = {
             "title": title,
@@ -189,6 +191,7 @@ def search_abs_agg_candidates(
             "cover_url": cover_url,
             "asin": asin,
             "summary": summary,
+            "genre": genre,
         }
         series_only_meta = {
             "title": "",
@@ -201,6 +204,7 @@ def search_abs_agg_candidates(
             "cover_url": "",
             "asin": asin,
             "summary": "",
+            "genre": genre,
         }
         allowed_modes = ["full"] + (["series_only"] if series_name else [])
 
@@ -288,15 +292,20 @@ def search_abs_tract_candidates(
         asin = "" if is_kindle else (match.get("asin", "") or "")
         display_key = asin or f"abs-tract-{provider}-{i}"
 
+        genres_raw = match.get("genres") or []
+        genre = genres_raw[0] if genres_raw else "Audiobook"
+
         full_meta = {
             "title": title, "subtitle": subtitle, "author": m_author,
             "narrator": narrator, "series": series_name, "sequence": sequence,
             "year": year, "cover_url": cover_url, "asin": asin, "summary": summary,
+            "genre": genre,
         }
         series_only_meta = {
             "title": "", "subtitle": "", "author": "", "narrator": "",
             "series": series_name, "sequence": sequence, "year": "",
             "cover_url": "", "asin": asin, "summary": "",
+            "genre": genre,
         }
         allowed_modes = ["full"] + (["series_only"] if series_name else [])
 
@@ -811,6 +820,7 @@ def search_audible_candidates(
                     "summary": metadata_preview.get("summary", ""),
                     "cover_url": metadata_preview.get("cover_url", ""),
                     "asin": metadata_preview.get("asin", ""),
+                    "genre": metadata_preview.get("genre", "Audiobook"),
                 },
                 "chosen_metadata_by_mode": {
                     mode: {
@@ -824,6 +834,7 @@ def search_audible_candidates(
                         "summary": preview.get("summary", ""),
                         "cover_url": preview.get("cover_url", ""),
                         "asin": preview.get("asin", ""),
+                        "genre": preview.get("genre", "Audiobook"),
                     }
                     for mode, preview in item["metadata_by_mode"].items()
                 },
@@ -4197,15 +4208,20 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
         duration_minutes = round(float(duration_minutes_raw), 2) if duration_minutes_raw else None
         region = match.get("region", "") or ""
 
+        genres_raw = match.get("genres") or []
+        genre = genres_raw[0] if genres_raw else "Audiobook"
+
         full_meta = {
             "title": title_val, "subtitle": subtitle, "author": author_val,
             "narrator": narrator, "series": series_name, "sequence": sequence,
             "year": year, "cover_url": cover_url, "asin": asin, "summary": summary,
+            "genre": genre,
         }
         series_only_meta = {
             "title": "", "subtitle": "", "author": "", "narrator": "",
             "series": series_name, "sequence": sequence,
             "year": "", "cover_url": "", "asin": asin, "summary": "",
+            "genre": genre,
         }
         allowed_modes = ["full"] + (["series_only"] if series_name else [])
 
