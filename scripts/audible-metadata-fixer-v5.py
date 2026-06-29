@@ -5905,11 +5905,13 @@ def title_evidence_score(clues: dict, product: dict) -> float:
             distinctive_containment = 0.75
 
     audible_in_local = 0.0
-    audible_title_tokens = significant_title_tokens(product.get("title", "") or "")
     if (
         audible_title
         and audible_title in title_to_check
-        and len(audible_title_tokens) >= 2
+        # Count tokens of the *normalized* title (after book-N stripping), not the
+        # raw Audible title. "Arena Book 4" normalizes to "arena" (1 token) -- that
+        # single word being contained in "arena road 4" should NOT score 1.0.
+        and len(significant_title_tokens(audible_title)) >= 2
     ):
         audible_in_local = 1.0
 
@@ -6165,6 +6167,7 @@ def score_product_for_metadata(
     )
 
     score = 0.0
+    _series_token_jaccard = 0.0  # set in series block, reused for sequence gating
 
     # Duration is the strongest confirmation signal.
     if duration_result["status"] == "perfect":
@@ -6183,7 +6186,15 @@ def score_product_for_metadata(
         series_score = SequenceMatcher(None, local_series, audible_series_norm).ratio()
 
         if local_series in audible_series_norm or audible_series_norm in local_series:
-            series_score = 1.0
+            # Only boost to 1.0 when the series names substantially overlap by
+            # token content. "Arena" being a substring of "Arena Road" does NOT
+            # mean they are the same series -- Logan Jacobs has both.
+            _ls_toks = set(significant_title_tokens(local_series))
+            _as_toks = set(significant_title_tokens(audible_series_norm))
+            _union = _ls_toks | _as_toks
+            _series_token_jaccard = len(_ls_toks & _as_toks) / len(_union) if _union else 1.0
+            if _series_token_jaccard >= 0.65:
+                series_score = 1.0
 
         if series_score >= 0.85:
             series_match = True
@@ -6201,8 +6212,19 @@ def score_product_for_metadata(
 
         if local_sequence_number is not None and audible_sequence_number is not None:
             if audible_sequence_number == local_sequence_number:
-                sequence_match = True
-                score += 0.18
+                # Only credit the sequence bonus when the series names are
+                # compatible. Book 3 in "Arena Road" matching Book 3 in "Arena"
+                # is a coincidence (same author, different series); the shared
+                # number should not boost the score.
+                _seq_series_ok = (
+                    not local_series
+                    or not audible_series_norm
+                    or series_match
+                    or _series_token_jaccard >= 0.65
+                )
+                if _seq_series_ok:
+                    sequence_match = True
+                    score += 0.18
             elif (
                 not _asin_identity
                 and local_number_source != "track"
