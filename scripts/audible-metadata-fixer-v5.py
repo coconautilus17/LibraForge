@@ -193,6 +193,7 @@ class ItemResult:
     diff_percent: float | None = None
     review_reasons: list[str] = field(default_factory=list)
     duration_review_item: dict | None = None
+    was_manually_applied: bool = False
     write_done: bool = False
     metadata_json_done: bool = False
     asin_conflict: bool = False
@@ -5262,6 +5263,7 @@ def search_item(
                 f"aggressive={existing_marker.get('aggressive')} "
                 f"score={existing_marker.get('score')}"
             )
+            result.was_manually_applied = bool(existing_marker.get("manually_applied"))
 
         skip_due_to_marker, marker_reason = should_skip_due_to_marker(
             source=file_path,
@@ -7275,6 +7277,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "duration_status": result.duration_status,
         "provider": result.source_provider,
         "used_query": result.used_query or "",
+        "was_manually_applied": result.was_manually_applied,
         "local": {
             "title": clues.get("title") or clues.get("raw_title") or "",
             "author": clues.get("author") or "",

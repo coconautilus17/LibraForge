@@ -1097,6 +1097,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'unmatched' && (hasMatch || s === 'skipped' || s === 'error')) continue;
       if (statusFilter === 'skipped' && s !== 'skipped') continue;
       if (statusFilter === 'error' && s !== 'error') continue;
+      if (statusFilter === 'manually_applied' && !item.was_manually_applied) continue;
     }
     if (query) {
       const local = item.local || {};
@@ -1169,6 +1170,7 @@ function buildMatchCard(item) {
   summary.className = 'mrep-head';
   summary.innerHTML = `
     <span class="match-status-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+    ${item.was_manually_applied ? '<span class="match-manual-badge">Manually Applied</span>' : ''}
     <span class="mrep-title">${escapeHtml(bookName)}</span>
     <div class="mrep-badges">
       ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
