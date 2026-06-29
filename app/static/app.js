@@ -1091,25 +1091,45 @@ function buildMatchReportCards() {
   }
 }
 
+function bookNameFromPath(p) {
+  if (!p) return '';
+  const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
+  let name = parts[parts.length - 1] || '';
+  // strip extension for file paths
+  name = name.replace(/\.[^.]+$/, '');
+  return name;
+}
+
+function matchStatusInfo(item) {
+  const s = (item.status || '').toLowerCase();
+  if (item.match) return { label: 'Matched', cls: 'status-matched' };
+  if (s === 'skipped') {
+    const reason = item.skip_reason ? ` — ${item.skip_reason}` : '';
+    return { label: `Skipped${reason}`, cls: 'status-skipped' };
+  }
+  if (s === 'error') return { label: 'Error', cls: 'status-error' };
+  if (s === 'matched' || s === 'applied' || s === 'written') return { label: 'Matched', cls: 'status-matched' };
+  return { label: 'Not Matched', cls: 'status-unmatched' };
+}
+
 function buildMatchCard(item) {
-  const status = (item.status || '').toLowerCase();
   const hasMatch = !!item.match;
-  const score = item.score != null ? Math.round(item.score) : null;
+  const score = item.score != null && item.score > 0 ? Math.round(item.score) : null;
   const mode = item.mode || '';
   const folderPath = item.path || '';
   const localCoverUrl = folderPath ? `/api/book/cover?path=${encodeURIComponent(folderPath)}` : '';
-
-  const statusLabel = hasMatch ? 'Matched' : 'Not Matched';
-  const statusClass = hasMatch ? 'status-matched' : 'status-unmatched';
+  const bookName = item.local?.title || bookNameFromPath(folderPath) || folderPath;
+  const { label: statusLabel, cls: statusClass } = matchStatusInfo(item);
 
   const card = document.createElement('div');
   card.className = 'match-report-card';
 
-  // header row: status badge, score, mode, load button
+  // header row: status badge, book name, score, mode, load button
   const header = document.createElement('div');
   header.className = 'match-report-card-header';
   header.innerHTML = `
-    <span class="match-status-badge ${statusClass}">${statusLabel}</span>
+    <span class="match-status-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+    <span class="match-card-title">${escapeHtml(bookName)}</span>
     ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
     ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
     ${item.provider ? `<span class="match-provider-badge">${escapeHtml(item.provider)}</span>` : ''}

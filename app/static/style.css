@@ -2957,3 +2957,24 @@ summary:focus-visible {
   color: var(--text-soft);
   word-break: break-word;
 }
+
+.status-skipped {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.match-card-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
