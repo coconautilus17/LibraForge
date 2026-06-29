@@ -1085,9 +1085,34 @@ function renderMatchReport(items) {
 function buildMatchReportCards() {
   const list = $('matchReportList');
   if (!list) return;
+  const query = ($('matchReportSearch')?.value || '').toLowerCase().trim();
+  const statusFilter = $('matchReportFilter')?.value || '';
   list.innerHTML = '';
+  let shown = 0;
   for (const item of matchReportItems) {
+    if (statusFilter) {
+      const s = (item.status || '').toLowerCase();
+      const hasMatch = !!item.match;
+      if (statusFilter === 'matched' && !hasMatch) continue;
+      if (statusFilter === 'unmatched' && (hasMatch || s === 'skipped' || s === 'error')) continue;
+      if (statusFilter === 'skipped' && s !== 'skipped') continue;
+      if (statusFilter === 'error' && s !== 'error') continue;
+      if (statusFilter === 'manually_applied' && !item.was_manually_applied) continue;
+    }
+    if (query) {
+      const local = item.local || {};
+      const m = item.match || {};
+      const haystack = [
+        item.path, local.title, local.author, local.series,
+        m.title, m.author, m.series, m.asin,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(query)) continue;
+    }
     list.appendChild(buildMatchCard(item));
+    shown++;
+  }
+  if (!shown) {
+    list.innerHTML = '<p class="note" style="grid-column:1/-1">No items match the current filter.</p>';
   }
 }
 
@@ -1145,6 +1170,7 @@ function buildMatchCard(item) {
   summary.className = 'mrep-head';
   summary.innerHTML = `
     <span class="match-status-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+    ${item.was_manually_applied ? '<span class="match-manual-badge">Manually Applied</span>' : ''}
     <span class="mrep-title">${escapeHtml(bookName)}</span>
     <div class="mrep-badges">
       ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
@@ -1170,11 +1196,15 @@ function buildMatchCard(item) {
   const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
   const matchDur = m.duration_minutes != null ? `${m.duration_minutes} min` : '';
 
+  const queryHtml = item.used_query
+    ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';
+
   body.innerHTML = `
     <div class="cover-comparison mrep-covers">
       <div><strong>Local</strong>${localCoverImg}</div>
       <div><strong>${providerLabel}</strong>${matchCoverImg}</div>
     </div>
+    ${queryHtml}
     <table class="compare-table mrep-compare">
       <thead><tr><th></th><th>Local</th><th>${hasMatch ? providerLabel : 'Match'}</th></tr></thead>
       <tbody>
@@ -1183,6 +1213,7 @@ function buildMatchCard(item) {
         ${mrepRow('Narrator', local.narrator, m.narrator)}
         ${mrepRow('Series', local.series, m.series)}
         ${mrepRow('Sequence', local.sequence, m.sequence)}
+        ${mrepRow('Genre', local.genre, m.genre)}
         ${mrepRow('Year', '', m.year)}
         ${mrepRow('ASIN', '', m.asin)}
         ${mrepRow('Duration', localDur, matchDur)}
@@ -1220,6 +1251,8 @@ $('matchReportBtn').addEventListener('click', () => {
   widget.hidden = !widget.hidden;
   $('matchReportBtn').textContent = widget.hidden ? 'View full match report' : 'Hide match report';
 });
+$('matchReportSearch').addEventListener('input', buildMatchReportCards);
+$('matchReportFilter').addEventListener('change', buildMatchReportCards);
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

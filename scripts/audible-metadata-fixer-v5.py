@@ -193,6 +193,7 @@ class ItemResult:
     diff_percent: float | None = None
     review_reasons: list[str] = field(default_factory=list)
     duration_review_item: dict | None = None
+    was_manually_applied: bool = False
     write_done: bool = False
     metadata_json_done: bool = False
     asin_conflict: bool = False
@@ -1763,7 +1764,7 @@ def build_m4b_tool_metadata_payload(
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
             "summary": metadata.get("summary", ""),
-            "genre": metadata.get("genre", "Audiobook"),
+            "genre": metadata.get("genre", ""),
             "cover_url": metadata.get("cover_url", ""),
         },
         "audible": {
@@ -1861,7 +1862,7 @@ def write_audiobookshelf_metadata_json(
         "authors": authors,
         "narrators": narrators,
         "series": series,
-        "genres": [metadata.get("genre", "Audiobook")],
+        "genres": [g for g in [metadata.get("genre", "")] if g],
         "publishedYear": str(metadata.get("year", "") or ""),
         "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
@@ -5262,6 +5263,7 @@ def search_item(
                 f"aggressive={existing_marker.get('aggressive')} "
                 f"score={existing_marker.get('score')}"
             )
+            result.was_manually_applied = bool(existing_marker.get("manually_applied"))
 
         skip_due_to_marker, marker_reason = should_skip_due_to_marker(
             source=file_path,
@@ -6938,7 +6940,7 @@ def final_metadata_preview(metadata: dict) -> dict:
         "mvin": metadata.get("sequence", ""),
         "composer": metadata.get("narrator", ""),
         "date": metadata.get("year", ""),
-        "genre": "Audiobook",
+        "genre": metadata.get("genre", ""),
         "publisher": metadata.get("publisher", ""),
     }
 
@@ -7102,7 +7104,7 @@ def compare_tags_for_write(
         ("title",  cur(["title"]),                              metadata.get("title", "")),
         ("author", cur(["artist", "album_artist"]),             metadata.get("author", "")),
         ("series", cur(["grouping", "mvnm"]),                   metadata.get("series", "")),
-        ("genre",  cur(["genre"]),                              "Audiobook"),
+        ("genre",  cur(["genre"]),                              metadata.get("genre", "")),
         ("asin",   cur(["asin"]).upper(),                       (metadata.get("asin") or "").upper()),
     ]
     if edit_mode == "full":
@@ -7274,12 +7276,15 @@ def _build_report_item(result: "ItemResult") -> dict:
         "mode": result.edit_mode,
         "duration_status": result.duration_status,
         "provider": result.source_provider,
+        "used_query": result.used_query or "",
+        "was_manually_applied": result.was_manually_applied,
         "local": {
             "title": clues.get("title") or clues.get("raw_title") or "",
             "author": clues.get("author") or "",
             "series": clues.get("series") or "",
             "sequence": str(clues.get("book_number") or ""),
             "narrator": clues.get("narrator") or "",
+            "genre": clues.get("genre") or "",
             "duration_minutes": clues.get("local_duration_minutes"),
         },
     }
@@ -7293,6 +7298,7 @@ def _build_report_item(result: "ItemResult") -> dict:
             "sequence": meta.get("sequence") or "",
             "year": meta.get("year") or "",
             "asin": meta.get("asin") or "",
+            "genre": meta.get("genre") or "",
             "cover_url": meta.get("cover_url") or "",
             "duration_minutes": meta.get("audible_duration_minutes"),
             "duration_local": duration.get("local_minutes"),
