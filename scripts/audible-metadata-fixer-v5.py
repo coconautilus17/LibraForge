@@ -1763,7 +1763,8 @@ def build_m4b_tool_metadata_payload(
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
             "summary": metadata.get("summary", ""),
-            "genre": metadata.get("genre", "Audiobook"),
+            "genre": metadata.get("genre", "") or "Audiobook",
+            "isbn": metadata.get("isbn", ""),
             "cover_url": metadata.get("cover_url", ""),
         },
         "audible": {
@@ -1861,11 +1862,11 @@ def write_audiobookshelf_metadata_json(
         "authors": authors,
         "narrators": narrators,
         "series": series,
-        "genres": [metadata.get("genre", "Audiobook")],
+        "genres": [g for g in [metadata.get("genre", "") or "Audiobook"] if g],
         "publishedYear": str(metadata.get("year", "") or ""),
         "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
-        "isbn": None,
+        "isbn": metadata.get("isbn") or None,
         "asin": metadata.get("asin", "") or None,
         "language": None,
         "explicit": False,
@@ -4954,7 +4955,8 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
         "runtime_length_min": None,  # these sources do not return runtime
         "release_date": str(match.get("publishedYear", "") or ""),
         "_abs_provider": provider,
-        "_abs_isbn": match.get("isbn", "") or match.get("bookId", "") or "",
+        "_abs_isbn": match.get("isbn", "") or "",
+        "_abs_genres": [g for g in (match.get("genres") or []) if g],
     }
 
 
@@ -4965,8 +4967,8 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
 # persistent failures and short-circuits further calls for a cooldown, so one
 # upstream block doesn't tax the rest of the run.
 _ABS_TRACT_BREAKER_LOCK = threading.Lock()
-_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
-_ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
+_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0}
+_ABS_TRACT_BREAKER_THRESHOLD = 4      # consecutive persistent failures before tripping
 _ABS_TRACT_BREAKER_COOLDOWN = 180.0   # seconds to stay open; measured recovery is ~90-105s
 
 # Throttle: enforce a minimum gap between any two abs-tract requests so
@@ -4986,7 +4988,6 @@ def _abs_tract_breaker_record(success: bool) -> None:
     with _ABS_TRACT_BREAKER_LOCK:
         if success:
             _ABS_TRACT_BREAKER["consecutive_failures"] = 0
-            _ABS_TRACT_BREAKER["logged_open"] = False
             return
         _ABS_TRACT_BREAKER["consecutive_failures"] += 1
         if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
@@ -5043,14 +5044,10 @@ def abs_tract_search(
     # rather than hang for the full timeout on every remaining book.
     if _abs_tract_breaker_is_open():
         if log is not None:
-            with _ABS_TRACT_BREAKER_LOCK:
-                _already = _ABS_TRACT_BREAKER["logged_open"]
-                _ABS_TRACT_BREAKER["logged_open"] = True
-            if not _already:
-                log.append(
-                    "  abs-tract circuit open (upstream blocking) -> skipping "
-                    "Goodreads/Kindle for the cooldown window"
-                )
+            log.append(
+                "  abs-tract circuit open (upstream blocking) -> skipping "
+                "Goodreads/Kindle for the cooldown window"
+            )
         return []
 
     _abs_tract_throttle()
@@ -6789,6 +6786,9 @@ def metadata_from_product(
         year_to_write = ""
         summary_to_write = ""
 
+    raw_genres: list[str] = product.get("_abs_genres") or []
+    genre_text = ", ".join(raw_genres[:3]) if raw_genres else ""
+
     return {
         "asin": product.get("asin", ""),
         "title": title,
@@ -6800,6 +6800,8 @@ def metadata_from_product(
         "year": year_to_write,
         "summary": summary_to_write,
         "publisher": sanitize_tag(clues.get("publisher", "")),
+        "genre": genre_text,
+        "isbn": product.get("_abs_isbn", "") or "",
         "album": album,
         "audible_title": audible_title,
         "audible_sequence": sequence,
@@ -6862,6 +6864,9 @@ def build_metadata_args(metadata: dict) -> list[str]:
     if metadata.get("write_summary") and metadata.get("summary"):
         tag_map["comment"] = metadata["summary"]
 
+    if metadata.get("isbn"):
+        tag_map["isbn"] = metadata["isbn"]
+
     args = []
     for key, value in tag_map.items():
         value = sanitize_tag(value)
@@ -6883,12 +6888,14 @@ def final_metadata_preview(metadata: dict) -> dict:
         "mvin": metadata.get("sequence", ""),
         "composer": metadata.get("narrator", ""),
         "date": metadata.get("year", ""),
-        "genre": "Audiobook",
+        "genre": metadata.get("genre", "") or "Audiobook",
         "publisher": metadata.get("publisher", ""),
     }
 
     if metadata.get("sequence"):
         preview["track"] = metadata["sequence"]
+    if metadata.get("isbn"):
+        preview["isbn"] = metadata["isbn"]
 
     return {key: value for key, value in preview.items() if value}
 
