@@ -1095,9 +1095,19 @@ function bookNameFromPath(p) {
   if (!p) return '';
   const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
   let name = parts[parts.length - 1] || '';
-  // strip extension for file paths
   name = name.replace(/\.[^.]+$/, '');
   return name;
+}
+
+function coverFolderFromPath(p) {
+  if (!p) return '';
+  const normalized = p.replace(/\\/g, '/');
+  const last = normalized.split('/').filter(Boolean).pop() || '';
+  // if the last segment has a file extension it's a file, use parent dir
+  if (/\.[^.]+$/.test(last)) {
+    return normalized.substring(0, normalized.lastIndexOf('/')) || '/';
+  }
+  return normalized;
 }
 
 function matchStatusInfo(item) {
@@ -1117,7 +1127,8 @@ function buildMatchCard(item) {
   const score = item.score != null && item.score > 0 ? Math.round(item.score) : null;
   const mode = item.mode || '';
   const folderPath = item.path || '';
-  const localCoverUrl = folderPath ? `/api/book/cover?path=${encodeURIComponent(folderPath)}` : '';
+  const coverFolder = coverFolderFromPath(folderPath);
+  const localCoverUrl = coverFolder ? `/api/book/cover?path=${encodeURIComponent(coverFolder)}` : '';
   const bookName = item.local?.title || bookNameFromPath(folderPath) || folderPath;
   const { label: statusLabel, cls: statusClass } = matchStatusInfo(item);
   const local = item.local || {};
