@@ -1092,8 +1092,12 @@ function buildMatchReportCards() {
   for (const item of matchReportItems) {
     if (statusFilter) {
       const s = (item.status || '').toLowerCase();
+      const writeAction = (item.write_action || '').toLowerCase();
       const hasMatch = !!item.match;
       if (statusFilter === 'matched' && !hasMatch) continue;
+      if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
+      if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
+      if (statusFilter === 'written' && writeAction !== 'written') continue;
       if (statusFilter === 'unmatched' && (hasMatch || s === 'skipped' || s === 'error')) continue;
       if (statusFilter === 'skipped' && s !== 'skipped') continue;
       if (statusFilter === 'error' && s !== 'error') continue;
@@ -1137,6 +1141,8 @@ function coverFolderFromPath(p) {
 
 function matchStatusInfo(item) {
   const s = (item.status || '').toLowerCase();
+  const writeAction = (item.write_action || '').toLowerCase();
+  if (writeAction === 'smart_skipped') return { label: 'Smart-skipped', cls: 'status-smart-skipped' };
   if (item.match) return { label: 'Matched', cls: 'status-matched' };
   if (s === 'skipped') {
     const reason = item.skip_reason ? ` — ${item.skip_reason}` : '';
@@ -1159,6 +1165,8 @@ function buildMatchCard(item) {
   const local = item.local || {};
   const m = item.match || {};
   const providerLabel = escapeHtml(item.provider || 'Match');
+  const writeAction = String(item.write_action || '').replace(/_/g, ' ');
+  const writeNote = item.write_note ? ` title="${escapeHtml(item.write_note)}"` : '';
 
   const article = document.createElement('article');
   article.className = 'mrep-card';
@@ -1176,6 +1184,7 @@ function buildMatchCard(item) {
       ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
       ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
+      ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
     </div>
   `;
   details.appendChild(summary);
@@ -1216,6 +1225,7 @@ function buildMatchCard(item) {
         ${mrepRow('Genre', local.genre, m.genre)}
         ${mrepRow('Year', '', m.year)}
         ${mrepRow('ASIN', '', m.asin)}
+        ${mrepRow('ISBN', '', m.isbn)}
         ${mrepRow('Duration', localDur, matchDur)}
         ${durationDiff ? mrepRow('Dur. diff', '', durationDiff) : ''}
       </tbody>

@@ -91,6 +91,53 @@ class DecideWriteTests(unittest.TestCase):
         _eff, skip_write, _note, _filled = FIXER.decide_write(current, meta, "full", "smart")
         self.assertFalse(skip_write)
 
+    def test_goodreads_smart_ignores_unavailable_blank_fields(self):
+        meta = {
+            "title": "Mind Breaker 1",
+            "author": "Dante King",
+            "series": "",
+            "sequence": "1",
+            "narrator": "",
+            "year": "",
+            "asin": "",
+            "genre": "",
+            "edit_mode": "full",
+        }
+        current = {
+            "title": "Mind Breaker 1",
+            "artist": "Dante King",
+            "grouping": "Mind Breaker",
+            "track": "1",
+            "composer": "Existing Narrator",
+            "date": "2024",
+            "asin": "B0EXISTING",
+            "genre": "Audiobook",
+        }
+        _eff, skip_write, note, _filled = FIXER.decide_write(
+            current, meta, "full", "smart", "goodreads"
+        )
+        self.assertTrue(skip_write)
+        self.assertIn("Smart-skip", note)
+
+    def test_goodreads_smart_requires_asserted_series_and_sequence(self):
+        meta = {
+            "title": "Backyard Dungeon 20",
+            "author": "Logan Jacobs",
+            "series": "Backyard Dungeon",
+            "sequence": "20",
+            "edit_mode": "full",
+        }
+        current = {
+            "title": "Backyard Dungeon 20",
+            "artist": "Logan Jacobs",
+            "grouping": "Backyard Dungeon",
+            "track": "19",
+        }
+        _eff, skip_write, _note, _filled = FIXER.decide_write(
+            current, meta, "full", "smart", "goodreads"
+        )
+        self.assertFalse(skip_write)
+
     def test_fill_missing_reports_filled_fields(self):
         meta = self._metadata()
         current = {"title": "The Book", "artist": "Jane Doe"}  # series/asin/etc missing
@@ -127,6 +174,8 @@ class MetadataJsonWriteTests(unittest.TestCase):
             "sequence": "1",
             "year": "2020",
             "asin": "B0SOLO0001",
+            "isbn": "9781234567890",
+            "genre": "Fantasy",
             "summary": "x",
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,6 +189,8 @@ class MetadataJsonWriteTests(unittest.TestCase):
             payload = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(payload["title"], "Solo Book")
             self.assertEqual(payload["asin"], "B0SOLO0001")
+            self.assertEqual(payload["isbn"], "9781234567890")
+            self.assertEqual(payload["genres"], ["Fantasy"])
 
     def test_write_places_companion_for_loose(self):
         meta = {"title": "Loose Book", "author": "Jane Doe", "asin": "B0LOOSE001"}
@@ -151,6 +202,37 @@ class MetadataJsonWriteTests(unittest.TestCase):
             )
             self.assertEqual(target, source.with_name("loose.m4b.metadata.json"))
             self.assertTrue(target.exists())
+
+    def test_metadata_json_does_not_add_audiobook_genre_fallback(self):
+        meta = {"title": "No Genre", "author": "Jane Doe"}
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "book.m4b"
+            source.write_bytes(b"")
+            target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["genres"], [])
+
+
+class ReportItemTests(unittest.TestCase):
+    def test_report_item_surfaces_match_genre_and_isbn(self):
+        result = FIXER.ItemResult(
+            index=1,
+            file_path=Path("/lib/book.m4b"),
+            display_path=Path("/lib/book.m4b"),
+            status="matched",
+            metadata={
+                "title": "The Book",
+                "author": "Jane Doe",
+                "genre": "Fantasy",
+                "isbn": "9781234567890",
+            },
+            clues={"title": "The Book", "author": "Jane Doe"},
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["match"]["genre"], "Fantasy")
+        self.assertEqual(item["match"]["isbn"], "9781234567890")
 
 
 if __name__ == "__main__":

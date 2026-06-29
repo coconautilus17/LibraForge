@@ -180,6 +180,7 @@ class AbsTractClientTests(unittest.TestCase):
         payload = {"matches": [{
             "title": "The Primal Talisman", "author": "Dante King",
             "series": [{"series": "Beast Shifter", "sequence": "3"}],
+            "genres": ["Audiobook", "Fantasy", "LitRPG"],
             "isbn": "9781", "cover": "http://gr/cover.jpg",
             "description": "A book.", "publishedYear": "2024",
         }]}
@@ -197,7 +198,31 @@ class AbsTractClientTests(unittest.TestCase):
         self.assertEqual(p["authors"][0]["name"], "Dante King")
         self.assertEqual(p["series"][0]["title"], "Beast Shifter")
         self.assertEqual(p["_abs_provider"], "goodreads")
+        self.assertEqual(p["_abs_isbn"], "9781")
+        self.assertEqual(p["_abs_genres"], ["Fantasy", "LitRPG"])
         self.assertIsNone(p["runtime_length_min"])
+
+    def test_goodreads_metadata_includes_real_genre_and_isbn_only(self):
+        product = {
+            "_abs_provider": "goodreads",
+            "_abs_isbn": "9781",
+            "_abs_genres": ["Audiobook", "Fantasy"],
+            "title": "The Primal Talisman",
+            "authors": [{"name": "Dante King"}],
+            "series": [{"title": "Beast Shifter", "sequence": "3"}],
+        }
+        meta = fixer.metadata_from_product(
+            product,
+            {
+                "title": "The Primal Talisman",
+                "author": "Dante King",
+                "series": "Beast Shifter",
+                "book_number": "3",
+            },
+            0.2,
+        )
+        self.assertEqual(meta["genre"], "Fantasy")
+        self.assertEqual(meta["isbn"], "9781")
 
     def test_kindle_url_uses_region_and_drops_ebook_asin(self):
         payload = {"matches": [{
