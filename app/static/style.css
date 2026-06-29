@@ -2787,3 +2787,143 @@ summary:focus-visible {
   font-family: inherit;
   line-height: 1.5;
 }
+
+/* ── Match Report Widget ──────────────────────────────────────────────── */
+
+.report-header {
+  user-select: none;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  vertical-align: middle;
+}
+
+/* Status badges */
+.match-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-matched   { background: var(--success-soft); color: var(--success); }
+.status-unmatched { background: var(--danger-soft);  color: var(--danger);  }
+.status-skipped   { background: var(--warning-soft); color: var(--warning); }
+.status-error     { background: var(--danger-soft);  color: var(--danger);  }
+
+/* Inline badges */
+.match-score-badge,
+.match-mode-badge,
+.match-provider-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.match-score-badge    { background: var(--accent-soft);           color: var(--accent);  }
+.match-mode-badge     { background: var(--warning-soft);          color: var(--warning); }
+.match-provider-badge { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
+
+/* Card list: 2-column grid */
+#matchReportList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: 800px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 10px;
+}
+
+/* Individual card */
+.mrep-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+/* Summary / collapsed header */
+.mrep-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.mrep-head::-webkit-details-marker { display: none; }
+
+.mrep-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mrep-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Expanded body */
+.mrep-body {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Shrink covers to fit within the half-width cards */
+.mrep-covers {
+  grid-template-columns: repeat(2, minmax(70px, 110px));
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.mrep-covers .cover-thumb {
+  max-width: 110px;
+}
+
+/* Field comparison table */
+.mrep-compare {
+  margin: 0 0 10px;
+}
+
+.mrep-compare thead th {
+  font-size: 0.72rem;
+}
+
+.mrep-compare td,
+.mrep-compare th {
+  font-size: 0.8rem;
+  padding: 5px 8px;
+}
+
+.mrep-load-btn {
+  font-size: 0.78rem !important;
+  padding: 4px 10px !important;
+  margin-top: 2px;
+}

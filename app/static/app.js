@@ -207,6 +207,7 @@ function render(state) {
   renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
+  renderMatchReport(state.report_items || []);
 }
 
 function renderPhaseCounters(state) {
@@ -1052,6 +1053,7 @@ async function loadLastReport() {
     renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
+    renderMatchReport(report.report_items || []);
     $('runStatus').textContent = `Last report loaded (${report.status || 'unknown'})`;
     $('currentFile').textContent = report.id || '';
   } finally {
@@ -1059,6 +1061,165 @@ async function loadLastReport() {
     btn.textContent = prev;
   }
 }
+
+// ── Match Report Widget ──────────────────────────────────────────────────────
+
+let matchReportItems = [];
+
+function renderMatchReport(items) {
+  matchReportItems = items || [];
+  const count = $('matchReportCount');
+  const card = $('matchReportCard');
+  if (!card) return;
+  if (!matchReportItems.length) {
+    count.style.display = 'none';
+    $('matchReportWidget').hidden = true;
+    $('matchReportBtn').textContent = 'View full match report';
+    return;
+  }
+  count.textContent = `${matchReportItems.length} book${matchReportItems.length !== 1 ? 's' : ''}`;
+  count.style.display = '';
+  buildMatchReportCards();
+}
+
+function buildMatchReportCards() {
+  const list = $('matchReportList');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const item of matchReportItems) {
+    list.appendChild(buildMatchCard(item));
+  }
+}
+
+function bookNameFromPath(p) {
+  if (!p) return '';
+  const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
+  let name = parts[parts.length - 1] || '';
+  name = name.replace(/\.[^.]+$/, '');
+  return name;
+}
+
+function coverFolderFromPath(p) {
+  if (!p) return '';
+  const normalized = p.replace(/\\/g, '/');
+  const last = normalized.split('/').filter(Boolean).pop() || '';
+  // if the last segment has a file extension it's a file, use parent dir
+  if (/\.[^.]+$/.test(last)) {
+    return normalized.substring(0, normalized.lastIndexOf('/')) || '/';
+  }
+  return normalized;
+}
+
+function matchStatusInfo(item) {
+  const s = (item.status || '').toLowerCase();
+  if (item.match) return { label: 'Matched', cls: 'status-matched' };
+  if (s === 'skipped') {
+    const reason = item.skip_reason ? ` — ${item.skip_reason}` : '';
+    return { label: `Skipped${reason}`, cls: 'status-skipped' };
+  }
+  if (s === 'error') return { label: 'Error', cls: 'status-error' };
+  if (s === 'matched' || s === 'applied' || s === 'written') return { label: 'Matched', cls: 'status-matched' };
+  return { label: 'Not Matched', cls: 'status-unmatched' };
+}
+
+function buildMatchCard(item) {
+  const hasMatch = !!item.match;
+  const score = item.score != null && item.score > 0 ? Math.round(item.score) : null;
+  const mode = item.mode || '';
+  const folderPath = item.path || '';
+  const coverFolder = coverFolderFromPath(folderPath);
+  const localCoverUrl = coverFolder ? `/api/book/cover?path=${encodeURIComponent(coverFolder)}` : '';
+  const bookName = item.local?.title || bookNameFromPath(folderPath) || folderPath;
+  const { label: statusLabel, cls: statusClass } = matchStatusInfo(item);
+  const local = item.local || {};
+  const m = item.match || {};
+  const providerLabel = escapeHtml(item.provider || 'Match');
+
+  const article = document.createElement('article');
+  article.className = 'mrep-card';
+
+  const details = document.createElement('details');
+  details.className = 'mrep-details';
+
+  const summary = document.createElement('summary');
+  summary.className = 'mrep-head';
+  summary.innerHTML = `
+    <span class="match-status-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+    <span class="mrep-title">${escapeHtml(bookName)}</span>
+    <div class="mrep-badges">
+      ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
+      ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
+      ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
+    </div>
+  `;
+  details.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'mrep-body';
+
+  const localCoverImg = localCoverUrl
+    ? `<img class="cover-thumb" src="${escapeHtml(localCoverUrl)}" alt="Local cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+  const matchCoverImg = hasMatch && m.cover_url
+    ? `<img class="cover-thumb" src="${escapeHtml(m.cover_url)}" alt="Match cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+
+  const titleMatch = m.title ? (m.title + (m.subtitle ? ': ' + m.subtitle : '')) : '';
+  const durationDiff = m.duration_diff_pct != null
+    ? `${m.duration_diff_pct > 0 ? '+' : ''}${m.duration_diff_pct}%` : '';
+  const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
+  const matchDur = m.duration_minutes != null ? `${m.duration_minutes} min` : '';
+
+  body.innerHTML = `
+    <div class="cover-comparison mrep-covers">
+      <div><strong>Local</strong>${localCoverImg}</div>
+      <div><strong>${providerLabel}</strong>${matchCoverImg}</div>
+    </div>
+    <table class="compare-table mrep-compare">
+      <thead><tr><th></th><th>Local</th><th>${hasMatch ? providerLabel : 'Match'}</th></tr></thead>
+      <tbody>
+        ${mrepRow('Title', local.title, titleMatch)}
+        ${mrepRow('Author', local.author, m.author)}
+        ${mrepRow('Narrator', local.narrator, m.narrator)}
+        ${mrepRow('Series', local.series, m.series)}
+        ${mrepRow('Sequence', local.sequence, m.sequence)}
+        ${mrepRow('Year', '', m.year)}
+        ${mrepRow('ASIN', '', m.asin)}
+        ${mrepRow('Duration', localDur, matchDur)}
+        ${durationDiff ? mrepRow('Dur. diff', '', durationDiff) : ''}
+      </tbody>
+    </table>
+  `;
+
+  const loadBtn = document.createElement('button');
+  loadBtn.className = 'secondary mrep-load-btn';
+  loadBtn.textContent = 'Load into Manual Review';
+  loadBtn.addEventListener('click', () => {
+    if (!folderPath) return;
+    loadManualTarget(folderPath);
+    $('manualTargetPath')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  body.appendChild(loadBtn);
+
+  details.appendChild(body);
+  article.appendChild(details);
+  return article;
+}
+
+function mrepRow(label, localVal, matchVal) {
+  if (!localVal && !matchVal) return '';
+  return `<tr>
+    <th>${escapeHtml(label)}</th>
+    <td>${escapeHtml(String(localVal || '—'))}</td>
+    <td>${escapeHtml(String(matchVal || '—'))}</td>
+  </tr>`;
+}
+
+$('matchReportBtn').addEventListener('click', () => {
+  const widget = $('matchReportWidget');
+  widget.hidden = !widget.hidden;
+  $('matchReportBtn').textContent = widget.hidden ? 'View full match report' : 'Hide match report';
+});
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

@@ -1043,6 +1043,7 @@ class RunState:
     stats: dict[str, Any] = field(default_factory=dict)
     files_by_category: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     parser_state: dict[str, Any] = field(default_factory=dict)
+    report_items: list[dict[str, Any]] = field(default_factory=list)
 
 
 runs: dict[str, RunState] = {}
@@ -1185,6 +1186,13 @@ def _fixer_percent(state: RunState) -> float:
 
 
 def parse_line(state: RunState, line: str, threshold: float) -> None:
+    if line.startswith("REPORT_ITEM_JSON: "):
+        try:
+            state.report_items.append(json.loads(line[18:]))
+        except Exception:
+            pass
+        return
+
     detected_phase = fixer_phase_for_line(line, state.current_file)
     if detected_phase:
         set_run_phase(state, *detected_phase)
@@ -1478,6 +1486,7 @@ def write_final_report(state: RunState) -> None:
         "items": items,
         "categories": categories,
         "manual_review_items": manual_review_items,
+        "report_items": state.report_items,
         "log_file": state.log_path.name if state.log_path else None,
     }
     state.report_path = REPORTS_DIR / f"{state.id}.report.json"

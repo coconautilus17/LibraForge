@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260628-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260629-4" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -269,6 +269,18 @@
       <p class="note">Choose a category to view the file names that contributed to it.</p>
       <select id="categorySelect"></select>
       <div id="categoryFiles" class="file-list"></div>
+    </section>
+
+    <section class="card" id="matchReportCard">
+      <div class="report-header" id="matchReportToggle" style="cursor:pointer;display:flex;align-items:center;gap:10px;">
+        <h2 style="margin:0">Match Report</h2>
+        <span id="matchReportCount" class="badge" style="display:none"></span>
+        <button class="secondary" style="margin-left:auto" id="matchReportBtn">View full match report</button>
+      </div>
+      <div id="matchReportWidget" hidden>
+        <p class="note" style="margin-top:10px">Per-book results from the last run. Covers on the left are local (folder cover.jpg), covers on the right are from the match provider.</p>
+        <div id="matchReportList"></div>
+      </div>
     </section>
 
     <section class="card">
