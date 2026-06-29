@@ -5359,6 +5359,10 @@ def update_publisher_policy(req: PublisherPolicyUpdate) -> dict[str, Any]:
 
 @app.post("/api/runs")
 def start_run(req: RunRequest) -> dict[str, Any]:
+    try:
+        validate_audiobook_path(req.target_path)
+    except HTTPException:
+        raise HTTPException(status_code=400, detail=f"Bad path: {req.target_path!r} — must be an existing path under {AUDIOBOOKS_ROOT}")
     run_id = datetime_id()
     state = RunState(id=run_id)
     with runs_lock:
