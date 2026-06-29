@@ -566,6 +566,7 @@ const COMPARE_FIELDS = [
   ['Year', 'year'],
   ['ASIN', 'asin'],
   ['Publisher', 'publisher'],
+  ['Genre', 'genre'],
 ];
 
 function chosenMetadataFor(result, mode) {
@@ -581,6 +582,7 @@ function chosenMetadataFor(result, mode) {
       year: result.year,
       asin: result.asin,
       summary: result.summary,
+      genre: 'Audiobook',
     };
 }
 
@@ -875,7 +877,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('maeYear').value      = chosen.year      || '';
   $('maeAsin').value      = chosen.asin      || '';
   $('maePublisher').value = chosen.publisher || '';
-  $('maeGenre').value     = chosen.genre     || '';
+  $('maeGenre').value     = chosen.genre     || 'Audiobook';
   $('maeSummary').value   = chosen.summary   || '';
 
   const editResult = await new Promise(resolve => {

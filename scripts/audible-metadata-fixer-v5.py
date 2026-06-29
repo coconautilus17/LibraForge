@@ -6849,6 +6849,7 @@ def metadata_from_product(
         "duration": duration_result,
         "edit_mode": edit_mode,
         "recommended_edit_mode": recommended_edit_mode,
+        "genre": "Audiobook",
     }
 
 
