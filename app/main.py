@@ -1513,10 +1513,7 @@ def _fixer_major_version(script_name: str) -> int:
 def build_command(req: RunRequest) -> tuple[list[str], float]:
     script_path = live_script_path(req.script_name, "fixer")
 
-    target = req.target_path
-    if target and not Path(target).is_absolute():
-        target = str(AUDIOBOOKS_ROOT / target)
-    cmd = ["python", "-u", str(script_path), target]
+    cmd = ["python", "-u", str(script_path), req.target_path]
 
     if req.restore_metadata:
         cmd.append("--restore-metadata")
@@ -5346,6 +5343,10 @@ def update_publisher_policy(req: PublisherPolicyUpdate) -> dict[str, Any]:
 
 @app.post("/api/runs")
 def start_run(req: RunRequest) -> dict[str, Any]:
+    try:
+        validate_audiobook_path(req.target_path)
+    except HTTPException:
+        raise HTTPException(status_code=400, detail=f"Bad path: {req.target_path!r} — must be an existing path under {AUDIOBOOKS_ROOT}")
     run_id = datetime_id()
     state = RunState(id=run_id)
     with runs_lock:
