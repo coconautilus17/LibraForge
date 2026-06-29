@@ -77,6 +77,26 @@ class ReportParserCategoryTests(unittest.TestCase):
         )
         self.assertEqual(state.stats["provider_breakdown"].get("goodreads"), 1)
 
+    def test_write_action_updates_report_item_and_category(self):
+        lines = [
+            'REPORT_ITEM_JSON: {"path": "/lib/Book/book.m4b", "status": "matched"}',
+            '[1/1] Writing: /lib/Book/book.m4b',
+            'WRITE_ACTION_JSON: {"path": "/lib/Book/book.m4b", "write_action": "smart_skipped", "write_note": "Smart-skip (tags already match)"}',
+        ]
+        state = run_lines(lines)
+        self.assertEqual(state.report_items[0]["write_action"], "smart_skipped")
+        self.assertEqual(
+            self._paths(state, "write:smart_skipped"), ["/lib/Book/book.m4b"]
+        )
+
+    def test_write_action_before_report_item_is_merged(self):
+        lines = [
+            'WRITE_ACTION_JSON: {"path": "/lib/Book/book.m4b", "write_action": "written"}',
+            'REPORT_ITEM_JSON: {"path": "/lib/Book/book.m4b", "status": "matched"}',
+        ]
+        state = run_lines(lines)
+        self.assertEqual(state.report_items[0]["write_action"], "written")
+
     def test_pass1_progress_counts_completed_out_of_order_results(self):
         lines = [
             "Found 3 supported files.",

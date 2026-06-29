@@ -383,6 +383,7 @@ MATCH_RE = re.compile(r"^[A-Z][A-Z ]*MATCH:")
 AMBIG_RESOLVED_RE = re.compile(r"\(chose .* on duration\)\s*$")
 FILL_ITEM_RE = re.compile(r"^\s+FILL:\s+(?:complete|filled\s+(.+))\s*$")
 SOURCE_RE = re.compile(r"^\s+SOURCE:\s+(\S+)\s*$")
+WRITE_ACTION_PREFIX = "WRITE_ACTION_JSON: "
 SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
@@ -1044,6 +1045,7 @@ class RunState:
     files_by_category: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     parser_state: dict[str, Any] = field(default_factory=dict)
     report_items: list[dict[str, Any]] = field(default_factory=list)
+    report_item_updates: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 runs: dict[str, RunState] = {}
@@ -1185,10 +1187,39 @@ def _fixer_percent(state: RunState) -> float:
     return round(scan + match + write, 2)
 
 
+def merge_report_item_update(state: RunState, update: dict[str, Any]) -> None:
+    path = str(update.get("path", "") or "")
+    if not path:
+        return
+    clean_update = {k: v for k, v in update.items() if k != "path"}
+    if not clean_update:
+        return
+    for item in state.report_items:
+        if item.get("path") == path:
+            item.update(clean_update)
+            return
+    state.report_item_updates.setdefault(path, {}).update(clean_update)
+
+
 def parse_line(state: RunState, line: str, threshold: float) -> None:
     if line.startswith("REPORT_ITEM_JSON: "):
         try:
-            state.report_items.append(json.loads(line[18:]))
+            item = json.loads(line[18:])
+            update = state.report_item_updates.get(item.get("path", ""))
+            if update:
+                item.update(update)
+            state.report_items.append(item)
+        except Exception:
+            pass
+        return
+    if line.startswith(WRITE_ACTION_PREFIX):
+        try:
+            update = json.loads(line[len(WRITE_ACTION_PREFIX):])
+            merge_report_item_update(state, update)
+            path = str(update.get("path", "") or state.current_file)
+            action = str(update.get("write_action", "") or "")
+            if path and action:
+                add_category(state, "write", action, path, str(update.get("write_note", "") or ""))
         except Exception:
             pass
         return

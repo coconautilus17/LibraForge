@@ -2822,12 +2822,14 @@ summary:focus-visible {
 .status-unmatched { background: var(--danger-soft);  color: var(--danger);  }
 .status-skipped   { background: var(--warning-soft); color: var(--warning); }
 .status-error     { background: var(--danger-soft);  color: var(--danger);  }
+.status-smart-skipped { background: rgb(0 160 100 / 15%); color: #00c878; }
 
 /* Inline badges */
 .match-score-badge,
 .match-mode-badge,
 .match-provider-badge,
-.match-manual-badge {
+.match-manual-badge,
+.match-write-badge {
   display: inline-block;
   padding: 2px 7px;
   border-radius: 99px;
@@ -2840,6 +2842,7 @@ summary:focus-visible {
 .match-mode-badge     { background: var(--warning-soft);          color: var(--warning); }
 .match-provider-badge { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
 .match-manual-badge   { background: rgb(0 160 100 / 15%);         color: #00c878;        }
+.match-write-badge    { background: var(--accent-soft);           color: var(--accent);  }
 
 /* Card list: 2-column grid */
 .mrep-controls {

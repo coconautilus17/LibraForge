@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Any
 
 import audible
 
@@ -173,6 +174,8 @@ RESPONSE_GROUPS = ",".join(
     ]
 )
 
+GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
+
 
 @dataclass
 class ItemResult:
@@ -198,7 +201,7 @@ class ItemResult:
     metadata_json_done: bool = False
     asin_conflict: bool = False
     error: str = ""
-    source_provider: str = ""  # abs-agg provider id when matched via GA/SBT endpoint
+    source_provider: str = ""  # provider id when matched via fallback/special source
     from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
 
 
@@ -1086,6 +1089,7 @@ def mutagen_write_mp4_tags(
     year = metadata.get("year", "")
     subtitle = metadata.get("subtitle", "")
     genre = metadata.get("genre", "")
+    isbn = metadata.get("isbn", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
     # Keep album equal to the book title, not the series.
@@ -1111,6 +1115,9 @@ def mutagen_write_mp4_tags(
     asin = metadata.get("asin", "")
     if asin:
         mp4_set_freeform(tags, "asin", asin)
+
+    if isbn:
+        mp4_set_freeform(tags, "isbn", isbn)
 
     publisher = metadata.get("publisher", "")
     if publisher:
@@ -1192,6 +1199,7 @@ def mutagen_write_mp3_tags(
     year = metadata.get("year", "")
     subtitle = metadata.get("subtitle", "")
     genre = metadata.get("genre", "")
+    isbn = metadata.get("isbn", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
     id3_set_text(tags, "TIT2", TIT2, title)
@@ -1217,6 +1225,9 @@ def mutagen_write_mp3_tags(
     asin = metadata.get("asin", "")
     if asin:
         id3_set_txxx(tags, "asin", asin)
+
+    if isbn:
+        id3_set_txxx(tags, "isbn", isbn)
 
     publisher = metadata.get("publisher", "")
     if publisher and TPUB is not None:
@@ -1765,6 +1776,7 @@ def build_m4b_tool_metadata_payload(
             "year": metadata.get("year", ""),
             "summary": metadata.get("summary", ""),
             "genre": metadata.get("genre", ""),
+            "isbn": metadata.get("isbn", ""),
             "cover_url": metadata.get("cover_url", ""),
         },
         "audible": {
@@ -1866,7 +1878,7 @@ def write_audiobookshelf_metadata_json(
         "publishedYear": str(metadata.get("year", "") or ""),
         "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
-        "isbn": None,
+        "isbn": metadata.get("isbn") or None,
         "asin": metadata.get("asin", "") or None,
         "language": None,
         "explicit": False,
@@ -4909,6 +4921,7 @@ def abs_search(title: str, author: str, provider: str, abs_url: str, abs_api_key
             "release_date": str(match.get("publishedYear", "") or ""),
             "_abs_provider": provider,
             "_abs_isbn": match.get("isbn", "") or "",
+            "_abs_genres": clean_provider_genres(match.get("genres") or []),
         })
     return products
 
@@ -4977,8 +4990,29 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
         "runtime_length_min": None,  # these sources do not return runtime
         "release_date": str(match.get("publishedYear", "") or ""),
         "_abs_provider": provider,
-        "_abs_isbn": match.get("isbn", "") or match.get("bookId", "") or "",
+        "_abs_isbn": match.get("isbn", "") or "",
+        "_abs_genres": clean_provider_genres(match.get("genres") or []),
     }
+
+
+def clean_provider_genres(genres: Any) -> list[str]:
+    """Return real provider genres, excluding generic format labels."""
+    if isinstance(genres, str):
+        raw = [genres]
+    elif isinstance(genres, list):
+        raw = genres
+    else:
+        raw = []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        text = sanitize_tag(str(value or "")).strip()
+        key = text.lower()
+        if not text or key in GENRE_BLOCKLIST or key in seen:
+            continue
+        cleaned.append(text)
+        seen.add(key)
+    return cleaned
 
 
 # abs-tract scrapes Goodreads/Amazon live. Under sustained mixed load the
@@ -5842,12 +5876,27 @@ def search_item(
             current_tags = (clues or {}).get("_raw_tags") or {}
             write_mode = getattr(args, "write_mode", "smart")
             effective_metadata, skip_write, write_note, _filled = decide_write(
-                current_tags, metadata, metadata.get("edit_mode", "none") or "none", write_mode
+                current_tags,
+                metadata,
+                metadata.get("edit_mode", "none") or "none",
+                write_mode,
+                result.source_provider,
             )
             alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
             meta_target = get_audiobookshelf_metadata_path(file_path, clues, alone)
             if skip_write and meta_target.exists():
                 log.append(f"  {write_note} (metadata.json unchanged)")
+                log.append(
+                    "WRITE_ACTION_JSON: "
+                    + json.dumps({
+                        "path": str(file_path),
+                        "write_action": "smart_skipped" if write_mode == "smart" else "no_op",
+                        "write_note": write_note,
+                        "write_mode": write_mode,
+                        "metadata_json_pending": False,
+                        "tag_write_pending": False,
+                    })
+                )
             else:
                 abs_path = write_audiobookshelf_metadata_json(
                     file_path, effective_metadata, clues, alone,
@@ -5855,6 +5904,17 @@ def search_item(
                 )
                 suffix = f" [{write_note}]" if write_note else ""
                 log.append(f"  APPLIED ({mode}, metadata_json={abs_path}){suffix}")
+                log.append(
+                    "WRITE_ACTION_JSON: "
+                    + json.dumps({
+                        "path": str(file_path),
+                        "write_action": "written",
+                        "write_note": write_note,
+                        "write_mode": write_mode,
+                        "metadata_json_pending": True,
+                        "tag_write_pending": False,
+                    })
+                )
             write_marker(
                 source=file_path,
                 metadata=effective_metadata,
@@ -6845,6 +6905,9 @@ def metadata_from_product(
         year_to_write = ""
         summary_to_write = ""
 
+    raw_genres = product.get("_abs_genres") or []
+    genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
+
     return {
         "asin": product.get("asin", ""),
         "title": title,
@@ -6856,6 +6919,8 @@ def metadata_from_product(
         "year": year_to_write,
         "summary": summary_to_write,
         "publisher": sanitize_tag(clues.get("publisher", "")),
+        "genre": genre_text,
+        "isbn": product.get("_abs_isbn", "") or "",
         "album": album,
         "audible_title": audible_title,
         "audible_sequence": sequence,
@@ -6866,7 +6931,6 @@ def metadata_from_product(
         "duration": duration_result,
         "edit_mode": edit_mode,
         "recommended_edit_mode": recommended_edit_mode,
-        "genre": "",
     }
 
 
@@ -6919,6 +6983,9 @@ def build_metadata_args(metadata: dict) -> list[str]:
     if metadata.get("write_summary") and metadata.get("summary"):
         tag_map["comment"] = metadata["summary"]
 
+    if metadata.get("isbn"):
+        tag_map["isbn"] = metadata["isbn"]
+
     args = []
     for key, value in tag_map.items():
         value = sanitize_tag(value)
@@ -6946,6 +7013,9 @@ def final_metadata_preview(metadata: dict) -> dict:
 
     if metadata.get("sequence"):
         preview["track"] = metadata["sequence"]
+
+    if metadata.get("isbn"):
+        preview["isbn"] = metadata["isbn"]
 
     return {key: value for key, value in preview.items() if value}
 
@@ -7086,7 +7156,10 @@ def mp3_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
 
 
 def compare_tags_for_write(
-    current_tags: dict, metadata: dict, edit_mode: str
+    current_tags: dict,
+    metadata: dict,
+    edit_mode: str,
+    source_provider: str = "",
 ) -> tuple[bool, list[str]]:
     """Compare current embedded tags to planned write values.
 
@@ -7100,19 +7173,32 @@ def compare_tags_for_write(
                 return v
         return ""
 
+    source_provider = (source_provider or metadata.get("_abs_provider") or "").lower()
     checks = [
         ("title",  cur(["title"]),                              metadata.get("title", "")),
         ("author", cur(["artist", "album_artist"]),             metadata.get("author", "")),
-        ("series", cur(["grouping", "mvnm"]),                   metadata.get("series", "")),
-        ("genre",  cur(["genre"]),                              metadata.get("genre", "")),
-        ("asin",   cur(["asin"]).upper(),                       (metadata.get("asin") or "").upper()),
     ]
-    if edit_mode == "full":
+    if source_provider == "goodreads":
+        # Goodreads does not reliably supply audiobook-only fields such as ASIN,
+        # narrator, year, genre, or duration. Treat blank Goodreads fields as
+        # "not asserted" for smart-skip, and only require series/sequence when
+        # the match actually provided them.
+        if str(metadata.get("series", "") or "").strip():
+            checks.append(("series", cur(["grouping", "mvnm"]), metadata.get("series", "")))
+        if edit_mode == "full" and str(metadata.get("sequence", "") or "").strip():
+            checks.append(("sequence", cur(["track", "mvin"]), metadata.get("sequence", "")))
+    else:
         checks += [
-            ("sequence", cur(["track", "mvin"]),                metadata.get("sequence", "")),
-            ("narrator", cur(["composer"]),                      metadata.get("narrator", "")),
-            ("year",     cur(["date", "year"]),                  metadata.get("year", "")),
+            ("series", cur(["grouping", "mvnm"]),                   metadata.get("series", "")),
+            ("genre",  cur(["genre"]),                              metadata.get("genre", "")),
+            ("asin",   cur(["asin"]).upper(),                       (metadata.get("asin") or "").upper()),
         ]
+        if edit_mode == "full":
+            checks += [
+                ("sequence", cur(["track", "mvin"]),                metadata.get("sequence", "")),
+                ("narrator", cur(["composer"]),                      metadata.get("narrator", "")),
+                ("year",     cur(["date", "year"]),                  metadata.get("year", "")),
+            ]
 
     changed = [
         field for field, current, planned in checks
@@ -7152,7 +7238,11 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
 
 
 def decide_write(
-    current_tags: dict, metadata: dict, edit_mode: str, write_mode: str
+    current_tags: dict,
+    metadata: dict,
+    edit_mode: str,
+    write_mode: str,
+    source_provider: str = "",
 ) -> tuple[dict, bool, str, list[str]]:
     """Resolve the effective metadata and whether the in-file tag write is a NO-OP.
 
@@ -7168,7 +7258,9 @@ def decide_write(
     filled_fields: list[str] = []
 
     if write_mode == "smart":
-        all_match, _changed = compare_tags_for_write(current_tags, metadata, edit_mode)
+        all_match, _changed = compare_tags_for_write(
+            current_tags, metadata, edit_mode, source_provider
+        )
         if all_match:
             skip_write = True
             write_note = "Smart-skip (tags already match)"
@@ -7266,7 +7358,13 @@ def collect_audio_files(root: Path) -> list[Path]:
 
 def _build_report_item(result: "ItemResult") -> dict:
     clues = result.clues or {}
-    meta = result.metadata or {}
+    # For manually applied books use the stored marker data so the report
+    # reflects what was actually written, not a fresh (potentially different) match.
+    if result.was_manually_applied:
+        stored = load_marker(result.file_path)
+        meta = metadata_from_marker(stored) if stored else (result.metadata or {})
+    else:
+        meta = result.metadata or {}
     duration = meta.get("duration") or {}
     item: dict = {
         "path": str(result.file_path),
@@ -7298,6 +7396,7 @@ def _build_report_item(result: "ItemResult") -> dict:
             "sequence": meta.get("sequence") or "",
             "year": meta.get("year") or "",
             "asin": meta.get("asin") or "",
+            "isbn": meta.get("isbn") or "",
             "genre": meta.get("genre") or "",
             "cover_url": meta.get("cover_url") or "",
             "duration_minutes": meta.get("audible_duration_minutes"),
@@ -8562,6 +8661,14 @@ def main():
             if result.status == "skipped":
                 w_skipped = 1
                 out.append(f"  Write-skip: {result.skip_reason}")
+                out.append(
+                    "WRITE_ACTION_JSON: "
+                    + json.dumps({
+                        "path": str(file_path),
+                        "write_action": "write_skipped",
+                        "write_note": result.skip_reason,
+                    })
+                )
                 out.append("")
                 if result.add_to_manual_review:
                     reason = result.skip_reason
@@ -8584,6 +8691,14 @@ def main():
             elif result.status == "failed":
                 w_failed = 1
                 out.append(f"  Write-error: {result.error}")
+                out.append(
+                    "WRITE_ACTION_JSON: "
+                    + json.dumps({
+                        "path": str(file_path),
+                        "write_action": "write_error",
+                        "write_note": result.error,
+                    })
+                )
                 out.append("")
 
             else:
@@ -8640,7 +8755,11 @@ def main():
 
                     if not is_sidecar:
                         effective_metadata, skip_write, write_note, filled_fields = decide_write(
-                            current_tags, metadata, w_edit_mode, write_mode
+                            current_tags,
+                            metadata,
+                            w_edit_mode,
+                            write_mode,
+                            result.source_provider,
                         )
                         if write_mode == "fill-missing":
                             if not filled_fields:
@@ -8675,6 +8794,21 @@ def main():
                             out.append(f"  PLAN: would write {' + '.join(plan_parts)} ({_write_kind}){_sfx}{_rec}")
                         else:
                             out.append(f"  PLAN: {write_note or 'NO-OP (nothing to write)'}{_rec}")
+                        out.append(
+                            "WRITE_ACTION_JSON: "
+                            + json.dumps({
+                                "path": str(file_path),
+                                "write_action": (
+                                    "smart_skipped"
+                                    if write_mode == "smart" and skip_write
+                                    else "no_op" if skip_write else "would_write"
+                                ),
+                                "write_note": write_note,
+                                "write_mode": write_mode,
+                                "metadata_json_pending": metadata_json_pending,
+                                "tag_write_pending": not skip_write and not only_json,
+                            })
+                        )
                         out.append("")
                     else:
                         applied_parts: list[str] = []
@@ -8746,6 +8880,21 @@ def main():
                             out.append(f"  APPLIED ({_write_kind}, {', '.join(applied_parts)}){_sfx}{_rec}")
                         else:
                             out.append(f"  {write_note or 'NO-OP'}{_rec}")
+                        out.append(
+                            "WRITE_ACTION_JSON: "
+                            + json.dumps({
+                                "path": str(file_path),
+                                "write_action": (
+                                    "smart_skipped"
+                                    if write_mode == "smart" and skip_write
+                                    else "no_op" if skip_write else "written"
+                                ),
+                                "write_note": write_note,
+                                "write_mode": write_mode,
+                                "metadata_json_pending": metadata_json_pending,
+                                "tag_write_pending": not skip_write and not only_json,
+                            })
+                        )
                         out.append("")
 
                 # Emit SOURCE: now that the book is confirmed written (or planned).
