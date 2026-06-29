@@ -2805,176 +2805,125 @@ summary:focus-visible {
   vertical-align: middle;
 }
 
-.match-report-card {
+/* Status badges */
+.match-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-matched   { background: var(--success-soft); color: var(--success); }
+.status-unmatched { background: var(--danger-soft);  color: var(--danger);  }
+.status-skipped   { background: var(--warning-soft); color: var(--warning); }
+.status-error     { background: var(--danger-soft);  color: var(--danger);  }
+
+/* Inline badges */
+.match-score-badge,
+.match-mode-badge,
+.match-provider-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.match-score-badge    { background: var(--accent-soft);           color: var(--accent);  }
+.match-mode-badge     { background: var(--warning-soft);          color: var(--warning); }
+.match-provider-badge { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
+
+/* Card list: 2-column grid */
+#matchReportList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: 800px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 10px;
+}
+
+/* Individual card */
+.mrep-card {
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface-raised);
+  background: var(--surface-soft);
   overflow: hidden;
 }
 
-.match-report-card-header {
+/* Summary / collapsed header */
+.mrep-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
-.match-status-badge {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 99px;
-  font-size: 0.74rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
+.mrep-head::-webkit-details-marker { display: none; }
 
-.status-matched {
-  background: var(--success-soft);
-  color: var(--success);
-}
-
-.status-unmatched {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.match-score-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.match-mode-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  background: var(--warning-soft);
-  color: var(--warning);
-}
-
-.match-provider-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  background: rgb(120 80 200 / 15%);
-  color: #b09eff;
-}
-
-.match-load-btn {
-  font-size: 0.78rem !important;
-  padding: 3px 10px !important;
-}
-
-.match-expand-btn {
-  font-size: 0.78rem !important;
-  padding: 3px 10px !important;
-}
-
-.match-report-card-body {
-  padding: 12px 14px 14px;
-  border-top: 1px solid var(--border);
-}
-
-.match-report-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.match-report-col {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.match-col-label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.match-cover {
-  width: 80px;
-  height: 80px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.match-cover-placeholder {
-  width: 80px;
-  height: 80px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-
-.match-no-match {
-  font-size: 0.85rem;
-  color: var(--danger);
-  font-style: italic;
-  margin-top: 8px;
-}
-
-.match-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.match-field-row {
-  display: flex;
-  gap: 6px;
-  font-size: 0.82rem;
-  line-height: 1.4;
-}
-
-.match-field-label {
-  color: var(--muted);
-  min-width: 70px;
-  flex-shrink: 0;
-  font-weight: 600;
-}
-
-.match-field-value {
-  color: var(--text-soft);
-  word-break: break-word;
-}
-
-.status-skipped {
-  background: var(--warning-soft);
-  color: var(--warning);
-}
-
-.status-error {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.match-card-title {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--text);
+.mrep-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mrep-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Expanded body */
+.mrep-body {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Shrink covers to fit within the half-width cards */
+.mrep-covers {
+  grid-template-columns: repeat(2, minmax(70px, 110px));
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+
+.mrep-covers .cover-thumb {
+  max-width: 110px;
+}
+
+/* Field comparison table */
+.mrep-compare {
+  margin: 0 0 10px;
+}
+
+.mrep-compare thead th {
+  font-size: 0.72rem;
+}
+
+.mrep-compare td,
+.mrep-compare th {
+  font-size: 0.8rem;
+  padding: 5px 8px;
+}
+
+.mrep-load-btn {
+  font-size: 0.78rem !important;
+  padding: 4px 10px !important;
+  margin-top: 2px;
 }
