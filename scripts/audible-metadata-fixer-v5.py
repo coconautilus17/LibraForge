@@ -1951,7 +1951,8 @@ UNAMBIGUOUS_TECHNICAL_LABEL_RE = re.compile(
     r"mpeg[\s._-]*4[\s._-]*aac|"
     r"e[\s._-]*ac[\s._-]*3|"
     r"ac[\s._-]*3|"
-    r"dolby[\s._-]*digital(?:[\s._-]*plus)?"
+    r"dolby[\s._-]*digital(?:[\s._-]*plus)?|"
+    r"audio[\s._-]*immersion(?:[\s._-]*tunnel)?"
     r")\b",
     re.IGNORECASE,
 )
@@ -4453,6 +4454,12 @@ def extract_title_identity_number(value: str) -> str:
         if re.fullmatch(r"(?:19|20)\d{2}", candidate):
             continue
 
+        # Reject chapter-level numbers like "Chapter 10" or "Episode 5".
+        # These appear in individual chapter filenames and are not book sequence numbers.
+        prefix = cleaned[: match.start(1)]
+        if re.search(r"\b(?:chapter|ch|episode|ep)\b\.?\s*$", prefix, re.IGNORECASE):
+            continue
+
         return candidate
 
     return ""
@@ -5592,12 +5599,19 @@ def search_item(
                 else:
                     log.append("  No Audible match -> trying Goodreads (abs-tract)")
                 gr_queries = goodreads_title_query_variants(clues.get("title", ""))
+                _gr_series = clues.get("series", "")
+                _gr_number = clues.get("book_number", "")
                 if (
                     is_generic_series_number_title(clues)
-                    and clean_sequence(clues.get("book_number", "")) == "1"
-                    and clues.get("series", "")
+                    and clean_sequence(_gr_number) == "1"
+                    and _gr_series
                 ):
-                    gr_queries.extend(goodreads_title_query_variants(clues.get("series", "")))
+                    gr_queries.extend(goodreads_title_query_variants(_gr_series))
+                # When the title looks like a subtitle (different from series+N),
+                # also try "Series N" directly - often better-indexed on Goodreads.
+                if _gr_series and _gr_number and not is_generic_series_number_title(clues):
+                    _sn_query = f"{_gr_series} {_gr_number}"
+                    gr_queries.extend(goodreads_title_query_variants(_sn_query))
                 gr_queries = list(dict.fromkeys(q for q in gr_queries if q))
 
                 for gr_query in gr_queries:
@@ -6013,6 +6027,12 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
         "na",
     }
     if local_author in generic or product_author in generic:
+        return False
+
+    # "Audio Versee", "Audio Version", etc. are garbled production-format labels
+    # that sometimes end up in the embedded author tag. Treat them as unknown.
+    _format_tokens = {"audio", "audiobook", "unabridged", "narrated"}
+    if set(local_author.split()) & _format_tokens:
         return False
 
     # Same author allowing for formatting differences
