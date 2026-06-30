@@ -2991,6 +2991,17 @@ summary:focus-visible {
 .suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
 .suspect-sev-badge.sev-info   { background: var(--surface-raised); color: var(--muted); }
 
+.suspect-trigger-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 99px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
 #suspectReportList {
   display: grid;
   grid-template-columns: 1fr 1fr;

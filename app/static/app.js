@@ -1138,6 +1138,12 @@ const SUSPECT_REASON_FIELDS = {
   visible_number_conflict: 'Sequence',
   provider_missing_sequence: 'Sequence',
   duration_mismatch: 'Duration',
+  low_score: 'Score',
+  unsafe_match: 'Mode',
+  series_only_mode: 'Mode',
+  duplicate_asin: 'Duplicate',
+  duplicate_local_identity: 'Duplicate',
+  unknown_title: 'Title',
 };
 
 function buildSuspectCard(item) {
@@ -1150,6 +1156,8 @@ function buildSuspectCard(item) {
   const flaggedFields = new Set(
     reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean)
   );
+  const triggerLabels = [...new Set(reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean))];
+  const triggerBadgesHtml = triggerLabels.map(l => `<span class="suspect-trigger-badge">${escapeHtml(l)}</span>`).join('');
 
   const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
   const bookName = local.title || pathName;
@@ -1170,6 +1178,7 @@ function buildSuspectCard(item) {
     ${writeAction ? `<span class="match-write-badge">${escapeHtml(writeAction)}</span>` : ''}
     <span class="mrep-title">${escapeHtml(bookName)}</span>
     <div class="mrep-badges">
+      ${triggerBadgesHtml}
       ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
       ${providerLabel ? `<span class="match-provider-badge">${escapeHtml(providerLabel)}</span>` : ''}
     </div>
