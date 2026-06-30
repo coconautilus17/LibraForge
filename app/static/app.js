@@ -209,6 +209,7 @@ function render(state) {
   renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
+  currentReportId = state.id || null;
   renderMatchReport(state.report_items || []);
 }
 
@@ -1052,6 +1053,7 @@ async function loadLastReport() {
     if (!res.ok) { alert((await res.json()).detail || 'No report found'); return; }
     const report = await res.json();
     latestState = report;
+    currentReportId = report.id || null;
     renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
@@ -1067,6 +1069,7 @@ async function loadLastReport() {
 // ── Match Report Widget ──────────────────────────────────────────────────────
 
 let matchReportItems = [];
+let currentReportId = null;
 
 function renderMatchReport(items) {
   matchReportItems = items || [];
@@ -1077,12 +1080,113 @@ function renderMatchReport(items) {
     count.style.display = 'none';
     $('matchReportWidget').hidden = true;
     $('matchReportBtn').textContent = 'View full match report';
+    $('suspectReportBtn').hidden = true;
     return;
   }
   count.textContent = `${matchReportItems.length} book${matchReportItems.length !== 1 ? 's' : ''}`;
   count.style.display = '';
   buildMatchReportCards();
+  if (currentReportId) probeSuspectReport(currentReportId);
 }
+
+async function probeSuspectReport(reportId) {
+  const btn = $('suspectReportBtn');
+  btn.hidden = false;
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/suspect-review`);
+    if (res.ok) {
+      const data = await res.json();
+      renderSuspectReport(data);
+    } else {
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+    }
+  } catch {
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+async function generateSuspectReport() {
+  const btn = $('suspectReportBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(currentReportId)}/suspect-review`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to generate suspicion report');
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+      return;
+    }
+    const data = await res.json();
+    renderSuspectReport(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+function renderSuspectReport(data) {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  const list = $('suspectReportList');
+  const suspects = data.suspects || [];
+  const summary = data.summary || {};
+
+  widget.hidden = false;
+  btn.disabled = false;
+  btn.textContent = 'Hide Suspicion Report';
+
+  list.innerHTML = '';
+
+  if (!suspects.length) {
+    list.innerHTML = '<p class="note" style="margin-top:10px">No suspects found -- all would-write items look clean.</p>';
+    return;
+  }
+
+  const severityColor = { high: '#e74c3c', medium: '#e67e22', low: '#f1c40f', info: '#95a5a6' };
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:10px 0 6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;';
+  header.innerHTML = `
+    <span style="font-weight:600">${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
+    ${Object.entries(summary.severity_counts || {}).reverse().map(([sev, n]) =>
+      `<span class="badge" style="background:${severityColor[sev] || '#95a5a6'}">${sev}: ${n}</span>`
+    ).join('')}
+  `;
+  list.appendChild(header);
+
+  for (const item of suspects) {
+    const sev = item.severity || 'info';
+    const card = document.createElement('div');
+    card.style.cssText = `border-left:3px solid ${severityColor[sev] || '#95a5a6'};padding:8px 10px;margin:6px 0;background:var(--bg2,#f8f8f8);border-radius:3px;`;
+
+    const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
+    const providerTag = item.provider ? ` <span style="opacity:.7;font-size:.85em">(${item.provider})</span>` : '';
+    const writeTag = item.write_action ? ` <span class="badge" style="font-size:.75em;background:#555">${item.write_action}</span>` : '';
+    const scoreTag = (item.score != null) ? ` <span style="opacity:.6;font-size:.82em">score ${(+item.score).toFixed(2)}</span>` : '';
+
+    const reasons = (item.reasons || []).map(r =>
+      `<li style="margin:2px 0"><strong>${escapeHtml(r.code)}</strong>: ${escapeHtml(r.message)}</li>`
+    ).join('');
+
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">
+        <span class="badge" style="background:${severityColor[sev]}">${sev}</span>
+        ${writeTag}
+        <span style="font-weight:500;word-break:break-all">${escapeHtml(pathName)}</span>
+        ${providerTag}${scoreTag}
+      </div>
+      <div style="font-size:.8em;opacity:.7;word-break:break-all;margin-bottom:4px">${escapeHtml(item.path || '')}</div>
+      <ul style="margin:0;padding-left:18px;font-size:.88em">${reasons}</ul>
+      <div style="font-size:.8em;margin-top:4px;opacity:.7">recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+    `;
+    list.appendChild(card);
+  }
+}
+
 
 function buildMatchReportCards() {
   const list = $('matchReportList');
@@ -1260,6 +1364,18 @@ $('matchReportBtn').addEventListener('click', () => {
 });
 $('matchReportSearch').addEventListener('input', buildMatchReportCards);
 $('matchReportFilter').addEventListener('change', buildMatchReportCards);
+
+$('suspectReportBtn').addEventListener('click', () => {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  // If report is already rendered (list has children), just toggle.
+  if ($('suspectReportList').children.length) {
+    widget.hidden = !widget.hidden;
+    btn.textContent = widget.hidden ? 'View Suspicion Report' : 'Hide Suspicion Report';
+  } else {
+    generateSuspectReport();
+  }
+});
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

@@ -6,6 +6,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -5717,3 +5718,41 @@ def get_latest_report() -> dict[str, Any]:
         if "python" in cmd0 or "fixer" in cmd0:
             return report_for_api(report)
     raise HTTPException(status_code=404, detail="No fixer reports found")
+
+
+def _suspect_review_path(report_id: str) -> Path:
+    return safe_child(REPORTS_DIR, f"{report_id}.report.suspect-review.json")
+
+
+@app.get("/api/reports/{report_id}/suspect-review")
+def get_suspect_review(report_id: str) -> dict[str, Any]:
+    path = _suspect_review_path(report_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Suspect review not yet generated")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/reports/{report_id}/suspect-review")
+def generate_suspect_review(report_id: str) -> dict[str, Any]:
+    report_path = safe_child(REPORTS_DIR, f"{report_id}.report.json")
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Source report not found")
+    review_script = safe_child(SCRIPTS_DIR, "review-libraforge-report.py")
+    if not review_script.exists():
+        raise HTTPException(status_code=500, detail="review-libraforge-report.py not found in scripts dir")
+    out_path = _suspect_review_path(report_id)
+    result = subprocess.run(
+        [sys.executable, str(review_script), str(report_path), "-o", str(out_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=result.stderr or result.stdout or "Script failed")
+    try:
+        return json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
