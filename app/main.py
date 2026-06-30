@@ -2308,11 +2308,21 @@ def inspect_manual_review_target(
             detail="Path must point to a single book file or grouped book folder",
         )
     source_path = processing_items[0]
+    # For large multi-part groups (e.g. 600-chapter .ogg books), build_search_context
+    # would ffprobe every chapter file to gather tags. For manual review we only need
+    # one representative file's tags -- title/author/series are the same in all parts.
+    # Strip the group from group_map when it has more than a few files so
+    # build_search_context falls through to the single-file path.
+    group_key = source_path.parent
+    if len(group_map.get(group_key) or []) > 4:
+        effective_group_map: dict = {}
+    else:
+        effective_group_map = group_map
     # Use original pre-apply tags (format_tags from backup) so the manual
     # review form reflects what the file looked like before the fixer wrote to
     # it. Falls back to probing the live file when no backup exists.
     queries, clues, _ = fixer_module.build_search_context(
-        source_path, group_map, use_backup_tags=True
+        source_path, effective_group_map, use_backup_tags=True
     )
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
 
