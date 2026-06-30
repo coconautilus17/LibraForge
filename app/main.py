@@ -413,6 +413,10 @@ def is_organizer_script(script_name: str) -> bool:
     return script_name.startswith("organize-audiobooks") and script_name.endswith(".py")
 
 
+def is_fixer_script(script_name: str) -> bool:
+    return script_name.startswith("audible-metadata-fixer") and script_name.endswith(".py")
+
+
 def discover_scripts() -> tuple[list[str], list[str]]:
     scripts = sorted(
         path.name
@@ -420,7 +424,7 @@ def discover_scripts() -> tuple[list[str], list[str]]:
         if path.is_file() and path.suffix == ".py"
     )
     organizer_scripts = [name for name in scripts if is_organizer_script(name)]
-    fixer_scripts = [name for name in scripts if not is_organizer_script(name)]
+    fixer_scripts = [name for name in scripts if is_fixer_script(name)]
     return fixer_scripts, organizer_scripts
 
 
