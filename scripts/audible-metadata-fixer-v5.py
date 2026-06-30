@@ -35,6 +35,8 @@ try:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject
+    from app.debug_trace import ALTER, CHOOSE, SCORE
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -45,6 +47,8 @@ except ModuleNotFoundError:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject
+    from app.debug_trace import ALTER, CHOOSE, SCORE
 
 try:
     from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
@@ -1960,6 +1964,7 @@ def refresh_multipart_sidecar_audio_profile(
     return lf_path
 
 
+@trace(ALTER, capture=["value"])
 def clean_text(value: str) -> str:
     if not value:
         return ""
@@ -2013,6 +2018,7 @@ def is_technical_label_block(value: str) -> bool:
     return not clean_text(remainder)
 
 
+@trace(ALTER, capture=["value"])
 def sanitize_technical_labels(value: str) -> str:
     """Remove codec/release noise without deleting ambiguous title words."""
     value = clean_text(value)
@@ -2046,6 +2052,7 @@ def sanitize_technical_labels(value: str) -> str:
     return value.strip(" -_.:,")
 
 
+@trace(ALTER, capture=["value"])
 def sanitize_book_title(value: str) -> str:
     """Remove technical and generic marketing text from a book title."""
     value = sanitize_technical_labels(value)
@@ -2066,6 +2073,7 @@ def sanitize_book_title(value: str) -> str:
     return value.strip(" -_.:,")
 
 
+@trace(ALTER, capture=["value"])
 def normalize_for_match(value: str) -> str:
     value = sanitize_book_title(value).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
@@ -2079,6 +2087,7 @@ def normalize_for_match(value: str) -> str:
     return value.strip()
 
 
+@trace(ALTER, capture=["value"])
 def sanitize_tag(value: str) -> str:
     return sanitize_technical_labels(value)
 
@@ -2096,6 +2105,7 @@ def remove_parenthetical(value: str) -> str:
     return clean_text(value)
 
 
+@trace(ALTER, capture=["value"])
 def clean_author_value(value: str) -> str:
     """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'."""
     return remove_parenthetical(value)
@@ -2142,6 +2152,7 @@ def _initials_dedup_key(name: str) -> str:
     return re.sub(r"\s+", " ", expanded.replace(".", "")).strip().lower()
 
 
+@trace(ALTER, capture=["values"])
 def canonicalize_author_credits(values: list[str] | str) -> str:
     if isinstance(values, str):
         values = [part.strip() for part in values.split(",")]
@@ -2279,6 +2290,7 @@ def extract_series_from_trailing_segment(value: str) -> str:
     return clean_series_value(value)
 
 
+@trace(ALTER, capture=["value"])
 def clean_series_value(value: str) -> str:
     """Prefer the series-looking value inside parentheses when metadata is polluted.
 
@@ -2596,6 +2608,7 @@ def first_existing_tag(tags: dict, keys: list[str]) -> str:
     return ""
 
 
+@trace(ALTER, capture=["value"])
 def roman_to_int(value: str) -> str:
     roman_map = {
         "I": 1,
@@ -2628,6 +2641,7 @@ def roman_to_int(value: str) -> str:
     return ""
 
 
+@trace(ALTER, capture=["value"])
 def normalize_book_number(value: str) -> str:
     value = str(value or "").strip()
 
@@ -2643,6 +2657,7 @@ def normalize_book_number(value: str) -> str:
         return value
 
 
+@trace(ALTER, capture=["value"])
 def extract_book_number_from_text(value: str) -> str:
     """Extract a strong book number from title/path text.
 
@@ -2684,6 +2699,7 @@ def extract_book_number_from_text(value: str) -> str:
     return ""
 
 
+@trace(ALTER, capture=["value"])
 def extract_folder_book_number(value: str) -> str:
     number = extract_book_number_from_text(value)
     if number:
@@ -3737,6 +3753,7 @@ SEARCH_TITLE_PREFIX_NOISE = [
 ]
 
 
+@trace(ALTER, capture=["text"])
 def strip_publisher_search_noise(text: str) -> str:
     """Remove known publisher/imprint/source tokens from a search string.
 
@@ -3756,10 +3773,11 @@ _TRAILING_BY_AUTHOR_RE = re.compile(
 )
 
 
+@trace(ALTER, capture=["text", "author"])
 def strip_title_search_noise(text: str, author: str = "") -> str:
     """Strip search-only title noise: a leading "Listening to" and a trailing
     "by <Author Name>" baked into the title tag. Used for queries and
-    title-evidence scoring only — never for written tags.
+    title-evidence scoring only -- never for written tags.
 
     The trailing "by <Name>" is only removed when it is clearly filename
     pollution: it is followed by a book/part number (e.g. "by Douglas Adams 1")
@@ -3793,6 +3811,7 @@ def strip_title_search_noise(text: str, author: str = "") -> str:
     return re.sub(r"\s+", " ", result).strip()
 
 
+@trace(ALTER, capture=["text"])
 def extract_author_from_title(text: str) -> str:
     """Recover an author name baked into a title as "... by <Name> <number>".
 
@@ -3922,6 +3941,7 @@ def goodreads_title_query_variants(title: str) -> list[str]:
     return unique
 
 
+@trace(ALTER, capture=["value"])
 def normalize_book_label_for_match(value: str) -> str:
     value = clean_text(value)
     value = re.sub(
@@ -3934,6 +3954,7 @@ def normalize_book_label_for_match(value: str) -> str:
     return normalize_for_match(re.sub(r"\s+", " ", value).strip())
 
 
+@trace(ALTER, capture=["value"])
 def strip_leading_sequence_from_title(value: str) -> str:
     """Remove an ordering prefix while preserving the separately stored number."""
     value = clean_text(value)
@@ -6407,6 +6428,7 @@ def is_single_numeric_sequence(value: str) -> bool:
     return bool(re.fullmatch(r"\d+(?:\.0)?", value))
 
 
+@trace(ALTER, capture=["value"])
 def clean_sequence(value: str) -> str:
     value = str(value or "").strip()
 
