@@ -35,7 +35,7 @@ try:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
-    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,7 +47,7 @@ except ModuleNotFoundError:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
-    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
 
 try:
@@ -5336,6 +5336,7 @@ def search_item(
         log_lines=log,
     )
 
+    trace_set_subject(display_path)
     try:
         existing_marker = load_marker(file_path)
         if existing_marker:
@@ -5983,6 +5984,8 @@ def search_item(
         result.status = "failed"
         result.error = str(error)
         return result
+    finally:
+        trace_set_subject(None)
 
 
 @trace(SCORE, capture=[])
@@ -8502,7 +8505,37 @@ def main():
         help="Milliseconds to sleep after each Audible API call per worker.",
     )
 
+    parser.add_argument(
+        "--debug-trace",
+        action="store_true",
+        dest="debug_trace",
+        help="Enable function-level debug tracing (output to stderr or --debug-trace-file).",
+    )
+
+    parser.add_argument(
+        "--debug-trace-file",
+        default=None,
+        dest="debug_trace_file",
+        metavar="PATH",
+        help="Write debug trace output to this file instead of stderr.",
+    )
+
+    parser.add_argument(
+        "--debug-trace-categories",
+        default=None,
+        dest="debug_trace_categories",
+        metavar="CATS",
+        help="Comma-separated trace categories to enable (choose,alter,score). Default: all.",
+    )
+
     args = parser.parse_args()
+
+    if args.debug_trace:
+        cats = None
+        if args.debug_trace_categories:
+            cats = [c.strip() for c in args.debug_trace_categories.split(",") if c.strip()]
+        from app.debug_trace import configure as trace_configure
+        trace_configure(enabled=True, file_path=args.debug_trace_file, categories=cats)
 
     if args.workers is None:
         args.workers = 5 if args.metadata_json_only else 1
