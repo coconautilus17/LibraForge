@@ -2540,6 +2540,11 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     On a clean run (or for files not yet cached), ffprobe calls are batched and
     run concurrently with `workers` threads. Results are written back to disk so
     the next run is instant.
+
+    All multi-part audio files are written to the cache regardless of type.
+    chapter_count is populated only for is_chapter_metadata_candidate files
+    (m4a/m4b/mp4); other types (ogg/mp3/opus) are recorded with chapter_count=None
+    so the cache covers every multi-file book for m4b merging and format support.
     """
     grouped: dict[Path, list[Path]] = {}
     for fp in files:
@@ -2552,58 +2557,60 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     for parent, group in sorted(grouped.items()):
         if len(group) <= 1:
             continue
-        candidates = [fp for fp in group if is_chapter_metadata_candidate(fp)]
-        if not candidates:
-            continue
 
         persistent = _load_chapter_count_persistent(parent)
         folder_persistent[parent] = persistent
 
-        for fp in candidates:
+        for fp in group:
             key = str(fp)
             entry = persistent.get(key)
             if entry is not None:
                 try:
                     if entry.get("mtime") == fp.stat().st_mtime:
-                        with _chapter_count_cache_lock:
-                            _chapter_count_cache[key] = entry.get("chapter_count")
+                        if is_chapter_metadata_candidate(fp):
+                            with _chapter_count_cache_lock:
+                                _chapter_count_cache[key] = entry.get("chapter_count")
                         continue
                 except OSError:
                     pass
-            to_probe.append(fp)
+            if is_chapter_metadata_candidate(fp):
+                to_probe.append(fp)
+            else:
+                # No ffprobe needed; record with chapter_count=None
+                try:
+                    mtime = fp.stat().st_mtime
+                except OSError:
+                    mtime = None
+                persistent[key] = {"chapter_count": None, "mtime": mtime}
 
-    if not to_probe:
-        return
+    if to_probe:
+        if workers > 1:
+            print(
+                f"  Pre-checking {len(to_probe)} files for embedded chapters "
+                f"({workers} workers)...",
+                flush=True,
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                list(executor.map(read_file_chapter_count, to_probe))
+        else:
+            for fp in to_probe:
+                read_file_chapter_count(fp)
 
-    if workers > 1:
-        print(
-            f"  Pre-checking {len(to_probe)} files for embedded chapters "
-            f"({workers} workers)...",
-            flush=True,
-        )
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(read_file_chapter_count, to_probe))
-    else:
-        for fp in to_probe:
-            read_file_chapter_count(fp)
+        for parent, persistent in folder_persistent.items():
+            for fp in to_probe:
+                if fp.parent != parent:
+                    continue
+                key = str(fp)
+                with _chapter_count_cache_lock:
+                    count = _chapter_count_cache.get(key)
+                try:
+                    mtime = fp.stat().st_mtime
+                except OSError:
+                    mtime = None
+                persistent[key] = {"chapter_count": count, "mtime": mtime}
 
-    # Persist newly probed results per folder
     for parent, persistent in folder_persistent.items():
-        changed = False
-        for fp in to_probe:
-            if fp.parent != parent:
-                continue
-            key = str(fp)
-            with _chapter_count_cache_lock:
-                count = _chapter_count_cache.get(key)
-            try:
-                mtime = fp.stat().st_mtime
-            except OSError:
-                mtime = None
-            persistent[key] = {"chapter_count": count, "mtime": mtime}
-            changed = True
-        if changed:
-            _save_chapter_count_persistent(parent, persistent)
+        _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
     files: list[Path], multi_part_group_map: dict[Path, list[Path]]
