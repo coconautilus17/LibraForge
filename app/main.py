@@ -1917,8 +1917,8 @@ def fixer_processing_context(
             )
         sibling_files = [
             item
-            for item in fixer_module.collect_audio_files(target_path.parent)
-            if item.parent == target_path.parent
+            for item in target_path.parent.iterdir()
+            if item.is_file() and fixer_module.is_supported_audio_file(item)
         ]
         sibling_group_map = fixer_module.build_multi_part_group_map(
             sibling_files,
@@ -2288,10 +2288,20 @@ def inspect_manual_review_target(
         target_path=target_path,
         fixer_module=fixer_module,
     )
-    files, group_map, processing_items = sidecar_context or fixer_processing_context(
-        target_path=target_path,
-        fixer_module=fixer_module,
-    )
+    if sidecar_context is not None:
+        files, group_map, processing_items = sidecar_context
+    elif target_path.is_file():
+        # Single file with no sidecar: skip sibling scan and chapter probing entirely.
+        # build_multi_part_group_map on the parent would ffprobe every sibling, which
+        # can take 10+ seconds when the parent is a large flat directory over NFS.
+        if not fixer_module.is_supported_audio_file(target_path):
+            raise HTTPException(status_code=400, detail=f"Unsupported audiobook file: {target_path}")
+        files, group_map, processing_items = [target_path], {}, [target_path]
+    else:
+        files, group_map, processing_items = fixer_processing_context(
+            target_path=target_path,
+            fixer_module=fixer_module,
+        )
     if len(processing_items) != 1:
         raise HTTPException(
             status_code=400,
