@@ -1129,6 +1129,117 @@ async function generateSuspectReport() {
   }
 }
 
+// Fields whose reason codes flag them for highlight in the compare table.
+const SUSPECT_REASON_FIELDS = {
+  title_mismatch: 'Title',
+  series_mismatch: 'Series',
+  author_mismatch: 'Author',
+  sequence_conflict: 'Sequence',
+  visible_number_conflict: 'Sequence',
+  provider_missing_sequence: 'Sequence',
+  duration_mismatch: 'Duration',
+};
+
+function buildSuspectCard(item) {
+  const sev = item.severity || 'info';
+  const sevCls = `sev-${sev}`;
+  const local = item.local || {};
+  const match = item.match || {};
+  const reasons = item.reasons || [];
+
+  const flaggedFields = new Set(
+    reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean)
+  );
+
+  const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
+  const bookName = local.title || pathName;
+  const scorePct = item.score != null && item.score > 0 ? Math.round(item.score * 100) : null;
+  const providerLabel = item.provider || '';
+  const writeAction = (item.write_action || '').replace(/_/g, ' ');
+
+  const article = document.createElement('article');
+  article.className = `mrep-card suspect-mrep-card ${sevCls}`;
+
+  const details = document.createElement('details');
+  details.className = 'mrep-details';
+
+  const summary = document.createElement('summary');
+  summary.className = 'mrep-head';
+  summary.innerHTML = `
+    <span class="suspect-sev-badge ${sevCls}">${escapeHtml(sev)}</span>
+    ${writeAction ? `<span class="match-write-badge">${escapeHtml(writeAction)}</span>` : ''}
+    <span class="mrep-title">${escapeHtml(bookName)}</span>
+    <div class="mrep-badges">
+      ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
+      ${providerLabel ? `<span class="match-provider-badge">${escapeHtml(providerLabel)}</span>` : ''}
+    </div>
+  `;
+  details.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'mrep-body';
+
+  const coverFolder = (item.path || '').replace(/\\/g, '/');
+  const localCoverUrl = coverFolder ? `/api/book/cover?path=${encodeURIComponent(coverFolder)}` : '';
+  const localCoverImg = localCoverUrl
+    ? `<img class="cover-thumb" src="${escapeHtml(localCoverUrl)}" alt="Local cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+  const matchCoverImg = match.cover_url
+    ? `<img class="cover-thumb" src="${escapeHtml(match.cover_url)}" alt="Match cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+
+  const providerHead = escapeHtml(providerLabel || 'Match');
+  const titleMatch = match.title ? (match.title + (match.subtitle ? ': ' + match.subtitle : '')) : '';
+  const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
+  const matchDur = match.duration_minutes != null ? `${match.duration_minutes} min` : '';
+  const queryHtml = item.used_query
+    ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';
+
+  const tableRows = [
+    ['Title',    local.title,    titleMatch],
+    ['Author',   local.author,   match.author],
+    ['Narrator', local.narrator, match.narrator],
+    ['Series',   local.series,   match.series],
+    ['Sequence', local.sequence, match.sequence],
+    ['Duration', localDur,       matchDur],
+    ['Year',     '',             match.year],
+    ['ASIN',     '',             match.asin],
+  ].filter(([, lv, mv]) => lv || mv)
+   .map(([label, lv, mv]) => {
+     const flagged = flaggedFields.has(label) ? ' suspect-flagged' : '';
+     return `<tr class="${flagged}">
+       <th>${escapeHtml(label)}</th>
+       <td>${escapeHtml(String(lv || '—'))}</td>
+       <td>${escapeHtml(String(mv || '—'))}</td>
+     </tr>`;
+   }).join('');
+
+  const reasonsHtml = reasons.map(r =>
+    `<li><strong>${escapeHtml(r.code.replace(/_/g, ' '))}</strong>: ${escapeHtml(r.message)}</li>`
+  ).join('');
+
+  body.innerHTML = `
+    <div class="cover-comparison mrep-covers">
+      <div><strong>Local</strong>${localCoverImg}</div>
+      <div><strong>${providerHead}</strong>${matchCoverImg}</div>
+    </div>
+    ${queryHtml}
+    <table class="compare-table mrep-compare">
+      <thead><tr><th></th><th>Local</th><th>${providerHead}</th></tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+    <div class="suspect-reasons-section">
+      <strong>Flags</strong>
+      <ul>${reasonsHtml}</ul>
+      <div class="suspect-recommendation">Recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+    </div>
+  `;
+
+  details.appendChild(body);
+  article.appendChild(details);
+  return article;
+}
+
 function renderSuspectReport(data) {
   const btn = $('suspectReportBtn');
   const widget = $('suspectReportWidget');
@@ -1143,50 +1254,22 @@ function renderSuspectReport(data) {
   list.innerHTML = '';
 
   if (!suspects.length) {
-    list.innerHTML = '<p class="note" style="margin-top:10px">No suspects found -- all would-write items look clean.</p>';
+    list.innerHTML = '<p class="note">No suspects found -- all would-write items look clean.</p>';
     return;
   }
-
-  const sevClass = sev => `sev-${sev || 'info'}`;
 
   const header = document.createElement('div');
   header.className = 'suspect-summary';
   header.innerHTML = `
     <span>${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
     ${Object.entries(summary.severity_counts || {}).reverse().map(([sev, n]) =>
-      `<span class="suspect-sev-badge ${sevClass(sev)}">${sev}: ${n}</span>`
+      `<span class="suspect-sev-badge sev-${sev}">${sev}: ${n}</span>`
     ).join('')}
   `;
   list.appendChild(header);
 
   for (const item of suspects) {
-    const sev = item.severity || 'info';
-    const card = document.createElement('div');
-    card.className = `suspect-card ${sevClass(sev)}`;
-
-    const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
-    const providerTag = item.provider
-      ? `<span class="match-provider-badge">${escapeHtml(item.provider)}</span>` : '';
-    const writeTag = item.write_action
-      ? `<span class="match-write-badge">${escapeHtml(item.write_action)}</span>` : '';
-    const scoreTag = (item.score != null)
-      ? `<span class="match-score-badge">score ${(+item.score).toFixed(2)}</span>` : '';
-
-    const reasons = (item.reasons || []).map(r =>
-      `<li><strong>${escapeHtml(r.code)}</strong>: ${escapeHtml(r.message)}</li>`
-    ).join('');
-
-    card.innerHTML = `
-      <div class="suspect-card-header">
-        <span class="suspect-sev-badge ${sevClass(sev)}">${sev}</span>
-        ${writeTag}${providerTag}${scoreTag}
-        <span class="suspect-filename">${escapeHtml(pathName)}</span>
-      </div>
-      <div class="suspect-path">${escapeHtml(item.path || '')}</div>
-      <ul class="suspect-reasons">${reasons}</ul>
-      <div class="suspect-recommendation">recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
-    `;
-    list.appendChild(card);
+    list.appendChild(buildSuspectCard(item));
   }
 }
 

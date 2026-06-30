@@ -2977,26 +2977,6 @@ summary:focus-visible {
   color: var(--text);
 }
 
-.suspect-card {
-  border-left: 3px solid var(--border-strong);
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  margin: 6px 0;
-}
-.suspect-card.sev-high   { border-left-color: var(--danger);  }
-.suspect-card.sev-medium { border-left-color: var(--warning); }
-.suspect-card.sev-low    { border-left-color: var(--muted);   }
-.suspect-card.sev-info   { border-left-color: var(--muted);   }
-
-.suspect-card-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 3px;
-}
-
 .suspect-sev-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -3011,32 +2991,54 @@ summary:focus-visible {
 .suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
 .suspect-sev-badge.sev-info   { background: var(--surface-raised); color: var(--muted); }
 
-.suspect-filename {
-  font-weight: 500;
-  word-break: break-all;
-  color: var(--text);
+#suspectReportList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: 900px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 10px;
 }
 
-.suspect-path {
-  font-size: 0.78rem;
-  color: var(--muted);
-  word-break: break-all;
-  margin-bottom: 5px;
+/* Full-width rows: summary header and empty state */
+#suspectReportList > .suspect-summary,
+#suspectReportList > p {
+  grid-column: 1 / -1;
 }
 
-.suspect-reasons {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 0.87rem;
+/* Reuse mrep-card but add severity left border */
+.suspect-mrep-card {
+  border-left: 3px solid var(--border-strong);
+}
+.suspect-mrep-card.sev-high   { border-left-color: var(--danger);  }
+.suspect-mrep-card.sev-medium { border-left-color: var(--warning); }
+.suspect-mrep-card.sev-low    { border-left-color: var(--muted);   }
+.suspect-mrep-card.sev-info   { border-left-color: var(--muted);   }
+
+/* Highlight flagged rows in the compare table */
+.mrep-compare tr.suspect-flagged th { color: var(--danger); }
+.mrep-compare tr.suspect-flagged td { color: var(--danger); font-weight: 600; }
+
+.suspect-reasons-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
   color: var(--text-soft);
 }
 
-.suspect-reasons li { margin: 2px 0; }
+.suspect-reasons-section ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.suspect-reasons-section li { margin: 3px 0; }
 
 .suspect-recommendation {
+  margin-top: 6px;
   font-size: 0.78rem;
   color: var(--muted);
-  margin-top: 4px;
 }
 
 .suspect-recommendation em { color: var(--accent); font-style: normal; }
