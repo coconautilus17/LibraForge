@@ -1435,6 +1435,7 @@ def marker_real_asin(marker: dict) -> str:
     return "" if (not asin or asin == "NOREALASIN") else asin
 
 
+@trace(ALTER, capture=[])
 def metadata_from_marker(marker: dict) -> dict:
     """Rebuild a fill-metadata dict from a marker's stored Audible match.
 
@@ -4849,6 +4850,7 @@ def get_year(product: dict) -> str:
     return ""
 
 
+@trace(ALTER, capture=["key"])
 def get_people(product: dict, key: str) -> list[str]:
     return [
         item.get("name", "").strip()
@@ -4857,6 +4859,7 @@ def get_people(product: dict, key: str) -> list[str]:
     ]
 
 
+@trace(ALTER, capture=[])
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
 
@@ -5207,6 +5210,7 @@ def abs_tract_search(
     return products
 
 
+@trace(CHOOSE, capture=[])
 def detect_special_provider(clues: dict) -> str | None:
     """Return the abs-agg provider id if the file is a known dramatized production.
 
@@ -6464,6 +6468,7 @@ def clean_sequence(value: str) -> str:
     return str(int(float(value)))
 
 
+@trace(CHOOSE, capture=[])
 def preferred_audible_sequence(product: dict) -> str:
     """Use a unique title/subtitle book number when the series sequence is absent."""
     _series_name, sequence = get_primary_series(product)
@@ -6504,6 +6509,7 @@ def _candidate_duration(
     )
 
 
+@trace(CHOOSE, capture=["local_duration_minutes"], show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
     products: list[dict],
@@ -6617,6 +6623,7 @@ def is_generic_series_number_title(clues: dict) -> bool:
     return any(re.fullmatch(pattern, title) for pattern in generic_patterns)
 
 
+@trace(CHOOSE, capture=[])
 def determine_edit_mode(
     product: dict,
     clues: dict,
@@ -6857,6 +6864,7 @@ def determine_edit_mode(
     return safe_series_only()
 
 
+@trace(ALTER, capture=[])
 def get_cover_url(product: dict) -> str:
     images = product.get("product_images") or {}
 
@@ -6884,6 +6892,7 @@ def get_cover_url(product: dict) -> str:
     return ""
 
 
+@trace(ALTER, capture=[], show_result=False)
 def metadata_from_product(
     product: dict,
     clues: dict,
@@ -6982,6 +6991,7 @@ def metadata_from_product(
     }
 
 
+@trace(CHOOSE, capture=["audible_title", "audible_series", "local_title"])
 def choose_best_title(audible_title: str, audible_series: str, local_title: str) -> str:
     audible_title_clean = sanitize_book_title(audible_title)
     audible_series_clean = sanitize_tag(audible_series)
@@ -7043,6 +7053,7 @@ def build_metadata_args(metadata: dict) -> list[str]:
     return args
 
 
+@trace(ALTER, capture=[])
 def final_metadata_preview(metadata: dict) -> dict:
     preview = {
         "file_type": metadata.get("file_type", ""),
