@@ -118,6 +118,23 @@ try:
         get_cover_url,
         choose_best_title,
     )
+    from app.fixer.tagging import (
+        MUTAGEN_MP4_EXTENSIONS,
+        MUTAGEN_MP3_EXTENSIONS,
+        mutagen_mp4_is_available,
+        mutagen_mp3_is_available,
+        mutagen_is_available,
+        is_mutagen_mp4_candidate,
+        is_mutagen_mp3_candidate,
+        is_mutagen_candidate,
+        mp4_set_text,
+        mp4_set_track,
+        mp4_set_freeform,
+        id3_set_text,
+        id3_set_txxx,
+        id3_set_track,
+        build_metadata_args,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -211,6 +228,23 @@ except ModuleNotFoundError:
         get_cover_url,
         choose_best_title,
     )
+    from app.fixer.tagging import (
+        MUTAGEN_MP4_EXTENSIONS,
+        MUTAGEN_MP3_EXTENSIONS,
+        mutagen_mp4_is_available,
+        mutagen_mp3_is_available,
+        mutagen_is_available,
+        is_mutagen_mp4_candidate,
+        is_mutagen_mp3_candidate,
+        is_mutagen_candidate,
+        mp4_set_text,
+        mp4_set_track,
+        mp4_set_freeform,
+        id3_set_text,
+        id3_set_txxx,
+        id3_set_track,
+        build_metadata_args,
+    )
 
 try:
     from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
@@ -289,8 +323,6 @@ try:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 except (ValueError, OSError):
     pass  # not in main thread (e.g. imported by FastAPI worker)
-MUTAGEN_MP4_EXTENSIONS = {".m4b", ".m4a", ".mp4"}
-MUTAGEN_MP3_EXTENSIONS = {".mp3"}
 # Formats that should be treated as a single audiobook when multiple files
 # exist in the same folder. MP3/OPUS/OGG were already supported for tagging;
 # M4A/M4B are included for chapter-split MP4 audiobook containers. OGG behaves
@@ -734,24 +766,6 @@ def ffmpeg_restore_metadata_from_backup(source: Path) -> Path:
 
     return backup_path
 
-def mutagen_mp4_is_available() -> bool:
-    return MP4 is not None and MP4FreeForm is not None and MP4Cover is not None
-
-def mutagen_mp3_is_available() -> bool:
-    return ID3 is not None and APIC is not None and TXXX is not None
-
-def mutagen_is_available() -> bool:
-    return mutagen_mp4_is_available() or mutagen_mp3_is_available()
-
-def is_mutagen_mp4_candidate(source: Path) -> bool:
-    return source.suffix.lower() in MUTAGEN_MP4_EXTENSIONS
-
-def is_mutagen_mp3_candidate(source: Path) -> bool:
-    return source.suffix.lower() in MUTAGEN_MP3_EXTENSIONS
-
-def is_mutagen_candidate(source: Path) -> bool:
-    return is_mutagen_mp4_candidate(source) or is_mutagen_mp3_candidate(source)
-
 def is_multi_part_audio_candidate(source: Path) -> bool:
     return source.suffix.lower() in MULTI_PART_AUDIO_EXTENSIONS
 
@@ -1117,52 +1131,6 @@ def inspect_mp4_top_level_layout(source: Path) -> dict:
             and atoms["moov"]["offset"] < atoms["mdat"]["offset"]
         ),
     }
-
-def mp4_set_text(tags: dict, key: str, value: str) -> None:
-    value = sanitize_tag(value)
-
-    if value:
-        tags[key] = [value]
-    else:
-        tags.pop(key, None)
-
-def mp4_set_track(tags: dict, value: str) -> None:
-    value = clean_sequence(value)
-
-    if value:
-        tags["trkn"] = [(int(value), 0)]
-    else:
-        tags.pop("trkn", None)
-
-def mp4_set_freeform(tags, name: str, value: str) -> None:
-    key = f"----:com.apple.iTunes:{name}"
-    value = sanitize_tag(value)
-
-    if value:
-        tags[key] = [MP4FreeForm(value.encode("utf-8"))]
-    else:
-        tags.pop(key, None)
-
-def id3_set_text(tags, frame_id: str, frame_cls, value: str) -> None:
-    value = sanitize_tag(value)
-    tags.delall(frame_id)
-
-    if value:
-        tags.add(frame_cls(encoding=3, text=[value]))
-
-def id3_set_txxx(tags, name: str, value: str) -> None:
-    value = sanitize_tag(value)
-    tags.delall(f"TXXX:{name}")
-
-    if value:
-        tags.add(TXXX(encoding=3, desc=name, text=[value]))
-
-def id3_set_track(tags, value: str) -> None:
-    value = clean_sequence(value)
-    tags.delall("TRCK")
-
-    if value:
-        tags.add(TRCK(encoding=3, text=[value]))
 
 def mutagen_write_mp4_tags(
     source: Path,
@@ -3764,42 +3732,6 @@ def search_item(
         return result
     finally:
         trace_set_subject(None)
-
-def build_metadata_args(metadata: dict) -> list[str]:
-    tag_map = {
-        "title": metadata.get("title", ""),
-        "artist": metadata.get("author", ""),
-        "album_artist": metadata.get("author", ""),
-        "album": metadata.get("title", ""),
-        "grouping": metadata.get("series", ""),
-        "mvnm": metadata.get("series", ""),
-        "mvin": metadata.get("sequence", ""),
-        "composer": metadata.get("narrator", ""),
-        "date": metadata.get("year", ""),
-        "genre": metadata.get("genre", ""),
-        "publisher": metadata.get("publisher", ""),
-        "subtitle": metadata.get("subtitle", ""),
-    }
-
-    if metadata.get("sequence"):
-        tag_map["track"] = metadata["sequence"]
-
-    if metadata.get("asin"):
-        tag_map["asin"] = metadata["asin"]
-
-    if metadata.get("write_summary") and metadata.get("summary"):
-        tag_map["comment"] = metadata["summary"]
-
-    if metadata.get("isbn"):
-        tag_map["isbn"] = metadata["isbn"]
-
-    args = []
-    for key, value in tag_map.items():
-        value = sanitize_tag(value)
-        if value:
-            args.extend(["-metadata", f"{key}={value}"])
-
-    return args
 
 @trace(ALTER, capture=[])
 def final_metadata_preview(metadata: dict) -> dict:
