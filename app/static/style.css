@@ -2957,3 +2957,86 @@ summary:focus-visible {
   padding: 4px 10px !important;
   margin-top: 2px;
 }
+
+/* ── Suspect Report Widget ───────────────────────────────────────────────── */
+
+#suspectReportWidget {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.suspect-summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.suspect-card {
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  margin: 6px 0;
+}
+.suspect-card.sev-high   { border-left-color: var(--danger);  }
+.suspect-card.sev-medium { border-left-color: var(--warning); }
+.suspect-card.sev-low    { border-left-color: var(--muted);   }
+.suspect-card.sev-info   { border-left-color: var(--muted);   }
+
+.suspect-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+.suspect-sev-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.suspect-sev-badge.sev-high   { background: var(--danger-soft);  color: var(--danger);  }
+.suspect-sev-badge.sev-medium { background: var(--warning-soft); color: var(--warning); }
+.suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
+.suspect-sev-badge.sev-info   { background: var(--surface-raised); color: var(--muted); }
+
+.suspect-filename {
+  font-weight: 500;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.suspect-path {
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-all;
+  margin-bottom: 5px;
+}
+
+.suspect-reasons {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.87rem;
+  color: var(--text-soft);
+}
+
+.suspect-reasons li { margin: 2px 0; }
+
+.suspect-recommendation {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.suspect-recommendation em { color: var(--accent); font-style: normal; }

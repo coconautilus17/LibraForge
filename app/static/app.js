@@ -1147,13 +1147,14 @@ function renderSuspectReport(data) {
     return;
   }
 
-  const severityColor = { high: '#e74c3c', medium: '#e67e22', low: '#f1c40f', info: '#95a5a6' };
+  const sevClass = sev => `sev-${sev || 'info'}`;
+
   const header = document.createElement('div');
-  header.style.cssText = 'padding:10px 0 6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;';
+  header.className = 'suspect-summary';
   header.innerHTML = `
-    <span style="font-weight:600">${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
+    <span>${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
     ${Object.entries(summary.severity_counts || {}).reverse().map(([sev, n]) =>
-      `<span class="badge" style="background:${severityColor[sev] || '#95a5a6'}">${sev}: ${n}</span>`
+      `<span class="suspect-sev-badge ${sevClass(sev)}">${sev}: ${n}</span>`
     ).join('')}
   `;
   list.appendChild(header);
@@ -1161,27 +1162,29 @@ function renderSuspectReport(data) {
   for (const item of suspects) {
     const sev = item.severity || 'info';
     const card = document.createElement('div');
-    card.style.cssText = `border-left:3px solid ${severityColor[sev] || '#95a5a6'};padding:8px 10px;margin:6px 0;background:var(--bg2,#f8f8f8);border-radius:3px;`;
+    card.className = `suspect-card ${sevClass(sev)}`;
 
     const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
-    const providerTag = item.provider ? ` <span style="opacity:.7;font-size:.85em">(${item.provider})</span>` : '';
-    const writeTag = item.write_action ? ` <span class="badge" style="font-size:.75em;background:#555">${item.write_action}</span>` : '';
-    const scoreTag = (item.score != null) ? ` <span style="opacity:.6;font-size:.82em">score ${(+item.score).toFixed(2)}</span>` : '';
+    const providerTag = item.provider
+      ? `<span class="match-provider-badge">${escapeHtml(item.provider)}</span>` : '';
+    const writeTag = item.write_action
+      ? `<span class="match-write-badge">${escapeHtml(item.write_action)}</span>` : '';
+    const scoreTag = (item.score != null)
+      ? `<span class="match-score-badge">score ${(+item.score).toFixed(2)}</span>` : '';
 
     const reasons = (item.reasons || []).map(r =>
-      `<li style="margin:2px 0"><strong>${escapeHtml(r.code)}</strong>: ${escapeHtml(r.message)}</li>`
+      `<li><strong>${escapeHtml(r.code)}</strong>: ${escapeHtml(r.message)}</li>`
     ).join('');
 
     card.innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">
-        <span class="badge" style="background:${severityColor[sev]}">${sev}</span>
-        ${writeTag}
-        <span style="font-weight:500;word-break:break-all">${escapeHtml(pathName)}</span>
-        ${providerTag}${scoreTag}
+      <div class="suspect-card-header">
+        <span class="suspect-sev-badge ${sevClass(sev)}">${sev}</span>
+        ${writeTag}${providerTag}${scoreTag}
+        <span class="suspect-filename">${escapeHtml(pathName)}</span>
       </div>
-      <div style="font-size:.8em;opacity:.7;word-break:break-all;margin-bottom:4px">${escapeHtml(item.path || '')}</div>
-      <ul style="margin:0;padding-left:18px;font-size:.88em">${reasons}</ul>
-      <div style="font-size:.8em;margin-top:4px;opacity:.7">recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+      <div class="suspect-path">${escapeHtml(item.path || '')}</div>
+      <ul class="suspect-reasons">${reasons}</ul>
+      <div class="suspect-recommendation">recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
     `;
     list.appendChild(card);
   }
