@@ -883,6 +883,8 @@ class RunRequest(BaseModel):
     provider: str = "audible"
     abs_provider: str = "audible"
     enable_goodreads_fallback: bool = False
+    debug_trace: bool = False
+    debug_trace_file: str = ""
 
 
 class M4BMetadataForm(BaseModel):
@@ -1640,6 +1642,11 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
             _region = (_abs_tract_cfg.get("kindle_region") or "").strip()
             if _region:
                 cmd += ["--abs-tract-kindle-region", _region]
+
+    if req.debug_trace:
+        cmd.append("--debug-trace")
+        if req.debug_trace_file:
+            cmd += ["--debug-trace-file", req.debug_trace_file]
 
     return cmd, float(req.duration_review_threshold or 10.0)
 
