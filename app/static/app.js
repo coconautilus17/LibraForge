@@ -1095,6 +1095,7 @@ function buildMatchReportCards() {
       const writeAction = (item.write_action || '').toLowerCase();
       const hasMatch = !!item.match;
       if (statusFilter === 'matched' && !hasMatch) continue;
+      if (statusFilter === 'goodreads' && (item.provider || '').toLowerCase() !== 'goodreads') continue;
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
       if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
       if (statusFilter === 'written' && writeAction !== 'written') continue;
@@ -1130,13 +1131,7 @@ function bookNameFromPath(p) {
 
 function coverFolderFromPath(p) {
   if (!p) return '';
-  const normalized = p.replace(/\\/g, '/');
-  const last = normalized.split('/').filter(Boolean).pop() || '';
-  // if the last segment has a file extension it's a file, use parent dir
-  if (/\.[^.]+$/.test(last)) {
-    return normalized.substring(0, normalized.lastIndexOf('/')) || '/';
-  }
-  return normalized;
+  return p.replace(/\\/g, '/');
 }
 
 function matchStatusInfo(item) {
@@ -1155,7 +1150,7 @@ function matchStatusInfo(item) {
 
 function buildMatchCard(item) {
   const hasMatch = !!item.match;
-  const score = item.score != null && item.score > 0 ? Math.round(item.score) : null;
+  const scorePct = item.score != null && item.score > 0 ? Math.round(item.score * 100) : null;
   const mode = item.mode || '';
   const folderPath = item.path || '';
   const coverFolder = coverFolderFromPath(folderPath);
@@ -1181,7 +1176,7 @@ function buildMatchCard(item) {
     ${item.was_manually_applied ? '<span class="match-manual-badge">Manually Applied</span>' : ''}
     <span class="mrep-title">${escapeHtml(bookName)}</span>
     <div class="mrep-badges">
-      ${score != null ? `<span class="match-score-badge">Score ${score}</span>` : ''}
+      ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
       ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}

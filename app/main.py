@@ -3935,10 +3935,17 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
 
 @app.get("/api/book/cover")
 def book_cover(path: str) -> Response:
-    folder = Path(path)
-    if not folder.is_dir():
+    p = Path(path)
+    if p.is_file():
+        # Loose audio file: extract embedded cover from the specific file
+        try:
+            data, media = extract_current_cover(p)
+            return Response(content=data, media_type=media)
+        except Exception:
+            raise HTTPException(status_code=404, detail="No cover found")
+    if not p.is_dir():
         raise HTTPException(status_code=404, detail="Not a directory")
-    result = _book_cover_data(folder)
+    result = _book_cover_data(p)
     if result:
         data, media = result
         return Response(content=data, media_type=media)
