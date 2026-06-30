@@ -253,23 +253,10 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     write_action = clean_text(item.get("write_action", ""))
     was_manually_applied = bool(item.get("was_manually_applied"))
 
-    # Items that have already been reviewed or are expected outcomes -- skip silently.
-    if was_manually_applied:
+    # Only review items that will actually be written to disk.
+    # write_skipped / smart_skipped / skipped items are already handled by the fixer -- not a risk.
+    if write_action != "would_write":
         return None
-    if status == "skipped" and is_benign_skip(skip_reason):
-        return None
-
-    # --- Status ---
-    if status == "skipped":
-        sr_lower = skip_reason.casefold()
-        if "no usable" in sr_lower or "no match" in sr_lower:
-            add_reason(reasons, "no_match", "high", "No provider match found.", {"skip_reason": skip_reason})
-        elif "score below minimum" in sr_lower:
-            add_reason(reasons, "score_below_minimum", "high", "Rejected match score was too low.", {"skip_reason": skip_reason})
-        else:
-            add_reason(reasons, "non_matched_status", "medium", f"Item skipped: {skip_reason!r}.", {"skip_reason": skip_reason})
-    elif status != "matched":
-        add_reason(reasons, "non_matched_status", "high", f"Item status is {status!r}.", {"status": status})
 
     # --- Mode ---
     if status == "matched":
@@ -430,6 +417,9 @@ def add_metadata_cross_item_suspects(
     for asin, items in sorted(asin_to_items.items()):
         if len(items) <= 1:
             continue
+        # Only flag when at least one of the duplicates will actually be written.
+        if not any(clean_text(i.get("write_action")) == "would_write" for i in items):
+            continue
         paths = [item.get("path") or "" for item in items]
         suspects.append({
             "id": None, "path": "", "tool": "metadata_fixer", "status": "cross_item",
@@ -442,6 +432,8 @@ def add_metadata_cross_item_suspects(
 
     for (series_key, seq_key, author_key), items in sorted(identity_to_items.items()):
         if len(items) <= 1:
+            continue
+        if not any(clean_text(i.get("write_action")) == "would_write" for i in items):
             continue
         titles = sorted({clean_text((item.get("local") or {}).get("title")) for item in items})
         paths = [item.get("path") or "" for item in items]
