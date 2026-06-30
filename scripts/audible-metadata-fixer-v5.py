@@ -2751,6 +2751,7 @@ def extract_book_number_from_path(file_path: Path) -> str:
     return ""
 
 
+@trace(ALTER, capture=["value", "known_author"])
 def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     """Parse structured file/folder names into series, number, and title.
 
@@ -2969,6 +2970,7 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     return {}
 
 
+@trace(ALTER, capture=["value", "known_author"])
 def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
     """Parse common author/title path names, using known author tags to orient them."""
     value = sanitize_technical_labels(value)
@@ -3100,6 +3102,7 @@ def parse_series_sequence_segment(
     return series, number
 
 
+@trace(ALTER, capture=["value"])
 def parse_identity_rich_book_text(value: str) -> dict:
     """Parse explicit folder names containing distinct title, author, and series."""
     value = sanitize_technical_labels(value)
@@ -3292,6 +3295,7 @@ def parse_identity_rich_book_text(value: str) -> dict:
     return {}
 
 
+@trace(ALTER, capture=["file_path", "known_author"])
 def parse_structured_book_from_path(file_path: Path, known_author: str = "") -> dict:
     """Return structured metadata from the corrected folder/file path if available."""
     candidates = [
@@ -3308,6 +3312,7 @@ def parse_structured_book_from_path(file_path: Path, known_author: str = "") -> 
     return {}
 
 
+@trace(ALTER, capture=["file_path", "known_author"])
 def parse_descriptive_book_from_path(file_path: Path, known_author: str = "") -> dict:
     candidates = [
         file_path.parent.name,
@@ -3324,6 +3329,7 @@ def parse_descriptive_book_from_path(file_path: Path, known_author: str = "") ->
     return {}
 
 
+@trace(ALTER, capture=["file_path"])
 def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     """Prefer a clearly structured path over stale embedded tags.
 
@@ -3431,6 +3437,7 @@ def sequence_values_equal(left: str, right: str) -> bool:
     return left_number == right_number
 
 
+@trace(ALTER, capture=[])
 def parse_title_series_number_from_metadata(tags: dict) -> dict:
     raw_title = sanitize_book_title(first_existing_tag(tags, ["title"]))
     album = sanitize_technical_labels(first_existing_tag(tags, ["album"]))
@@ -3542,6 +3549,7 @@ def is_invalid_local_title(value: str, author: str = "") -> bool:
     return False
 
 
+@trace(ALTER, capture=["file_path"])
 def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
     if not is_invalid_local_title(clues.get("title", ""), clues.get("author", "")):
         return clues
@@ -3573,6 +3581,7 @@ def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
     return clues
 
 
+@trace(ALTER, capture=["file_path"])
 def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> dict:
     if tags is None:
         tags = read_file_tags(file_path)
@@ -3700,6 +3709,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     return recover_invalid_local_title(clues, file_path)
 
 
+@trace(ALTER, capture=[])
 def capture_publisher_clue(clues: dict, tags: dict) -> dict:
     """Record the local publisher (before query sanitization) and clean leaks.
 
@@ -3828,6 +3838,7 @@ def extract_author_from_title(text: str) -> str:
     return ""
 
 
+@trace(CHOOSE, capture=[])
 def build_search_queries_from_clues(clues: dict) -> list[str]:
     # Strip search-only noise ("Listening to", trailing "by <author>") so the
     # query carries the real title; recover the author if it was only present
@@ -3910,6 +3921,7 @@ def build_search_queries_from_clues(clues: dict) -> list[str]:
     return clean_queries
 
 
+@trace(CHOOSE, capture=["title"])
 def goodreads_title_query_variants(title: str) -> list[str]:
     """Return Goodreads-friendly title query variants.
 
@@ -3973,6 +3985,7 @@ def strip_leading_sequence_from_title(value: str) -> str:
     return sanitize_book_title(cleaned)
 
 
+@trace(CHOOSE, capture=["file_path"])
 def build_search_queries_from_metadata(file_path: Path, tags: dict | None = None) -> tuple[list[str], dict]:
     clues = build_search_clues_from_file(file_path, tags=tags)
     return build_search_queries_from_clues(clues), clues
@@ -4027,6 +4040,7 @@ def pick_most_common_value(values: list[str]) -> str:
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
 
 
+@trace(CHOOSE, capture=["folder_name"])
 def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[str, str]:
     priority_sources = ["path", "title"]
 
@@ -4049,6 +4063,7 @@ def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[
     return "", ""
 
 
+@trace(ALTER, capture=["folder"])
 def infer_group_identity_from_path(folder: Path) -> tuple[str, str]:
     """Recover author/series from an organized Author/Series/Book hierarchy."""
     folder_name = sanitize_technical_labels(folder.name)
@@ -4079,6 +4094,7 @@ def infer_group_identity_from_path(folder: Path) -> tuple[str, str]:
     return author, series
 
 
+@trace(ALTER, capture=["value", "author"])
 def clean_group_folder_title(value: str, author: str) -> str:
     """Apply Folder Forge-style sequence and author cleanup to group folders."""
     cleaned = strip_leading_sequence_from_title(value) or sanitize_book_title(value)
@@ -4093,6 +4109,7 @@ def clean_group_folder_title(value: str, author: str) -> str:
     return sanitize_book_title(cleaned)
 
 
+@trace(ALTER, capture=[], show_result=False)
 def build_multi_file_search_context(
     file_paths: list[Path],
     use_backup_tags: bool = False,
