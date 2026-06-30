@@ -122,12 +122,16 @@ def title_similarity(local_title: Any, match_title: Any, match_subtitle: Any = "
 
     Audible sometimes puts the colloquial series-number title only in the
     subtitle (e.g. local "Dragon Born 3", title "The Shifter's Hoard 3",
-    subtitle "Dragon Born, Book 3"). Checking both prevents false positives.
+    subtitle "Dragon Born, Book 3"). Subtitle is only used when the main
+    title is essentially unrelated (score < 0.30) to avoid suppressing
+    real mismatches where the main title shares incidental keywords.
     """
-    best = similarity(local_title, match_title)
-    if match_subtitle:
-        best = max(best, similarity(local_title, match_subtitle))
-    return best
+    title_score = similarity(local_title, match_title)
+    if match_subtitle and title_score < 0.30:
+        sub_score = similarity(local_title, match_subtitle)
+        if sub_score > title_score:
+            return sub_score
+    return title_score
 
 
 def normalize_number(value: Any) -> str:
