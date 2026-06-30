@@ -7214,6 +7214,7 @@ def mp3_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
     )
 
 
+@trace(ALTER, capture=[])
 def compare_tags_for_write(
     current_tags: dict,
     metadata: dict,
@@ -7266,6 +7267,7 @@ def compare_tags_for_write(
     return len(changed) == 0, changed
 
 
+@trace(ALTER, capture=[], show_result=False)
 def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dict, list[str]]:
     """Return a copy of metadata where already-populated fields keep their current value.
 
@@ -7296,6 +7298,7 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
     return merged, filled
 
 
+@trace(CHOOSE, capture=[])
 def decide_write(
     current_tags: dict,
     metadata: dict,
