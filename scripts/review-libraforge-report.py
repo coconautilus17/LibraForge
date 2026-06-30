@@ -177,6 +177,32 @@ def is_benign_skip(skip_reason: str) -> bool:
     return sr in BENIGN_SKIP_REASONS
 
 
+_MULTI_BOOK_KW = re.compile(
+    r"\b(?:omnibus|complete collection|definitive collection|complete series|"
+    r"complete trilogy|complete duology|complete saga|trilogy|duology|box\s?set|"
+    r"books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
+    re.IGNORECASE,
+)
+_MULTI_BOOK_SEQ = re.compile(r"^\d+\s*-\s*\d+$")
+
+
+def is_multi_book(local: dict, match: dict) -> bool:
+    """Return True when the item is an omnibus/box-set/multi-book product.
+
+    Mirrors the fixer's is_omnibus_product() logic plus local-side keyword scan.
+    """
+    for text in (
+        local.get("title", ""),
+        match.get("title", ""),
+        match.get("subtitle", ""),
+    ):
+        if _MULTI_BOOK_KW.search(text or ""):
+            return True
+    if _MULTI_BOOK_SEQ.fullmatch(str(match.get("sequence", "") or "").strip()):
+        return True
+    return False
+
+
 def is_folder_like_series(series: str) -> bool:
     """Return True when the local series looks like a folder-organization prefix.
 
@@ -307,7 +333,8 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
         )
     elif local_seq and not match_seq and mode == "full" and not is_gr:
         # GR/Kindle routinely omit sequence -- don't flag.
-        if local.get("series") or match.get("series"):
+        # Omnibus/box-set/multi-book products on Audible also rarely carry a sequence number.
+        if (local.get("series") or match.get("series")) and not is_multi_book(local, match):
             add_reason(
                 reasons, "provider_missing_sequence", "medium",
                 "Local item has a sequence but the Audible match has none.",
