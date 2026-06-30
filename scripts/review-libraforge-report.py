@@ -74,6 +74,20 @@ def normalize_person_list(value: Any) -> str:
     return normalize(value)
 
 
+def normalize_series(value: Any) -> str:
+    """Like normalize() but also strips trailing book/volume/series qualifiers.
+
+    Handles patterns like:
+      "Speedrunning the Multiverse, Book 02" -> "speedrunning multiverse"
+      "Speedrunning the Multiverse Series"   -> "speedrunning multiverse"
+    """
+    s = normalize(value)
+    s = re.sub(r",?\s*\bbook\s+\d+\s*$", "", s).strip()
+    s = re.sub(r",?\s*\bvol(?:ume)?\s*\d+\s*$", "", s).strip()
+    s = re.sub(r"\bseries\s*$", "", s).strip()
+    return s
+
+
 def similarity(left: Any, right: Any) -> float:
     left_n = normalize(left)
     right_n = normalize(right)
@@ -86,6 +100,34 @@ def similarity(left: Any, right: Any) -> float:
     if left_n in right_n or right_n in left_n:
         return 0.92
     return SequenceMatcher(None, left_n, right_n).ratio()
+
+
+def series_similarity(left: Any, right: Any) -> float:
+    """Series comparison with trailing book/vol/series qualifiers stripped."""
+    ln = normalize_series(left)
+    rn = normalize_series(right)
+    if not ln and not rn:
+        return 1.0
+    if not ln or not rn:
+        return 0.0
+    if ln == rn:
+        return 1.0
+    if ln in rn or rn in ln:
+        return 0.92
+    return SequenceMatcher(None, ln, rn).ratio()
+
+
+def title_similarity(local_title: Any, match_title: Any, match_subtitle: Any = "") -> float:
+    """Title comparison that also considers the subtitle as a candidate match.
+
+    Audible sometimes puts the colloquial series-number title only in the
+    subtitle (e.g. local "Dragon Born 3", title "The Shifter's Hoard 3",
+    subtitle "Dragon Born, Book 3"). Checking both prevents false positives.
+    """
+    best = similarity(local_title, match_title)
+    if match_subtitle:
+        best = max(best, similarity(local_title, match_subtitle))
+    return best
 
 
 def normalize_number(value: Any) -> str:
@@ -368,7 +410,7 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     local_title = clean_text(local.get("title"))
     match_title = clean_text(match.get("title"))
     if local_title and match_title:
-        title_score = similarity(local_title, match_title)
+        title_score = title_similarity(local_title, match_title, clean_text(match.get("subtitle")))
         if title_score < args.title_similarity:
             add_reason(
                 reasons, "title_mismatch", "medium",
@@ -380,7 +422,7 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     local_series = clean_text(local.get("series"))
     match_series = clean_text(match.get("series"))
     if local_series and match_series and not is_folder_like_series(local_series):
-        series_score = similarity(local_series, match_series)
+        series_score = series_similarity(local_series, match_series)
         if series_score < args.series_similarity:
             add_reason(
                 reasons, "series_mismatch", "high",
