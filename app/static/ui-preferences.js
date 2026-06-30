@@ -27,6 +27,8 @@
     density: "comfortable",
     explanationsExpanded: true,
     debugMode: false,
+    debugTrace: false,
+    debugTraceFile: "",
     defaultRootPath: "",
     ignoredFolders: [".", "#", "@"],
     persistentSkipPatterns: "",
@@ -592,6 +594,23 @@
         preferences = { ...preferences, debugMode: debugModeEl.checked };
         savePreferences(preferences);
         if (debugLinks) debugLinks.hidden = !preferences.debugMode;
+      });
+    }
+
+    const debugTraceEl = document.getElementById("debugTrace");
+    const debugTraceFileEl = document.getElementById("debugTraceFile");
+    if (debugTraceEl) {
+      debugTraceEl.checked = preferences.debugTrace;
+      debugTraceEl.addEventListener("change", () => {
+        preferences = { ...preferences, debugTrace: debugTraceEl.checked };
+        savePreferences(preferences);
+      });
+    }
+    if (debugTraceFileEl) {
+      debugTraceFileEl.value = preferences.debugTraceFile || "";
+      debugTraceFileEl.addEventListener("change", () => {
+        preferences = { ...preferences, debugTraceFile: debugTraceFileEl.value.trim() };
+        savePreferences(preferences);
       });
     }
 

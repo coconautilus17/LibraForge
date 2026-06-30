@@ -95,6 +95,8 @@ function collectRequest() {
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchProvider')?.value || 'audible') : 'audible',
     abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchAbsProvider')?.value || 'audible') : 'audible',
     enable_goodreads_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableGoodreadsFallback')?.checked) : false,
+    debug_trace: fixerMajorVersion($('script').value) >= 5 ? Boolean(prefs.debugTrace) : false,
+    debug_trace_file: prefs.debugTraceFile || "",
     min_score: parseFloat($('minScore').value || '0.7'),
     limit: parseInt($('limit').value || '50', 10),
     max_files: parseInt($('maxFiles').value || '0', 10),
@@ -207,6 +209,7 @@ function render(state) {
   renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
+  currentReportId = state.id || null;
   renderMatchReport(state.report_items || []);
 }
 
@@ -1050,6 +1053,7 @@ async function loadLastReport() {
     if (!res.ok) { alert((await res.json()).detail || 'No report found'); return; }
     const report = await res.json();
     latestState = report;
+    currentReportId = report.id || null;
     renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
@@ -1065,6 +1069,7 @@ async function loadLastReport() {
 // ── Match Report Widget ──────────────────────────────────────────────────────
 
 let matchReportItems = [];
+let currentReportId = null;
 
 function renderMatchReport(items) {
   matchReportItems = items || [];
@@ -1075,12 +1080,208 @@ function renderMatchReport(items) {
     count.style.display = 'none';
     $('matchReportWidget').hidden = true;
     $('matchReportBtn').textContent = 'View full match report';
+    $('suspectReportBtn').hidden = true;
     return;
   }
   count.textContent = `${matchReportItems.length} book${matchReportItems.length !== 1 ? 's' : ''}`;
   count.style.display = '';
   buildMatchReportCards();
+  if (currentReportId) probeSuspectReport(currentReportId);
 }
+
+async function probeSuspectReport(reportId) {
+  const btn = $('suspectReportBtn');
+  btn.hidden = false;
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/suspect-review`);
+    if (res.ok) {
+      const data = await res.json();
+      renderSuspectReport(data);
+    } else {
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+    }
+  } catch {
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+async function generateSuspectReport() {
+  const btn = $('suspectReportBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(currentReportId)}/suspect-review`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to generate suspicion report');
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+      return;
+    }
+    const data = await res.json();
+    renderSuspectReport(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+// Fields whose reason codes flag them for highlight in the compare table.
+const SUSPECT_REASON_FIELDS = {
+  title_mismatch: 'Title',
+  series_mismatch: 'Series',
+  author_mismatch: 'Author',
+  sequence_conflict: 'Sequence',
+  visible_number_conflict: 'Sequence',
+  provider_missing_sequence: 'Sequence',
+  duration_mismatch: 'Duration',
+  low_score: 'Score',
+  unsafe_match: 'Mode',
+  series_only_mode: 'Mode',
+  duplicate_asin: 'Duplicate',
+  duplicate_local_identity: 'Duplicate',
+  unknown_title: 'Title',
+};
+
+function buildSuspectCard(item) {
+  const sev = item.severity || 'info';
+  const sevCls = `sev-${sev}`;
+  const local = item.local || {};
+  const match = item.match || {};
+  const reasons = item.reasons || [];
+
+  const flaggedFields = new Set(
+    reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean)
+  );
+  const triggerLabels = [...new Set(reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean))];
+  const triggerBadgesHtml = triggerLabels.map(l => `<span class="suspect-trigger-badge">${escapeHtml(l)}</span>`).join('');
+
+  const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
+  const bookName = local.title || pathName;
+  const scorePct = item.score != null && item.score > 0 ? Math.round(item.score * 100) : null;
+  const providerLabel = item.provider || '';
+  const writeAction = (item.write_action || '').replace(/_/g, ' ');
+
+  const article = document.createElement('article');
+  article.className = `mrep-card suspect-mrep-card ${sevCls}`;
+
+  const details = document.createElement('details');
+  details.className = 'mrep-details';
+
+  const summary = document.createElement('summary');
+  summary.className = 'mrep-head';
+  summary.innerHTML = `
+    <span class="suspect-sev-badge ${sevCls}">${escapeHtml(sev)}</span>
+    ${writeAction ? `<span class="match-write-badge">${escapeHtml(writeAction)}</span>` : ''}
+    <span class="mrep-title">${escapeHtml(bookName)}</span>
+    <div class="mrep-badges">
+      ${triggerBadgesHtml}
+      ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
+      ${providerLabel ? `<span class="match-provider-badge">${escapeHtml(providerLabel)}</span>` : ''}
+    </div>
+  `;
+  details.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'mrep-body';
+
+  const coverFolder = (item.path || '').replace(/\\/g, '/');
+  const localCoverUrl = coverFolder ? `/api/book/cover?path=${encodeURIComponent(coverFolder)}` : '';
+  const localCoverImg = localCoverUrl
+    ? `<img class="cover-thumb" src="${escapeHtml(localCoverUrl)}" alt="Local cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+  const matchCoverImg = match.cover_url
+    ? `<img class="cover-thumb" src="${escapeHtml(match.cover_url)}" alt="Match cover" onerror="this.style.display='none'" loading="lazy">`
+    : '<p class="note">No cover</p>';
+
+  const providerHead = escapeHtml(providerLabel || 'Match');
+  const titleMatch = match.title ? (match.title + (match.subtitle ? ': ' + match.subtitle : '')) : '';
+  const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
+  const matchDur = match.duration_minutes != null ? `${match.duration_minutes} min` : '';
+  const queryHtml = item.used_query
+    ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';
+
+  const tableRows = [
+    ['Title',    local.title,    titleMatch],
+    ['Author',   local.author,   match.author],
+    ['Narrator', local.narrator, match.narrator],
+    ['Series',   local.series,   match.series],
+    ['Sequence', local.sequence, match.sequence],
+    ['Duration', localDur,       matchDur],
+    ['Year',     '',             match.year],
+    ['ASIN',     '',             match.asin],
+  ].filter(([, lv, mv]) => lv || mv)
+   .map(([label, lv, mv]) => {
+     const flagged = flaggedFields.has(label) ? ' suspect-flagged' : '';
+     return `<tr class="${flagged}">
+       <th>${escapeHtml(label)}</th>
+       <td>${escapeHtml(String(lv || '—'))}</td>
+       <td>${escapeHtml(String(mv || '—'))}</td>
+     </tr>`;
+   }).join('');
+
+  const reasonsHtml = reasons.map(r =>
+    `<li><strong>${escapeHtml(r.code.replace(/_/g, ' '))}</strong>: ${escapeHtml(r.message)}</li>`
+  ).join('');
+
+  body.innerHTML = `
+    <div class="cover-comparison mrep-covers">
+      <div><strong>Local</strong>${localCoverImg}</div>
+      <div><strong>${providerHead}</strong>${matchCoverImg}</div>
+    </div>
+    ${queryHtml}
+    <table class="compare-table mrep-compare">
+      <thead><tr><th></th><th>Local</th><th>${providerHead}</th></tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+    <div class="suspect-reasons-section">
+      <strong>Flags</strong>
+      <ul>${reasonsHtml}</ul>
+      <div class="suspect-recommendation">Recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+    </div>
+  `;
+
+  details.appendChild(body);
+  article.appendChild(details);
+  return article;
+}
+
+function renderSuspectReport(data) {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  const list = $('suspectReportList');
+  const suspects = data.suspects || [];
+  const summary = data.summary || {};
+
+  widget.hidden = false;
+  btn.disabled = false;
+  btn.textContent = 'Hide Suspicion Report';
+
+  list.innerHTML = '';
+
+  if (!suspects.length) {
+    list.innerHTML = '<p class="note">No suspects found -- all would-write items look clean.</p>';
+    return;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'suspect-summary';
+  header.innerHTML = `
+    <span>${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
+    ${Object.entries(summary.severity_counts || {}).reverse().map(([sev, n]) =>
+      `<span class="suspect-sev-badge sev-${sev}">${sev}: ${n}</span>`
+    ).join('')}
+  `;
+  list.appendChild(header);
+
+  for (const item of suspects) {
+    list.appendChild(buildSuspectCard(item));
+  }
+}
+
 
 function buildMatchReportCards() {
   const list = $('matchReportList');
@@ -1258,6 +1459,18 @@ $('matchReportBtn').addEventListener('click', () => {
 });
 $('matchReportSearch').addEventListener('input', buildMatchReportCards);
 $('matchReportFilter').addEventListener('change', buildMatchReportCards);
+
+$('suspectReportBtn').addEventListener('click', () => {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  // If report is already rendered (list has children), just toggle.
+  if ($('suspectReportList').children.length) {
+    widget.hidden = !widget.hidden;
+    btn.textContent = widget.hidden ? 'View Suspicion Report' : 'Hide Suspicion Report';
+  } else {
+    generateSuspectReport();
+  }
+});
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

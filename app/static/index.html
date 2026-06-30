@@ -275,7 +275,8 @@
       <div class="report-header" id="matchReportToggle" style="cursor:pointer;display:flex;align-items:center;gap:10px;">
         <h2 style="margin:0">Match Report</h2>
         <span id="matchReportCount" class="badge" style="display:none"></span>
-        <button class="secondary" style="margin-left:auto" id="matchReportBtn">View full match report</button>
+        <button class="secondary" style="margin-left:auto" id="suspectReportBtn" hidden>Generate Suspicion Report</button>
+        <button class="secondary" id="matchReportBtn">View full match report</button>
       </div>
       <div id="matchReportWidget" hidden>
         <p class="note" style="margin-top:10px">Per-book results from the last run. Covers on the left are local (folder cover.jpg), covers on the right are from the match provider.</p>
@@ -295,6 +296,9 @@
           </select>
         </div>
         <div id="matchReportList"></div>
+      </div>
+      <div id="suspectReportWidget" hidden>
+        <div id="suspectReportList"></div>
       </div>
     </section>
 

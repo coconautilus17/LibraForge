@@ -269,9 +269,33 @@
     <!-- Developer -->
     <section id="developer" class="card settings-card">
       <h2>Developer</h2>
-      <label class="preference-field"><input type="checkbox" id="debugMode" /> Debug mode</label>
+
+      <label class="preference-field"><input type="checkbox" id="debugMode" /> Show developer links</label>
       <div id="debugLinks" hidden style="margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:0.9em">
         <a href="/api/config">App config (JSON) →</a>
+      </div>
+
+      <div style="margin-top:20px">
+        <label class="preference-field"><input type="checkbox" id="debugTrace" /> Enable debug trace on runs</label>
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;font-size:0.9em;color:var(--muted)">What gets traced?</summary>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px;font-size:0.875em;line-height:1.55;color:var(--muted)">
+            <p style="margin:0">When enabled, every run emits a structured log of the decisions made while matching your audiobooks. Three categories are traced:</p>
+            <div>
+              <strong>ALTER</strong> -- text cleaning and transformation functions. Logs the input value and what it became after normalization, stripping, or sanitization (e.g. author names, titles, series strings, sequences, tag values).
+            </div>
+            <div>
+              <strong>CHOOSE</strong> -- selection and routing decisions. Logs what options were available and which one was picked (e.g. which search query to fire, which book number to trust, which provider to use, whether a path override was applied).
+            </div>
+            <div>
+              <strong>SCORE</strong> -- match scoring. Logs the score components and final result for each candidate considered during matching (title similarity, author match, duration delta, series/sequence conflicts, omnibus range).
+            </div>
+            <p style="margin:0">Output goes to the log file path below. Leave the path blank to send trace output to the container's <code>stderr</code> instead (visible in <code>docker compose logs libraforge</code>). To review a saved log file, set a path under <code>/reports/</code> -- the <code>reports/</code> folder is bind-mounted to your host, so the file is accessible outside the container at <code>reports/debug-trace.log</code> (or whatever name you choose).</p>
+          </div>
+        </details>
+        <label class="preference-field" style="margin-top:12px">Log file path (optional)
+          <input type="text" id="debugTraceFile" placeholder="/reports/debug-trace.log" style="font-family:var(--font-mono);font-size:0.85em" />
+        </label>
       </div>
     </section>
 
