@@ -1902,6 +1902,31 @@ def browse_manual_review_path(path: str) -> dict[str, Any]:
     }
 
 
+def _make_cached_chapter_count_reader(fixer_module):
+    """Return a chapter_count_reader that serves from the on-disk per-folder cache.
+
+    build_multi_part_group_map calls this instead of running ffprobe when the
+    persistent cache file (<folder>/<folder>.chapter-count-cache.json) already
+    has a valid (mtime-matched) entry for the file.
+    """
+    loaded: dict[Path, dict] = {}
+
+    def reader(file_path: Path) -> int | None:
+        parent = file_path.parent
+        if parent not in loaded:
+            loaded[parent] = fixer_module._load_chapter_count_persistent(parent)
+        entry = loaded[parent].get(str(file_path))
+        if entry is not None:
+            try:
+                if entry.get("mtime") == file_path.stat().st_mtime:
+                    return entry.get("chapter_count")
+            except OSError:
+                pass
+        return fixer_module.read_file_chapter_count(file_path)
+
+    return reader
+
+
 def fixer_processing_context(
     *,
     target_path: Path,
@@ -1909,6 +1934,7 @@ def fixer_processing_context(
     chapter_count_reader=None,
 ) -> tuple[list[Path], dict[Path, list[Path]], list[Path]]:
     """Return source files, accepted multipart groups, and processing items."""
+    reader = chapter_count_reader or _make_cached_chapter_count_reader(fixer_module)
     if target_path.is_file():
         if not fixer_module.collect_audio_files(target_path):
             raise HTTPException(
@@ -1922,7 +1948,7 @@ def fixer_processing_context(
         ]
         sibling_group_map = fixer_module.build_multi_part_group_map(
             sibling_files,
-            chapter_count_reader=chapter_count_reader,
+            chapter_count_reader=reader,
         )
         grouped_files = sibling_group_map.get(target_path.parent, [])
         files = grouped_files if target_path in grouped_files else [target_path]
@@ -1937,7 +1963,7 @@ def fixer_processing_context(
 
     group_map = fixer_module.build_multi_part_group_map(
         files,
-        chapter_count_reader=chapter_count_reader,
+        chapter_count_reader=reader,
     )
     processing_items = fixer_module.build_processing_items(files, group_map)
     return files, group_map, processing_items
