@@ -2549,6 +2549,7 @@ def get_audible_duration_minutes(product: dict) -> float | None:
     return minutes
 
 
+@trace(SCORE, capture=["local_minutes", "audible_minutes"])
 def compare_duration(
     local_minutes: float | None, audible_minutes: float | None
 ) -> dict:
@@ -4621,6 +4622,7 @@ def get_audible_book_number_range(product: dict) -> tuple[int, int] | None:
     return None
 
 
+@trace(SCORE, capture=[])
 def omnibus_range_relation(clues: dict, product: dict) -> str:
     """Compare local and Audible omnibus spans.
 
@@ -4640,6 +4642,7 @@ def has_matching_omnibus_range(clues: dict, product: dict) -> bool:
     return omnibus_range_relation(clues, product) == "match"
 
 
+@trace(SCORE, capture=[])
 def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     """Reject wrong books in the same series when title numbers disagree.
 
@@ -4669,6 +4672,7 @@ def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     return not bool(set(local_numbers) & set(audible_numbers))
 
 
+@trace(SCORE, capture=["local_duration_minutes"])
 def strong_identity_overrides_number_conflict(
     clues: dict,
     product: dict,
@@ -4755,6 +4759,7 @@ def has_strong_local_number(clues: dict) -> bool:
     return str(clues.get("book_number_source", "")).strip() in {"title", "path"}
 
 
+@trace(SCORE, capture=["local_duration_minutes"])
 def has_sequence_conflict(
     clues: dict,
     product: dict,
@@ -5976,6 +5981,7 @@ def search_item(
         return result
 
 
+@trace(SCORE, capture=[])
 def title_evidence_score(clues: dict, product: dict) -> float:
     # Strip search-only noise ("Listening to ...", trailing "by <author>") so a
     # polluted local title still scores against the clean Audible title.
@@ -6110,6 +6116,7 @@ def significant_title_tokens(value: str) -> list[str]:
     return tokens
 
 
+@trace(SCORE, capture=[])
 def has_author_identity_conflict(clues: dict, product: dict) -> bool:
     """Detect a confidently-different author between the local book and product.
 
@@ -6176,6 +6183,7 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
     return True
 
 
+@trace(SCORE, capture=[])
 def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
     """Detect same-keywords/different-order title mismatches.
 
@@ -6207,6 +6215,7 @@ def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
     return sorted(local_tokens) == sorted(audible_tokens)
 
 
+@trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
     product: dict,
