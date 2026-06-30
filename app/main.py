@@ -640,39 +640,36 @@ def load_json(path: Path) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {path}: {exc}") from exc
 
 
+# Loading the fixer re-execs the module, which is too costly to do on every request.
+# Cache by (path, mtime) so edits to the bind-mounted script are still picked up.
+_fixer_module_cache: dict[tuple[str, int], Any] = {}
+
+
 def load_fixer_module(script_name: str = ""):
     script_path = live_script_path(script_name, "fixer")
+    try:
+        mtime = script_path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    key = (str(script_path), mtime)
+    cached = _fixer_module_cache.get(key)
+    if cached is not None:
+        return cached
 
     module_name = f"audible_fixer_{re.sub(r'[^a-zA-Z0-9_]', '_', script_name)}"
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
         raise HTTPException(status_code=500, detail=f"Could not load fixer script: {script_name}")
-
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    _fixer_module_cache.clear()  # only keep the current script version
+    _fixer_module_cache[key] = module
     return module
-
-
-# Loading the fixer re-execs the module, which is too costly to repeat per book
-# during a scan. Cache it keyed by the live script's path + mtime so edits to the
-# bind-mounted script are still picked up, but a single scan reuses one instance.
-_scan_fixer_cache: dict[tuple[str, int], Any] = {}
 
 
 def scan_fixer_module():
-    """Return the active fixer module, cached for the duration of a scan."""
-    path = live_script_path(default_fixer_script(), "fixer")
-    try:
-        mtime = path.stat().st_mtime_ns
-    except OSError:
-        mtime = 0
-    key = (str(path), mtime)
-    module = _scan_fixer_cache.get(key)
-    if module is None:
-        module = load_fixer_module(default_fixer_script())
-        _scan_fixer_cache.clear()  # only keep the current script version
-        _scan_fixer_cache[key] = module
-    return module
+    """Return the active fixer module (cached)."""
+    return load_fixer_module(default_fixer_script())
 
 
 def build_context_clues(
