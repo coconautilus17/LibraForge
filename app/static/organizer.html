@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260701-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260701-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -85,7 +85,12 @@
       <div class="actions">
         <button id="startBtn">Start organizer run</button>
         <button id="cancelBtn" class="secondary" disabled>Cancel</button>
+        <div class="cleanup-btn-group">
+          <button id="cleanupBtn" class="secondary">Cleanup source folder</button>
+          <span class="info-tip" data-tooltip="Deletes only: empty folders left after moves, *.chapter-count-cache.json files written by the fixer, and Thumbs.db thumbnail caches created by Windows. Sidecar files (.libraforge.json) and audio files are never touched."></span>
+        </div>
       </div>
+      <div id="cleanupReport" hidden></div>
       <p class="action-explanation"><strong>Start organizer run</strong> previews destinations unless Apply moves is enabled. Index-only refreshes the cache and stops before move planning; consolidation should always be reviewed as a full-root dry run first.</p>
 
       <div class="workflow-guide" aria-label="Library structure cache workflow">
@@ -168,6 +173,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260701-1"></script>
-  <script src="/static/organizer.js?v=20260701-2"></script>
+  <script src="/static/organizer.js?v=20260701-3"></script>
 </body>
 </html>

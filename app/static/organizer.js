@@ -353,7 +353,73 @@ $('suspectReportBtn').addEventListener('click', () => {
   }
 });
 
+async function runCleanup() {
+  const btn = $('cleanupBtn');
+  const report = $('cleanupReport');
+  btn.disabled = true;
+  btn.textContent = 'Cleaning…';
+  report.hidden = true;
+  try {
+    const res = await fetch('/api/organizer/cleanup-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root_path: $('rootPath').value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.detail || 'Cleanup failed'); return; }
+    renderCleanupReport(data);
+  } catch (e) {
+    alert('Cleanup request failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Cleanup source folder';
+  }
+}
+
+function renderCleanupReport(data) {
+  const report = $('cleanupReport');
+  const lines = [];
+
+  lines.push(`<p class="cleanup-summary"><strong>${data.empty_dirs_deleted}</strong> empty folder${data.empty_dirs_deleted === 1 ? '' : 's'} removed.</p>`);
+
+  if (data.json_files.length) {
+    lines.push('<p class="cleanup-section-title">Cache JSON files deleted:</p><ul class="cleanup-list">');
+    for (const f of data.json_files) {
+      const folderLabel = f.folder === '.' ? '(root)' : f.folder;
+      const ok = f.status === 'deleted';
+      lines.push(`<li class="${ok ? '' : 'cleanup-error'}">${escapeHtml(f.name)} <span class="cleanup-folder">in ${escapeHtml(folderLabel)}</span>${ok ? '' : ` — ${escapeHtml(f.status)}`}</li>`);
+    }
+    lines.push('</ul>');
+  } else {
+    lines.push('<p class="cleanup-none">No cache JSON files found.</p>');
+  }
+
+  if (data.thumbs_db.length) {
+    lines.push('<p class="cleanup-section-title">Thumbs.db files:</p><ul class="cleanup-list">');
+    for (const t of data.thumbs_db) {
+      const folderLabel = t.path === '.' ? '(root)' : t.path;
+      const ok = t.status === 'deleted';
+      lines.push(`<li class="${ok ? '' : 'cleanup-error'}">${escapeHtml(t.path === '.' ? t.name : t.path + '/' + t.name)}${ok ? ' — deleted' : ` — ${escapeHtml(t.status)}`}</li>`);
+      if (!ok) {
+        lines.push(`<li class="cleanup-tip">
+          <strong>Thumbs.db</strong> is a Windows thumbnail cache automatically created by File Explorer when you browse a folder.
+          It is safe to delete but may be locked if File Explorer has the folder open.
+          To force removal: close File Explorer, then from an administrator command prompt run
+          <code>attrib -r -h -s "${escapeHtml(folderLabel)}\\Thumbs.db"</code> followed by
+          <code>del /f /q "${escapeHtml(folderLabel)}\\Thumbs.db"</code>.
+          On Linux/Mac you can use <code>rm -f</code> directly.
+        </li>`);
+      }
+    }
+    lines.push('</ul>');
+  }
+
+  report.innerHTML = `<div class="cleanup-report">${lines.join('')}</div>`;
+  report.hidden = false;
+}
+
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
+$('cleanupBtn').addEventListener('click', runCleanup);
 loadScripts();
 resumeActiveRun();

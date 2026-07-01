@@ -2788,6 +2788,76 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
+/* ── Cleanup button group (right-aligned in .actions row) ────────────── */
+
+.cleanup-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.cleanup-report {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.cleanup-summary {
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.cleanup-section-title {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cleanup-none {
+  margin: 4px 0 0;
+  color: var(--text-soft);
+}
+
+.cleanup-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-soft);
+}
+
+.cleanup-list .cleanup-folder {
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.cleanup-list .cleanup-error {
+  color: var(--danger);
+}
+
+.cleanup-tip {
+  list-style: none;
+  margin-top: 6px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.25);
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.cleanup-tip code {
+  font-family: var(--mono);
+  background: var(--surface);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
 /* ── Danger button variant ────────────────────────────────────────────── */
 
 button.danger {
