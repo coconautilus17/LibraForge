@@ -2303,6 +2303,21 @@ def refresh_cached_multipart_audio_profiles(
     }
 
 
+def _read_sidecar_book(source_path: Path) -> dict | None:
+    """Return the applied book metadata from the libraforge.json sidecar, if present."""
+    lf_path = source_path.parent / "libraforge.json"
+    if not lf_path.is_file():
+        return None
+    try:
+        lf = json.loads(lf_path.read_text(encoding="utf-8"))
+        book = (lf.get("sidecar") or {}).get("book")
+        if book and isinstance(book, dict) and book.get("title"):
+            return book
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def _sum_group_duration(folder: Path, group_files: list[Path]) -> float | None:
     """Sum per-file duration_minutes from the folder-level libraforge.json file_cache.
 
@@ -2429,22 +2444,45 @@ def inspect_manual_review_target(
             clues["local_duration_minutes"] = total_dur
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
 
-    metadata = {
-        "title": clues.get("title", "") or clues.get("raw_title", ""),
-        "subtitle": "",
-        "author": clues.get("author", ""),
-        "narrator": clues.get("narrator", ""),
-        "series": clues.get("series", ""),
-        "sequence": clues.get("book_number", ""),
-        "year": "",
-        "summary": "",
-        "publisher": clues.get("publisher", ""),
-        "cover_url": "",
-        "asin": "",
-        "local_duration_minutes": clues.get("local_duration_minutes"),
-        "raw_title": clues.get("raw_title", ""),
-        "book_number_source": clues.get("book_number_source", ""),
-    }
+    # For live display (use_backup_tags=False), prefer the libraforge.json sidecar.book
+    # over the search-context clues. build_search_clues_from_file applies path-based
+    # overrides (folder name -> title, hierarchy -> series) that are useful for finding
+    # the right match but corrupt the "Current" column when showing post-apply state.
+    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path)
+    if sidecar_book:
+        metadata = {
+            "title": sidecar_book.get("title", "") or clues.get("raw_title", ""),
+            "subtitle": sidecar_book.get("subtitle", "") or "",
+            "author": sidecar_book.get("author", ""),
+            "narrator": sidecar_book.get("narrator", ""),
+            "series": sidecar_book.get("series", ""),
+            "sequence": sidecar_book.get("sequence", ""),
+            "year": sidecar_book.get("year", ""),
+            "summary": sidecar_book.get("summary", ""),
+            "publisher": sidecar_book.get("publisher", "") or clues.get("publisher", ""),
+            "cover_url": "",
+            "asin": sidecar_book.get("asin", "") or "",
+            "local_duration_minutes": clues.get("local_duration_minutes"),
+            "raw_title": clues.get("raw_title", ""),
+            "book_number_source": clues.get("book_number_source", ""),
+        }
+    else:
+        metadata = {
+            "title": clues.get("title", "") or clues.get("raw_title", ""),
+            "subtitle": "",
+            "author": clues.get("author", ""),
+            "narrator": clues.get("narrator", ""),
+            "series": clues.get("series", ""),
+            "sequence": clues.get("book_number", ""),
+            "year": "",
+            "summary": "",
+            "publisher": clues.get("publisher", ""),
+            "cover_url": "",
+            "asin": "",
+            "local_duration_minutes": clues.get("local_duration_minutes"),
+            "raw_title": clues.get("raw_title", ""),
+            "book_number_source": clues.get("book_number_source", ""),
+        }
 
     return {
         "path": str(target_path),

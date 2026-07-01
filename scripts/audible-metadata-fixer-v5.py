@@ -1620,11 +1620,9 @@ def write_marker(
 
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     suffix = source.suffix.lower()
-
-    if suffix in SIDECAR_OUTPUT_AUDIO_EXTENSIONS:
-        return True
-
     group_search = (clues or {}).get("group_search", {}) or {}
+    # Sidecar only for grouped multi-part books: stamping every chapter file with
+    # book-level metadata is wrong. Standalone single files get direct tag writes.
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
 
 def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
