@@ -44,6 +44,14 @@ BENIGN_SKIP_REASONS = frozenset({"already processed", "already manually applied"
 # Providers whose scores are expected to be much lower than Audible.
 GR_PROVIDERS = frozenset({"goodreads", "kindle"})
 
+# Organizer-specific patterns
+_BITRATE_PATTERN = re.compile(r"\b(?:64|96|128|192|256|320)k\b", re.IGNORECASE)
+_BRACKET_TITLE_PATTERN = re.compile(r"^\[(.+?)\]\s*-\s*(.+)$", re.IGNORECASE)
+_GENERIC_OMNI_TITLE = re.compile(
+    r"^(?:omnibus(?:,?\s*books?\s*[\d\s,\-–—]+)?|omnibus\s*-\s*books?\s*[\d\s,\-–—]+)$",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Text helpers
@@ -232,10 +240,12 @@ _MULTI_BOOK_KW = re.compile(
 _MULTI_BOOK_SEQ = re.compile(r"^\d+\s*-\s*\d+$")
 
 
-def is_multi_book(local: dict, match: dict) -> bool:
+def is_multi_book(local: dict, match: dict, path: str = "") -> bool:
     """Return True when the item is an omnibus/box-set/multi-book product.
 
     Mirrors the fixer's is_omnibus_product() logic plus local-side keyword scan.
+    Also checks ancestor path components so that omnibus container folders like
+    'Secret Alchemist (Book 1 & 2)' are detected even when titles don't say so.
     """
     for text in (
         local.get("title", ""),
@@ -246,6 +256,10 @@ def is_multi_book(local: dict, match: dict) -> bool:
             return True
     if _MULTI_BOOK_SEQ.fullmatch(str(match.get("sequence", "") or "").strip()):
         return True
+    if path:
+        for part in Path(path).parts:
+            if _MULTI_BOOK_KW.search(part):
+                return True
     return False
 
 
@@ -372,15 +386,21 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     match_seq = normalize_number(match.get("sequence"))
 
     if local_seq and match_seq and local_seq != match_seq:
+        item_path_seq = item.get("path") or item.get("source") or ""
+        in_omnibus_folder = any(_MULTI_BOOK_KW.search(p) for p in Path(item_path_seq).parts if p) if item_path_seq else False
+        seq_evidence: dict[str, Any] = {"local_sequence": local_seq, "match_sequence": match_seq}
+        if in_omnibus_folder:
+            seq_evidence["omnibus_context"] = "Path contains an omnibus/multi-book folder; local_sequence may reflect folder position, not the actual book number."
         add_reason(
             reasons, "sequence_conflict", "high",
             "Local sequence and provider sequence disagree.",
-            {"local_sequence": local_seq, "match_sequence": match_seq},
+            seq_evidence,
         )
     elif local_seq and not match_seq and mode == "full" and not is_gr:
         # GR/Kindle routinely omit sequence -- don't flag.
         # Omnibus/box-set/multi-book products on Audible also rarely carry a sequence number.
-        if (local.get("series") or match.get("series")) and not is_multi_book(local, match):
+        item_path = item.get("path") or item.get("source") or ""
+        if (local.get("series") or match.get("series")) and not is_multi_book(local, match, item_path):
             add_reason(
                 reasons, "provider_missing_sequence", "medium",
                 "Local item has a sequence but the Audible match has none.",
@@ -397,10 +417,13 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     for number, sources in number_to_sources.items():
         sources_str = ", ".join(sources)
         if local_seq and number != local_seq:
+            corroborates_match = bool(match_seq and number == match_seq)
             add_reason(
                 reasons, "visible_number_conflict", "high",
-                f"Visible number {number!r} (from {sources_str}) conflicts with local sequence {local_seq!r}.",
-                {"visible_number": number, "sources": sources, "local_sequence": local_seq},
+                f"Visible number {number!r} (from {sources_str}) conflicts with local sequence {local_seq!r}."
+                + (" Visible number matches provider sequence -- local_sequence was likely extracted incorrectly." if corroborates_match else ""),
+                {"visible_number": number, "sources": sources, "local_sequence": local_seq,
+                 **({"corroborates_match_sequence": match_seq} if corroborates_match else {})},
             )
         elif match_seq and number != match_seq and not local_seq:
             # Only flag match-sequence conflict when there's no local_seq (already covered above)
@@ -550,6 +573,46 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
                    "Organizer sequence differs from target folder number.",
                    {"selected_number": number, "visible_target_number": visible_target})
 
+    # Bitrate annotation (64k/128k/320k) leaked from source path into the organizer title.
+    if _BITRATE_PATTERN.search(title):
+        add_reason(reasons, "bitrate_in_title", "high",
+                   "Organizer title contains a bitrate annotation leaked from the source path.",
+                   {"title": title, "bitrate": _BITRATE_PATTERN.search(title).group(0)})
+
+    # ABS-style duplicated bracket artifact: '[Title (Unabridged)] - Title (Unabridged)'.
+    bracket_m = _BRACKET_TITLE_PATTERN.match(title)
+    if bracket_m:
+        inner = normalize(bracket_m.group(1))
+        outer = normalize(bracket_m.group(2))
+        if inner and outer and SequenceMatcher(None, inner, outer).ratio() > 0.5:
+            add_reason(reasons, "title_bracket_artifact", "high",
+                       "Title is an ABS-style '[title] - title' duplication artifact.",
+                       {"title": title})
+
+    # Source is the _unorganized root itself and metadata is thin -- the file has no sub-folder of its own and
+    # the organizer had to infer everything from the file's embedded tags alone.
+    if source and Path(source).name == "_unorganized" and (not title or not series):
+        add_reason(reasons, "source_is_unorganized_root", "medium",
+                   "Source is the _unorganized root directory with incomplete metadata; file has no sub-folder to derive context from.",
+                   {"source": source, "title": title, "series": series})
+
+    # Series name baked redundantly into the title (e.g. "Towers of Heaven - Book 1" with series "Towers of Heaven").
+    if series and title and len(series) > 10:
+        title_lc = title.casefold()
+        series_lc = series.casefold()
+        for sep in (",", " -", ":"):
+            if title_lc.startswith(series_lc + sep):
+                add_reason(reasons, "title_has_redundant_series_prefix", "low",
+                           "Title starts with the series name; the series field already captures it.",
+                           {"series": series, "title": title})
+                break
+
+    # Generic omnibus label with no real book title (e.g. "Omnibus, Books 1-3").
+    if _GENERIC_OMNI_TITLE.match(title.strip()):
+        add_reason(reasons, "generic_omnibus_title", "low",
+                   "Organizer title is a generic omnibus label with no identifiable book title.",
+                   {"title": title, "series": series})
+
     if not reasons:
         return None
 
@@ -569,10 +632,17 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
 # ---------------------------------------------------------------------------
 
 def infer_report_kind(report: dict[str, Any]) -> str:
-    if isinstance(report.get("report_items"), list):
+    # Prefer the explicit kind field in stats when available.
+    explicit_kind = clean_text((report.get("stats") or {}).get("kind", ""))
+    if explicit_kind == "organizer":
+        return "organizer"
+    if explicit_kind in {"metadata_fixer", "fixer"}:
         return "metadata_fixer"
+    # Fall back to structural inference.
     if isinstance((report.get("stats") or {}).get("move_items"), list):
         return "organizer"
+    if isinstance(report.get("report_items"), list) and report.get("report_items"):
+        return "metadata_fixer"
     if isinstance(report.get("items"), list) and "mode_breakdown" in (report.get("stats") or {}):
         return "metadata_fixer"
     return "unknown"
