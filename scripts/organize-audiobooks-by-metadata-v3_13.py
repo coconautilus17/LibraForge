@@ -1245,6 +1245,11 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         # Bold Beginnings" → "Bold Beginnings"), but only when the result is
         # non-trivial so "The Bright Lord" (series "The Bright") stays intact.
         cleaned = sanitize_path_name(title, "") or fallback
+        # Strip technical release tokens (bitrate, codec, year) that survive
+        # sanitize_path_name.  cleanup_title_artifacts is intentionally skipped
+        # for trusted titles to avoid wiping genre keywords, but release tokens
+        # such as (128k) or [WEB] are never real title content.
+        cleaned = strip_release_bracket_tokens(cleaned).strip(" -_.,") or cleaned
         # Strip trailing marketing descriptor suffix if present.
         without_suffix = remove_trailing_marketing_descriptor(cleaned)
         if without_suffix and without_suffix != cleaned:
