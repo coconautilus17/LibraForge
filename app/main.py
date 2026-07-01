@@ -2338,6 +2338,36 @@ def _sum_group_duration(folder: Path, group_files: list[Path]) -> float | None:
         return None
 
 
+def _probe_and_cache_group_duration(
+    group_files: list[Path], fixer_module, max_files: int = 200
+) -> float | None:
+    """Probe all files concurrently for duration and save to libraforge.json file_cache.
+
+    Skips groups larger than max_files to avoid multi-second hangs on extreme
+    cases (e.g. 600-file .ogg chapter splits).  Results are cached so the next
+    manual-review load is instant.
+    """
+    if not group_files or len(group_files) > max_files:
+        return None
+    workers = min(16, len(group_files))
+    per_file: list[tuple[dict, float | None]] = [({}, None)] * len(group_files)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(fixer_module.probe_file, f): i for i, f in enumerate(group_files)}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                per_file[idx] = fut.result()
+            except Exception:
+                pass
+    try:
+        fixer_module._save_group_file_cache(group_files, per_file)
+    except Exception:
+        pass
+    total = sum(float(dur or 0) for _, dur in per_file)
+    found = sum(1 for _, dur in per_file if dur is not None)
+    return round(total, 2) if found > 0 else None
+
+
 def inspect_manual_review_target(
     *,
     path: str,
@@ -2385,13 +2415,16 @@ def inspect_manual_review_target(
     # When the group_map was stripped to avoid ffprobing a large group, the clues
     # won't have group_search.applied. Restore it so apply writes a folder-level
     # sidecar instead of tagging an individual chapter file.
-    # Also compute the total duration by summing all files from the libraforge cache.
+    # Also compute the total duration: prefer the cached libraforge.json file_cache,
+    # fall back to a concurrent ffprobe pass (one-time cost, results saved to cache).
     if not effective_group_map and real_group:
         gs = clues.setdefault("group_search", {})
         gs["applied"] = True
         gs.setdefault("folder", str(group_key))
         gs.setdefault("file_count", len(real_group))
         total_dur = _sum_group_duration(group_key, real_group)
+        if total_dur is None:
+            total_dur = _probe_and_cache_group_duration(real_group, fixer_module)
         if total_dur is not None:
             clues["local_duration_minutes"] = total_dur
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
