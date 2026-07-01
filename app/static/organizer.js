@@ -1,6 +1,7 @@
 let currentRun = null;
 let pollTimer = null;
 let latestMoveItems = [];
+let latestStats = {};
 let currentOrgReportId = null;
 
 // Strip the trailing filename from a path so only the directory is shown.
@@ -73,10 +74,70 @@ function collectRequest() {
   };
 }
 
+function buildOrgConfirmDialog() {
+  if ($('orgApplyConfirmDialog')) return;
+  const dlg = document.createElement('dialog');
+  dlg.id = 'orgApplyConfirmDialog';
+  dlg.className = 'manual-apply-dialog org-confirm-dialog';
+  dlg.innerHTML = `
+    <h3 class="manual-apply-title org-confirm-danger-title">Files will be moved — are you sure?</h3>
+    <div class="org-confirm-paths">
+      <div class="org-confirm-path-row">
+        <span class="org-confirm-label">From</span>
+        <span class="org-confirm-path-value mono" id="orgConfirmFrom"></span>
+      </div>
+      <div class="org-confirm-path-row">
+        <span class="org-confirm-label">To</span>
+        <span class="org-confirm-path-value mono" id="orgConfirmTo"></span>
+      </div>
+    </div>
+    <p class="org-confirm-stat" id="orgConfirmStat"></p>
+    <div class="manual-apply-warning">
+      <strong>Before applying:</strong> review all flagged cards and their review reasons above.
+      Generate a <strong>Suspicion Report</strong> to catch identity mismatches before committing.
+      Any moves that fail or are skipped will need to be corrected manually afterwards.
+    </div>
+    <div class="manual-apply-actions">
+      <button id="orgConfirmCancel" class="secondary">Cancel</button>
+      <button id="orgConfirmOk" class="danger">Move files</button>
+    </div>`;
+  document.body.appendChild(dlg);
+}
+
+function showOrgApplyConfirm(req) {
+  buildOrgConfirmDialog();
+  const dlg = $('orgApplyConfirmDialog');
+  $('orgConfirmFrom').textContent = req.root_path;
+  $('orgConfirmTo').textContent = req.destination_root;
+
+  const parts = [];
+  if (latestStats.structure_cache_entries != null) parts.push(`${latestStats.structure_cache_entries} cached series structures`);
+  if (latestStats.planned_moves != null) parts.push(`${latestStats.planned_moves} moves planned in last run`);
+  const stat = $('orgConfirmStat');
+  stat.textContent = parts.join(' · ');
+  stat.hidden = parts.length === 0;
+
+  return new Promise((resolve) => {
+    const onOk = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    const onBackdrop = (e) => { if (e.target === dlg) onCancel(); };
+    function cleanup() {
+      $('orgConfirmOk').removeEventListener('click', onOk);
+      $('orgConfirmCancel').removeEventListener('click', onCancel);
+      dlg.removeEventListener('click', onBackdrop);
+      dlg.close();
+    }
+    $('orgConfirmOk').addEventListener('click', onOk);
+    $('orgConfirmCancel').addEventListener('click', onCancel);
+    dlg.addEventListener('click', onBackdrop);
+    dlg.showModal();
+  });
+}
+
 async function startRun() {
   const req = collectRequest();
   if (req.apply) {
-    const ok = confirm('This run will move files or folders. Continue?');
+    const ok = await showOrgApplyConfirm(req);
     if (!ok) return;
   }
 
@@ -130,6 +191,7 @@ function render(state) {
   $('tail').textContent = (state.tail || []).join('\n');
   $('tail').scrollTop = $('tail').scrollHeight;
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
+  latestStats = stats;
   renderStats(stats);
   latestMoveItems = stats.move_items || [];
   populateReviewReasonFilter(latestMoveItems);
