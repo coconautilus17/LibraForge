@@ -1921,6 +1921,8 @@ def parse_legacy_series_container(name: str) -> dict[str, str]:
     Supported forms:
       Series - Author - Narrator
       Author - Series (#1-6)
+      Series (Book 1 & 2)
+      Series (Books 1-3)
     """
     cleaned = sanitize_path_name(cleanup_title_artifacts(name), "")
     if not cleaned:
@@ -1938,6 +1940,13 @@ def parse_legacy_series_container(name: str) -> dict[str, str]:
         if re.search(r"\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)", right) or re.search(r"\bbooks?\s*#?\d", right, flags=re.IGNORECASE):
             series = re.sub(r"\s*\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)\s*$", "", right).strip()
             return {"series": clean_series_name(series), "author": left, "narrator": ""}
+    if len(parts) == 1:
+        # "Series Name (Book 1 & 2)" or "Series Name (Books 1-3)" collection container.
+        book_range = re.search(r"\(books?\s+[^)]+\)", parts[0], flags=re.IGNORECASE)
+        if book_range:
+            series_part = parts[0][:book_range.start()].strip(" -_.,")
+            if series_part:
+                return {"series": clean_series_name(series_part), "author": "", "narrator": ""}
     return {}
 
 
@@ -2718,10 +2727,9 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
             and has_distinct_book_title(path_title, series, book_number)
             and not is_marketing_descriptor(path_title)
         ):
-            # title == series is a strong signal the metadata is incomplete or
-            # wrong-matched. Prefer the path title regardless of source trust.
-            use_path_title = True
-            add_review_reason("title matches series name; path title used instead")
+            # title == series: no distinct book title in metadata; collapse to
+            # sequence only ("Book N") rather than using the noisy path title.
+            add_review_reason("title matches series name; using sequence only")
         elif trusted_metadata and path_title_differs:
             if title_conflict_should_trigger_review(
                 metadata_title=metadata_title,
