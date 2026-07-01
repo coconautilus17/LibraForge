@@ -366,6 +366,8 @@ def is_release_bracket_token(value: str) -> bool:
         return True
     if re.fullmatch(r"\d{2,4}", token):
         return True
+    if re.fullmatch(r"\d+k(?:bps)?", token, flags=re.IGNORECASE):
+        return True
     if re.fullmatch(r"(?:eng|en|english|heb|he|jpn|jp|ja|japanese)", token, flags=re.IGNORECASE):
         return True
     if _NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token):
@@ -1255,6 +1257,14 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
             numbered = clean_title_from_number(cleaned)
             if numbered and not title_is_bad_after_cleanup(numbered):
                 cleaned = numbered
+        elif stripped != cleaned and title_is_bad_after_cleanup(stripped) and series_clean and book_number:
+            # strip_series_prefix left only "Book N" or a similar bare label —
+            # the full title is just <Series> + sequence. Collapse it to the
+            # series name so build_book_folder_name() emits "Book 001" instead
+            # of repeating the series name as the folder title.
+            redundant = strip_redundant_series_sequence_title(cleaned, series_clean, book_number)
+            if redundant and not title_is_bad_after_cleanup(redundant):
+                cleaned = redundant
         return cleaned or fallback
     cleaned_seed = cleanup_title_artifacts(title)
     if not cleaned_seed and series:
@@ -2618,6 +2628,26 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
                 path_book_number = path_series_suffix_number
                 break
 
+    # When trusted sidecar metadata reports an omnibus range (e.g. "001-003")
+    # but the book folder name is shaped like "<Series> N", the folder path is
+    # the authoritative clue about which individual book this is.  The fixer
+    # likely matched the omnibus Audible entry instead of the single book.
+    if trusted_metadata and not path_book_number and "-" in str(tag_book_number) and series:
+        for suffix_source in (item.source_path.name, item.representative.stem):
+            p = small_series_suffix_number_from_text(suffix_source, series)
+            if p and "-" not in p:
+                try:
+                    rng_parts = str(tag_book_number).split("-")
+                    if int(rng_parts[0]) <= int(p) <= int(rng_parts[-1]):
+                        book_number = p
+                        tag_book_number = p
+                        title = series
+                        metadata_title = series
+                        add_review_reason("omnibus range in sidecar overridden by single-book path number")
+                        break
+                except (ValueError, IndexError):
+                    pass
+
     # Some Audible/fixer marker payloads can carry a bad sequence even though
     # the chosen title and path both clearly expose the real sequence, e.g.
     # title="Corruption Wielder 2", path="Corruption Wielder Book 2",
@@ -3714,10 +3744,10 @@ def print_move(move: dict[str, Any]) -> None:
     if metadata.get("book_number"):
         label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
         print(f"  Number: {label} {display_book_number(metadata['book_number'])}")
-    # Always display directory paths for consistency. Folder moves already use
-    # folder paths; loose-file moves show the containing folder and destination
-    # folder so both kinds look the same.
-    source_display = move["source"] if move["kind"] == "folder" else move["source"].parent
+    # Folder moves show directory paths. Loose-file moves show the actual file
+    # path so the report captures which specific file is moving (the parent
+    # directory is ambiguous when the file lives directly in the scan root).
+    source_display = move["source"]
     target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
     print("  MOVE:")
     print(f"    {source_display}")
