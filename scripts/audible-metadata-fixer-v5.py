@@ -1929,7 +1929,7 @@ def write_audiobookshelf_metadata_json(
         target = get_audiobookshelf_metadata_path(source, clues, alone_in_folder)
 
     authors = [
-        {"name": name.strip()}
+        name.strip()
         for name in re.split(r"\s*,\s*", metadata.get("author", "") or "")
         if name.strip()
     ]
@@ -1940,10 +1940,9 @@ def write_audiobookshelf_metadata_json(
     ]
     series = []
     if metadata.get("series"):
-        series.append({
-            "name": metadata["series"],
-            "sequence": metadata.get("sequence", "") or "",
-        })
+        series_name = metadata["series"]
+        seq = metadata.get("sequence", "") or ""
+        series.append(f"{series_name} #{seq}" if seq else series_name)
 
     payload = {
         "title": metadata.get("title", "") or "",
