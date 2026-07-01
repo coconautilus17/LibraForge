@@ -131,6 +131,7 @@ function render(state) {
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
   renderStats(stats);
   latestMoveItems = stats.move_items || [];
+  populateReviewReasonFilter(latestMoveItems);
   renderRisks(latestMoveItems);
   renderMoves(latestMoveItems);
 }
@@ -184,11 +185,23 @@ function renderRisks(items) {
   $("moveRiskSummary").className = risks.length ? "review-alert danger" : "review-alert";
 }
 
+function populateReviewReasonFilter(items) {
+  const select = $("reviewReasonFilter");
+  const current = select.value;
+  const reasons = [...new Set(
+    items.flatMap((item) => item.review_reasons || [])
+  )].sort();
+  select.innerHTML = '<option value="">All reasons</option>'
+    + reasons.map((r) => `<option value="${escapeHtml(r)}"${r === current ? " selected" : ""}>${escapeHtml(r)}</option>`).join("");
+}
+
 function renderMoves(items) {
   const query = $("moveSearch").value.trim().toLowerCase();
   const reviewOnly = $("reviewOnly").checked;
+  const reasonFilter = $("reviewReasonFilter").value;
   const filtered = items.filter((item) => {
     if (reviewOnly && !isReviewMove(item)) return false;
+    if (reasonFilter && !(item.review_reasons || []).includes(reasonFilter)) return false;
     if (!query) return true;
     return [item.title, item.author, item.series, item.number, item.source, item.target]
       .some((value) => String(value || "").toLowerCase().includes(query));
@@ -229,6 +242,7 @@ function renderMoves(items) {
 
 $("moveSearch").addEventListener("input", () => renderMoves(latestMoveItems));
 $("reviewOnly").addEventListener("change", () => renderMoves(latestMoveItems));
+$("reviewReasonFilter").addEventListener("change", () => renderMoves(latestMoveItems));
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
