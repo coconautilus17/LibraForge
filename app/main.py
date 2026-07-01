@@ -14,6 +14,7 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -75,6 +76,56 @@ DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 # account is whichever one currently mirrors DEFAULT_AUTH_FILE.
 ACCOUNTS_DIR = Path("/auth/accounts")
 ABS_AGG_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-agg.json"
+RETENTION_CONFIG_FILE = APP_ROOT.parent / "config" / "retention.json"
+
+
+def _load_retention_config() -> dict[str, Any]:
+    try:
+        if RETENTION_CONFIG_FILE.exists():
+            return json.loads(RETENTION_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"max_age_days_enabled": False, "max_age_days": 30, "max_count_enabled": False, "max_count": 20}
+
+
+def _save_retention_config(config: dict[str, Any]) -> None:
+    RETENTION_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RETENTION_CONFIG_FILE.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _prune_reports() -> list[str]:
+    """Apply retention rules and return list of deleted run IDs."""
+    cfg = _load_retention_config()
+    report_files = sorted(REPORTS_DIR.glob("*.report.json"), reverse=True)
+
+    to_delete: set[Path] = set()
+
+    if cfg.get("max_age_days_enabled"):
+        max_age = int(cfg.get("max_age_days") or 30)
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age * 86400
+        for p in report_files:
+            if p.stat().st_mtime < cutoff:
+                to_delete.add(p)
+
+    if cfg.get("max_count_enabled"):
+        max_count = int(cfg.get("max_count") or 20)
+        for p in report_files[max_count:]:
+            to_delete.add(p)
+
+    deleted: list[str] = []
+    for report_path in to_delete:
+        run_id = report_path.name.replace(".report.json", "")
+        for suffix in (".report.json", ".log.txt", ".report.suspect-review.json"):
+            companion = REPORTS_DIR / f"{run_id}{suffix}"
+            try:
+                companion.unlink(missing_ok=True)
+            except OSError:
+                pass
+        deleted.append(run_id)
+    return deleted
 
 # Fallback provider catalog used when abs-agg is unreachable.
 # IDs must match the abs-agg URL slugs exactly (verified against /providers endpoint).
@@ -1527,6 +1578,7 @@ def write_final_report(state: RunState) -> None:
     }
     state.report_path = REPORTS_DIR / f"{state.id}.report.json"
     state.report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    _prune_reports()
 
 
 def stream_process_output(
@@ -5573,6 +5625,29 @@ def list_scripts() -> dict[str, Any]:
         "default_script": fixer_scripts[-1] if fixer_scripts else "",
         "default_organizer_script": organizer_scripts[-1] if organizer_scripts else "",
     }
+
+
+@app.get("/api/settings/retention")
+def get_retention_settings() -> dict[str, Any]:
+    return _load_retention_config()
+
+
+@app.put("/api/settings/retention")
+def save_retention_settings(req: dict[str, Any]) -> dict[str, Any]:
+    cfg = {
+        "max_age_days_enabled": bool(req.get("max_age_days_enabled")),
+        "max_age_days": max(1, int(req.get("max_age_days") or 30)),
+        "max_count_enabled": bool(req.get("max_count_enabled")),
+        "max_count": max(1, int(req.get("max_count") or 20)),
+    }
+    _save_retention_config(cfg)
+    return cfg
+
+
+@app.post("/api/reports/prune")
+def prune_reports_now() -> dict[str, Any]:
+    deleted = _prune_reports()
+    return {"deleted": deleted, "count": len(deleted)}
 
 
 @app.get("/api/settings/title-noise")
