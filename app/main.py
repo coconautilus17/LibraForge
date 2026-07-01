@@ -5654,6 +5654,57 @@ def start_m4b_run(req: M4BRunRequest) -> dict[str, Any]:
     return {"id": run_id}
 
 
+class OrganizerCleanupRequest(BaseModel):
+    root_path: str
+
+
+@app.post("/api/organizer/cleanup-source")
+def organizer_cleanup_source(req: OrganizerCleanupRequest) -> dict[str, Any]:
+    """Delete empty folders, Thumbs.db files, and chapter-count-cache JSON files
+    from the organizer scan root after books have been moved out."""
+    root = assert_under_audiobooks(validate_existing_path(req.root_path))
+
+    # Chapter-count-cache JSON files left behind by the fixer.
+    # Pattern: <folder>/<folder>.chapter-count-cache.json
+    CACHE_SUFFIX = ".chapter-count-cache.json"
+    json_deleted: list[dict[str, str]] = []
+    for cache_file in sorted(root.rglob(f"*{CACHE_SUFFIX}")):
+        rel = str(cache_file.parent.relative_to(root)) or "."
+        try:
+            cache_file.unlink()
+            json_deleted.append({"name": cache_file.name, "folder": rel, "status": "deleted"})
+        except OSError as exc:
+            json_deleted.append({"name": cache_file.name, "folder": rel, "status": f"error: {exc}"})
+
+    # Thumbs.db thumbnail cache files created by Windows Explorer.
+    thumbs_results: list[dict[str, str]] = []
+    for thumbs in sorted(p for p in root.rglob("*") if p.name.lower() == "thumbs.db"):
+        rel = str(thumbs.parent.relative_to(root)) or "."
+        try:
+            thumbs.unlink()
+            thumbs_results.append({"path": rel, "name": thumbs.name, "status": "deleted"})
+        except OSError as exc:
+            thumbs_results.append({"path": rel, "name": thumbs.name, "status": f"error: {exc}"})
+
+    # Empty directories — walk deepest-first so parents become empty after children.
+    empty_dirs_deleted = 0
+    for dirpath in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if dirpath == root or not dirpath.is_dir():
+            continue
+        try:
+            dirpath.rmdir()
+            empty_dirs_deleted += 1
+        except OSError:
+            pass
+
+    return {
+        "root": str(root),
+        "empty_dirs_deleted": empty_dirs_deleted,
+        "json_files": json_deleted,
+        "thumbs_db": thumbs_results,
+    }
+
+
 @app.post("/api/organizer/runs")
 def start_organizer_run(req: OrganizerRunRequest) -> dict[str, Any]:
     run_id = datetime_id()

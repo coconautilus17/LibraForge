@@ -1,6 +1,7 @@
 let currentRun = null;
 let pollTimer = null;
 let latestMoveItems = [];
+let latestStats = {};
 let currentOrgReportId = null;
 
 // Strip the trailing filename from a path so only the directory is shown.
@@ -73,10 +74,70 @@ function collectRequest() {
   };
 }
 
+function buildOrgConfirmDialog() {
+  if ($('orgApplyConfirmDialog')) return;
+  const dlg = document.createElement('dialog');
+  dlg.id = 'orgApplyConfirmDialog';
+  dlg.className = 'manual-apply-dialog org-confirm-dialog';
+  dlg.innerHTML = `
+    <h3 class="manual-apply-title org-confirm-danger-title">Files will be moved — are you sure?</h3>
+    <div class="org-confirm-paths">
+      <div class="org-confirm-path-row">
+        <span class="org-confirm-label">From</span>
+        <span class="org-confirm-path-value mono" id="orgConfirmFrom"></span>
+      </div>
+      <div class="org-confirm-path-row">
+        <span class="org-confirm-label">To</span>
+        <span class="org-confirm-path-value mono" id="orgConfirmTo"></span>
+      </div>
+    </div>
+    <p class="org-confirm-stat" id="orgConfirmStat"></p>
+    <div class="manual-apply-warning">
+      <strong>Before applying:</strong> review all flagged cards and their review reasons above.
+      Generate a <strong>Suspicion Report</strong> to catch identity mismatches before committing.
+      Any moves that fail or are skipped will need to be corrected manually afterwards.
+    </div>
+    <div class="manual-apply-actions">
+      <button id="orgConfirmCancel" class="secondary">Cancel</button>
+      <button id="orgConfirmOk" class="danger">Move files</button>
+    </div>`;
+  document.body.appendChild(dlg);
+}
+
+function showOrgApplyConfirm(req) {
+  buildOrgConfirmDialog();
+  const dlg = $('orgApplyConfirmDialog');
+  $('orgConfirmFrom').textContent = req.root_path;
+  $('orgConfirmTo').textContent = req.destination_root;
+
+  const parts = [];
+  if (latestStats.structure_cache_entries != null) parts.push(`${latestStats.structure_cache_entries} cached series structures`);
+  if (latestStats.planned_moves != null) parts.push(`${latestStats.planned_moves} moves planned in last run`);
+  const stat = $('orgConfirmStat');
+  stat.textContent = parts.join(' · ');
+  stat.hidden = parts.length === 0;
+
+  return new Promise((resolve) => {
+    const onOk = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    const onBackdrop = (e) => { if (e.target === dlg) onCancel(); };
+    function cleanup() {
+      $('orgConfirmOk').removeEventListener('click', onOk);
+      $('orgConfirmCancel').removeEventListener('click', onCancel);
+      dlg.removeEventListener('click', onBackdrop);
+      dlg.close();
+    }
+    $('orgConfirmOk').addEventListener('click', onOk);
+    $('orgConfirmCancel').addEventListener('click', onCancel);
+    dlg.addEventListener('click', onBackdrop);
+    dlg.showModal();
+  });
+}
+
 async function startRun() {
   const req = collectRequest();
   if (req.apply) {
-    const ok = confirm('This run will move files or folders. Continue?');
+    const ok = await showOrgApplyConfirm(req);
     if (!ok) return;
   }
 
@@ -130,6 +191,7 @@ function render(state) {
   $('tail').textContent = (state.tail || []).join('\n');
   $('tail').scrollTop = $('tail').scrollHeight;
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
+  latestStats = stats;
   renderStats(stats);
   latestMoveItems = stats.move_items || [];
   populateReviewReasonFilter(latestMoveItems);
@@ -291,7 +353,73 @@ $('suspectReportBtn').addEventListener('click', () => {
   }
 });
 
+async function runCleanup() {
+  const btn = $('cleanupBtn');
+  const report = $('cleanupReport');
+  btn.disabled = true;
+  btn.textContent = 'Cleaning…';
+  report.hidden = true;
+  try {
+    const res = await fetch('/api/organizer/cleanup-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root_path: $('rootPath').value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.detail || 'Cleanup failed'); return; }
+    renderCleanupReport(data);
+  } catch (e) {
+    alert('Cleanup request failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Cleanup source folder';
+  }
+}
+
+function renderCleanupReport(data) {
+  const report = $('cleanupReport');
+  const lines = [];
+
+  lines.push(`<p class="cleanup-summary"><strong>${data.empty_dirs_deleted}</strong> empty folder${data.empty_dirs_deleted === 1 ? '' : 's'} removed.</p>`);
+
+  if (data.json_files.length) {
+    lines.push('<p class="cleanup-section-title">Cache JSON files deleted:</p><ul class="cleanup-list">');
+    for (const f of data.json_files) {
+      const folderLabel = f.folder === '.' ? '(root)' : f.folder;
+      const ok = f.status === 'deleted';
+      lines.push(`<li class="${ok ? '' : 'cleanup-error'}">${escapeHtml(f.name)} <span class="cleanup-folder">in ${escapeHtml(folderLabel)}</span>${ok ? '' : ` — ${escapeHtml(f.status)}`}</li>`);
+    }
+    lines.push('</ul>');
+  } else {
+    lines.push('<p class="cleanup-none">No cache JSON files found.</p>');
+  }
+
+  if (data.thumbs_db.length) {
+    lines.push('<p class="cleanup-section-title">Thumbs.db files:</p><ul class="cleanup-list">');
+    for (const t of data.thumbs_db) {
+      const folderLabel = t.path === '.' ? '(root)' : t.path;
+      const ok = t.status === 'deleted';
+      lines.push(`<li class="${ok ? '' : 'cleanup-error'}">${escapeHtml(t.path === '.' ? t.name : t.path + '/' + t.name)}${ok ? ' — deleted' : ` — ${escapeHtml(t.status)}`}</li>`);
+      if (!ok) {
+        lines.push(`<li class="cleanup-tip">
+          <strong>Thumbs.db</strong> is a Windows thumbnail cache automatically created by File Explorer when you browse a folder.
+          It is safe to delete but may be locked if File Explorer has the folder open.
+          To force removal: close File Explorer, then from an administrator command prompt run
+          <code>attrib -r -h -s "${escapeHtml(folderLabel)}\\Thumbs.db"</code> followed by
+          <code>del /f /q "${escapeHtml(folderLabel)}\\Thumbs.db"</code>.
+          On Linux/Mac you can use <code>rm -f</code> directly.
+        </li>`);
+      }
+    }
+    lines.push('</ul>');
+  }
+
+  report.innerHTML = `<div class="cleanup-report">${lines.join('')}</div>`;
+  report.hidden = false;
+}
+
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
+$('cleanupBtn').addEventListener('click', runCleanup);
 loadScripts();
 resumeActiveRun();
