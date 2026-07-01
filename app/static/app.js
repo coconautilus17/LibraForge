@@ -95,6 +95,8 @@ function collectRequest() {
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchProvider')?.value || 'audible') : 'audible',
     abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchAbsProvider')?.value || 'audible') : 'audible',
     enable_goodreads_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableGoodreadsFallback')?.checked) : false,
+    debug_trace: fixerMajorVersion($('script').value) >= 5 ? Boolean(prefs.debugTrace) : false,
+    debug_trace_file: prefs.debugTraceFile || "",
     min_score: parseFloat($('minScore').value || '0.7'),
     limit: parseInt($('limit').value || '50', 10),
     max_files: parseInt($('maxFiles').value || '0', 10),
@@ -207,6 +209,7 @@ function render(state) {
   renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
+  currentReportId = state.id || null;
   renderMatchReport(state.report_items || []);
 }
 
@@ -1050,6 +1053,7 @@ async function loadLastReport() {
     if (!res.ok) { alert((await res.json()).detail || 'No report found'); return; }
     const report = await res.json();
     latestState = report;
+    currentReportId = report.id || null;
     renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
@@ -1065,6 +1069,7 @@ async function loadLastReport() {
 // ── Match Report Widget ──────────────────────────────────────────────────────
 
 let matchReportItems = [];
+let currentReportId = null;
 
 function renderMatchReport(items) {
   matchReportItems = items || [];
@@ -1075,12 +1080,61 @@ function renderMatchReport(items) {
     count.style.display = 'none';
     $('matchReportWidget').hidden = true;
     $('matchReportBtn').textContent = 'View full match report';
+    $('suspectReportBtn').hidden = true;
     return;
   }
   count.textContent = `${matchReportItems.length} book${matchReportItems.length !== 1 ? 's' : ''}`;
   count.style.display = '';
   buildMatchReportCards();
+  if (currentReportId) probeSuspectReport(currentReportId);
 }
+
+async function probeSuspectReport(reportId) {
+  const btn = $('suspectReportBtn');
+  btn.hidden = false;
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/suspect-review`);
+    if (res.ok) {
+      const data = await res.json();
+      renderSuspectReport(data);
+    } else {
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+    }
+  } catch {
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+async function generateSuspectReport() {
+  const btn = $('suspectReportBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  try {
+    const res = await fetch(`/api/reports/${encodeURIComponent(currentReportId)}/suspect-review`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to generate suspicion report');
+      btn.textContent = 'Generate Suspicion Report';
+      btn.disabled = false;
+      return;
+    }
+    const data = await res.json();
+    renderSuspectReport(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.textContent = 'Generate Suspicion Report';
+    btn.disabled = false;
+  }
+}
+
+const { buildSuspectCard, renderSuspectReport: _renderSuspectReport } = window.UiCommon;
+
+function renderSuspectReport(data) {
+  _renderSuspectReport(data, $('suspectReportBtn'), $('suspectReportWidget'), $('suspectReportList'));
+}
+
 
 function buildMatchReportCards() {
   const list = $('matchReportList');
@@ -1258,6 +1312,18 @@ $('matchReportBtn').addEventListener('click', () => {
 });
 $('matchReportSearch').addEventListener('input', buildMatchReportCards);
 $('matchReportFilter').addEventListener('change', buildMatchReportCards);
+
+$('suspectReportBtn').addEventListener('click', () => {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  // If report is already rendered (list has children), just toggle.
+  if ($('suspectReportList').children.length) {
+    widget.hidden = !widget.hidden;
+    btn.textContent = widget.hidden ? 'View Suspicion Report' : 'Hide Suspicion Report';
+  } else {
+    generateSuspectReport();
+  }
+});
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

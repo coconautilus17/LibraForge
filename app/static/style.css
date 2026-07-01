@@ -2957,3 +2957,99 @@ summary:focus-visible {
   padding: 4px 10px !important;
   margin-top: 2px;
 }
+
+/* ── Suspect Report Widget ───────────────────────────────────────────────── */
+
+#suspectReportWidget {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.suspect-summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.suspect-sev-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.suspect-sev-badge.sev-high   { background: var(--danger-soft);  color: var(--danger);  }
+.suspect-sev-badge.sev-medium { background: var(--warning-soft); color: var(--warning); }
+.suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
+.suspect-sev-badge.sev-info   { background: var(--surface-raised); color: var(--muted); }
+
+.suspect-trigger-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 99px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+#suspectReportList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: 900px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 10px;
+}
+
+/* Full-width rows: summary header and empty state */
+#suspectReportList > .suspect-summary,
+#suspectReportList > p {
+  grid-column: 1 / -1;
+}
+
+/* Reuse mrep-card but add severity left border */
+.suspect-mrep-card {
+  border-left: 3px solid var(--border-strong);
+}
+.suspect-mrep-card.sev-high   { border-left-color: var(--danger);  }
+.suspect-mrep-card.sev-medium { border-left-color: var(--warning); }
+.suspect-mrep-card.sev-low    { border-left-color: var(--muted);   }
+.suspect-mrep-card.sev-info   { border-left-color: var(--muted);   }
+
+/* Highlight flagged rows in the compare table */
+.mrep-compare tr.suspect-flagged th { color: var(--danger); }
+.mrep-compare tr.suspect-flagged td { color: var(--danger); font-weight: 600; }
+
+.suspect-reasons-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-soft);
+}
+
+.suspect-reasons-section ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.suspect-reasons-section li { margin: 3px 0; }
+
+.suspect-recommendation {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.suspect-recommendation em { color: var(--accent); font-style: normal; }

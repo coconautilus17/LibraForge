@@ -1,6 +1,7 @@
 let currentRun = null;
 let pollTimer = null;
 let latestMoveItems = [];
+let currentOrgReportId = null;
 
 // Strip the trailing filename from a path so only the directory is shown.
 // Paths ending in a known audio extension are treated as files; others as dirs.
@@ -134,6 +135,16 @@ function render(state) {
   populateReviewReasonFilter(latestMoveItems);
   renderRisks(latestMoveItems);
   renderMoves(latestMoveItems);
+
+  if (state.id && state.id !== currentOrgReportId) {
+    currentOrgReportId = state.id;
+    $('suspectReportBtn').hidden = false;
+    $('suspectReportBtn').disabled = false;
+    $('suspectReportBtn').textContent = 'Generate Suspicion Report';
+    $('suspectReportWidget').hidden = true;
+    $('suspectReportList').innerHTML = '';
+    probeSuspectReport(state.id);
+  }
 }
 
 function renderStats(stats) {
@@ -243,6 +254,42 @@ function renderMoves(items) {
 $("moveSearch").addEventListener("input", () => renderMoves(latestMoveItems));
 $("reviewOnly").addEventListener("change", () => renderMoves(latestMoveItems));
 $("reviewReasonFilter").addEventListener("change", () => renderMoves(latestMoveItems));
+
+const { renderSuspectReport: _renderSuspectReport } = window.UiCommon;
+
+function renderOrgSuspectReport(data) {
+  _renderSuspectReport(data, $('suspectReportBtn'), $('suspectReportWidget'), $('suspectReportList'));
+}
+
+async function probeSuspectReport(reportId) {
+  const btn = $('suspectReportBtn');
+  const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/suspect-review`).catch(() => null);
+  if (!res || !res.ok) { btn.hidden = false; return; }
+  const data = await res.json();
+  if (data.suspects) renderOrgSuspectReport(data);
+}
+
+async function generateSuspectReport() {
+  const btn = $('suspectReportBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  const res = await fetch(`/api/reports/${encodeURIComponent(currentOrgReportId)}/suspect-review`, { method: 'POST' }).catch(() => null);
+  if (!res || !res.ok) { btn.disabled = false; btn.textContent = 'Generate Suspicion Report'; return; }
+  const data = await res.json();
+  renderOrgSuspectReport(data);
+}
+
+$('suspectReportBtn').addEventListener('click', () => {
+  const btn = $('suspectReportBtn');
+  const widget = $('suspectReportWidget');
+  if ($('suspectReportList').children.length) {
+    const isHidden = widget.hidden;
+    widget.hidden = !isHidden;
+    btn.textContent = isHidden ? 'Hide Suspicion Report' : 'Show Suspicion Report';
+  } else {
+    generateSuspectReport();
+  }
+});
 
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);

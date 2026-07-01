@@ -253,6 +253,184 @@
     try { return localStorage.getItem(RUN_STORAGE_PREFIX + pageKey) || null; } catch (_e) { return null; }
   }
 
+  // ---------------------------------------------------------------------------
+  // Suspect report shared rendering
+  // ---------------------------------------------------------------------------
+
+  const SUSPECT_REASON_FIELDS = {
+    title_mismatch: 'Title',
+    series_mismatch: 'Series',
+    author_mismatch: 'Author',
+    sequence_conflict: 'Sequence',
+    visible_number_conflict: 'Sequence',
+    provider_missing_sequence: 'Sequence',
+    organizer_source_number_conflict: 'Sequence',
+    organizer_target_number_conflict: 'Sequence',
+    duration_mismatch: 'Duration',
+    low_score: 'Score',
+    unsafe_match: 'Mode',
+    series_only_mode: 'Mode',
+    duplicate_asin: 'Duplicate',
+    duplicate_local_identity: 'Duplicate',
+    unknown_title: 'Title',
+    unknown_author: 'Author',
+    bitrate_in_title: 'Title',
+    title_bracket_artifact: 'Title',
+    title_has_redundant_series_prefix: 'Title',
+    generic_omnibus_title: 'Title',
+  };
+
+  function buildSuspectCard(item) {
+    const sev = item.severity || 'info';
+    const sevCls = `sev-${sev}`;
+    const local = item.local || {};
+    const match = item.match || {};
+    const reasons = item.reasons || [];
+
+    const flaggedFields = new Set(
+      reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean)
+    );
+    const triggerLabels = [...new Set(reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean))];
+    const triggerBadgesHtml = triggerLabels.map(l => `<span class="suspect-trigger-badge">${escapeHtml(l)}</span>`).join('');
+
+    const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
+    const bookName = local.title || pathName;
+    const scorePct = item.score != null && item.score > 0 ? Math.round(item.score * 100) : null;
+    const providerLabel = item.provider || '';
+    const writeAction = (item.write_action || '').replace(/_/g, ' ');
+
+    const article = document.createElement('article');
+    article.className = `mrep-card suspect-mrep-card ${sevCls}`;
+
+    const details = document.createElement('details');
+    details.className = 'mrep-details';
+
+    const summary = document.createElement('summary');
+    summary.className = 'mrep-head';
+    summary.innerHTML = `
+      <span class="suspect-sev-badge ${sevCls}">${escapeHtml(sev)}</span>
+      ${writeAction ? `<span class="match-write-badge">${escapeHtml(writeAction)}</span>` : ''}
+      <span class="mrep-title">${escapeHtml(bookName)}</span>
+      <div class="mrep-badges">
+        ${triggerBadgesHtml}
+        ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
+        ${providerLabel ? `<span class="match-provider-badge">${escapeHtml(providerLabel)}</span>` : ''}
+      </div>
+    `;
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'mrep-body';
+
+    const coverFolder = (item.path || '').replace(/\\/g, '/');
+    const localCoverUrl = coverFolder ? `/api/book/cover?path=${encodeURIComponent(coverFolder)}` : '';
+    const localCoverImg = localCoverUrl
+      ? `<img class="cover-thumb" src="${escapeHtml(localCoverUrl)}" alt="Local cover" onerror="this.style.display='none'" loading="lazy">`
+      : '<p class="note">No cover</p>';
+    const matchCoverImg = match.cover_url
+      ? `<img class="cover-thumb" src="${escapeHtml(match.cover_url)}" alt="Match cover" onerror="this.style.display='none'" loading="lazy">`
+      : '<p class="note">No cover</p>';
+
+    const providerHead = escapeHtml(providerLabel || 'Match');
+    const titleMatch = match.title ? (match.title + (match.subtitle ? ': ' + match.subtitle : '')) : '';
+    const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
+    const matchDur = match.duration_minutes != null ? `${match.duration_minutes} min` : '';
+    const queryHtml = item.used_query
+      ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';
+
+    const isOrganizerItem = item.tool === 'organizer';
+    const tableRows = isOrganizerItem
+      ? [
+          ['Title',    local.title,  ''],
+          ['Author',   local.author, ''],
+          ['Series',   local.series, ''],
+          ['Sequence', local.sequence, ''],
+          ['Source',   item.path || '', ''],
+          ['Target',   local.target || '', ''],
+          ['Metadata', local.metadata_source || '', ''],
+        ].filter(([, lv]) => lv)
+         .map(([label, lv]) => {
+           const flagged = flaggedFields.has(label) ? ' suspect-flagged' : '';
+           return `<tr class="${flagged}">
+             <th>${escapeHtml(label)}</th>
+             <td colspan="2">${escapeHtml(String(lv))}</td>
+           </tr>`;
+         }).join('')
+      : [
+          ['Title',    local.title,    titleMatch],
+          ['Author',   local.author,   match.author],
+          ['Narrator', local.narrator, match.narrator],
+          ['Series',   local.series,   match.series],
+          ['Sequence', local.sequence, match.sequence],
+          ['Duration', localDur,       matchDur],
+          ['Year',     '',             match.year],
+          ['ASIN',     '',             match.asin],
+        ].filter(([, lv, mv]) => lv || mv)
+         .map(([label, lv, mv]) => {
+           const flagged = flaggedFields.has(label) ? ' suspect-flagged' : '';
+           return `<tr class="${flagged}">
+             <th>${escapeHtml(label)}</th>
+             <td>${escapeHtml(String(lv || '—'))}</td>
+             <td>${escapeHtml(String(mv || '—'))}</td>
+           </tr>`;
+         }).join('');
+
+    const reasonsHtml = reasons.map(r =>
+      `<li><strong>${escapeHtml(r.code.replace(/_/g, ' '))}</strong>: ${escapeHtml(r.message)}</li>`
+    ).join('');
+
+    body.innerHTML = `
+      <div class="cover-comparison mrep-covers">
+        <div><strong>Local</strong>${localCoverImg}</div>
+        <div><strong>${providerHead}</strong>${matchCoverImg}</div>
+      </div>
+      ${queryHtml}
+      <table class="compare-table mrep-compare">
+        <thead><tr><th></th>${isOrganizerItem ? '<th colspan="2">Organizer</th>' : `<th>Local</th><th>${escapeHtml(providerHead)}</th>`}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      <div class="suspect-reasons-section">
+        <strong>Flags</strong>
+        <ul>${reasonsHtml}</ul>
+        <div class="suspect-recommendation">Recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+      </div>
+    `;
+
+    details.appendChild(body);
+    article.appendChild(details);
+    return article;
+  }
+
+  function renderSuspectReport(data, btnEl, widgetEl, listEl) {
+    const suspects = data.suspects || [];
+    const summary = data.summary || {};
+
+    widgetEl.hidden = false;
+    btnEl.disabled = false;
+    btnEl.textContent = 'Hide Suspicion Report';
+
+    listEl.innerHTML = '';
+
+    if (!suspects.length) {
+      listEl.innerHTML = '<p class="note">No suspects found -- all items look clean.</p>';
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'suspect-summary';
+    header.innerHTML = `
+      <span>${suspects.length} suspect${suspects.length !== 1 ? 's' : ''}</span>
+      ${Object.entries(summary.severity_counts || {}).reverse().map(([sev, n]) =>
+        `<span class="suspect-sev-badge sev-${sev}">${sev}: ${n}</span>`
+      ).join('')}
+    `;
+    listEl.appendChild(header);
+
+    for (const item of suspects) {
+      listEl.appendChild(buildSuspectCard(item));
+    }
+  }
+
   window.UiCommon = {
     escapeHtml,
     renderDownloadLinks,
@@ -270,5 +448,8 @@
     searchAbsAgg,
     scoreBadge,
     initFolderBrowser,
+    buildSuspectCard,
+    renderSuspectReport,
+    SUSPECT_REASON_FIELDS,
   };
 })();

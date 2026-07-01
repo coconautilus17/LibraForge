@@ -6,6 +6,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -412,6 +413,10 @@ def is_organizer_script(script_name: str) -> bool:
     return script_name.startswith("organize-audiobooks") and script_name.endswith(".py")
 
 
+def is_fixer_script(script_name: str) -> bool:
+    return script_name.startswith("audible-metadata-fixer") and script_name.endswith(".py")
+
+
 def discover_scripts() -> tuple[list[str], list[str]]:
     scripts = sorted(
         path.name
@@ -419,7 +424,7 @@ def discover_scripts() -> tuple[list[str], list[str]]:
         if path.is_file() and path.suffix == ".py"
     )
     organizer_scripts = [name for name in scripts if is_organizer_script(name)]
-    fixer_scripts = [name for name in scripts if not is_organizer_script(name)]
+    fixer_scripts = [name for name in scripts if is_fixer_script(name)]
     return fixer_scripts, organizer_scripts
 
 
@@ -635,39 +640,36 @@ def load_json(path: Path) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {path}: {exc}") from exc
 
 
+# Loading the fixer re-execs the module, which is too costly to do on every request.
+# Cache by (path, mtime) so edits to the bind-mounted script are still picked up.
+_fixer_module_cache: dict[tuple[str, int], Any] = {}
+
+
 def load_fixer_module(script_name: str = ""):
     script_path = live_script_path(script_name, "fixer")
+    try:
+        mtime = script_path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    key = (str(script_path), mtime)
+    cached = _fixer_module_cache.get(key)
+    if cached is not None:
+        return cached
 
     module_name = f"audible_fixer_{re.sub(r'[^a-zA-Z0-9_]', '_', script_name)}"
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
         raise HTTPException(status_code=500, detail=f"Could not load fixer script: {script_name}")
-
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    _fixer_module_cache.clear()  # only keep the current script version
+    _fixer_module_cache[key] = module
     return module
-
-
-# Loading the fixer re-execs the module, which is too costly to repeat per book
-# during a scan. Cache it keyed by the live script's path + mtime so edits to the
-# bind-mounted script are still picked up, but a single scan reuses one instance.
-_scan_fixer_cache: dict[tuple[str, int], Any] = {}
 
 
 def scan_fixer_module():
-    """Return the active fixer module, cached for the duration of a scan."""
-    path = live_script_path(default_fixer_script(), "fixer")
-    try:
-        mtime = path.stat().st_mtime_ns
-    except OSError:
-        mtime = 0
-    key = (str(path), mtime)
-    module = _scan_fixer_cache.get(key)
-    if module is None:
-        module = load_fixer_module(default_fixer_script())
-        _scan_fixer_cache.clear()  # only keep the current script version
-        _scan_fixer_cache[key] = module
-    return module
+    """Return the active fixer module (cached)."""
+    return load_fixer_module(default_fixer_script())
 
 
 def build_context_clues(
@@ -883,6 +885,8 @@ class RunRequest(BaseModel):
     provider: str = "audible"
     abs_provider: str = "audible"
     enable_goodreads_fallback: bool = False
+    debug_trace: bool = False
+    debug_trace_file: str = ""
 
 
 class M4BMetadataForm(BaseModel):
@@ -1641,6 +1645,11 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
             if _region:
                 cmd += ["--abs-tract-kindle-region", _region]
 
+    if req.debug_trace:
+        cmd.append("--debug-trace")
+        if req.debug_trace_file:
+            cmd += ["--debug-trace-file", req.debug_trace_file]
+
     return cmd, float(req.duration_review_threshold or 10.0)
 
 
@@ -1893,6 +1902,31 @@ def browse_manual_review_path(path: str) -> dict[str, Any]:
     }
 
 
+def _make_cached_chapter_count_reader(fixer_module):
+    """Return a chapter_count_reader that serves from the on-disk per-folder cache.
+
+    build_multi_part_group_map calls this instead of running ffprobe when the
+    persistent cache file (<folder>/<folder>.chapter-count-cache.json) already
+    has a valid (mtime-matched) entry for the file.
+    """
+    loaded: dict[Path, dict] = {}
+
+    def reader(file_path: Path) -> int | None:
+        parent = file_path.parent
+        if parent not in loaded:
+            loaded[parent] = fixer_module._load_chapter_count_persistent(parent)
+        entry = loaded[parent].get(str(file_path))
+        if entry is not None:
+            try:
+                if entry.get("mtime") == file_path.stat().st_mtime:
+                    return entry.get("chapter_count")
+            except OSError:
+                pass
+        return fixer_module.read_file_chapter_count(file_path)
+
+    return reader
+
+
 def fixer_processing_context(
     *,
     target_path: Path,
@@ -1900,6 +1934,7 @@ def fixer_processing_context(
     chapter_count_reader=None,
 ) -> tuple[list[Path], dict[Path, list[Path]], list[Path]]:
     """Return source files, accepted multipart groups, and processing items."""
+    reader = chapter_count_reader or _make_cached_chapter_count_reader(fixer_module)
     if target_path.is_file():
         if not fixer_module.collect_audio_files(target_path):
             raise HTTPException(
@@ -1908,12 +1943,12 @@ def fixer_processing_context(
             )
         sibling_files = [
             item
-            for item in fixer_module.collect_audio_files(target_path.parent)
-            if item.parent == target_path.parent
+            for item in target_path.parent.iterdir()
+            if item.is_file() and fixer_module.is_supported_audio_file(item)
         ]
         sibling_group_map = fixer_module.build_multi_part_group_map(
             sibling_files,
-            chapter_count_reader=chapter_count_reader,
+            chapter_count_reader=reader,
         )
         grouped_files = sibling_group_map.get(target_path.parent, [])
         files = grouped_files if target_path in grouped_files else [target_path]
@@ -1928,7 +1963,7 @@ def fixer_processing_context(
 
     group_map = fixer_module.build_multi_part_group_map(
         files,
-        chapter_count_reader=chapter_count_reader,
+        chapter_count_reader=reader,
     )
     processing_items = fixer_module.build_processing_items(files, group_map)
     return files, group_map, processing_items
@@ -2279,21 +2314,41 @@ def inspect_manual_review_target(
         target_path=target_path,
         fixer_module=fixer_module,
     )
-    files, group_map, processing_items = sidecar_context or fixer_processing_context(
-        target_path=target_path,
-        fixer_module=fixer_module,
-    )
+    if sidecar_context is not None:
+        files, group_map, processing_items = sidecar_context
+    elif target_path.is_file():
+        # Single file with no sidecar: skip sibling scan and chapter probing entirely.
+        # build_multi_part_group_map on the parent would ffprobe every sibling, which
+        # can take 10+ seconds when the parent is a large flat directory over NFS.
+        if not fixer_module.is_supported_audio_file(target_path):
+            raise HTTPException(status_code=400, detail=f"Unsupported audiobook file: {target_path}")
+        files, group_map, processing_items = [target_path], {}, [target_path]
+    else:
+        files, group_map, processing_items = fixer_processing_context(
+            target_path=target_path,
+            fixer_module=fixer_module,
+        )
     if len(processing_items) != 1:
         raise HTTPException(
             status_code=400,
             detail="Path must point to a single book file or grouped book folder",
         )
     source_path = processing_items[0]
+    # For large multi-part groups (e.g. 600-chapter .ogg books), build_search_context
+    # would ffprobe every chapter file to gather tags. For manual review we only need
+    # one representative file's tags -- title/author/series are the same in all parts.
+    # Strip the group from group_map when it has more than a few files so
+    # build_search_context falls through to the single-file path.
+    group_key = source_path.parent
+    if len(group_map.get(group_key) or []) > 4:
+        effective_group_map: dict = {}
+    else:
+        effective_group_map = group_map
     # Use original pre-apply tags (format_tags from backup) so the manual
     # review form reflects what the file looked like before the fixer wrote to
     # it. Falls back to probing the live file when no backup exists.
     queries, clues, _ = fixer_module.build_search_context(
-        source_path, group_map, use_backup_tags=True
+        source_path, effective_group_map, use_backup_tags=True
     )
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
 
@@ -5710,3 +5765,41 @@ def get_latest_report() -> dict[str, Any]:
         if "python" in cmd0 or "fixer" in cmd0:
             return report_for_api(report)
     raise HTTPException(status_code=404, detail="No fixer reports found")
+
+
+def _suspect_review_path(report_id: str) -> Path:
+    return safe_child(REPORTS_DIR, f"{report_id}.report.suspect-review.json")
+
+
+@app.get("/api/reports/{report_id}/suspect-review")
+def get_suspect_review(report_id: str) -> dict[str, Any]:
+    path = _suspect_review_path(report_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Suspect review not yet generated")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/reports/{report_id}/suspect-review")
+def generate_suspect_review(report_id: str) -> dict[str, Any]:
+    report_path = safe_child(REPORTS_DIR, f"{report_id}.report.json")
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Source report not found")
+    review_script = safe_child(SCRIPTS_DIR, "review-libraforge-report.py")
+    if not review_script.exists():
+        raise HTTPException(status_code=500, detail="review-libraforge-report.py not found in scripts dir")
+    out_path = _suspect_review_path(report_id)
+    result = subprocess.run(
+        [sys.executable, str(review_script), str(report_path), "-o", str(out_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=result.stderr or result.stdout or "Script failed")
+    try:
+        return json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -35,6 +35,120 @@ try:
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
     )
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
+    from app.debug_trace import ALTER, CHOOSE, SCORE
+    from app.fixer.parsing import (
+        # text normalization
+        clean_text, is_technical_label_block,
+        sanitize_technical_labels, sanitize_book_title,
+        normalize_for_match, sanitize_tag,
+        UNAMBIGUOUS_TECHNICAL_LABEL_RE, AMBIGUOUS_CODEC_LABEL_RE, TECHNICAL_QUALIFIER_RE,
+        # parenthetical helpers
+        extract_first_parenthetical, remove_parenthetical,
+        # author helpers
+        clean_author_value, canonicalize_author_credits,
+        _split_author_names, _authors_compatible, _initials_dedup_key,
+        _NAME_FUNCTION_WORDS,
+        looks_like_person_name, should_prefer_path_author,
+        # series helpers
+        extract_series_from_trailing_segment, clean_series_value,
+        # tag utilities
+        first_existing_tag,
+        # number helpers
+        roman_to_int, normalize_book_number,
+        extract_book_number_from_text, extract_folder_book_number,
+        extract_book_number_from_path, extract_title_identity_number,
+        get_local_number_identity_candidates,
+        # book number range
+        parse_book_number_range, get_local_book_number_range,
+        # sequence helpers
+        is_single_numeric_sequence, clean_sequence,
+        parse_sequence_number, sequence_values_equal, sequence_values_differ,
+        # book text parsers
+        parse_structured_book_text, parse_descriptive_book_text,
+        parse_series_sequence_segment, parse_identity_rich_book_text,
+        parse_structured_book_from_path, parse_descriptive_book_from_path,
+        # metadata parsers
+        parse_title_series_number_from_metadata,
+        is_invalid_local_title, recover_invalid_local_title,
+        # query noise helpers
+        SEARCH_TITLE_PREFIX_NOISE, _TRAILING_BY_AUTHOR_RE,
+        strip_publisher_search_noise, strip_title_search_noise,
+        extract_author_from_title, goodreads_title_query_variants,
+        normalize_book_label_for_match, strip_leading_sequence_from_title,
+        # misc utilities
+        is_generic_chapter_title, pick_most_common_value,
+    )
+    from app.fixer.clues import (
+        apply_structured_path_override,
+        capture_publisher_clue,
+        build_search_queries_from_clues,
+        choose_group_book_number,
+        infer_group_identity_from_path,
+        clean_group_folder_title,
+    )
+    from app.fixer.scoring import (
+        AGGRESSIVE_SCORE_THRESHOLD,
+        score_product_for_metadata,
+        pick_best_match_for_metadata,
+        metadata_from_product,
+        get_primary_series,
+        clean_provider_genres,
+        is_generic_series_number_title,
+        compare_duration,
+        get_audible_duration_minutes,
+        get_people,
+        get_year,
+        has_number_identity_conflict,
+        has_sequence_conflict,
+        has_reordered_title_conflict,
+        has_author_identity_conflict,
+        has_matching_omnibus_range,
+        omnibus_range_relation,
+        get_audible_number_candidates,
+        get_audible_book_number_range,
+        strong_identity_overrides_number_conflict,
+        has_strong_local_number,
+        title_evidence_score,
+        product_title_equals_series,
+        is_omnibus_product,
+        significant_title_tokens,
+        preferred_audible_sequence,
+        determine_edit_mode,
+        get_cover_url,
+        choose_best_title,
+    )
+    from app.fixer.tagging import (
+        MUTAGEN_MP4_EXTENSIONS,
+        MUTAGEN_MP3_EXTENSIONS,
+        mutagen_mp4_is_available,
+        mutagen_mp3_is_available,
+        mutagen_is_available,
+        is_mutagen_mp4_candidate,
+        is_mutagen_mp3_candidate,
+        is_mutagen_candidate,
+        mp4_set_text,
+        mp4_set_track,
+        mp4_set_freeform,
+        id3_set_text,
+        id3_set_txxx,
+        id3_set_track,
+        build_metadata_args,
+    )
+    from app.fixer.search import (
+        audible_search,
+        audible_lookup_by_asin,
+        abs_search,
+        abs_agg_search,
+        _abs_match_to_product,
+        _ABS_TRACT_BREAKER,
+        _ABS_TRACT_BREAKER_THRESHOLD,
+        _abs_tract_breaker_is_open,
+        abs_tract_search,
+        detect_special_provider,
+        get_thread_client,
+        cached_audible_search,
+    )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -44,6 +158,120 @@ except ModuleNotFoundError:
         special_provider_for,
         strip_publisher_noise,
         SPECIAL_PROVIDERS,
+    )
+    from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
+    from app.debug_trace import ALTER, CHOOSE, SCORE
+    from app.fixer.parsing import (
+        # text normalization
+        clean_text, is_technical_label_block,
+        sanitize_technical_labels, sanitize_book_title,
+        normalize_for_match, sanitize_tag,
+        UNAMBIGUOUS_TECHNICAL_LABEL_RE, AMBIGUOUS_CODEC_LABEL_RE, TECHNICAL_QUALIFIER_RE,
+        # parenthetical helpers
+        extract_first_parenthetical, remove_parenthetical,
+        # author helpers
+        clean_author_value, canonicalize_author_credits,
+        _split_author_names, _authors_compatible, _initials_dedup_key,
+        _NAME_FUNCTION_WORDS,
+        looks_like_person_name, should_prefer_path_author,
+        # series helpers
+        extract_series_from_trailing_segment, clean_series_value,
+        # tag utilities
+        first_existing_tag,
+        # number helpers
+        roman_to_int, normalize_book_number,
+        extract_book_number_from_text, extract_folder_book_number,
+        extract_book_number_from_path, extract_title_identity_number,
+        get_local_number_identity_candidates,
+        # book number range
+        parse_book_number_range, get_local_book_number_range,
+        # sequence helpers
+        is_single_numeric_sequence, clean_sequence,
+        parse_sequence_number, sequence_values_equal, sequence_values_differ,
+        # book text parsers
+        parse_structured_book_text, parse_descriptive_book_text,
+        parse_series_sequence_segment, parse_identity_rich_book_text,
+        parse_structured_book_from_path, parse_descriptive_book_from_path,
+        # metadata parsers
+        parse_title_series_number_from_metadata,
+        is_invalid_local_title, recover_invalid_local_title,
+        # query noise helpers
+        SEARCH_TITLE_PREFIX_NOISE, _TRAILING_BY_AUTHOR_RE,
+        strip_publisher_search_noise, strip_title_search_noise,
+        extract_author_from_title, goodreads_title_query_variants,
+        normalize_book_label_for_match, strip_leading_sequence_from_title,
+        # misc utilities
+        is_generic_chapter_title, pick_most_common_value,
+    )
+    from app.fixer.clues import (
+        apply_structured_path_override,
+        capture_publisher_clue,
+        build_search_queries_from_clues,
+        choose_group_book_number,
+        infer_group_identity_from_path,
+        clean_group_folder_title,
+    )
+    from app.fixer.scoring import (
+        AGGRESSIVE_SCORE_THRESHOLD,
+        score_product_for_metadata,
+        pick_best_match_for_metadata,
+        metadata_from_product,
+        get_primary_series,
+        clean_provider_genres,
+        is_generic_series_number_title,
+        compare_duration,
+        get_audible_duration_minutes,
+        get_people,
+        get_year,
+        has_number_identity_conflict,
+        has_sequence_conflict,
+        has_reordered_title_conflict,
+        has_author_identity_conflict,
+        has_matching_omnibus_range,
+        omnibus_range_relation,
+        get_audible_number_candidates,
+        get_audible_book_number_range,
+        strong_identity_overrides_number_conflict,
+        has_strong_local_number,
+        title_evidence_score,
+        product_title_equals_series,
+        is_omnibus_product,
+        significant_title_tokens,
+        preferred_audible_sequence,
+        determine_edit_mode,
+        get_cover_url,
+        choose_best_title,
+    )
+    from app.fixer.tagging import (
+        MUTAGEN_MP4_EXTENSIONS,
+        MUTAGEN_MP3_EXTENSIONS,
+        mutagen_mp4_is_available,
+        mutagen_mp3_is_available,
+        mutagen_is_available,
+        is_mutagen_mp4_candidate,
+        is_mutagen_mp3_candidate,
+        is_mutagen_candidate,
+        mp4_set_text,
+        mp4_set_track,
+        mp4_set_freeform,
+        id3_set_text,
+        id3_set_txxx,
+        id3_set_track,
+        build_metadata_args,
+    )
+    from app.fixer.search import (
+        audible_search,
+        audible_lookup_by_asin,
+        abs_search,
+        abs_agg_search,
+        _abs_match_to_product,
+        _ABS_TRACT_BREAKER,
+        _ABS_TRACT_BREAKER_THRESHOLD,
+        _abs_tract_breaker_is_open,
+        abs_tract_search,
+        detect_special_provider,
+        get_thread_client,
+        cached_audible_search,
     )
 
 try:
@@ -115,18 +343,14 @@ TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
 # the current book's writes complete rather than being killed mid-write.
 _cancel_requested = False
 
-
 def _handle_sigterm(signum: int, frame: object) -> None:
     global _cancel_requested
     _cancel_requested = True
-
 
 try:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 except (ValueError, OSError):
     pass  # not in main thread (e.g. imported by FastAPI worker)
-MUTAGEN_MP4_EXTENSIONS = {".m4b", ".m4a", ".mp4"}
-MUTAGEN_MP3_EXTENSIONS = {".mp3"}
 # Formats that should be treated as a single audiobook when multiple files
 # exist in the same folder. MP3/OPUS/OGG were already supported for tagging;
 # M4A/M4B are included for chapter-split MP4 audiobook containers. OGG behaves
@@ -161,22 +385,6 @@ MIN_SHARED_IDENTITY_TOKENS = 2
 # accepted multi-file group.
 SIDECAR_OUTPUT_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg"}
 
-AGGRESSIVE_SCORE_THRESHOLD = 0.70
-
-RESPONSE_GROUPS = ",".join(
-    [
-        "contributors",
-        "media",
-        "product_attrs",
-        "product_desc",
-        "product_extended_attrs",
-        "series",
-    ]
-)
-
-GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
-
-
 @dataclass
 class ItemResult:
     index: int
@@ -204,7 +412,6 @@ class ItemResult:
     source_provider: str = ""  # provider id when matched via fallback/special source
     from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
 
-
 def get_marker_path(source: Path) -> Path:
     """Return the preferred per-file marker path.
 
@@ -218,19 +425,15 @@ def get_marker_path(source: Path) -> Path:
     """
     return source.with_name(f"{source.name}{MARKER_SUFFIX}")
 
-
 def get_legacy_marker_path(source: Path) -> Path:
     return source.parent / MARKER_FILENAME
-
 
 def load_marker(source: Path) -> dict:
     _, payload = _load_libraforge_raw(source)
     return payload.get("marker", {})
 
-
 def get_metadata_backup_path(source: Path) -> Path:
     return source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}")
-
 
 def get_libraforge_path(
     source: Path, clues: dict | None = None, alone: bool = False
@@ -240,7 +443,6 @@ def get_libraforge_path(
         return source.parent / "libraforge.json"
     return source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}")
 
-
 def _write_libraforge(path: Path, payload: dict) -> None:
     try:
         path.write_text(
@@ -249,7 +451,6 @@ def _write_libraforge(path: Path, payload: dict) -> None:
         )
     except OSError:
         pass
-
 
 def _load_libraforge_raw(
     source: Path, clues: dict | None = None, alone: bool = False
@@ -379,7 +580,6 @@ def _load_libraforge_raw(
 
     return lf_path, payload
 
-
 def get_m4b_tool_metadata_path(source: Path, clues: dict | None = None) -> Path:
     group_search = (clues or {}).get("group_search", {}) or {}
 
@@ -388,7 +588,6 @@ def get_m4b_tool_metadata_path(source: Path, clues: dict | None = None) -> Path:
         return folder / f"{folder.name}{M4B_TOOL_METADATA_SUFFIX}"
 
     return source.with_name(f"{source.name}{M4B_TOOL_METADATA_SUFFIX}")
-
 
 def get_audiobookshelf_metadata_path(
     source: Path, clues: dict | None = None, alone_in_folder: bool = False
@@ -407,7 +606,6 @@ def get_audiobookshelf_metadata_path(
         return source.parent / "metadata.json"
 
     return source.with_name(source.name + ".metadata.json")
-
 
 def write_original_metadata_backup(
     source: Path,
@@ -444,7 +642,6 @@ def write_original_metadata_backup(
     _write_libraforge(lf_path, payload)
     return lf_path
 
-
 def build_raw_metadata_args(tags: dict) -> list[str]:
     args: list[str] = []
 
@@ -459,7 +656,6 @@ def build_raw_metadata_args(tags: dict) -> list[str]:
 
     return args
 
-
 def mark_metadata_restored(source: Path) -> None:
     lf_path, payload = _load_libraforge_raw(source)
     if not payload.get("marker"):
@@ -471,16 +667,13 @@ def mark_metadata_restored(source: Path) -> None:
     except (OSError, KeyError):
         return
 
-
 def path_is_ignored(file_path: Path) -> bool:
     parts = {part.lower() for part in file_path.parts}
     return bool(parts & IGNORED_PATH_PARTS)
 
-
 def is_temporary_output_file(file_path: Path) -> bool:
     name_lower = file_path.name.lower()
     return any(marker in name_lower for marker in TEMP_OUTPUT_MARKERS)
-
 
 def is_supported_audio_file(file_path: Path) -> bool:
     if path_is_ignored(file_path):
@@ -499,11 +692,9 @@ def is_supported_audio_file(file_path: Path) -> bool:
 
     return True
 
-
 def get_file_type(file_path: Path) -> str:
     suffix = file_path.suffix.lower().lstrip(".")
     return suffix or "unknown"
-
 
 def safe_ffmpeg_copy_metadata_command(
     source: Path,
@@ -550,7 +741,6 @@ def safe_ffmpeg_copy_metadata_command(
     cmd.append(str(tmp_path))
     return cmd
 
-
 def load_metadata_backup_payload(source: Path) -> tuple[Path, dict]:
     lf_path, payload = _load_libraforge_raw(source)
     backup = payload.get("backup", {})
@@ -558,7 +748,6 @@ def load_metadata_backup_payload(source: Path) -> tuple[Path, dict]:
     if not isinstance(tags, dict) or not tags:
         raise FileNotFoundError(f"no backup data found: {lf_path}")
     return lf_path, tags
-
 
 def ffmpeg_restore_metadata_from_backup(source: Path) -> Path:
     backup_path, tags = load_metadata_backup_payload(source)
@@ -594,38 +783,11 @@ def ffmpeg_restore_metadata_from_backup(source: Path) -> Path:
 
     return backup_path
 
-
-def mutagen_mp4_is_available() -> bool:
-    return MP4 is not None and MP4FreeForm is not None and MP4Cover is not None
-
-
-def mutagen_mp3_is_available() -> bool:
-    return ID3 is not None and APIC is not None and TXXX is not None
-
-
-def mutagen_is_available() -> bool:
-    return mutagen_mp4_is_available() or mutagen_mp3_is_available()
-
-
-def is_mutagen_mp4_candidate(source: Path) -> bool:
-    return source.suffix.lower() in MUTAGEN_MP4_EXTENSIONS
-
-
-def is_mutagen_mp3_candidate(source: Path) -> bool:
-    return source.suffix.lower() in MUTAGEN_MP3_EXTENSIONS
-
-
-def is_mutagen_candidate(source: Path) -> bool:
-    return is_mutagen_mp4_candidate(source) or is_mutagen_mp3_candidate(source)
-
-
 def is_multi_part_audio_candidate(source: Path) -> bool:
     return source.suffix.lower() in MULTI_PART_AUDIO_EXTENSIONS
 
-
 def is_chapter_metadata_candidate(source: Path) -> bool:
     return source.suffix.lower() in CHAPTER_METADATA_EXTENSIONS
-
 
 def natural_audio_sort_key(file_path: Path) -> list[tuple[int, object]]:
     """Sort chapter files naturally, so 2 comes before 10."""
@@ -634,7 +796,6 @@ def natural_audio_sort_key(file_path: Path) -> list[tuple[int, object]]:
         (0, int(part)) if part.isdigit() else (1, part)
         for part in parts
     ]
-
 
 _chapter_count_cache: dict[str, int | None] = {}
 _chapter_count_cache_lock = threading.Lock()
@@ -645,7 +806,6 @@ _chapter_count_cache_lock = threading.Lock()
 _print_plan_lock = threading.Lock()
 
 CHAPTER_COUNT_CACHE_SUFFIX = ".chapter-count-cache.json"
-
 
 def read_file_chapter_count(file_path: Path) -> int | None:
     """Return embedded chapter count using ffprobe, or None when unreadable.
@@ -697,10 +857,8 @@ def read_file_chapter_count(file_path: Path) -> int | None:
         _chapter_count_cache[key] = count
     return count
 
-
 def _chapter_count_cache_path(folder: Path) -> Path:
     return folder / f"{folder.name}{CHAPTER_COUNT_CACHE_SUFFIX}"
-
 
 def _load_chapter_count_persistent(folder: Path) -> dict[str, dict]:
     cache_path = _chapter_count_cache_path(folder)
@@ -711,7 +869,6 @@ def _load_chapter_count_persistent(folder: Path) -> dict[str, dict]:
         return data.get("entries", {}) if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}
-
 
 def _save_chapter_count_persistent(folder: Path, entries: dict[str, dict]) -> None:
     cache_path = _chapter_count_cache_path(folder)
@@ -729,7 +886,6 @@ def _save_chapter_count_persistent(folder: Path, entries: dict[str, dict]) -> No
     except OSError:
         pass
 
-
 def normalize_part_filename(value: str) -> str:
     value = html.unescape(str(value or "")).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
@@ -737,7 +893,6 @@ def normalize_part_filename(value: str) -> str:
     value = re.sub(r"[_.\-–—:]+", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
-
 
 def looks_like_chapter_part_filename(file_path: Path) -> bool:
     """Return True when the filename looks like one chapter/section file.
@@ -762,7 +917,6 @@ def looks_like_chapter_part_filename(file_path: Path) -> bool:
     ]
 
     return any(re.search(pattern, name, flags=re.IGNORECASE) for pattern in patterns)
-
 
 def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
     """Recognize groups named with a shared identity plus `- 01`, `- 02`, etc."""
@@ -793,12 +947,10 @@ def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
                 best = candidate
     return best
 
-
 # Leading ordinal: a number at the *start* of the name followed by a separator
 # and a title, e.g. "0. Opening Credits ...", "10. Suspect Alchemy ...",
 # "001 - ...". Leading zeros are tolerated; the captured value is the index.
 _LEADING_ORDINAL_RE = re.compile(r"^\s*0*(\d{1,4})\s*[.)\]_-]\s+(?=\S)")
-
 
 def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
     """Longest run of tokens shared at the END of every token list."""
@@ -817,7 +969,6 @@ def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
         if not common:
             break
     return common
-
 
 def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
     """Recognize ONE book split into many leading-ordinal-numbered parts.
@@ -862,7 +1013,6 @@ def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
 
     return {by_number[n][0] for n in numbers}
 
-
 def part_sequence_files(file_paths: list[Path]) -> set[Path]:
     """Files that belong to a recognized numbered part sequence.
 
@@ -874,7 +1024,6 @@ def part_sequence_files(file_paths: list[Path]) -> set[Path]:
         numeric_part_sequence_files(file_paths)
         or leading_ordinal_sequence_files(file_paths)
     )
-
 
 def classify_multi_part_file_safety(
     file_path: Path,
@@ -909,7 +1058,6 @@ def classify_multi_part_file_safety(
         return False, "low chapter count M4B lacks a chapter-like filename"
 
     return False, f"embedded chapter count {chapter_count} suggests a complete audiobook"
-
 
 def validate_multi_part_group_files(
     file_paths: list[Path],
@@ -954,7 +1102,6 @@ def validate_multi_part_group_files(
         "checked_files": checked,
         "unsafe_files": unsafe,
     }
-
 
 def inspect_mp4_top_level_layout(source: Path) -> dict:
     """Read only top-level atom headers to predict expensive in-place shifts."""
@@ -1001,59 +1148,6 @@ def inspect_mp4_top_level_layout(source: Path) -> dict:
             and atoms["moov"]["offset"] < atoms["mdat"]["offset"]
         ),
     }
-
-
-def mp4_set_text(tags: dict, key: str, value: str) -> None:
-    value = sanitize_tag(value)
-
-    if value:
-        tags[key] = [value]
-    else:
-        tags.pop(key, None)
-
-
-def mp4_set_track(tags: dict, value: str) -> None:
-    value = clean_sequence(value)
-
-    if value:
-        tags["trkn"] = [(int(value), 0)]
-    else:
-        tags.pop("trkn", None)
-
-
-def mp4_set_freeform(tags, name: str, value: str) -> None:
-    key = f"----:com.apple.iTunes:{name}"
-    value = sanitize_tag(value)
-
-    if value:
-        tags[key] = [MP4FreeForm(value.encode("utf-8"))]
-    else:
-        tags.pop(key, None)
-
-
-def id3_set_text(tags, frame_id: str, frame_cls, value: str) -> None:
-    value = sanitize_tag(value)
-    tags.delall(frame_id)
-
-    if value:
-        tags.add(frame_cls(encoding=3, text=[value]))
-
-
-def id3_set_txxx(tags, name: str, value: str) -> None:
-    value = sanitize_tag(value)
-    tags.delall(f"TXXX:{name}")
-
-    if value:
-        tags.add(TXXX(encoding=3, desc=name, text=[value]))
-
-
-def id3_set_track(tags, value: str) -> None:
-    value = clean_sequence(value)
-    tags.delall("TRCK")
-
-    if value:
-        tags.add(TRCK(encoding=3, text=[value]))
-
 
 def mutagen_write_mp4_tags(
     source: Path,
@@ -1163,7 +1257,6 @@ def mutagen_write_mp4_tags(
         flush=True,
     )
 
-
 def mutagen_write_mp3_tags(
     source: Path,
     metadata: dict,
@@ -1260,7 +1353,6 @@ def mutagen_write_mp3_tags(
 
     tags.save(str(source))
 
-
 def mutagen_restore_metadata_from_backup(source: Path) -> Path:
     backup_path, tags = load_metadata_backup_payload(source)
 
@@ -1328,7 +1420,6 @@ def mutagen_restore_metadata_from_backup(source: Path) -> Path:
     mark_metadata_restored(source)
     return backup_path
 
-
 def restore_metadata_from_backup(source: Path, writer: str = "auto") -> Path:
     if writer in {"auto", "mutagen"} and is_mutagen_candidate(source):
         try:
@@ -1339,7 +1430,6 @@ def restore_metadata_from_backup(source: Path, writer: str = "auto") -> Path:
             print(f"  WARNING: mutagen restore failed, falling back to ffmpeg: {error}")
 
     return ffmpeg_restore_metadata_from_backup(source)
-
 
 def restore_metadata_backups(
     files: list[Path], writer: str = "auto"
@@ -1386,7 +1476,6 @@ def restore_metadata_backups(
 
     return restored, skipped, failed
 
-
 def should_skip_due_to_marker(
     source: Path,
     aggressive_run: bool,
@@ -1420,17 +1509,15 @@ def should_skip_due_to_marker(
 
     return False, ""
 
-
 # Fields the fixer fills into file tags / metadata.json, in report order.
 FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin")
-
 
 def marker_real_asin(marker: dict) -> str:
     """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
     asin = str((marker.get("audible") or {}).get("asin") or "").strip().upper()
     return "" if (not asin or asin == "NOREALASIN") else asin
 
-
+@trace(ALTER, capture=[])
 def metadata_from_marker(marker: dict) -> dict:
     """Rebuild a fill-metadata dict from a marker's stored Audible match.
 
@@ -1455,7 +1542,6 @@ def metadata_from_marker(marker: dict) -> dict:
         "duration": marker.get("duration") or {},
     }
 
-
 def marker_skip_is_clean(
     source: Path, marker: dict, alone: bool, meta_target: Path
 ) -> bool:
@@ -1476,7 +1562,6 @@ def marker_skip_is_clean(
     if alone and source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}").is_file():
         return False
     return True
-
 
 def write_marker(
     source: Path,
@@ -1533,7 +1618,6 @@ def write_marker(
     }
     _write_libraforge(lf_path, payload)
 
-
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     suffix = source.suffix.lower()
 
@@ -1542,7 +1626,6 @@ def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
 
     group_search = (clues or {}).get("group_search", {}) or {}
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
-
 
 def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
     """Write a non-applied marker for books that could not be matched.
@@ -1578,14 +1661,12 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     }
     _write_libraforge(lf_path, payload)
 
-
 def is_single_file_mp3(source: Path, clues: dict | None = None) -> bool:
     """True for a standalone single-file .mp3 (not a multi-part folder group)."""
     if source.suffix.lower() != ".mp3":
         return False
     group_search = (clues or {}).get("group_search", {}) or {}
     return not group_search.get("applied")
-
 
 def probe_audio_stream_properties(file_path: Path) -> dict:
     cmd = [
@@ -1636,7 +1717,6 @@ def probe_audio_stream_properties(file_path: Path) -> dict:
             int(stream["sample_rate"]) if stream.get("sample_rate") else None
         ),
     }
-
 
 def summarize_audio_stream_properties(file_paths: list[Path]) -> dict:
     probes = [probe_audio_stream_properties(file_path) for file_path in file_paths]
@@ -1735,7 +1815,6 @@ def summarize_audio_stream_properties(file_paths: list[Path]) -> dict:
         "no_conversion": recommendation,
     }
 
-
 def build_m4b_tool_metadata_payload(
     source: Path, metadata: dict, clues: dict, score: float
 ) -> dict:
@@ -1810,7 +1889,6 @@ def build_m4b_tool_metadata_payload(
         },
     }
 
-
 def write_m4b_tool_metadata_sidecar(
     source: Path, metadata: dict, clues: dict, score: float
 ) -> Path:
@@ -1825,7 +1903,6 @@ def write_m4b_tool_metadata_sidecar(
     }
     _write_libraforge(lf_path, lf_payload)
     return lf_path
-
 
 def write_audiobookshelf_metadata_json(
     source: Path,
@@ -1927,7 +2004,6 @@ def write_audiobookshelf_metadata_json(
         target.write_text(content, encoding="utf-8")
     return target
 
-
 def refresh_multipart_sidecar_audio_profile(
     folder: Path,
     chapter_files: list[Path],
@@ -1958,357 +2034,6 @@ def refresh_multipart_sidecar_audio_profile(
 
     _write_libraforge(lf_path, lf_payload)
     return lf_path
-
-
-def clean_text(value: str) -> str:
-    if not value:
-        return ""
-
-    value = html.unescape(str(value))
-    value = re.sub(r"<[^>]+>", " ", value)
-    value = re.sub(r"\s+", " ", value)
-
-    return value.strip()
-
-
-UNAMBIGUOUS_TECHNICAL_LABEL_RE = re.compile(
-    r"\b(?:"
-    r"xhe[\s._-]*aac(?:[\s._-]*llc)?|"
-    r"he[\s._-]*aac(?:[\s._-]*v?[12])?|"
-    r"aac[\s._-]*lc|"
-    r"mpeg[\s._-]*4[\s._-]*aac|"
-    r"e[\s._-]*ac[\s._-]*3|"
-    r"ac[\s._-]*3|"
-    r"dolby[\s._-]*digital(?:[\s._-]*plus)?|"
-    r"audio[\s._-]*immersion(?:[\s._-]*tunnel)?"
-    r")\b",
-    re.IGNORECASE,
-)
-AMBIGUOUS_CODEC_LABEL_RE = re.compile(
-    r"\b(?:aac|mp3|m4a|m4b|mp4|opus|flac|ogg(?:\s+vorbis)?|vorbis|alac|wav|wave)\b",
-    re.IGNORECASE,
-)
-TECHNICAL_QUALIFIER_RE = re.compile(
-    r"\b(?:"
-    r"\d+(?:\.\d+)?\s*(?:k?hz|kbps|kbit/s|bit)|"
-    r"mono|stereo|joint\s+stereo|"
-    r"cbr|vbr|abr|lossless|lossy|audio|codec|encoder|encoded|llc"
-    r")\b",
-    re.IGNORECASE,
-)
-def is_technical_label_block(value: str) -> bool:
-    value = clean_text(value)
-    if not value:
-        return False
-    if not (
-        UNAMBIGUOUS_TECHNICAL_LABEL_RE.search(value)
-        or AMBIGUOUS_CODEC_LABEL_RE.search(value)
-    ):
-        return False
-
-    remainder = UNAMBIGUOUS_TECHNICAL_LABEL_RE.sub(" ", value)
-    remainder = AMBIGUOUS_CODEC_LABEL_RE.sub(" ", remainder)
-    remainder = TECHNICAL_QUALIFIER_RE.sub(" ", remainder)
-    remainder = re.sub(r"[\d\s.,;+|/_-]+", " ", remainder)
-    return not clean_text(remainder)
-
-
-def sanitize_technical_labels(value: str) -> str:
-    """Remove codec/release noise without deleting ambiguous title words."""
-    value = clean_text(value)
-    if not value:
-        return ""
-
-    value = UNAMBIGUOUS_TECHNICAL_LABEL_RE.sub(" ", value)
-
-    def strip_bracketed(match: re.Match) -> str:
-        inner = match.group(1)
-        if is_technical_label_block(inner):
-            return " "
-        # Strip "[Series N - PartN]" part-indicator brackets, e.g. "[Rise, My
-        # Minions 3 - 1]". These appear in filenames like "Author - [Series N -
-        # 1] - Title" and are redundant with the title that follows.
-        if re.search(r"-\s*\d+\s*$", inner):
-            return " "
-        return match.group(0)
-
-    value = re.sub(r"[\[({]\s*([^])}]+?)\s*[\])}]", strip_bracketed, value)
-    value = re.sub(r"[\[({]\s*[\])}]", " ", value)
-    # A stripped bracket between two " - " separators leaves " -  - "; collapse.
-    value = re.sub(r"\s+-\s+-\s+", " - ", value)
-
-    parts = re.split(r"(\s+[-–—|:]\s+)", value)
-    while len(parts) >= 3 and is_technical_label_block(parts[-1]):
-        parts = parts[:-2]
-    value = "".join(parts)
-
-    value = re.sub(r"\s+", " ", value)
-    return value.strip(" -_.:,")
-
-
-def sanitize_book_title(value: str) -> str:
-    """Remove technical and generic marketing text from a book title."""
-    value = sanitize_technical_labels(value)
-    if not value:
-        return ""
-
-    value = re.sub(
-        r"\s*\((?:unabridged|audiobook)\)\s*$",
-        "",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if is_title_noise(value):
-        return ""
-
-    value = remove_trailing_title_noise(value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip(" -_.:,")
-
-
-def normalize_for_match(value: str) -> str:
-    value = sanitize_book_title(value).lower()
-    value = re.sub(r"\[[^\]]+\]", " ", value)
-    value = re.sub(r"\([^)]*\)", " ", value)
-    value = re.sub(r"[_\-:]+", " ", value)
-    value = re.sub(r"\bbook\s+#?\d+\b", " ", value)
-    value = re.sub(r"\bvolume\s+#?\d+\b", " ", value)
-    value = re.sub(r"\bvol\.?\s+#?\d+\b", " ", value)
-    value = re.sub(r"\s+", " ", value)
-
-    return value.strip()
-
-
-def sanitize_tag(value: str) -> str:
-    return sanitize_technical_labels(value)
-
-
-def extract_first_parenthetical(value: str) -> str:
-    match = re.search(r"\(([^)]{2,})\)", value or "")
-    if not match:
-        return ""
-    return clean_text(match.group(1))
-
-
-def remove_parenthetical(value: str) -> str:
-    value = re.sub(r"\s*\([^)]*\)\s*", " ", value or "")
-    value = re.sub(r"\s+", " ", value)
-    return clean_text(value)
-
-
-def clean_author_value(value: str) -> str:
-    """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'."""
-    return remove_parenthetical(value)
-
-
-def _split_author_names(value: str) -> list[str]:
-    """Split a credit string into individual normalized author names."""
-    value = clean_author_value(value or "")
-    parts = re.split(r"\s*(?:,|;|&|/|\band\b|\bwith\b)\s*", value, flags=re.IGNORECASE)
-    return [n for n in (normalize_for_match(p) for p in parts) if n]
-
-
-def _authors_compatible(local: str, candidate: str) -> bool | None:
-    """Whether two author credits refer to the same author(s).
-
-    Returns True/False, or None when either side has no usable name (the caller
-    decides how to treat 'unknown'). Tolerant of multi-author ordering and of one
-    source listing only the primary author of a co-authored book: a single shared
-    author name is enough. Containment is length-guarded to avoid tiny matches.
-    """
-    local_names = _split_author_names(local)
-    cand_names = _split_author_names(candidate)
-    if not local_names or not cand_names:
-        return None
-    for c in cand_names:
-        for l in local_names:
-            if c == l:
-                return True
-            shorter, longer = (c, l) if len(c) <= len(l) else (l, c)
-            if len(shorter) >= 6 and shorter in longer:
-                return True
-            if SequenceMatcher(None, c, l).ratio() >= 0.85:
-                return True
-    return False
-
-
-def _initials_dedup_key(name: str) -> str:
-    """Dedup key that collapses initial-format variants.
-    'L.M. Kerr', 'L. M. Kerr', 'L M Kerr' all map to 'l m kerr'."""
-    # Insert space after a period that is immediately followed by a letter,
-    # so jammed initials like "L.M." become "L. M." before period removal.
-    expanded = re.sub(r"\.(?=[A-Za-z])", " ", name)
-    # Strip remaining periods (trailing singles like "L.") and collapse whitespace.
-    return re.sub(r"\s+", " ", expanded.replace(".", "")).strip().lower()
-
-
-def canonicalize_author_credits(values: list[str] | str) -> str:
-    if isinstance(values, str):
-        values = [part.strip() for part in values.split(",")]
-
-    aliases = {
-        "リュート": "Ryuto",
-        "cássio ferreira": "Cassio Ferreira",
-        "cassio ferreira": "Cassio Ferreira",
-        "mashton x x": "Mashton XX",
-        "mashton x y": "Mashton XY",
-        "mashton xx": "Mashton XX",
-        "mashton xy": "Mashton XY",
-        # Production studios / broadcasters that appear as artist/author tags — strip them
-        "graphic audio": "",
-        "graphicaudio": "",
-        "soundbooth theatre": "",
-        "soundbooth theater": "",
-        "soundbooththeatre": "",
-        "soundbooththeater": "",
-        "sbt": "",
-        "bbc": "",
-        "bbc radio": "",
-        "bbc radio 4": "",
-        "bbc radio 4 extra": "",
-        "bbc audio": "",
-        "bbc books": "",
-        "bbc radio drama": "",
-        "audible studios": "",
-        "audible original": "",
-        "audible originals": "",
-        "brilliance audio": "",
-        "podium audio": "",
-        "tantor audio": "",
-        "tantor media": "",
-        "macmillan audio": "",
-        "full cast audio": "",
-        "blackstone audio": "",
-        "blackstone publishing": "",
-        "dreamscape media": "",
-        "dreamscape audio": "",
-        "l.a. theatre works": "",
-        "la theatre works": "",
-    }
-    people = []
-    seen = set()
-    order_keys = set()
-    for value in values:
-        value = clean_text(value)
-        if not value or re.search(r"\s+-\s+editor\s*$", value, flags=re.IGNORECASE):
-            continue
-        canonical = aliases.get(value.casefold(), value)
-        if canonical == "":
-            continue
-        key = _initials_dedup_key(canonical)
-        if key and key not in seen:
-            people.append(canonical)
-            seen.add(key)
-            order_keys.add(re.sub(r"[^a-z0-9]+", " ", canonical.casefold()).strip())
-
-    preferred_order = {
-        frozenset({"j m clarke", "c j thompson"}): ["J.M. Clarke", "C.J. Thompson"],
-        frozenset({"mashton xx", "mashton xy"}): ["Mashton XX", "Mashton XY"],
-    }
-    order = preferred_order.get(frozenset(order_keys))
-    if order:
-        return ", ".join(order)
-    return ", ".join(people)
-
-
-_NAME_FUNCTION_WORDS = frozenset({
-    "a", "an", "the", "of", "in", "on", "at", "for",
-    "with", "by", "and", "or", "from", "to", "as",
-})
-
-
-def looks_like_person_name(value: str) -> bool:
-    value = clean_text(value)
-    if not value:
-        return False
-
-    if re.search(
-        r"[\[\]{}]|(?:19|20)\d{2}|"
-        r"\b(?:book|vol(?:ume)?|unabridged|complete series|box ?set)\b",
-        value,
-        flags=re.IGNORECASE,
-    ):
-        return False
-
-    tokens = [token for token in re.split(r"\s+", value) if token]
-    if not 2 <= len(tokens) <= 5:
-        return False
-
-    # A bare article as the first word ("The Name", "A Story") is a title, not
-    # a person name. Function words as non-terminal tokens have the same effect:
-    # "Age of Steel" fails while "Leigh de Paiva" passes ("de" not in the list).
-    if tokens[0].lower() in {"the", "a", "an"}:
-        return False
-    if any(token.lower() in _NAME_FUNCTION_WORDS for token in tokens[1:-1]):
-        return False
-
-    cleaned_tokens = [
-        re.sub(r"[^A-Za-z.’’-]", "", token)
-        for token in tokens
-    ]
-    if not all(cleaned_tokens):
-        return False
-
-    return True
-
-
-def should_prefer_path_author(current_author: str, candidate_author: str) -> bool:
-    current_author = clean_author_value(current_author)
-    candidate_author = clean_author_value(candidate_author)
-
-    if not candidate_author:
-        return False
-
-    if not current_author:
-        return True
-
-    return looks_like_person_name(candidate_author) and not looks_like_person_name(current_author)
-
-
-def extract_series_from_trailing_segment(value: str) -> str:
-    value = sanitize_technical_labels(value)
-    if not value:
-        return ""
-
-    value = re.sub(r"\bunabridged\b", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"\bbook\s*#?\s*\d+(?:\.\d+)?\b", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"\bvol(?:ume)?\.?\s*\d+(?:\.\d+)?\b", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"\bv\.?\s*\d+(?:\.\d+)?\b", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"[_\-:,]+", " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return clean_series_value(value)
-
-
-def clean_series_value(value: str) -> str:
-    """Prefer the series-looking value inside parentheses when metadata is polluted.
-
-    Example:
-      'Aaron Crash (American Dragons)' -> 'American Dragons'
-    """
-    value = sanitize_technical_labels(value)
-    if normalize_for_match(value) in {
-        "audiobook",
-        "complete",
-        "retail",
-        "unabridged",
-    }:
-        return ""
-
-    parenthetical = extract_first_parenthetical(value)
-
-    if parenthetical and not re.search(r"#|\d+\s*-\s*\d+", parenthetical):
-        value = parenthetical
-
-    if normalize_for_match(value) in {
-        "audiobook",
-        "complete",
-        "retail",
-        "unabridged",
-    }:
-        return ""
-
-    return value
-
 
 def probe_file(file_path: Path) -> tuple[dict, float | None]:
     """Single ffprobe -show_format call returning (tags_dict, duration_minutes).
@@ -2364,14 +2089,11 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
 
     return tags, duration_minutes
 
-
 def read_file_tags(file_path: Path) -> dict:
     return probe_file(file_path)[0]
 
-
 def read_file_duration_minutes(file_path: Path) -> float | None:
     return probe_file(file_path)[1]
-
 
 def _synthesize_applied_tags(metadata: dict) -> dict:
     """Build a probe-format tags dict from applied metadata for backup caching.
@@ -2398,7 +2120,6 @@ def _synthesize_applied_tags(metadata: dict) -> dict:
         tags["track"] = seq
     return tags
 
-
 def update_backup_with_applied_metadata(source: Path, metadata: dict) -> None:
     """Append applied_tags to the backup section so future runs skip probing the file."""
     lf_path, payload = _load_libraforge_raw(source)
@@ -2410,7 +2131,6 @@ def update_backup_with_applied_metadata(source: Path, metadata: dict) -> None:
         _write_libraforge(lf_path, payload)
     except (OSError, KeyError):
         pass
-
 
 def _save_group_file_cache(
     file_paths: list[Path],
@@ -2455,7 +2175,6 @@ def _save_group_file_cache(
     lf_payload["file_cache"] = existing_cache
     lf_payload["file_cache_updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_libraforge(lf_path, lf_payload)
-
 
 def read_tags_and_duration(
     file_path: Path,
@@ -2518,1045 +2237,7 @@ def read_tags_and_duration(
 
     return probe_file(file_path)
 
-
-def get_audible_duration_minutes(product: dict) -> float | None:
-    """Return Audible runtime in minutes when available."""
-    value = product.get("runtime_length_min")
-
-    if value is None:
-        return None
-
-    try:
-        minutes = float(value)
-    except (TypeError, ValueError):
-        return None
-
-    if minutes <= 0:
-        return None
-
-    return minutes
-
-
-def compare_duration(
-    local_minutes: float | None, audible_minutes: float | None
-) -> dict:
-    """Compare local and Audible durations.
-
-    status values:
-      perfect     <= 3%
-      strong      <= 10%
-      acceptable  <= 20%
-      mismatch    > 20%
-      unknown      one side is missing
-    """
-    if local_minutes is None or audible_minutes is None:
-        return {
-            "available": False,
-            "local_minutes": (
-                round(local_minutes, 2) if local_minutes is not None else None
-            ),
-            "audible_minutes": (
-                round(audible_minutes, 2) if audible_minutes is not None else None
-            ),
-            "diff_minutes": None,
-            "diff_percent": None,
-            "status": "unknown",
-        }
-
-    diff_minutes = abs(local_minutes - audible_minutes)
-    larger = max(local_minutes, audible_minutes)
-    diff_percent = diff_minutes / larger if larger else 1.0
-
-    if diff_percent <= 0.03:
-        status = "perfect"
-    elif diff_percent <= 0.10:
-        status = "strong"
-    elif diff_percent <= 0.20:
-        status = "acceptable"
-    else:
-        status = "mismatch"
-
-    return {
-        "available": True,
-        "local_minutes": round(local_minutes, 2),
-        "audible_minutes": round(audible_minutes, 2),
-        "diff_minutes": round(diff_minutes, 2),
-        "diff_percent": round(diff_percent * 100, 2),
-        "status": status,
-    }
-
-
-def first_existing_tag(tags: dict, keys: list[str]) -> str:
-    for key in keys:
-        value = tags.get(key.lower(), "").strip()
-
-        if value:
-            return value
-
-    return ""
-
-
-def roman_to_int(value: str) -> str:
-    roman_map = {
-        "I": 1,
-        "II": 2,
-        "III": 3,
-        "IV": 4,
-        "V": 5,
-        "VI": 6,
-        "VII": 7,
-        "VIII": 8,
-        "IX": 9,
-        "X": 10,
-        "XI": 11,
-        "XII": 12,
-        "XIII": 13,
-        "XIV": 14,
-        "XV": 15,
-        "XVI": 16,
-        "XVII": 17,
-        "XVIII": 18,
-        "XIX": 19,
-        "XX": 20,
-    }
-
-    value = value.strip().upper()
-
-    if value in roman_map:
-        return str(roman_map[value])
-
-    return ""
-
-
-def normalize_book_number(value: str) -> str:
-    value = str(value or "").strip()
-
-    if not value:
-        return ""
-
-    try:
-        if "." in value:
-            left, right = value.split(".", 1)
-            return f"{int(left)}.{right.rstrip('0') or '0'}"
-        return str(int(value))
-    except ValueError:
-        return value
-
-
-def extract_book_number_from_text(value: str) -> str:
-    """Extract a strong book number from title/path text.
-
-    Handles values like:
-      All the Skills - Book 003
-      Series - Book 003.5 - Side Story
-      Aaron Crash - American Dragons, Book 8
-
-    Avoids plural/range patterns like:
-      Books 1-3
-      #1-8
-    """
-    value = clean_text(value)
-
-    if not value:
-        return ""
-
-    # Avoid collection/range hints.
-    if re.search(
-        r"\bbooks\s+\d+(?:\.\d+)?\s*(?:-|to|through|&)\s*\d+",
-        value,
-        flags=re.IGNORECASE,
-    ):
-        return ""
-
-    patterns = [
-        r"\bbook\s*#?\s*(\d+(?:\.\d+)?)\b",
-        r",\s*book\s*(\d+(?:\.\d+)?)\b",
-        r"\bvol(?:ume)?\.?\s*(\d+(?:\.\d+)?)\b",
-        r"\bv\.?\s*(\d+(?:\.\d+)?)\b",
-        r"#\s*(\d+(?:\.\d+)?)(?!\s*[-–—])\b",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, value, flags=re.IGNORECASE)
-        if match:
-            return normalize_book_number(match.group(1))
-
-    return ""
-
-
-def extract_folder_book_number(value: str) -> str:
-    number = extract_book_number_from_text(value)
-    if number:
-        return number
-
-    value = clean_text(value)
-    if not value:
-        return ""
-
-    leading = re.match(
-        r"^\s*(\d{1,4}(?:\.\d+)?)(?!\s*%)\s*[-_.:]+\s*\S",
-        value,
-    )
-    if leading and not re.fullmatch(r"(?:19|20)\d{2}", leading.group(1)):
-        return normalize_book_number(leading.group(1))
-
-    match = re.search(r"(?:^|[\s_-])(\d{1,3}(?:\.\d+)?)$", value)
-    if not match:
-        return ""
-
-    candidate = match.group(1)
-    if re.fullmatch(r"(?:19|20)\d{2}", candidate):
-        return ""
-
-    return normalize_book_number(candidate)
-
-
-def extract_book_number_from_path(file_path: Path) -> str:
-    """Extract a strong book number from nearby file/folder names."""
-    candidates = [
-        file_path.stem,
-        file_path.parent.name,
-        file_path.parent.parent.name if file_path.parent.parent else "",
-    ]
-
-    for index, candidate in enumerate(candidates):
-        candidate = sanitize_technical_labels(candidate)
-        number = extract_book_number_from_text(candidate)
-        if number:
-            return number
-        number = extract_title_identity_number(candidate)
-        if number:
-            return number
-        if index > 0:
-            number = extract_folder_book_number(candidate)
-            if number:
-                return number
-
-    return ""
-
-
-def parse_structured_book_text(value: str, known_author: str = "") -> dict:
-    """Parse structured file/folder names into series, number, and title.
-
-    This is intentionally strict. It only trusts path names that look like:
-      Series Name - Book 002 - Actual Title
-      Series Name, Book 2 - Actual Title
-
-    The goal is to let a manually corrected folder/file path override stale
-    embedded tags, without guessing from loose text.
-    """
-    value = sanitize_technical_labels(value)
-
-    if not value:
-        return {}
-
-    # A sequence-only folder does not identify the series. Preserve the
-    # embedded series, and use the folder suffix only when it is a distinct
-    # book title.
-    sequence_folder = re.match(
-        r"^(?:Book|Volume|Vol\.?)\s*(?P<number>\d{1,4}(?:\.\d+)?)"
-        r"\s*-\s*(?P<title>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if sequence_folder:
-        return {
-            "raw_title": value,
-            "series": "",
-            "book_number": normalize_book_number(sequence_folder.group("number")),
-            "title": sanitize_book_title(sequence_folder.group("title")),
-        }
-
-    # Omnibus paths need their embedded metadata. Do not reduce either
-    # "Books 1-2" or "Series - Book 001, 002 - Titles" to a single book.
-    if re.search(
-        r"\b(?:Books?|Volumes?|Vols?\.?)\s*\d+(?:\.\d+)?"
-        r"\s*(?:[-,&+]|\band\b)\s*\d+",
-        value,
-        flags=re.IGNORECASE,
-    ):
-        return {}
-
-    three_part = re.match(
-        r"^(?P<first>.+?)\s*-\s*(?P<series>.+?),\s*Book\s*"
-        r"(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<last>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if three_part:
-        first = clean_text(three_part.group("first"))
-        last = clean_text(three_part.group("last"))
-        known_author_norm = normalize_for_match(clean_author_value(known_author))
-        first_norm = normalize_for_match(clean_author_value(first))
-        last_norm = normalize_for_match(clean_author_value(last))
-        last_looks_like_title = bool(
-            re.search(
-                r"\b(?:a|an|the|in|of|to|for|with|and)\b",
-                last,
-                flags=re.IGNORECASE,
-            )
-        )
-
-        if known_author_norm and last_norm == known_author_norm and not last_looks_like_title:
-            title, author = first, clean_author_value(last)
-        elif known_author_norm and first_norm == known_author_norm:
-            title, author = last, clean_author_value(first)
-        elif looks_like_person_name(first) and not looks_like_person_name(last):
-            title, author = last, clean_author_value(first)
-        elif last_looks_like_title:
-            title, author = last, clean_author_value(first)
-        else:
-            title, author = first, clean_author_value(last)
-
-        return {
-            "raw_title": value,
-            "series": clean_series_value(three_part.group("series").strip()),
-            "book_number": normalize_book_number(three_part.group("number")),
-            "title": sanitize_book_title(title),
-            "author": author,
-        }
-
-    title_series_author = re.match(
-        r"^(?P<title>.+?)\s*-\s*(?P<series>.+?),\s*Book\s*"
-        r"(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<author>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if title_series_author and looks_like_person_name(title_series_author.group("author")):
-        return {
-            "raw_title": value,
-            "series": clean_series_value(title_series_author.group("series").strip()),
-            "book_number": normalize_book_number(title_series_author.group("number")),
-            "title": sanitize_book_title(title_series_author.group("title")),
-        }
-
-    # "Title - Series, N": bare trailing book number, no "Book" keyword and no
-    # trailing author. e.g. "The Primal Talisman - Beast Shifter, 3". Placed
-    # after the Book-keyword / author variants so it only catches that leftover
-    # case. The series segment must be comma-free and the number small (a book
-    # index, not a year) so this does not eat titles that merely end in ", <n>".
-    title_series_bare_number = re.match(
-        r"^(?P<title>.+?)\s*-\s*(?P<series>[^,]+?)\s*,\s*(?P<number>\d{1,3})$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if title_series_bare_number:
-        _ts_series = title_series_bare_number.group("series").strip()
-        _ts_title = title_series_bare_number.group("title").strip()
-        if (
-            _ts_title
-            and _ts_series
-            and _ts_series.lower() not in {
-                "book", "books", "vol", "vols", "volume", "volumes", "part", "parts"
-            }
-        ):
-            return {
-                "raw_title": value,
-                "series": clean_series_value(_ts_series),
-                "book_number": normalize_book_number(title_series_bare_number.group("number")),
-                "title": sanitize_book_title(_ts_title),
-            }
-
-    series_number_title = re.match(
-        r"^(?P<series>.+?)\s+(?P<number>\d{1,3}(?:\.\d+)?)\s*-\s*(?P<title>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    trailing_title_norm = (
-        normalize_for_match(series_number_title.group("title"))
-        if series_number_title
-        else ""
-    )
-    known_author_norm = normalize_for_match(clean_author_value(known_author))
-    series_number_series_ok = bool(
-        series_number_title
-        and series_number_title.group("series").strip().lower()
-        not in {"book", "books", "volume", "volumes", "vol", "vols", "side story"}
-    )
-    if (
-        series_number_series_ok
-        and not (
-            trailing_title_norm
-            and known_author_norm
-            and (
-                trailing_title_norm in known_author_norm
-                or known_author_norm in trailing_title_norm
-            )
-        )
-    ):
-        return {
-            "raw_title": value,
-            "series": clean_series_value(series_number_title.group("series").strip()),
-            "book_number": normalize_book_number(series_number_title.group("number")),
-            "title": sanitize_book_title(series_number_title.group("title")),
-        }
-
-    # "Series N - Author Name" (e.g. a grouped folder "Backyard Dungeon 18 -
-    # Logan Jacobs"): the trailing segment is *the author itself*, not the title.
-    # Salvage the valuable series/number and omit the title so the caller falls
-    # back to a cleaned folder/tag title instead of stamping the author name as
-    # the book title. The trailing must equal the known author (or be one entry
-    # of a multi-author list); an author merely *embedded* in a longer title
-    # (e.g. "Arcane Artificer {Gary Furlong}") is left to the later parsers.
-    if (
-        series_number_series_ok
-        and trailing_title_norm
-        and known_author_norm
-        and (
-            trailing_title_norm == known_author_norm
-            or trailing_title_norm in known_author_norm
-        )
-        and looks_like_person_name(series_number_title.group("title"))
-    ):
-        return {
-            "raw_title": value,
-            "series": clean_series_value(series_number_title.group("series").strip()),
-            "book_number": normalize_book_number(series_number_title.group("number")),
-        }
-
-    year_title = re.match(
-        r"^(?:19|20)\d{2}\s*-\s*(?P<title>.+?)"
-        r"(?:\s*\((?P<number>\d{1,3}(?:\.\d+)?)\))?$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if year_title:
-        return {
-            "raw_title": value,
-            "series": "",
-            "book_number": normalize_book_number(year_title.group("number") or ""),
-            "title": sanitize_book_title(year_title.group("title")),
-        }
-
-    patterns = [
-        r"^(?P<series>.+?)\s*-\s*Book\s*(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<title>.+)$",
-        r"^(?P<series>.+?)\s*,\s*Book\s*(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<title>.+)$",
-    ]
-
-    for pattern in patterns:
-        match = re.match(pattern, value, flags=re.IGNORECASE)
-        if match:
-            matched_title = sanitize_book_title(match.group("title"))
-            if (
-                known_author_norm
-                and normalize_for_match(clean_author_value(matched_title))
-                in known_author_norm
-            ):
-                matched_title = sanitize_book_title(match.group("series"))
-            return {
-                "raw_title": value,
-                "series": clean_series_value(match.group("series").strip()),
-                "book_number": normalize_book_number(match.group("number")),
-                "title": matched_title,
-            }
-
-    return {}
-
-
-def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
-    """Parse common author/title path names, using known author tags to orient them."""
-    value = sanitize_technical_labels(value)
-
-    if not value:
-        return {}
-
-    # Structured series/sequence names have already been handled by the stricter
-    # parser and must not be reinterpreted as loose "title - author" names.
-    if parse_structured_book_text(value, known_author=known_author):
-        return {}
-
-    identity_rich = parse_identity_rich_book_text(value)
-    if identity_rich:
-        return identity_rich
-
-    segments = [clean_text(segment) for segment in value.split(" - ") if clean_text(segment)]
-    if len(segments) >= 3:
-        candidate_title = clean_text(segments[0])
-        candidate_author = clean_author_value(segments[1])
-        trailing = clean_text(" - ".join(segments[2:]))
-        trailing_series = extract_series_from_trailing_segment(trailing)
-
-        if (
-            looks_like_person_name(candidate_author)
-            and (extract_book_number_from_text(trailing) or trailing_series)
-        ):
-            return {
-                "raw_title": value,
-                "title": candidate_title,
-                "author": candidate_author,
-                "narrator": "",
-                "year": "",
-                "series": trailing_series,
-                "book_number": extract_book_number_from_text(candidate_title) or extract_folder_book_number(trailing),
-            }
-
-    year_match = re.match(
-        r"^(?P<author>.+?)\s*\((?P<year>\d{4})\)\s*(?P<title>.+?)"
-        r"(?:\s*\((?P<narrator>[^)]{2,})\))?$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if year_match:
-        title = clean_text(year_match.group("title"))
-        author = clean_author_value(year_match.group("author"))
-        narrator = clean_text(year_match.group("narrator") or "")
-        if not looks_like_person_name(author) or is_generic_chapter_title(title):
-            return {}
-        if narrator.lower() == "unabridged":
-            narrator = ""
-        return {
-            "raw_title": value,
-            "title": title,
-            "author": author,
-            "narrator": narrator,
-            "year": clean_text(year_match.group("year")),
-            "series": "",
-            "book_number": extract_book_number_from_text(title),
-        }
-
-    if len(segments) != 2:
-        return {}
-
-    left, right = segments
-    known_norm = normalize_for_match(clean_author_value(known_author))
-    left_norm = normalize_for_match(clean_author_value(left))
-    right_norm = normalize_for_match(clean_author_value(right))
-
-    left_author_score = SequenceMatcher(None, known_norm, left_norm).ratio() if known_norm else 0.0
-    right_author_score = SequenceMatcher(None, known_norm, right_norm).ratio() if known_norm else 0.0
-
-    if right_author_score >= 0.75 and right_author_score > left_author_score:
-        title, author = left, clean_author_value(right)
-    elif left_author_score >= 0.75 and left_author_score > right_author_score:
-        title, author = right, clean_author_value(left)
-    elif known_norm and looks_like_person_name(known_author):
-        return {}
-    elif (
-        looks_like_person_name(right)
-        and not looks_like_person_name(left)
-        and not is_generic_chapter_title(left)
-    ):
-        title, author = left, clean_author_value(right)
-    elif (
-        looks_like_person_name(left)
-        and not looks_like_person_name(right)
-        and not is_generic_chapter_title(right)
-    ):
-        title, author = right, clean_author_value(left)
-    else:
-        return {}
-
-    return {
-        "raw_title": value,
-        "title": clean_text(title),
-        "author": author,
-        "narrator": "",
-        "year": "",
-        "series": "",
-        "book_number": extract_book_number_from_text(title),
-    }
-
-
-def parse_series_sequence_segment(
-    value: str,
-    *,
-    require_label: bool = True,
-) -> tuple[str, str]:
-    label = r"(?:Books?|Volumes?|Vols?\.?)"
-    pattern = (
-        rf"^(?P<series>.+?)\s*,?\s*{label}\s*"
-        rf"(?P<number>\d{{1,4}}(?:\.\d+)?)$"
-    )
-    match = re.match(pattern, value, flags=re.IGNORECASE)
-    if not match and not require_label:
-        match = re.match(
-            r"^(?P<series>.+?)\s+(?P<number>\d{1,4}(?:\.\d+)?)$",
-            value,
-            flags=re.IGNORECASE,
-        )
-    if not match:
-        return "", ""
-
-    series = clean_series_value(match.group("series"))
-    number = normalize_book_number(match.group("number"))
-    if not series or not number:
-        return "", ""
-    return series, number
-
-
-def parse_identity_rich_book_text(value: str) -> dict:
-    """Parse explicit folder names containing distinct title, author, and series."""
-    value = sanitize_technical_labels(value)
-    if not value:
-        return {}
-
-    def plausible_author_credit(candidate: str) -> bool:
-        candidate = clean_author_value(candidate)
-        if looks_like_person_name(candidate):
-            return True
-        return bool(
-            re.fullmatch(r"[A-Za-z][A-Za-z.'’-]{1,30}", candidate)
-            and candidate.lower()
-            not in {"book", "volume", "unknown", "audiobooks", "library"}
-        )
-
-    def looks_like_title_phrase(candidate: str) -> bool:
-        return bool(
-            re.search(
-                r"\b(?:a|an|the|in|of|to|for|with|and|as|into|from|by)\b",
-                candidate,
-                flags=re.IGNORECASE,
-            )
-        )
-
-    def has_strong_author_marker(candidate: str) -> bool:
-        candidate = clean_author_value(candidate)
-        return bool(
-            re.search(r"(?:^|\s)(?:[A-Z]\.){1,4}(?:\s|$)", candidate)
-            or re.search(r"\b[A-Z]\.[A-Z]\.", candidate)
-        )
-
-    segments = [
-        clean_text(segment)
-        for segment in re.split(r"\s+-\s+", value)
-        if clean_text(segment)
-    ]
-    if len(segments) == 3:
-        first, middle, last = segments
-        first_is_author = looks_like_person_name(first)
-        last_is_author = looks_like_person_name(last)
-        first_author_credit = plausible_author_credit(first)
-        last_author_credit = plausible_author_credit(last)
-        labeled_middle_series, labeled_middle_number = parse_series_sequence_segment(
-            middle
-        )
-        loose_middle_series, loose_middle_number = parse_series_sequence_segment(
-            middle,
-            require_label=False,
-        )
-
-        # Author - Series Book N - Title
-        if first_author_credit and (
-            not last_is_author
-            or looks_like_title_phrase(last)
-            or (loose_middle_series and not labeled_middle_series)
-        ):
-            series, number = loose_middle_series, loose_middle_number
-            if series and number and not is_generic_chapter_title(last):
-                return {
-                    "raw_title": value,
-                    "title": sanitize_book_title(last),
-                    "author": clean_author_value(first),
-                    "narrator": "",
-                    "year": "",
-                    "series": series,
-                    "book_number": number,
-                }
-
-        # Title - Series Book N - Author
-        if last_author_credit and (
-            not first_is_author or looks_like_title_phrase(first)
-        ):
-            series, number = labeled_middle_series, labeled_middle_number
-            if series and number and not is_generic_chapter_title(first):
-                return {
-                    "raw_title": value,
-                    "title": sanitize_book_title(first),
-                    "author": clean_author_value(last),
-                    "narrator": "",
-                    "year": "",
-                    "series": series,
-                    "book_number": number,
-                }
-
-            # Series Book N - Title - Author
-            series, number = parse_series_sequence_segment(first)
-            if series and number and not is_generic_chapter_title(middle):
-                return {
-                    "raw_title": value,
-                    "title": sanitize_book_title(middle),
-                    "author": clean_author_value(last),
-                    "narrator": "",
-                    "year": "",
-                    "series": series,
-                    "book_number": number,
-                }
-
-    # Author - Title (Series Book N)
-    parenthetical = re.match(
-        r"^(?P<author>.+?)\s+-\s*(?P<title>.+?)\s*"
-        r"\((?P<series>.+?)\s*,?\s*(?:Books?|Volumes?|Vols?\.?)\s*"
-        r"(?P<number>\d{1,4}(?:\.\d+)?)\)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if parenthetical and looks_like_person_name(parenthetical.group("author")):
-        return {
-            "raw_title": value,
-            "title": sanitize_book_title(parenthetical.group("title")),
-            "author": clean_author_value(parenthetical.group("author")),
-            "narrator": "",
-            "year": "",
-            "series": clean_series_value(parenthetical.group("series")),
-            "book_number": normalize_book_number(parenthetical.group("number")),
-        }
-
-    # Series/title, Book N - Author
-    trailing_author = re.match(
-        r"^(?P<series>.+?)\s*,\s*(?:Books?|Volumes?|Vols?\.?)\s*"
-        r"(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<author>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if trailing_author and plausible_author_credit(trailing_author.group("author")):
-        series = clean_series_value(trailing_author.group("series"))
-        return {
-            "raw_title": value,
-            "title": sanitize_book_title(series),
-            "author": clean_author_value(trailing_author.group("author")),
-            "narrator": "",
-            "year": "",
-            "series": series,
-            "book_number": normalize_book_number(trailing_author.group("number")),
-        }
-
-    # Series/title N - Author, used by folders such as
-    # "Rune Seeker 5 - J.M. Clarke".
-    trailing_author_number = re.match(
-        r"^(?P<series>.+?)\s+(?P<number>\d{1,4}(?:\.\d+)?)"
-        r"\s*-\s*(?P<author>.+)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if (
-        trailing_author_number
-        and plausible_author_credit(trailing_author_number.group("author"))
-        and has_strong_author_marker(trailing_author_number.group("author"))
-        and not looks_like_title_phrase(trailing_author_number.group("author"))
-        and normalize_for_match(trailing_author_number.group("series"))
-        not in {"book", "books", "volume", "volumes", "vol", "vols"}
-    ):
-        series = clean_series_value(trailing_author_number.group("series"))
-        return {
-            "raw_title": value,
-            "title": sanitize_book_title(series),
-            "author": clean_author_value(trailing_author_number.group("author")),
-            "narrator": "",
-            "year": "",
-            "series": series,
-            "book_number": normalize_book_number(
-                trailing_author_number.group("number")
-            ),
-        }
-
-    # Title, Author - Series N. The comma provides the otherwise missing
-    # title/author boundary.
-    title_author_series = re.match(
-        r"^(?P<title>[^,]+),\s*(?P<author>.+?)\s*-\s*"
-        r"(?P<series>.+?)\s+(?P<number>\d{1,4}(?:\.\d+)?)$",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if (
-        title_author_series
-        and plausible_author_credit(title_author_series.group("author"))
-    ):
-        return {
-            "raw_title": value,
-            "title": sanitize_book_title(title_author_series.group("title")),
-            "author": clean_author_value(title_author_series.group("author")),
-            "narrator": "",
-            "year": "",
-            "series": clean_series_value(title_author_series.group("series")),
-            "book_number": normalize_book_number(
-                title_author_series.group("number")
-            ),
-        }
-
-    return {}
-
-
-def parse_structured_book_from_path(file_path: Path, known_author: str = "") -> dict:
-    """Return structured metadata from the corrected folder/file path if available."""
-    candidates = [
-        file_path.parent.name,
-        file_path.stem,
-    ]
-
-    for candidate in candidates:
-        parsed = parse_structured_book_text(candidate, known_author=known_author)
-        if parsed:
-            parsed["source"] = candidate
-            return parsed
-
-    return {}
-
-
-def parse_descriptive_book_from_path(file_path: Path, known_author: str = "") -> dict:
-    candidates = [
-        file_path.parent.name,
-        file_path.stem,
-        file_path.parent.parent.name if file_path.parent.parent else "",
-    ]
-
-    for candidate in candidates:
-        parsed = parse_descriptive_book_text(candidate, known_author=known_author)
-        if parsed:
-            parsed["source"] = candidate
-            return parsed
-
-    return {}
-
-
-def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
-    """Prefer a clearly structured path over stale embedded tags.
-
-    This is a narrow fix for manually corrected libraries where the folder/file
-    name is now accurate, but the embedded M4B tags still contain old bad
-    title/series/track metadata.
-    """
-    path_meta = parse_structured_book_from_path(
-        file_path,
-        known_author=clues.get("author", ""),
-    )
-
-    if not path_meta:
-        return clues
-
-    original = {
-        "raw_title": clues.get("raw_title", ""),
-        "title": clues.get("title", ""),
-        "series": clues.get("series", ""),
-        "book_number": clues.get("book_number", ""),
-        "book_number_source": clues.get("book_number_source", ""),
-    }
-
-    changes = []
-
-    path_title_norm = normalize_for_match(path_meta.get("title", ""))
-    current_title_norm = normalize_for_match(clues.get("title", ""))
-    current_series_norm = normalize_for_match(clues.get("series", ""))
-    path_title_is_series_label = bool(
-        path_title_norm
-        and current_series_norm
-        and path_title_norm == current_series_norm
-        and current_title_norm != current_series_norm
-    )
-
-    if (
-        path_title_norm
-        and not path_title_is_series_label
-        and path_title_norm != current_title_norm
-    ):
-        changes.append("title")
-
-    if (
-        path_meta.get("series")
-        and normalize_for_match(path_meta.get("series", "")) != normalize_for_match(
-            clues.get("series", "")
-        )
-    ):
-        changes.append("series")
-
-    if path_meta.get("book_number") and not sequence_values_equal(
-        path_meta.get("book_number", ""), clues.get("book_number", "")
-    ):
-        changes.append("number")
-
-    path_author_norm = normalize_for_match(path_meta.get("author", ""))
-    current_author_norm = normalize_for_match(clues.get("author", ""))
-    if path_author_norm and path_author_norm != current_author_norm:
-        changes.append("author")
-
-    if not changes:
-        return clues
-
-    clues["embedded_before_path_override"] = original
-    clues["path_override"] = {
-        "applied": True,
-        "source": path_meta.get("source", ""),
-        "changed": sorted(set(changes)),
-    }
-
-    # From this point on, raw_title/title/series/number are the trusted search clues.
-    if not path_title_is_series_label:
-        clues["raw_title"] = path_meta.get("raw_title", clues.get("raw_title", ""))
-        clues["title"] = path_meta.get("title", clues.get("title", ""))
-    if path_meta.get("series"):
-        clues["series"] = path_meta["series"]
-    if path_meta.get("book_number"):
-        clues["book_number"] = path_meta["book_number"]
-        clues["book_number_source"] = "path"
-    if path_meta.get("author"):
-        clues["author"] = path_meta["author"]
-
-    return clues
-
-
-def parse_sequence_number(value: str) -> float | None:
-    value = str(value or "").strip()
-
-    if not re.fullmatch(r"\d+(?:\.\d+)?", value):
-        return None
-
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-def sequence_values_equal(left: str, right: str) -> bool:
-    left_number = parse_sequence_number(left)
-    right_number = parse_sequence_number(right)
-
-    if left_number is None or right_number is None:
-        return False
-
-    return left_number == right_number
-
-
-def parse_title_series_number_from_metadata(tags: dict) -> dict:
-    raw_title = sanitize_book_title(first_existing_tag(tags, ["title"]))
-    album = sanitize_technical_labels(first_existing_tag(tags, ["album"]))
-    artist = first_existing_tag(tags, ["album_artist", "artist", "author"])
-    narrator = first_existing_tag(tags, ["composer", "narrator", "performer"])
-    track = first_existing_tag(tags, ["track", "tracknumber"])
-    grouping = sanitize_technical_labels(
-        first_existing_tag(tags, ["grouping", "contentgroup", "series"])
-    )
-
-    series = clean_series_value(grouping or album)
-    title = raw_title
-    book_number = ""
-    book_number_source = ""
-
-    # Pattern:
-    # Unbound - Book 001 - Dissonance
-    # 12 Miles Below - Book 004 - The Mite Forge
-    # Also supports decimal side stories such as Book 003.5.
-    match = re.match(
-        r"^(?P<series>.+?)\s*-\s*Book\s*(?P<number>\d{1,4}(?:\.\d+)?)\s*-\s*(?P<title>.+)$",
-        raw_title,
-        flags=re.IGNORECASE,
-    )
-
-    if match:
-        series = clean_series_value(match.group("series").strip())
-        book_number = normalize_book_number(match.group("number"))
-        book_number_source = "title"
-        title = match.group("title").strip()
-
-    # Pattern:
-    # 12 Miles Below IV: The Mite Forge
-    roman_match = re.match(
-        r"^(?P<series>.+?)\s+(?P<roman>I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)\s*[:\-]\s*(?P<title>.+)$",
-        raw_title,
-        flags=re.IGNORECASE,
-    )
-
-    if roman_match:
-        series = clean_series_value(roman_match.group("series").strip())
-        title = roman_match.group("title").strip()
-        book_number = roman_to_int(roman_match.group("roman"))
-        book_number_source = "title"
-
-    # Folder Forge also treats a trailing ": Series, Book N" segment as
-    # structured identity rather than part of the display title.
-    trailing_series = re.match(
-        r"^(?P<title>.+?)\s*[:\-]\s*(?P<series>[^:]+?),\s*Book\s*"
-        r"(?P<number>\d{1,4}(?:\.\d+)?)$",
-        raw_title,
-        flags=re.IGNORECASE,
-    )
-    if trailing_series:
-        title = sanitize_book_title(trailing_series.group("title"))
-        series = clean_series_value(trailing_series.group("series"))
-        book_number = normalize_book_number(trailing_series.group("number"))
-        book_number_source = "title"
-
-    # Pattern:
-    # All the Skills - Book 003
-    # Amber the Cursed Berserker - Book 002
-    # These do not have a title after the book number, but the number is still strong evidence.
-    if not book_number:
-        title_number = extract_book_number_from_text(raw_title)
-        if title_number:
-            book_number = title_number
-            book_number_source = "title"
-
-    # Track is weak fallback only.
-    if not book_number and track:
-        track_match = re.search(r"\d+", track)
-
-        if track_match:
-            book_number = normalize_book_number(track_match.group(0))
-            book_number_source = "track"
-
-    return {
-        "raw_title": raw_title,
-        "title": title,
-        "series": series,
-        "book_number": book_number,
-        "book_number_source": book_number_source,
-        "author": clean_author_value(artist),
-        "narrator": narrator,
-        "album": album,
-    }
-
-
-def is_invalid_local_title(value: str, author: str = "") -> bool:
-    title_norm = normalize_for_match(value)
-    author_norm = normalize_for_match(clean_author_value(author))
-
-    if not title_norm or is_generic_chapter_title(title_norm):
-        return True
-
-    if author_norm and title_norm == author_norm:
-        return True
-
-    # "Author - Title" rip format: embedded title tag contains "Author Name - Book Title".
-    # After normalization the dash becomes a space, so we check whether the title starts
-    # with the author string followed by more text.  Minimum author length of 4 avoids
-    # false positives on very short initials.
-    if author_norm and len(author_norm) >= 4 and title_norm.startswith(author_norm):
-        remainder = title_norm[len(author_norm):].strip()
-        if remainder:
-            return True
-
-    return False
-
-
-def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
-    if not is_invalid_local_title(clues.get("title", ""), clues.get("author", "")):
-        return clues
-
-    candidates = [
-        clues.get("album", ""),
-        file_path.parent.name,
-        file_path.stem,
-    ]
-    series_norm = normalize_for_match(clues.get("series", ""))
-    author_norm = normalize_for_match(clues.get("author", ""))
-
-    for candidate in candidates:
-        candidate = sanitize_book_title(candidate)
-        candidate_norm = normalize_for_match(candidate)
-        if (
-            candidate_norm
-            and candidate_norm not in {series_norm, author_norm}
-            and not is_invalid_local_title(candidate, clues.get("author", ""))
-        ):
-            clues["raw_title"] = candidate
-            clues["title"] = candidate
-            clues["title_recovery"] = {
-                "applied": True,
-                "source": "album" if candidate == sanitize_book_title(clues.get("album", "")) else "path",
-            }
-            break
-
-    return clues
-
-
+@trace(ALTER, capture=["file_path"])
 def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> dict:
     if tags is None:
         tags = read_file_tags(file_path)
@@ -3683,395 +2364,12 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
 
     return recover_invalid_local_title(clues, file_path)
 
-
-def capture_publisher_clue(clues: dict, tags: dict) -> dict:
-    """Record the local publisher (before query sanitization) and clean leaks.
-
-    The publisher is captured from its dedicated tag when present, otherwise from
-    a canonical-publisher match in the author/narrator/album/comment fields (some
-    libraries dump the imprint there). The captured value is preserved verbatim so
-    it can be written back to the tag + metadata.json, while any publisher token
-    that leaked into the author/narrator clues is stripped for cleaner searches and
-    fallback writes. ``publisher_verified`` marks values confirmed against the
-    canonical catalog (the rest are candidates for learning).
-    """
-    def is_descriptor(entry: dict | None) -> bool:
-        # Catalog entries like "Unabridged"/"Audiobook" exist to strip query/author
-        # noise; they are format descriptors, not real publishers to record.
-        return bool(entry) and str(entry.get("id", "")).startswith("noise-")
-
-    raw_publisher = str(tags.get("publisher", "") or "").strip()
-    canonical = match_canonical_publisher(raw_publisher) if raw_publisher else None
-    # A publisher tag that is only a format descriptor ("Unabridged") is not a publisher.
-    if raw_publisher and is_descriptor(canonical) and not strip_publisher_noise(raw_publisher):
-        raw_publisher, canonical = "", None
-
-    if not raw_publisher:
-        # Look for a recognized imprint hiding in adjacent fields.
-        for field in ("album_artist", "comment", "album", "artist", "composer"):
-            entry = match_canonical_publisher(str(tags.get(field, "") or ""))
-            if entry and not is_descriptor(entry):
-                canonical = entry
-                raw_publisher = entry["name"]
-                break
-
-    if raw_publisher:
-        clues["publisher"] = raw_publisher
-        clues["publisher_verified"] = bool(canonical)
-
-    # Strip any leaked publisher token from author/narrator without losing real data.
-    for field in ("author", "narrator"):
-        value = str(clues.get(field, "") or "")
-        if not value:
-            continue
-        cleaned = strip_publisher_noise(value)
-        if cleaned and cleaned != value:
-            clues[field] = cleaned
-
-    return clues
-
-
-# Leading filler phrases some libraries prepend to title tags.
-SEARCH_TITLE_PREFIX_NOISE = [
-    "listening to",
-]
-
-
-def strip_publisher_search_noise(text: str) -> str:
-    """Remove known publisher/imprint/source tokens from a search string.
-
-    Word-boundary, case-insensitive. Backed by the shared, editable canonical
-    publisher catalog (``app.publisher_policy``). Used for search queries and for
-    cleaning author/narrator clues — never for the dedicated publisher field.
-    """
-    if not text:
-        return text
-    return strip_publisher_noise(text)
-
-
-# Trailing "by <Name>" baked into a title, capturing the name and any trailing
-# book/part number (e.g. "... by Douglas Adams 1"). Up to four capitalised words.
-_TRAILING_BY_AUTHOR_RE = re.compile(
-    r"\s+by\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
-)
-
-
-def strip_title_search_noise(text: str, author: str = "") -> str:
-    """Strip search-only title noise: a leading "Listening to" and a trailing
-    "by <Author Name>" baked into the title tag. Used for queries and
-    title-evidence scoring only — never for written tags.
-
-    The trailing "by <Name>" is only removed when it is clearly filename
-    pollution: it is followed by a book/part number (e.g. "by Douglas Adams 1")
-    or the name matches the known author. This protects legitimate titles such
-    as "Death by Black Hole".
-
-    Example:
-        "Listening to Dirk Gently's Holistic Detective Agency by Douglas Adams 1"
-        -> "Dirk Gently's Holistic Detective Agency"
-    """
-    if not text:
-        return text
-
-    result = clean_text(text)
-
-    for prefix in SEARCH_TITLE_PREFIX_NOISE:
-        result = re.sub(
-            r"^\s*" + re.escape(prefix) + r"\s+", "", result, flags=re.IGNORECASE
-        )
-
-    match = _TRAILING_BY_AUTHOR_RE.search(result)
-    if match:
-        has_trailing_number = bool(match.group(2))
-        name_matches_author = bool(
-            author
-            and normalize_for_match(match.group(1)) == normalize_for_match(author)
-        )
-        if has_trailing_number or name_matches_author:
-            result = result[: match.start()]
-
-    return re.sub(r"\s+", " ", result).strip()
-
-
-def extract_author_from_title(text: str) -> str:
-    """Recover an author name baked into a title as "... by <Name> <number>".
-
-    A trailing book/part number is required so legitimate titles like
-    "Death by Black Hole" are not misread as having author "Black Hole".
-    Returns "" when no such pattern is present.
-    """
-    if not text:
-        return ""
-
-    match = _TRAILING_BY_AUTHOR_RE.search(clean_text(text))
-    if match and match.group(2):
-        return match.group(1).strip()
-    return ""
-
-
-def build_search_queries_from_clues(clues: dict) -> list[str]:
-    # Strip search-only noise ("Listening to", trailing "by <author>") so the
-    # query carries the real title; recover the author if it was only present
-    # inside the title.
-    author = clues["author"] or extract_author_from_title(clues["title"]) or extract_author_from_title(clues["raw_title"])
-    series = clues["series"]
-    title = strip_title_search_noise(clues["title"], author) or clues["title"]
-    raw_title = strip_title_search_noise(clues["raw_title"], author) or clues["raw_title"]
-    book_number = normalize_book_number(clues.get("book_number", ""))
-
-    queries = []
-    sequence_free_title = strip_leading_sequence_from_title(title)
-    sequence_free_raw_title = strip_leading_sequence_from_title(raw_title)
-
-    # Best first attempt:
-    # exact book title + author. This helps cases like:
-    # "Alaska Kingdom Aaron Crash"
-    if title and author:
-        queries.append(f"{title} {author}")
-
-    # Folder Forge uses the same cleanup when deriving canonical titles. Keep
-    # the sequence as ranking evidence, but do not force prefixes such as
-    # "02 - When True Night Falls" into every Audible search.
-    if sequence_free_title and sequence_free_title != title:
-        queries.append(
-            f"{sequence_free_title} {author}" if author else sequence_free_title
-        )
-
-    # If cleaned title failed, try raw title + author.
-    if raw_title and author and raw_title != title:
-        queries.append(f"{raw_title} {author}")
-
-    if (
-        sequence_free_raw_title
-        and sequence_free_raw_title not in {raw_title, sequence_free_title}
-    ):
-        queries.append(
-            f"{sequence_free_raw_title} {author}"
-            if author
-            else sequence_free_raw_title
-        )
-
-    # Broad series search only after title search fails to produce a strong match.
-    if series and author:
-        queries.append(f"{series} {author}")
-
-    # When the local title is polluted or redundant, prefer a clean
-    # series + book number search before broader fallbacks.
-    if series and author and book_number:
-        queries.append(f"{author} {series} Book {book_number}")
-        queries.append(f"{author} {series} {book_number}")
-
-    # Broader but still reasonable.
-    if series and title and author:
-        queries.append(f"{series} {title} {author}")
-
-    # Wider fallbacks.
-    if title:
-        queries.append(title)
-
-    if series:
-        queries.append(series)
-
-    clean_queries = []
-    seen = set()
-
-    for query in queries:
-        query = re.sub(r"\((?:19|20)\d{2}\)", " ", query)
-        query = re.sub(r"\([^)]{2,}\)$", " ", query)
-        query = query.replace(",", " ")
-        query = re.sub(r"[_\-:]+", " ", query)
-        query = re.sub(r"[^\w\s'.]+", " ", query)
-        query = strip_publisher_search_noise(query)
-        query = re.sub(r"\s+", " ", query).strip()
-
-        if query and query.lower() not in seen:
-            clean_queries.append(query)
-            seen.add(query.lower())
-
-    return clean_queries
-
-
-def goodreads_title_query_variants(title: str) -> list[str]:
-    """Return Goodreads-friendly title query variants.
-
-    abs-tract/Goodreads often ranks "Series 1" correctly while "Series Book 1"
-    drifts to omnibuses or unrelated subtitle matches.
-    """
-    variants: list[str] = []
-    title = clean_text(title)
-    if title:
-        no_book_label = re.sub(
-            r"\bbook\s+0*(\d+(?:\.\d+)?)\b",
-            r"\1",
-            title,
-            flags=re.IGNORECASE,
-        )
-        no_book_label = no_book_label.replace(",", " ")
-        no_book_label = re.sub(r"\s+", " ", no_book_label).strip(" ,")
-        if no_book_label and no_book_label != title:
-            variants.append(no_book_label)
-        variants.append(title)
-
-    seen = set()
-    unique: list[str] = []
-    for variant in variants:
-        key = normalize_for_match(variant)
-        if key and key not in seen:
-            unique.append(variant)
-            seen.add(key)
-    return unique
-
-
-def normalize_book_label_for_match(value: str) -> str:
-    value = clean_text(value)
-    value = re.sub(
-        r"\bbook\s+0*(\d+(?:\.\d+)?)\b",
-        r"\1",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = value.replace(",", " ")
-    return normalize_for_match(re.sub(r"\s+", " ", value).strip())
-
-
-def strip_leading_sequence_from_title(value: str) -> str:
-    """Remove an ordering prefix while preserving the separately stored number."""
-    value = clean_text(value)
-    if not value:
-        return ""
-
-    cleaned = re.sub(
-        r"^\s*(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)?\s*"
-        r"\d{1,4}(?:\.\d+)?(?!\s*%)"
-        r"(?:\s*(?:[-–—]|,)\s*\d{1,4}(?:\.\d+)?)?"
-        r"\s*[-_.: ]+\s*",
-        "",
-        value,
-        flags=re.IGNORECASE,
-    )
-    return sanitize_book_title(cleaned)
-
-
+@trace(CHOOSE, capture=["file_path"])
 def build_search_queries_from_metadata(file_path: Path, tags: dict | None = None) -> tuple[list[str], dict]:
     clues = build_search_clues_from_file(file_path, tags=tags)
     return build_search_queries_from_clues(clues), clues
 
-
-def is_generic_chapter_title(value: str) -> bool:
-    value = normalize_for_match(value)
-
-    if not value:
-        return True
-
-    patterns = [
-        r"^chapter\s+\d+$",
-        r"^chapter\s+\d+\s+of\s+\d+$",
-        r"^track\s+\d+$",
-        r"^part\s+\d+$",
-        r"^pt\s*0*\d+$",
-        r"^disc\s+\d+\s+track\s+\d+$",
-        r"^cd\s+\d+\s+track\s+\d+$",
-        r"^\d+$",
-        r"^file\s+\d+$",
-        # Chapter-level credit/filler titles that are never book titles
-        r"^credits?$",
-        r"^(opening|end|ending|outro|intro|closing|beginning)\s+credits?$",
-        r"^(intro|outro)$",
-        # Episode/lecture identifiers used as embedded title tags instead of the book title
-        r"^episode\s+\d+(\s+.*)?$",
-        r"^episode\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(\s+.*)?$",
-        r"^lecture\s+\d+(\s+.*)?$",
-        # Word-form chapter titles ("Chapter Forty-Two", "Chapter One")
-        r"^chapter\s+[a-z][\w\s-]*$",
-        # Bonus/filler content tags
-        r"^bloopers?$",
-        r"^bonus\s+(content|material|chapter|story|stories)$",
-        r"^the\s+story\s+continues(\s+.*)?$",
-    ]
-
-    return any(re.fullmatch(pattern, value) for pattern in patterns)
-
-
-def pick_most_common_value(values: list[str]) -> str:
-    cleaned_values = [
-        sanitize_technical_labels(value)
-        for value in values
-        if sanitize_technical_labels(value)
-    ]
-
-    if not cleaned_values:
-        return ""
-
-    counts = Counter(cleaned_values)
-    return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
-
-
-def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[str, str]:
-    priority_sources = ["path", "title"]
-
-    for source in priority_sources:
-        values = [
-            normalize_book_number(clues.get("book_number", ""))
-            for clues in clues_list
-            if clues.get("book_number_source") == source and clues.get("book_number")
-        ]
-        chosen = pick_most_common_value(values)
-        if chosen:
-            return chosen, source
-
-    folder_number = extract_folder_book_number(folder_name)
-    if folder_number:
-        return folder_number, "path"
-
-    # Track numbers on individual chapter files are chapter positions, not book
-    # numbers — do not use them as a sequence fallback for the group.
-    return "", ""
-
-
-def infer_group_identity_from_path(folder: Path) -> tuple[str, str]:
-    """Recover author/series from an organized Author/Series/Book hierarchy."""
-    folder_name = sanitize_technical_labels(folder.name)
-    if not re.match(
-        r"^(?:Book|Volume|Vol\.?)\s*\d+(?:\.\d+)?(?:\s*[-:,]|$)",
-        folder_name,
-        flags=re.IGNORECASE,
-    ):
-        return "", ""
-
-    series = clean_series_value(folder.parent.name)
-    author = clean_author_value(folder.parent.parent.name)
-    generic_names = {
-        "audiobooks",
-        "books",
-        "library",
-        "media",
-        "unorganized",
-        "_unorganized",
-        "unknown",
-    }
-
-    if normalize_for_match(series) in generic_names:
-        series = ""
-    if normalize_for_match(author) in generic_names or not looks_like_person_name(author):
-        author = ""
-
-    return author, series
-
-
-def clean_group_folder_title(value: str, author: str) -> str:
-    """Apply Folder Forge-style sequence and author cleanup to group folders."""
-    cleaned = strip_leading_sequence_from_title(value) or sanitize_book_title(value)
-    author = clean_author_value(author)
-    if author:
-        cleaned = re.sub(
-            rf"[\s_-]+{re.escape(author)}\s*$",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        ).strip(" -_.:,")
-    return sanitize_book_title(cleaned)
-
-
+@trace(ALTER, capture=[], show_result=False)
 def build_multi_file_search_context(
     file_paths: list[Path],
     use_backup_tags: bool = False,
@@ -4188,7 +2486,6 @@ def build_multi_file_search_context(
     queries = build_search_queries_from_clues(clues)
     return queries, clues
 
-
 def build_multi_part_group_map(
     files: list[Path],
     chapter_count_reader=None,
@@ -4233,7 +2530,6 @@ def build_multi_part_group_map(
 
     return accepted
 
-
 def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     """Pre-warm read_file_chapter_count from disk cache, probing only new/changed files.
 
@@ -4244,6 +2540,11 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     On a clean run (or for files not yet cached), ffprobe calls are batched and
     run concurrently with `workers` threads. Results are written back to disk so
     the next run is instant.
+
+    All multi-part audio files are written to the cache regardless of type.
+    chapter_count is populated only for is_chapter_metadata_candidate files
+    (m4a/m4b/mp4); other types (ogg/mp3/opus) are recorded with chapter_count=None
+    so the cache covers every multi-file book for m4b merging and format support.
     """
     grouped: dict[Path, list[Path]] = {}
     for fp in files:
@@ -4256,59 +2557,60 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     for parent, group in sorted(grouped.items()):
         if len(group) <= 1:
             continue
-        candidates = [fp for fp in group if is_chapter_metadata_candidate(fp)]
-        if not candidates:
-            continue
 
         persistent = _load_chapter_count_persistent(parent)
         folder_persistent[parent] = persistent
 
-        for fp in candidates:
+        for fp in group:
             key = str(fp)
             entry = persistent.get(key)
             if entry is not None:
                 try:
                     if entry.get("mtime") == fp.stat().st_mtime:
-                        with _chapter_count_cache_lock:
-                            _chapter_count_cache[key] = entry.get("chapter_count")
+                        if is_chapter_metadata_candidate(fp):
+                            with _chapter_count_cache_lock:
+                                _chapter_count_cache[key] = entry.get("chapter_count")
                         continue
                 except OSError:
                     pass
-            to_probe.append(fp)
+            if is_chapter_metadata_candidate(fp):
+                to_probe.append(fp)
+            else:
+                # No ffprobe needed; record with chapter_count=None
+                try:
+                    mtime = fp.stat().st_mtime
+                except OSError:
+                    mtime = None
+                persistent[key] = {"chapter_count": None, "mtime": mtime}
 
-    if not to_probe:
-        return
+    if to_probe:
+        if workers > 1:
+            print(
+                f"  Pre-checking {len(to_probe)} files for embedded chapters "
+                f"({workers} workers)...",
+                flush=True,
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                list(executor.map(read_file_chapter_count, to_probe))
+        else:
+            for fp in to_probe:
+                read_file_chapter_count(fp)
 
-    if workers > 1:
-        print(
-            f"  Pre-checking {len(to_probe)} files for embedded chapters "
-            f"({workers} workers)...",
-            flush=True,
-        )
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(read_file_chapter_count, to_probe))
-    else:
-        for fp in to_probe:
-            read_file_chapter_count(fp)
+        for parent, persistent in folder_persistent.items():
+            for fp in to_probe:
+                if fp.parent != parent:
+                    continue
+                key = str(fp)
+                with _chapter_count_cache_lock:
+                    count = _chapter_count_cache.get(key)
+                try:
+                    mtime = fp.stat().st_mtime
+                except OSError:
+                    mtime = None
+                persistent[key] = {"chapter_count": count, "mtime": mtime}
 
-    # Persist newly probed results per folder
     for parent, persistent in folder_persistent.items():
-        changed = False
-        for fp in to_probe:
-            if fp.parent != parent:
-                continue
-            key = str(fp)
-            with _chapter_count_cache_lock:
-                count = _chapter_count_cache.get(key)
-            try:
-                mtime = fp.stat().st_mtime
-            except OSError:
-                mtime = None
-            persistent[key] = {"chapter_count": count, "mtime": mtime}
-            changed = True
-        if changed:
-            _save_chapter_count_persistent(parent, persistent)
-
+        _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
     files: list[Path], multi_part_group_map: dict[Path, list[Path]]
@@ -4329,7 +2631,6 @@ def build_processing_items(
 
     return items
 
-
 def get_processing_display_path(
     file_path: Path, multi_part_group_map: dict[Path, list[Path]]
 ) -> Path:
@@ -4337,7 +2638,6 @@ def get_processing_display_path(
     if group_files and is_multi_part_audio_candidate(file_path):
         return file_path.parent
     return file_path
-
 
 def build_search_context(
     file_path: Path,
@@ -4367,7 +2667,6 @@ def build_search_context(
     cache_key = f"file::{file_path}"
     return queries, clues, cache_key
 
-
 def get_search_context_cache_key(
     file_path: Path, multi_part_group_map: dict[Path, list[Path]]
 ) -> str:
@@ -4378,888 +2677,6 @@ def get_search_context_cache_key(
         return f"group::{file_path.parent}"
 
     return f"file::{file_path}"
-
-
-def get_audible_number_candidates(product: dict) -> list[str]:
-    """Return likely Audible book numbers from structured series, title, and subtitle.
-
-    Series sequence is preferred, but some Audible products expose the book
-    number only in the title/subtitle, e.g. "Casual Farming 3".
-    Ranges/omnibus values such as "1-3" are intentionally ignored here.
-    """
-    candidates: list[str] = []
-
-    _, sequence = get_primary_series(product)
-    sequence = str(sequence or "").strip()
-
-    if parse_sequence_number(sequence) is not None:
-        candidates.append(normalize_book_number(sequence))
-
-    title = product.get("title", "") or ""
-    subtitle = product.get("subtitle", "") or ""
-
-    for value in [title, subtitle]:
-        number = extract_book_number_from_text(value)
-        if number:
-            candidates.append(number)
-
-    # Fallback for Audible titles like "Casual Farming 3" or "All the Skills 5".
-    # Only use this when the trailing number is not part of a range/collection marker.
-    for value in [title, subtitle]:
-        cleaned = clean_text(value)
-        if re.search(
-            r"\bbooks?\s+\d+\s*(?:-|to|through|&)\s*\d+", cleaned, flags=re.IGNORECASE
-        ):
-            continue
-
-        match = re.search(r"(?:^|\s)(\d+(?:\.\d+)?)\s*(?:[:\-]|$)", cleaned)
-        if match:
-            candidates.append(normalize_book_number(match.group(1)))
-
-    unique: list[str] = []
-    seen = set()
-    for candidate in candidates:
-        candidate = normalize_book_number(candidate)
-        if candidate and candidate not in seen:
-            unique.append(candidate)
-            seen.add(candidate)
-
-    return unique
-
-
-def extract_title_identity_number(value: str) -> str:
-    """Extract a title-identity number from names like "Series 3".
-
-    This is intentionally separate from extract_book_number_from_text(). That
-    function extracts explicit labels such as "Book 3". This one handles the
-    common Audible naming pattern where the book number is part of the title:
-
-      The Lost Bloodline 5
-      Overpowered Wizard 3: A Progression LitRPG Epic
-      All the Skills 6
-
-    The number is treated as identity evidence only for comparing candidate
-    Audible results; it is not used as a generic track number. Years, ranges,
-    and percent values are ignored to avoid false rejects.
-    """
-    value = clean_text(value)
-
-    if not value:
-        return ""
-
-    if re.search(
-        r"\bbooks?\s+\d+(?:\.\d+)?\s*(?:-|to|through|&|and)\s*\d+",
-        value,
-        flags=re.IGNORECASE,
-    ):
-        return ""
-
-    # Do not treat "1% Lifesteal" or similar as book one.
-    if re.search(r"\d\s*%", value):
-        return ""
-
-    # Strip trailing author/source/date noise that is common in filenames.
-    cleaned = re.sub(r"\s+by\s+.+$", "", value, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"\s*\[(?:ASIN\.)?[A-Z0-9]{8,}\]\s*", " ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*\((?:19|20)\d{2}\)\s*", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-    patterns = [
-        # "The Lost Bloodline 5: An Isekai Epic"
-        r"(?:^|\s)(\d{1,3}(?:\.\d+)?)\s*[:\-–—]\s+\S+",
-        # "The Lost Bloodline 5"
-        r"(?:^|\s)(\d{1,3}(?:\.\d+)?)\s*$",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, cleaned)
-        if not match:
-            continue
-
-        candidate = normalize_book_number(match.group(1))
-
-        # Avoid obvious years if the cleanup did not remove them.
-        if re.fullmatch(r"(?:19|20)\d{2}", candidate):
-            continue
-
-        # Reject chapter-level numbers like "Chapter 10" or "Episode 5".
-        # These appear in individual chapter filenames and are not book sequence numbers.
-        prefix = cleaned[: match.start(1)]
-        if re.search(r"\b(?:chapter|ch|episode|ep)\b\.?\s*$", prefix, re.IGNORECASE):
-            continue
-
-        return candidate
-
-    return ""
-
-
-def get_local_number_identity_candidates(clues: dict) -> list[str]:
-    """Return trustworthy local book-number identity candidates.
-
-    These candidates are used to reject same-series wrong-book results. Track
-    numbers are excluded because they are often per-file chapter numbers in
-    multi-file audiobooks.
-    """
-    candidates: list[str] = []
-
-    local_number = normalize_book_number(clues.get("book_number", ""))
-    local_number_source = str(clues.get("book_number_source", "")).strip()
-
-    if local_number and local_number_source in {"title", "path"}:
-        candidates.append(local_number)
-
-    for key in ["title", "raw_title", "series", "album"]:
-        value = clues.get(key, "")
-        if not value:
-            continue
-
-        explicit_number = extract_book_number_from_text(value)
-        if explicit_number:
-            candidates.append(explicit_number)
-
-        identity_number = extract_title_identity_number(value)
-        if identity_number:
-            candidates.append(identity_number)
-
-    unique: list[str] = []
-    seen = set()
-    for candidate in candidates:
-        candidate = normalize_book_number(candidate)
-        if candidate and candidate not in seen:
-            unique.append(candidate)
-            seen.add(candidate)
-
-    return unique
-
-
-def parse_book_number_range(text: str) -> tuple[int, int] | None:
-    """Parse an omnibus book-number range like "Books 11-12", "11 to 12", or
-    "Books 011 012" into an (low, high) tuple. Returns None when there is no
-    range. Implausibly wide spans are ignored to avoid matching noise.
-    """
-    if not text:
-        return None
-
-    value = clean_text(str(text))
-
-    # "Books 11-12", "11-12", "11 to 12", "11 through 12", "11 & 12"
-    match = re.search(
-        r"\b(?:books?\s+)?(\d{1,4})\s*(?:-|–|—|to|through|&)\s*(\d{1,4})\b",
-        value,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        # "Books 011 012" (space-separated pair after an explicit Books label)
-        match = re.search(
-            r"\bbooks?\s+(\d{1,4})\s+(\d{1,4})\b", value, flags=re.IGNORECASE
-        )
-
-    if not match:
-        return None
-
-    low, high = int(match.group(1)), int(match.group(2))
-    if high < low or (high - low) > 50:
-        return None
-    return (low, high)
-
-
-def get_local_book_number_range(clues: dict) -> tuple[int, int] | None:
-    for key in ("title", "raw_title", "series", "album"):
-        found = parse_book_number_range(clues.get(key, ""))
-        if found:
-            return found
-    return None
-
-
-def get_audible_book_number_range(product: dict) -> tuple[int, int] | None:
-    _, sequence = get_primary_series(product)
-    found = parse_book_number_range(str(sequence or ""))
-    if found:
-        return found
-    for key in ("title", "subtitle"):
-        found = parse_book_number_range(product.get(key, "") or "")
-        if found:
-            return found
-    return None
-
-
-def omnibus_range_relation(clues: dict, product: dict) -> str:
-    """Compare local and Audible omnibus spans.
-
-    Returns:
-      "match"    both sides express the same exact range (e.g. 11-12 vs 11-12)
-      "conflict" both sides express ranges but they differ (11-12 vs 13-14)
-      "none"     at least one side has no range to compare
-    """
-    local_range = get_local_book_number_range(clues)
-    audible_range = get_audible_book_number_range(product)
-    if not local_range or not audible_range:
-        return "none"
-    return "match" if local_range == audible_range else "conflict"
-
-
-def has_matching_omnibus_range(clues: dict, product: dict) -> bool:
-    return omnibus_range_relation(clues, product) == "match"
-
-
-def has_number_identity_conflict(clues: dict, product: dict) -> bool:
-    """Reject wrong books in the same series when title numbers disagree.
-
-    Duration and fuzzy title scoring can make adjacent books look perfect, e.g.:
-      local "The Lost Bloodline 2" vs Audible "The Lost Bloodline 5"
-      local "Overpowered Wizard 3" vs Audible "Overpowered Wizard"
-
-    If both sides expose numeric identity evidence and none of the local numbers
-    exists on the Audible candidate, the candidate is the wrong book.
-    """
-    # Omnibus spans are compared exactly: an identical range (e.g. local
-    # "Books 11-12" vs an Audible Pack covering 11-12) is the right record even
-    # though the Pack's own number differs; a different range (11-12 vs 13-14)
-    # is the wrong box set.
-    relation = omnibus_range_relation(clues, product)
-    if relation == "match":
-        return False
-    if relation == "conflict":
-        return True
-
-    local_numbers = get_local_number_identity_candidates(clues)
-    audible_numbers = get_audible_number_candidates(product)
-
-    if not local_numbers or not audible_numbers:
-        return False
-
-    return not bool(set(local_numbers) & set(audible_numbers))
-
-
-def strong_identity_overrides_number_conflict(
-    clues: dict,
-    product: dict,
-    local_duration_minutes: float | None,
-) -> bool:
-    """Allow side-story numbering differences only with independent confirmation.
-
-    This is designed for parallel-series cases where a book legitimately carries
-    different numbers in different numbering systems (e.g. Book 3 in the main
-    series is Book 2 in a sub-series). It must NOT fire when both the local title
-    and the Audible title explicitly encode different numbers — in that case the
-    numbers are the identity of two different books in the same series.
-    """
-    if title_evidence_score(clues, product) < 0.85:
-        return False
-
-    # If the local title and the Audible title both carry explicit trailing
-    # series numbers and those numbers differ, this is a wrong-book match
-    # within the same series, not a parallel-numbering difference.
-    # Example: local "Super Sales on Super Heroes 4" vs Audible
-    #          "Super Sales on Super Heroes 6" — high title similarity masks
-    #          the fact that these are different books.
-    # Note: Book 02 is NOT rejected here because both sides have title "Super
-    # Sales on Super Heroes 2" (same number) despite Audible sequence = 1.
-    local_title_number = extract_title_identity_number(
-        clues.get("title", "") or clues.get("raw_title", "")
-    )
-    audible_title_number = extract_title_identity_number(
-        product.get("title", "") or ""
-    )
-    if (
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    ):
-        # Both titles carry explicit series numbers and they disagree — not a
-        # parallel-series case (e.g. local "Series 4" vs Audible "Series 6").
-        return False
-
-    if local_title_number and not audible_title_number:
-        # Local title carries an explicit series number but the Audible title
-        # is the base series title with no number (e.g. local "Series 2" vs
-        # Audible "Series" sequence=1). If the local number and the Audible
-        # sequence disagree, the candidate is a different book.
-        _, audible_seq = get_primary_series(product)
-        audible_seq_norm = normalize_book_number(str(audible_seq or ""))
-        if audible_seq_norm and local_title_number != audible_seq_norm:
-            return False
-
-    duration = compare_duration(
-        local_minutes=local_duration_minutes,
-        audible_minutes=get_audible_duration_minutes(product),
-    )
-    if duration["status"] not in {"perfect", "strong"}:
-        return False
-
-    local_author = normalize_for_match(clues.get("author", ""))
-    audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
-    local_narrator = normalize_for_match(clues.get("narrator", ""))
-    audible_narrators = normalize_for_match(" ".join(get_people(product, "narrators")))
-
-    author_match = bool(
-        local_author
-        and audible_authors
-        and (
-            local_author in audible_authors
-            or audible_authors in local_author
-            or SequenceMatcher(None, local_author, audible_authors).ratio() >= 0.85
-        )
-    )
-    narrator_match = bool(
-        local_narrator
-        and audible_narrators
-        and (
-            local_narrator in audible_narrators
-            or audible_narrators in local_narrator
-            or SequenceMatcher(None, local_narrator, audible_narrators).ratio() >= 0.85
-        )
-    )
-    return author_match or narrator_match
-
-
-def has_strong_local_number(clues: dict) -> bool:
-    return str(clues.get("book_number_source", "")).strip() in {"title", "path"}
-
-
-def has_sequence_conflict(
-    clues: dict,
-    product: dict,
-    local_duration_minutes: float | None = None,
-) -> bool:
-    local_number = str(clues.get("book_number", "")).strip()
-    number_source = str(clues.get("book_number_source", "")).strip()
-
-    if not local_number:
-        return False
-
-    _, audible_sequence = get_primary_series(product)
-    audible_sequence = str(audible_sequence).strip()
-
-    if not is_single_numeric_sequence(audible_sequence):
-        return False
-
-    duration_result = compare_duration(
-        local_minutes=local_duration_minutes,
-        audible_minutes=get_audible_duration_minutes(product),
-    )
-
-    title_score = title_evidence_score(clues, product)
-
-    local_author = normalize_for_match(clues.get("author", ""))
-    local_narrator = normalize_for_match(clues.get("narrator", ""))
-
-    audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
-    audible_narrators = normalize_for_match(" ".join(get_people(product, "narrators")))
-
-    author_good = bool(
-        local_author and audible_authors and local_author in audible_authors
-    )
-    narrator_good = bool(
-        local_narrator and audible_narrators and local_narrator in audible_narrators
-    )
-
-    # Track numbers are weak metadata.
-    if number_source == "track":
-        return False
-
-    # When both the local title and the Audible title carry explicit, differing
-    # trailing numbers (e.g. local "Power Mage 5" vs Audible "Power Mage 6"),
-    # the numbers ARE the identity of two different books in the same series.
-    # High title similarity (they share the base series name) must not be allowed
-    # to mask this as a parallel-numbering case.
-    local_title_number = extract_title_identity_number(
-        clues.get("title", "") or clues.get("raw_title", "")
-    )
-    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
-    explicit_title_number_conflict = bool(
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    )
-
-    # If the title is a strong match and duration confirms it,
-    # do not reject only because the local folder numbering differs from
-    # Audible's sub-series sequence.
-    #
-    # This handles companion/parallel series like:
-    # Local Book 003 - Of Dawn and Darkness
-    # Audible The Elder Empire: Sea, Book 2
-    #
-    # It must NOT fire when the titles themselves carry conflicting numbers.
-    if (
-        not explicit_title_number_conflict
-        and title_score >= 0.85
-        and duration_result["status"] in {"perfect", "strong", "acceptable"}
-        and (author_good or narrator_good)
-    ):
-        return False
-
-    try:
-        return int(float(audible_sequence)) != int(local_number)
-    except ValueError:
-        return False
-
-
-def get_year(product: dict) -> str:
-    for key in ["release_date", "issue_date", "publication_datetime"]:
-        value = product.get(key)
-
-        if value and len(value) >= 4:
-            return value[:4]
-
-    return ""
-
-
-def get_people(product: dict, key: str) -> list[str]:
-    return [
-        item.get("name", "").strip()
-        for item in product.get(key, [])
-        if item.get("name", "").strip()
-    ]
-
-
-def get_primary_series(product: dict) -> tuple[str, str]:
-    series = product.get("series") or []
-
-    if not series:
-        return "", ""
-
-    first = series[0] or {}
-
-    series_name = first.get("title") or first.get("name") or ""
-    sequence = first.get("sequence") or first.get("position") or ""
-
-    return sanitize_tag(series_name), sanitize_tag(sequence)
-
-
-def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]:
-    response = client.get(
-        "catalog/products",
-        params={
-            "keywords": query,
-            "num_results": limit,
-            "response_groups": RESPONSE_GROUPS,
-        },
-    )
-
-    return response.get("products", []) or []
-
-
-def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
-    """Look up a product by ASIN.
-
-    Tries catalog/products/{asin} (direct) first. If that returns nothing,
-    falls back to a keyword search for the ASIN and returns the first result
-    whose ASIN matches exactly. Some ASINs only respond to one of the two
-    endpoints, so both are needed for complete coverage.
-    """
-    asin_upper = asin.strip().upper()
-    try:
-        response = client.get(
-            f"catalog/products/{asin_upper}",
-            params={"response_groups": RESPONSE_GROUPS},
-        )
-        product = response.get("product") or None
-        if product:
-            return product
-    except Exception:
-        pass
-    # Fallback: keyword search -- some ASINs surface here but not via direct lookup
-    try:
-        results = audible_search(client, asin_upper, 5)
-        for p in results:
-            if str(p.get("asin", "") or "").upper() == asin_upper:
-                return p
-    except Exception:
-        pass
-    return None
-
-
-def abs_search(title: str, author: str, provider: str, abs_url: str, abs_api_key: str, limit: int) -> list[dict]:
-    """Search Audiobookshelf's metadata API and return results normalised to Audible product shape."""
-    import urllib.error as _urlerror
-    import urllib.parse as _urlparse
-    import urllib.request as _urlrequest
-
-    params: dict[str, str] = {"title": title, "provider": provider}
-    if author:
-        params["author"] = author
-    url = f"{abs_url.rstrip('/')}/api/search/books?{_urlparse.urlencode(params)}"
-    req = _urlrequest.Request(url, headers={"Authorization": f"Bearer {abs_api_key}", "Accept": "application/json"})
-    try:
-        with _urlrequest.urlopen(req, timeout=15) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except (_urlerror.URLError, OSError) as exc:
-        print(f"  WARNING: ABS search failed: {exc}")
-        return []
-    except Exception as exc:
-        print(f"  WARNING: ABS search error: {exc}")
-        return []
-
-    products = []
-    for match in (raw if isinstance(raw, list) else [])[:limit]:
-        series_raw = match.get("series") or []
-        if isinstance(series_raw, list) and series_raw:
-            series_name = series_raw[0].get("series", "")
-            sequence = str(series_raw[0].get("sequence", "") or "")
-        elif isinstance(series_raw, str):
-            series_name, sequence = series_raw, ""
-        else:
-            series_name, sequence = "", ""
-
-        duration_min = match.get("duration")
-        duration_sec = round(float(duration_min) * 60) if duration_min else None
-
-        # Normalise to Audible product shape so existing scoring/metadata functions work unchanged.
-        products.append({
-            "asin": match.get("asin", ""),
-            "title": match.get("title", "") or "",
-            "subtitle": match.get("subtitle", "") or "",
-            "authors": [{"name": match.get("author", "") or ""}],
-            "narrators": [{"name": match.get("narrator", "") or ""}],
-            "series": [{"title": series_name, "sequence": sequence}] if series_name else [],
-            "publisher_summary": match.get("description", "") or "",
-            "product_images": {"500": match.get("cover", "") or ""},
-            "runtime_length_min": duration_min,
-            "runtime_length_sec": duration_sec,
-            "release_date": str(match.get("publishedYear", "") or ""),
-            "_abs_provider": provider,
-            "_abs_isbn": match.get("isbn", "") or "",
-            "_abs_genres": clean_provider_genres(match.get("genres") or []),
-        })
-    return products
-
-
-def abs_agg_search(
-    title: str,
-    author: str,
-    provider: str,
-    abs_agg_url: str,
-    limit: int,
-    existing_asin: str = "",
-) -> list[dict]:
-    """Search an abs-agg provider endpoint and normalize results to Audible product shape.
-
-    Calls /{provider}/search?title=...&author=...&limit=... on the abs-agg service.
-    The existing_asin is preserved in the result so tag writes don't clear embedded ASINs.
-    """
-    import urllib.error as _urlerror
-    import urllib.parse as _urlparse
-    import urllib.request as _urlrequest
-
-    params: dict[str, str] = {"title": title, "limit": str(limit)}
-    if author:
-        params["author"] = author
-    url = f"{abs_agg_url.rstrip('/')}/{provider}/search?{_urlparse.urlencode(params)}"
-    try:
-        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
-        with _urlrequest.urlopen(req, timeout=15) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except (_urlerror.URLError, OSError) as exc:
-        return []
-    except Exception:
-        return []
-
-    products = []
-    for match in (raw.get("matches", []) or [])[:limit]:
-        # Preserve the embedded ASIN so we don't accidentally clear it on write.
-        asin = match.get("asin", "") or existing_asin
-        products.append(_abs_match_to_product(match, provider, asin))
-    return products
-
-
-def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
-    """Normalize one ABS-custom-provider ``match`` to the Audible product shape.
-
-    Shared by abs-agg and abs-tract (both speak the Audiobookshelf custom
-    metadata provider format). ``asin`` is supplied by the caller so each source
-    can decide whether to trust the match's own ASIN.
-    """
-    series_raw = match.get("series") or []
-    if isinstance(series_raw, list) and series_raw:
-        series_name = series_raw[0].get("series", "")
-        sequence = str(series_raw[0].get("sequence", "") or "")
-    else:
-        series_name, sequence = "", ""
-
-    return {
-        "asin": asin,
-        "title": match.get("title", "") or "",
-        "subtitle": match.get("subtitle", "") or "",
-        "authors": [{"name": match.get("author", "") or ""}],
-        "narrators": [{"name": match.get("narrator", "") or ""}],
-        "series": [{"title": series_name, "sequence": sequence}] if series_name else [],
-        "publisher_summary": match.get("description", "") or "",
-        "product_images": {"500": match.get("cover", "") or ""},
-        "runtime_length_min": None,  # these sources do not return runtime
-        "release_date": str(match.get("publishedYear", "") or ""),
-        "_abs_provider": provider,
-        "_abs_isbn": match.get("isbn", "") or "",
-        "_abs_genres": clean_provider_genres(match.get("genres") or []),
-    }
-
-
-def clean_provider_genres(genres: Any) -> list[str]:
-    """Return real provider genres, excluding generic format labels."""
-    if isinstance(genres, str):
-        raw = [genres]
-    elif isinstance(genres, list):
-        raw = genres
-    else:
-        raw = []
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in raw:
-        text = sanitize_tag(str(value or "")).strip()
-        key = text.lower()
-        if not text or key in GENRE_BLOCKLIST or key in seen:
-            continue
-        cleaned.append(text)
-        seen.add(key)
-    return cleaned
-
-
-# abs-tract scrapes Goodreads/Amazon live. Under sustained mixed load the
-# upstream sites start blocking, after which every request hangs until timeout.
-# A naive per-call retry then makes a long run pathologically slow (every book
-# burns retries * timeout). This circuit breaker trips after a few consecutive
-# persistent failures and short-circuits further calls for a cooldown, so one
-# upstream block doesn't tax the rest of the run.
-_ABS_TRACT_BREAKER_LOCK = threading.Lock()
-_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
-_ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
-_ABS_TRACT_BREAKER_COOLDOWN = 180.0   # seconds to stay open; measured recovery is ~90-105s
-
-# Throttle: enforce a minimum gap between any two abs-tract requests so
-# sustained parallel batches don't hit upstream rate limits. With 5 workers
-# all needing Goodreads simultaneously the burst would otherwise be 5x.
-_ABS_TRACT_THROTTLE_LOCK = threading.Lock()
-_ABS_TRACT_LAST_REQUEST_TIME: list[float] = [0.0]
-_ABS_TRACT_THROTTLE_DELAY = 0.5  # seconds between requests (global, across all workers)
-
-
-def _abs_tract_breaker_is_open() -> bool:
-    with _ABS_TRACT_BREAKER_LOCK:
-        return time.time() < _ABS_TRACT_BREAKER["open_until"]
-
-
-def _abs_tract_breaker_record(success: bool) -> None:
-    with _ABS_TRACT_BREAKER_LOCK:
-        if success:
-            _ABS_TRACT_BREAKER["consecutive_failures"] = 0
-            _ABS_TRACT_BREAKER["logged_open"] = False
-            return
-        _ABS_TRACT_BREAKER["consecutive_failures"] += 1
-        if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
-            _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
-
-
-def _abs_tract_throttle() -> None:
-    """Block until at least _ABS_TRACT_THROTTLE_DELAY seconds have passed since
-    the last request.  Serializes across all worker threads so 5 concurrent
-    workers don't fire simultaneously and trigger upstream rate limits.
-    """
-    with _ABS_TRACT_THROTTLE_LOCK:
-        now = time.time()
-        gap = _ABS_TRACT_LAST_REQUEST_TIME[0] + _ABS_TRACT_THROTTLE_DELAY - now
-        if gap > 0:
-            time.sleep(gap)
-        _ABS_TRACT_LAST_REQUEST_TIME[0] = time.time()
-
-
-def abs_tract_search(
-    title: str,
-    author: str,
-    provider: str,
-    abs_tract_url: str,
-    limit: int,
-    existing_asin: str = "",
-    kindle_region: str = "us",
-    timeout: int = 20,
-    retries: int = 2,
-    log: list | None = None,
-) -> list[dict]:
-    """Search an abs-tract provider (Goodreads/Kindle) and normalize results.
-
-    abs-tract is a standalone Audiobookshelf custom metadata provider, separate
-    from abs-agg. Endpoints:
-      goodreads -> /goodreads/search?query=...&author=...
-      kindle    -> /kindle/<region>/search?query=...&author=...
-
-    Kindle Store ASINs are *ebook* ASINs, not Audible audiobook ASINs, so the
-    Kindle match's ASIN is never adopted as the book's ASIN (we keep any existing
-    one). Kindle is useful here for its high-quality cover, not identity.
-    """
-    import urllib.error as _urlerror
-    import urllib.parse as _urlparse
-    import urllib.request as _urlrequest
-
-    if not abs_tract_url:
-        return []
-
-    # If the breaker is open (upstream is blocking us), skip the call entirely
-    # rather than hang for the full timeout on every remaining book.
-    if _abs_tract_breaker_is_open():
-        if log is not None:
-            with _ABS_TRACT_BREAKER_LOCK:
-                _already = _ABS_TRACT_BREAKER["logged_open"]
-                _ABS_TRACT_BREAKER["logged_open"] = True
-            if not _already:
-                log.append(
-                    "  abs-tract circuit open (upstream blocking) -> skipping "
-                    "Goodreads/Kindle for the cooldown window"
-                )
-        return []
-
-    _abs_tract_throttle()
-
-    if provider == "kindle":
-        path = f"kindle/{kindle_region.strip('/')}/search"
-    else:
-        path = f"{provider}/search"
-    params: dict[str, str] = {"query": title}
-    if author:
-        params["author"] = author
-    url = f"{abs_tract_url.rstrip('/')}/{path}?{_urlparse.urlencode(params)}"
-
-    # abs-tract scrapes Goodreads/Amazon live, so a single request can fail
-    # transiently (timeout, rate-limit, scraper hiccup) especially during a long
-    # batch run. Swallowing those as [] makes a book that *is* on Goodreads look
-    # like a genuine miss. Retry transient failures with backoff and surface a
-    # distinct log line so a real "no results" is distinguishable from an error.
-    _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
-    raw = None
-    last_err = ""
-    for _attempt in range(max(1, retries)):
-        try:
-            req = _urlrequest.Request(url, headers={"Accept": "application/json"})
-            with _urlrequest.urlopen(req, timeout=timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-            break
-        except _urlerror.HTTPError as exc:
-            last_err = f"HTTP {exc.code}"
-            if exc.code not in _RETRYABLE_HTTP:
-                break
-        except (_urlerror.URLError, OSError, TimeoutError) as exc:
-            last_err = type(exc).__name__
-        except Exception as exc:  # malformed JSON etc.
-            last_err = type(exc).__name__
-            break
-        if _attempt < max(1, retries) - 1:
-            time.sleep(0.75 * (2 ** _attempt))  # 0.75s, 1.5s, 3s ...
-
-    if raw is None:
-        _abs_tract_breaker_record(success=False)
-        if log is not None:
-            log.append(
-                f"  {provider} request failed after {max(1, retries)} tries "
-                f"({last_err or 'unknown error'}) -> treated as no result"
-            )
-        return []
-
-    _abs_tract_breaker_record(success=True)
-    products = []
-    for match in (raw.get("matches", []) or [])[:limit]:
-        if provider == "kindle":
-            asin = existing_asin  # never trust a Kindle ebook ASIN as the audiobook ASIN
-        else:
-            asin = match.get("asin", "") or existing_asin
-        products.append(_abs_match_to_product(match, provider, asin))
-    return products
-
-
-def detect_special_provider(clues: dict) -> str | None:
-    """Return the abs-agg provider id if the file is a known dramatized production.
-
-    Checks multiple signals so 'Dramatized Adaptation' is an indicator but not
-    the sole trigger -- publisher name, series name, and raw composer tag are
-    all considered.
-    """
-    # 1. Publisher name matches a known GA/SBT imprint in the catalog
-    special = special_provider_for(clues.get("publisher", ""))
-    if special:
-        return special
-
-    # 2. Series name contains the producer name (e.g. "The Mistborn Saga (GraphicAudio)")
-    series = clues.get("series", "") or ""
-    if "graphicaudio" in series.lower():
-        return "graphicaudio"
-    if "soundbooth" in series.lower():
-        return "soundbooththeater"
-
-    # 3. Composer/writer raw tag (©wrt / "composer") -- GraphicAudio embeds its name there.
-    #    mutagen uses ©wrt; ffprobe (probe_file fallback) uses the lowercase "composer" key.
-    raw_tags = clues.get("_raw_tags") or {}
-    _composer_vals: list[str] = []
-    for tag_key in ("©wrt", "\xa9wrt"):
-        for val in (raw_tags.get(tag_key) or []):
-            try:
-                _composer_vals.append(
-                    bytes(val).decode("utf-8", "ignore") if hasattr(val, "__bytes__") else str(val)
-                )
-            except Exception:
-                pass
-    if not _composer_vals:
-        _ffprobe_comp = str(raw_tags.get("composer", "") or "")
-        if _ffprobe_comp:
-            _composer_vals.append(_ffprobe_comp)
-    for _cv in _composer_vals:
-        if "graphicaudio" in _cv.lower():
-            return "graphicaudio"
-        if "soundbooth" in _cv.lower():
-            return "soundbooththeater"
-
-    # 4. "[Dramatized Adaptation]" in subtitle or narrator tag -- both are used
-    #    by GA/SBT productions; narrator is more common in practice.
-    subtitle = clues.get("subtitle", "") or ""
-    narrator = clues.get("narrator", "") or ""
-    for _sig in (subtitle, narrator):
-        if "dramatized" in _sig.lower() and "adaptation" in _sig.lower():
-            return "graphicaudio"
-
-    return None
-
-
-_thread_local = threading.local()
-
-
-def get_thread_client(auth_file: str, password: str | None = None) -> audible.Client:
-    if not hasattr(_thread_local, "client"):
-        kwargs = {"password": password} if password else {}
-        auth = audible.Authenticator.from_file(auth_file, **kwargs)
-        _thread_local.client = audible.Client(auth=auth)
-    return _thread_local.client
-
-
-def cached_audible_search(
-    client: audible.Client,
-    query: str,
-    limit: int,
-    api_delay_ms: int,
-    cache: dict,
-    cache_lock: threading.Lock,
-    in_flight: dict,
-) -> list[dict]:
-    key = (query.lower(), limit)
-    while True:
-        with cache_lock:
-            if key in cache:
-                return cache[key]
-            if key not in in_flight:
-                event = threading.Event()
-                in_flight[key] = event
-                break
-            event = in_flight[key]
-        event.wait(timeout=60)
-    try:
-        results = audible_search(client, query, limit)
-        if api_delay_ms > 0:
-            time.sleep(api_delay_ms / 1000)
-    except Exception:
-        results = []
-    finally:
-        with cache_lock:
-            cache[key] = results
-            in_flight.pop(key, None)
-        event.set()
-    return results
-
 
 def search_item(
     index: int,
@@ -5289,6 +2706,7 @@ def search_item(
         log_lines=log,
     )
 
+    trace_set_subject(display_path)
     try:
         existing_marker = load_marker(file_path)
         if existing_marker:
@@ -5936,1065 +3354,10 @@ def search_item(
         result.status = "failed"
         result.error = str(error)
         return result
+    finally:
+        trace_set_subject(None)
 
-
-def title_evidence_score(clues: dict, product: dict) -> float:
-    # Strip search-only noise ("Listening to ...", trailing "by <author>") so a
-    # polluted local title still scores against the clean Audible title.
-    local_author = clues.get("author", "")
-    clean_title = strip_title_search_noise(clues.get("title", ""), local_author) or clues.get("title", "")
-    clean_raw_title = strip_title_search_noise(clues.get("raw_title", ""), local_author) or clues.get("raw_title", "")
-
-    local_title = normalize_for_match(clean_title)
-    local_raw_title = normalize_for_match(clean_raw_title)
-    local_sequence_free_title = normalize_for_match(
-        strip_leading_sequence_from_title(clean_title)
-    )
-    local_sequence_free_raw_title = normalize_for_match(
-        strip_leading_sequence_from_title(clean_raw_title)
-    )
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
-
-    if not local_title and not local_raw_title:
-        return 0.0
-
-    title_to_check = local_title or local_raw_title
-    title_candidates = [
-        candidate
-        for candidate in {
-            title_to_check,
-            local_sequence_free_title,
-            local_sequence_free_raw_title,
-        }
-        if candidate
-    ]
-
-    local_tokens = significant_title_tokens(clean_title or clean_raw_title)
-    audible_token_sets = [
-        set(significant_title_tokens(product.get("title", "") or "")),
-        set(significant_title_tokens(product.get("subtitle", "") or "")),
-    ]
-    distinctive_containment = 0.0
-    if local_tokens and any(len(token) >= 5 for token in local_tokens):
-        local_token_set = set(local_tokens)
-        if any(local_token_set <= token_set for token_set in audible_token_sets):
-            distinctive_containment = 0.75
-
-    audible_in_local = 0.0
-    if (
-        audible_title
-        and audible_title in title_to_check
-        # Count tokens of the *normalized* title (after book-N stripping), not the
-        # raw Audible title. "Arena Book 4" normalizes to "arena" (1 token) -- that
-        # single word being contained in "arena road 4" should NOT score 1.0.
-        and len(significant_title_tokens(audible_title)) >= 2
-    ):
-        audible_in_local = 1.0
-
-    return max(
-        *[
-            SequenceMatcher(None, candidate, audible_value).ratio()
-            for candidate in title_candidates
-            for audible_value in (audible_title, audible_subtitle)
-            if audible_value
-        ],
-        (
-            1.0
-            if any(
-                candidate in audible_value
-                for candidate in title_candidates
-                for audible_value in (audible_title, audible_subtitle)
-                if audible_value
-            )
-            else 0.0
-        ),
-        distinctive_containment,
-        audible_in_local,
-    )
-
-
-def product_title_equals_series(product: dict) -> bool:
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_series, _ = get_primary_series(product)
-    audible_series_norm = normalize_for_match(audible_series)
-
-    return bool(
-        audible_title and audible_series_norm and audible_title == audible_series_norm
-    )
-
-
-def is_omnibus_product(product: dict) -> bool:
-    title = normalize_for_match(product.get("title", "") or "")
-    subtitle = normalize_for_match(product.get("subtitle", "") or "")
-    _, sequence = get_primary_series(product)
-    sequence = str(sequence or "").strip()
-
-    if re.search(r"\bbooks?\s+\d+\s*(?:-|to|through|&)\s*\d+\b", title):
-        return True
-
-    if re.search(r"\bbooks?\s+\d+\s*(?:-|to|through|&)\s*\d+\b", subtitle):
-        return True
-
-    if re.fullmatch(r"\d+\s*-\s*\d+", sequence):
-        return True
-
-    return False
-
-
-TITLE_ORDER_STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "of",
-    "the",
-    "to",
-    "in",
-    "on",
-    "for",
-    "with",
-}
-
-
-def significant_title_tokens(value: str) -> list[str]:
-    """Return title tokens used only for detecting reordered-title conflicts.
-
-    This is intentionally separate from normalize_for_match(), because we do
-    not want fuzzy matching to treat these as equivalent:
-      Of Dawn and Darkness
-      Of Darkness and Dawn
-    """
-    value = clean_text(value).lower()
-    value = re.sub(r"\[[^\]]+\]", " ", value)
-    value = re.sub(r"\([^)]*\)", " ", value)
-    value = re.sub(r"[^a-z0-9]+", " ", value)
-    tokens = [token for token in value.split() if token not in TITLE_ORDER_STOPWORDS]
-    return tokens
-
-
-def has_author_identity_conflict(clues: dict, product: dict) -> bool:
-    """Detect a confidently-different author between the local book and product.
-
-    Used as a HARD reject: a title can collide across unrelated books (Arthur C.
-    Clarke's "Cradle" vs Will Wight's "Cradle" series), but the author cannot.
-    A different author means it is not the same book, so no duration/title/series
-    coincidence may promote it. ASIN identity is the only bypass (handled by the
-    caller).
-
-    Deliberately conservative -- returns False whenever the comparison is
-    uncertain, so legitimate matches are never blocked:
-      - missing author on either side,
-      - generic/placeholder author values,
-      - high whole-string similarity (formatting differences),
-      - substring containment ("Clarke" vs "Arthur C. Clarke"; co-authors),
-      - any shared name token (co-authors, middle-name variants, translators).
-    Only a complete absence of overlap counts as a conflict.
-    """
-    local_author = normalize_for_match(clean_author_value(clues.get("author", "")))
-    product_author = normalize_for_match(" ".join(get_people(product, "authors")))
-
-    if not local_author or not product_author:
-        return False
-
-    generic = {
-        "unknown",
-        "unknown author",
-        "various",
-        "various authors",
-        "anonymous",
-        "n a",
-        "na",
-    }
-    if local_author in generic or product_author in generic:
-        return False
-
-    # "Audio Versee", "Audio Version", etc. are garbled production-format labels
-    # that sometimes end up in the embedded author tag. Treat them as unknown.
-    _format_tokens = {"audio", "audiobook", "unabridged", "narrated"}
-    if set(local_author.split()) & _format_tokens:
-        return False
-
-    # Same author allowing for formatting differences
-    # ("J R R Tolkien" vs "John Ronald Reuel Tolkien").
-    if SequenceMatcher(None, local_author, product_author).ratio() >= 0.70:
-        return False
-
-    # Containment covers short-vs-full names and co-author lists where one side
-    # is a subset of the other ("arthur c clarke gentry lee" contains
-    # "arthur c clarke").
-    if local_author in product_author or product_author in local_author:
-        return False
-
-    # Any shared meaningful name token (>= 3 chars, skipping initials) means we
-    # cannot be sure the authors differ -- shared co-author, alternate spelling,
-    # etc. Only block when there is zero overlap.
-    def name_tokens(value: str) -> set[str]:
-        return {token for token in value.split() if len(token) >= 3}
-
-    if name_tokens(local_author) & name_tokens(product_author):
-        return False
-
-    # No similarity, no containment, no shared name token: confidently different.
-    return True
-
-
-def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
-    """Detect same-keywords/different-order title mismatches.
-
-    This catches dangerous companion-title cases such as:
-      Local:   Of Dawn and Darkness
-      Audible: Of Darkness and Dawn
-
-      Local:   Of Shadow and Sea
-      Audible: Of Sea and Shadow
-
-    Those can score highly with simple fuzzy matching, but they are different
-    books and should not be used for metadata edits.
-    """
-    if is_generic_series_number_title(clues):
-        return False
-
-    if product_title_equals_series(product):
-        return False
-
-    local_tokens = significant_title_tokens(clues.get("title", ""))
-    audible_tokens = significant_title_tokens(product.get("title", "") or "")
-
-    if len(local_tokens) < 2 or len(audible_tokens) < 2:
-        return False
-
-    if local_tokens == audible_tokens:
-        return False
-
-    return sorted(local_tokens) == sorted(audible_tokens)
-
-
-def score_product_for_metadata(
-    clues: dict,
-    product: dict,
-    local_duration_minutes: float | None = None,
-) -> float:
-    # ASIN identity: embedded ASIN + title + author is bullet-proof confirmation.
-    # When all three match, skip hard-reject guards designed for wrong-book
-    # false positives and guarantee a floor score above the min_score gate.
-    # Duration mismatch still contributes normally (and triggers review), but
-    # sequence/series conflicts cannot veto a directly identified book.
-    _existing_asin = (clues.get("existing_asin") or "").upper().strip()
-    _product_asin  = (product.get("asin") or "").upper().strip()
-    _asin_identity = False
-    if _existing_asin and _product_asin and _existing_asin == _product_asin:
-        _lt = normalize_for_match(clues.get("title", ""))
-        _pt = normalize_for_match(product.get("title", "") or "")
-        _la = normalize_for_match(clues.get("author", ""))
-        _pa = normalize_for_match(" ".join(get_people(product, "authors")))
-        _title_ok = bool(_lt and (_lt == _pt or _lt in _pt or _pt in _lt))
-        _auth_ok  = bool(_la and _pa and SequenceMatcher(None, _la, _pa).ratio() >= 0.75)
-        _asin_identity = _title_ok and _auth_ok
-
-    if not _asin_identity:
-        # Hard reject a clearly different author. A title can collide across
-        # unrelated books (Arthur C. Clarke's "Cradle" vs Will Wight's "Cradle"
-        # series), but the author cannot -- a different author is never the same
-        # book, regardless of any duration/title/series coincidence.
-        if has_author_identity_conflict(clues, product):
-            return 0.0
-
-        # Hard reject same-words/different-order titles.
-        # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
-        if has_reordered_title_conflict(clues, product):
-            return 0.0
-
-        # Hard reject same-series wrong-book candidates before fuzzy title/duration
-        # bonuses can promote them to perfect matches.
-        # Examples:
-        #   local "The Lost Bloodline 2" must not match Audible "The Lost Bloodline 5"
-        #   local "Overpowered Wizard 3" must not match Audible sequence 1
-        if (
-            has_number_identity_conflict(clues, product)
-            and not strong_identity_overrides_number_conflict(
-                clues,
-                product,
-                local_duration_minutes,
-            )
-        ):
-            return 0.0
-
-        # Hard reject only when the sequence conflict is trustworthy.
-        # The has_sequence_conflict() function should ignore weak track-derived numbers,
-        # especially when duration confirms the match.
-        if has_sequence_conflict(clues, product, local_duration_minutes):
-            return 0.0
-
-    local_series = normalize_for_match(clues.get("series", ""))
-    local_author = normalize_for_match(clues.get("author", ""))
-    local_narrator = normalize_for_match(clues.get("narrator", ""))
-    local_number = str(clues.get("book_number", "")).strip()
-    local_number_source = str(clues.get("book_number_source", "")).strip()
-
-    audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
-    audible_narrators = normalize_for_match(" ".join(get_people(product, "narrators")))
-
-    audible_series, audible_sequence = get_primary_series(product)
-    audible_series_norm = normalize_for_match(audible_series)
-    audible_sequence = str(audible_sequence).strip()
-
-    duration_result = compare_duration(
-        local_minutes=local_duration_minutes,
-        audible_minutes=get_audible_duration_minutes(product),
-    )
-
-    score = 0.0
-    _series_token_jaccard = 0.0  # set in series block, reused for sequence gating
-
-    # Duration is the strongest confirmation signal.
-    if duration_result["status"] == "perfect":
-        score += 0.38
-    elif duration_result["status"] == "strong":
-        score += 0.30
-    elif duration_result["status"] == "acceptable":
-        score += 0.18
-    elif duration_result["status"] == "mismatch":
-        score -= 0.35
-
-    # Series match.
-    series_match = False
-
-    if local_series and audible_series_norm:
-        series_score = SequenceMatcher(None, local_series, audible_series_norm).ratio()
-
-        if local_series in audible_series_norm or audible_series_norm in local_series:
-            # Only boost to 1.0 when the series names substantially overlap by
-            # token content. "Arena" being a substring of "Arena Road" does NOT
-            # mean they are the same series -- Logan Jacobs has both.
-            _ls_toks = set(significant_title_tokens(local_series))
-            _as_toks = set(significant_title_tokens(audible_series_norm))
-            _union = _ls_toks | _as_toks
-            _series_token_jaccard = len(_ls_toks & _as_toks) / len(_union) if _union else 1.0
-            if _series_token_jaccard >= 0.65:
-                series_score = 1.0
-
-        if series_score >= 0.85:
-            series_match = True
-
-        score += series_score * 0.25
-
-    # Sequence match.
-    # Track-derived local numbers are weak, so they can boost only if they agree,
-    # but they should not punish if they disagree.
-    sequence_match = False
-
-    if local_number and audible_sequence:
-        local_sequence_number = parse_sequence_number(local_number)
-        audible_sequence_number = parse_sequence_number(audible_sequence)
-
-        if local_sequence_number is not None and audible_sequence_number is not None:
-            if audible_sequence_number == local_sequence_number:
-                # Only credit the sequence bonus when the series names are
-                # compatible. Book 3 in "Arena Road" matching Book 3 in "Arena"
-                # is a coincidence (same author, different series); the shared
-                # number should not boost the score.
-                _seq_series_ok = (
-                    not local_series
-                    or not audible_series_norm
-                    or series_match
-                    or _series_token_jaccard >= 0.65
-                )
-                if _seq_series_ok:
-                    sequence_match = True
-                    score += 0.18
-            elif (
-                not _asin_identity
-                and local_number_source != "track"
-                and not strong_identity_overrides_number_conflict(
-                    clues,
-                    product,
-                    local_duration_minutes,
-                )
-            ):
-                # Non-track-derived conflicts should already be blocked by
-                # has_sequence_conflict(), but keep this as a safety fallback.
-                # ASIN identity bypasses this: a confirmed ASIN+title+author match
-                # should not be vetoed by a stale or subseries book number.
-                return 0.0
-
-    # Author match.
-    author_good = False
-
-    if local_author and audible_authors:
-        author_score = SequenceMatcher(None, local_author, audible_authors).ratio()
-
-        if local_author in audible_authors:
-            author_score = 1.0
-
-        if author_score >= 0.70:
-            author_good = True
-
-        score += author_score * 0.17
-
-    # Narrator match.
-    narrator_good = False
-
-    if local_narrator and audible_narrators:
-        narrator_score = SequenceMatcher(
-            None, local_narrator, audible_narrators
-        ).ratio()
-
-        if local_narrator in audible_narrators:
-            narrator_score = 1.0
-
-        if narrator_score >= 0.70:
-            narrator_good = True
-
-        score += narrator_score * 0.10
-
-    # Title evidence.
-    title_score = title_evidence_score(clues, product)
-    local_title = normalize_for_match(clues.get("title", ""))
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
-
-    title_matches_audible = (
-        title_score >= 0.55
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
-    score += title_score * 0.12
-
-    # Strong identity bonus.
-    if series_match and sequence_match:
-        score += 0.10
-
-    # Duration-confirmed matches should pass even when title formatting differs.
-    if duration_result["status"] in {"perfect", "strong", "acceptable"}:
-        if series_match and (author_good or narrator_good):
-            score = max(score, 0.82)
-        elif title_score >= 0.75 and (author_good or narrator_good):
-            score = max(score, 0.80)
-
-    # Extra safety for title + duration + author/narrator cases.
-    # This helps cases like Alaska Kingdom where local track is wrong,
-    # but title, author/narrator, and duration identify the correct book.
-    if duration_result["status"] in {"perfect", "strong"} and title_score >= 0.80:
-        if author_good or narrator_good:
-            score = max(score, 0.90)
-
-    # Series-grouping correction path.
-    # Allows series_only correction even when duration/title/sequence are messy.
-    if series_match and (author_good or narrator_good):
-        score = max(score, 0.72)
-
-    # Perfect confidence path:
-    # duration <= 3% difference + title match + author match
-    # should be considered extremely reliable.
-    if (
-        duration_result["status"] == "perfect"
-        and title_score >= 0.80
-        and (author_good or narrator_good)
-    ):
-        score = 1.0
-
-    # ASIN identity floor: ASIN+title+author confirmed above -- guarantee this
-    # clears the min_score gate even when duration or series penalised the score.
-    if _asin_identity:
-        score = max(score, 0.75)
-
-    return round(min(max(score, 0.0), 1.0), 4)
-
-
-def is_single_numeric_sequence(value: str) -> bool:
-    value = str(value or "").strip()
-    return bool(re.fullmatch(r"\d+(?:\.0)?", value))
-
-
-def clean_sequence(value: str) -> str:
-    value = str(value or "").strip()
-
-    if not is_single_numeric_sequence(value):
-        return ""
-
-    return str(int(float(value)))
-
-
-def preferred_audible_sequence(product: dict) -> str:
-    """Use a unique title/subtitle book number when the series sequence is absent."""
-    _series_name, sequence = get_primary_series(product)
-    clean_seq = clean_sequence(sequence)
-    if clean_seq:
-        return clean_seq
-
-    candidates = [
-        clean_sequence(candidate)
-        for candidate in get_audible_number_candidates(product)
-    ]
-    candidates = [candidate for candidate in candidates if candidate]
-    return candidates[0] if len(set(candidates)) == 1 else ""
-
-
-# Tie-break configuration for multiple top-scoring candidates.
-# Scores within TIE_SCORE_EPSILON of the maximum are treated as tied at the top.
-TIE_SCORE_EPSILON = 0.02
-# Duration-status preference: a perfect-duration candidate beats a strong one, etc.
-DURATION_STATUS_RANK = {
-    "perfect": 4,
-    "strong": 3,
-    "acceptable": 2,
-    "unknown": 1,
-    "mismatch": 0,
-}
-# Same-status tie: the closer candidate must beat the other by at least this many
-# minutes of duration difference (30 seconds) to count as a clear winner.
-TIE_DURATION_MARGIN_MINUTES = 0.5
-
-
-def _candidate_duration(
-    product: dict, local_duration_minutes: float | None
-) -> dict:
-    return compare_duration(
-        local_minutes=local_duration_minutes,
-        audible_minutes=get_audible_duration_minutes(product),
-    )
-
-
-def pick_best_match_for_metadata(
-    clues: dict,
-    products: list[dict],
-    local_duration_minutes: float | None = None,
-) -> tuple[dict | None, float, dict | None]:
-    """Pick the best Audible product for the local book.
-
-    Returns (best_product, best_score, ambiguity). When two or more products
-    tie at the top score, fallbacks decide the winner:
-      1. duration status (perfect > strong > acceptable > ...), picked silently;
-      2. for the same status, the candidate that is at least 30 seconds closer
-         on exact duration wins; otherwise there is no clear winner.
-
-    ambiguity is None for an unambiguous single winner. When several candidates
-    tie at the top it is a dict describing the contest:
-      {"count", "resolved", "reason", "chosen", "alternatives"}
-    where resolved=False means the fallbacks could not separate the top two and
-    the caller should route the book to manual review.
-    """
-    scored = [
-        (score, product)
-        for product in products
-        for score in (
-            score_product_for_metadata(clues, product, local_duration_minutes),
-        )
-        if score > 0.0
-    ]
-
-    if not scored:
-        return None, 0.0, None
-
-    best_score = max(score for score, _ in scored)
-    top = [item for item in scored if best_score - item[0] <= TIE_SCORE_EPSILON]
-
-    def sort_key(item: tuple[float, dict]):
-        score, product = item
-        duration = _candidate_duration(product, local_duration_minutes)
-        status_rank = DURATION_STATUS_RANK.get(duration.get("status", "unknown"), 1)
-        diff = duration.get("diff_minutes")
-        # Higher score, then better duration status, then smaller exact diff.
-        return (
-            round(score, 4),
-            status_rank,
-            -(diff if diff is not None else float("inf")),
-        )
-
-    top.sort(key=sort_key, reverse=True)
-    best_score_value, best_product = top[0]
-
-    if len(top) == 1:
-        return best_product, best_score_value, None
-
-    # Multiple candidates tied at the top score: try to resolve with fallbacks.
-    second_product = top[1][1]
-    best_dur = _candidate_duration(best_product, local_duration_minutes)
-    second_dur = _candidate_duration(second_product, local_duration_minutes)
-    best_rank = DURATION_STATUS_RANK.get(best_dur.get("status", "unknown"), 1)
-    second_rank = DURATION_STATUS_RANK.get(second_dur.get("status", "unknown"), 1)
-
-    resolved = False
-    if best_rank > second_rank:
-        # e.g. perfect beats strong — clear winner, resolved silently.
-        resolved = True
-    elif best_rank == second_rank:
-        best_diff = best_dur.get("diff_minutes")
-        second_diff = second_dur.get("diff_minutes")
-        if best_diff is not None and second_diff is not None:
-            if (second_diff - best_diff) >= TIE_DURATION_MARGIN_MINUTES:
-                resolved = True
-
-    def label(product: dict) -> str:
-        title = product.get("title", "") or "?"
-        asin = product.get("asin", "") or "?"
-        return f"{title} [{asin}]"
-
-    ambiguity = {
-        "count": len(top),
-        "resolved": resolved,
-        "chosen": label(best_product),
-        "alternatives": [label(product) for _score, product in top[1:]],
-        "reason": (
-            f"ambiguous match: {len(top)} candidates at score {best_score_value} "
-            + (
-                f"(chose {label(best_product)} on duration)"
-                if resolved
-                else "with no clear duration winner"
-            )
-        ),
-    }
-
-    return best_product, best_score_value, ambiguity
-
-
-def is_generic_series_number_title(clues: dict) -> bool:
-    title = normalize_for_match(clues.get("title", ""))
-    series = normalize_for_match(clues.get("series", ""))
-    number = str(clues.get("book_number", "")).strip()
-
-    if not title or not series or not number:
-        return False
-
-    # Examples:
-    # "All the Skills - Book 003"
-    # "The Perfect Run - Book 003"
-    # "Amber the Cursed Berserker - Book 002"
-    generic_patterns = [
-        rf"^{re.escape(series)}\s+book\s+0*{re.escape(number)}$",
-        rf"^{re.escape(series)}\s+0*{re.escape(number)}$",
-    ]
-
-    return any(re.fullmatch(pattern, title) for pattern in generic_patterns)
-
-
-def determine_edit_mode(
-    product: dict,
-    clues: dict,
-    score: float,
-    duration_result: dict | None = None,
-) -> str:
-    # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
-    # runtime data via abs-agg so duration is always "unknown". Their scores are
-    # structurally low even for perfect matches, so evaluate them before the
-    # general score gate. Verify via the local file's composer (©wrt) tag that
-    # the production company matches, then confirm title+author before writing.
-    _sp = product.get("_abs_provider")
-    if _sp in SPECIAL_PROVIDERS:
-        _COMPOSER_MARKERS: dict[str, str] = {
-            "graphicaudio": "graphicaudio",
-            "soundbooththeater": "soundbooth",
-        }
-        _expected = _COMPOSER_MARKERS.get(_sp, "")
-        _raw_tags = clues.get("_raw_tags") or {}
-        _composer_text = ""
-        for _tag_key in ("©wrt", "\xa9wrt"):
-            for _val in (_raw_tags.get(_tag_key) or []):
-                try:
-                    _composer_text = (
-                        bytes(_val).decode("utf-8", "ignore")
-                        if hasattr(_val, "__bytes__") else str(_val)
-                    )
-                except Exception:
-                    pass
-                break
-            if _composer_text:
-                break
-        if not _composer_text:
-            _composer_text = str(_raw_tags.get("composer", "") or "")
-        composer_confirmed = bool(_expected and _expected in _composer_text.lower())
-        if composer_confirmed:
-            local_title_n  = normalize_for_match(clues.get("title", ""))
-            abs_title_n    = normalize_for_match(product.get("title", "") or "")
-            local_author_n = normalize_for_match(clues.get("author", ""))
-            abs_author_n   = normalize_for_match(" ".join(get_people(product, "authors")))
-            title_ok  = bool(local_title_n and (
-                local_title_n == abs_title_n
-                or local_title_n in abs_title_n
-                or abs_title_n in local_title_n
-            ))
-            author_ok = bool(
-                local_author_n and abs_author_n
-                and SequenceMatcher(None, local_author_n, abs_author_n).ratio() >= 0.75
-            )
-            if title_ok and author_ok:
-                return "full"
-
-    # Goodreads (abs-tract) fallback: no narrator, no duration, no composer
-    # signal, and scores are structurally low. Accept only on a strong title +
-    # author identity match -- that is the "enough metadata was found" bar -- and
-    # write full; otherwise reject (leave as a manual-review miss).
-    if product.get("_abs_provider") == "goodreads":
-        gr_local_title = normalize_for_match(clues.get("title", ""))
-        gr_title = normalize_for_match(product.get("title", "") or "")
-        gr_local_title_bookless = normalize_book_label_for_match(clues.get("title", ""))
-        gr_title_bookless = normalize_book_label_for_match(product.get("title", "") or "")
-        gr_title_ok = bool(gr_local_title and (
-            gr_local_title == gr_title
-            or gr_local_title_bookless == gr_title_bookless
-            or gr_local_title in gr_title
-            or gr_title in gr_local_title
-        ))
-        # Series + sequence identity is an alternative to title-string identity:
-        # Goodreads often titles a book by its series ("Beast Shifter 3") while
-        # the local title is the actual book name ("The Primal Talisman").
-        gr_cand_series, gr_cand_seq = get_primary_series(product)
-        gr_local_series = normalize_for_match(clues.get("series", ""))
-        gr_cand_series_n = normalize_for_match(gr_cand_series)
-        gr_series_ok = bool(gr_local_series and gr_cand_series_n and (
-            gr_local_series == gr_cand_series_n
-            or gr_local_series in gr_cand_series_n
-            or gr_cand_series_n in gr_local_series
-        ))
-        gr_seq_ok = sequence_values_equal(clues.get("book_number", ""), gr_cand_seq)
-        gr_identity_ok = gr_title_ok or (gr_series_ok and gr_seq_ok)
-
-        # Author check, tolerant of multi-author credits and ordering. Goodreads
-        # frequently lists only the primary author of a co-authored book, so
-        # match per-name (subset), not on the whole concatenated string.
-        gr_author_compat = _authors_compatible(
-            clues.get("author", ""), " ".join(get_people(product, "authors"))
-        )
-        if gr_author_compat is True:
-            gr_author_ok = True
-        elif gr_author_compat is None:
-            # Author unknown on one side (e.g. a missing local author tag). Only
-            # safe to accept on an exact title match, not a loose containment.
-            gr_author_ok = bool(gr_local_title and gr_local_title == gr_title)
-        else:
-            gr_author_ok = False
-        return "full" if (gr_identity_ok and gr_author_ok) else "none"
-
-    if score < AGGRESSIVE_SCORE_THRESHOLD:
-        return "none"
-
-    duration_status = (duration_result or {}).get("status", "unknown")
-    title_score = title_evidence_score(clues, product)
-    series_name, sequence = get_primary_series(product)
-
-    local_title = normalize_for_match(clues.get("title", ""))
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
-
-    title_matches_audible = (
-        title_score >= 0.55
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
-
-    local_author = normalize_for_match(clues.get("author", ""))
-    audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
-    local_series = normalize_for_match(clues.get("series", ""))
-    audible_series = normalize_for_match(series_name)
-    author_identity_match = bool(
-        local_author
-        and audible_authors
-        and (
-            local_author == audible_authors
-            or local_author in audible_authors
-            or audible_authors in local_author
-            or SequenceMatcher(None, local_author, audible_authors).ratio() >= 0.85
-        )
-    )
-    series_identity_match = bool(
-        local_series
-        and audible_series
-        and (
-            local_series == audible_series
-            or audible_series in local_series
-            or local_series in audible_series
-            or SequenceMatcher(None, local_series, audible_series).ratio() >= 0.88
-        )
-    )
-
-    def safe_series_only() -> str:
-        return (
-            "series_only"
-            if series_name and author_identity_match and series_identity_match
-            else "none"
-        )
-
-    # Only gate to series_only when duration is a genuine mismatch.
-    # "acceptable" status already means the duration difference is within
-    # tolerable range -- adding a separate 10% hard cap was redundant and
-    # overrode confirmed ASIN + title + author + narrator evidence.
-    if duration_status == "mismatch":
-        return safe_series_only()
-
-    # Omnibus / box-set records can be useful for series grouping,
-    # but should not overwrite individual book titles or track numbers.
-    if is_omnibus_product(product):
-        local_omnibus_text = clean_text(
-            " ".join(
-                str(clues.get(key, "") or "")
-                for key in ("title", "raw_title", "album", "series")
-            )
-        )
-        local_omnibus = bool(
-            re.search(
-                r"\b(?:omnibus|complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
-                local_omnibus_text,
-                flags=re.IGNORECASE,
-            )
-        )
-        if (
-            local_omnibus
-            and title_score >= 0.80
-            and duration_status in {"perfect", "strong"}
-        ):
-            return "full"
-        return safe_series_only()
-
-    # Same-keywords/different-order titles are unsafe.
-    # Example:
-    #   Local:   Of Dawn and Darkness
-    #   Audible: Of Darkness and Dawn
-    # These should be skipped, not full or series_only.
-    if has_reordered_title_conflict(clues, product):
-        return "none"
-
-    # Special case:
-    # Some Audible entries use the series name as the product title.
-    #
-    # Example:
-    #   Local title:   The Frozen Realm
-    #   Audible title: 12 Miles Below
-    #   Series:        12 Miles Below
-    #
-    # This can still be a valid full match when duration and sequence confirm it,
-    # because choose_best_title() will preserve the local specific title.
-    if product_title_equals_series(product):
-        if (
-            duration_status in {"perfect", "strong", "acceptable"}
-            and series_name
-            and is_single_numeric_sequence(sequence)
-        ):
-            return "full"
-
-        return safe_series_only()
-
-    # Main title-safety gate:
-    # If the local title is meaningful and clearly does not match Audible,
-    # do not allow a full rewrite, even if sequence/duration look good.
-    #
-    # This blocks cases like:
-    #   Local:   Of Dawn and Darkness
-    #   Audible: Of Kings and Killers
-    #
-    # But it still allows generic titles like:
-    #   All the Skills - Book 003
-    if clues.get("title") and not title_matches_audible:
-        return safe_series_only()
-
-    # If duration confirms the match, full edit is allowed when either title is
-    # plausible or we have a clean series sequence.
-    if duration_status in {"perfect", "strong", "acceptable"}:
-        if title_score >= 0.45:
-            return "full"
-
-        if series_name and is_single_numeric_sequence(sequence):
-            return "full"
-
-    # If the local title clearly does not match the Audible title/subtitle,
-    # only fix the series grouping fields.
-    if clues.get("title") and title_score < 0.55:
-        return safe_series_only()
-
-    # If Audible gave a clean single sequence and the title is plausible, full edit is OK.
-    if series_name and is_single_numeric_sequence(sequence):
-        return "full"
-
-    return safe_series_only()
-
-
-def get_cover_url(product: dict) -> str:
-    images = product.get("product_images") or {}
-
-    if not isinstance(images, dict):
-        return ""
-
-    # Prefer larger covers when available.
-    preferred_keys = [
-        "2400",
-        "1215",
-        "1200",
-        "500",
-        "408",
-        "300",
-    ]
-
-    for key in preferred_keys:
-        if images.get(key):
-            return images[key]
-
-    for value in images.values():
-        if value:
-            return value
-
-    return ""
-
-
-def metadata_from_product(
-    product: dict,
-    clues: dict,
-    score: float,
-    requested_edit_mode: str = "",
-) -> dict:
-    audible_title = sanitize_tag(product.get("title", ""))
-    subtitle = sanitize_tag(product.get("subtitle", ""))
-
-    series_name, sequence = get_primary_series(product)
-    clean_seq = preferred_audible_sequence(product)
-
-    duration_result = compare_duration(
-        local_minutes=clues.get("local_duration_minutes"),
-        audible_minutes=get_audible_duration_minutes(product),
-    )
-
-    recommended_edit_mode = determine_edit_mode(
-        product, clues, score, duration_result
-    )
-    if requested_edit_mode and requested_edit_mode not in {"full", "series_only"}:
-        raise ValueError(f"unsupported edit mode: {requested_edit_mode}")
-    edit_mode = requested_edit_mode or recommended_edit_mode
-
-    authors = get_people(product, "authors")
-    narrators = get_people(product, "narrators")
-
-    author_text = canonicalize_author_credits(authors)
-    narrator_text = ", ".join(narrators)
-
-    year = get_year(product)
-    summary = sanitize_tag(
-        product.get("publisher_summary") or product.get("merchandising_summary") or ""
-    )
-
-    if edit_mode == "full":
-        title = choose_best_title(
-            audible_title=audible_title,
-            audible_series=series_name,
-            local_title=clues.get("title", ""),
-        )
-        album = title
-        sequence_to_write = clean_seq
-        narrator_to_write = narrator_text
-        year_to_write = year
-        summary_to_write = summary
-    elif edit_mode == "series_only":
-        # Preserve local book identity; fix only the grouping-critical fields and clean author.
-        local_title = clues.get("title") or clues.get("raw_title")
-        title = sanitize_tag(
-            audible_title
-            if is_invalid_local_title(local_title, clues.get("author", ""))
-            else local_title
-        )
-        album = title
-        sequence_to_write = ""
-        narrator_to_write = sanitize_tag(clues.get("narrator", ""))
-        year_to_write = ""
-        summary_to_write = ""
-    else:
-        title = sanitize_tag(
-            clues.get("title") or clues.get("raw_title") or audible_title
-        )
-        album = title
-        sequence_to_write = ""
-        narrator_to_write = sanitize_tag(clues.get("narrator", ""))
-        year_to_write = ""
-        summary_to_write = ""
-
-    raw_genres = product.get("_abs_genres") or []
-    genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
-
-    return {
-        "asin": product.get("asin", ""),
-        "title": title,
-        "subtitle": subtitle,
-        "author": author_text or sanitize_tag(clues.get("author", "")),
-        "narrator": narrator_to_write,
-        "series": series_name,
-        "sequence": sequence_to_write,
-        "year": year_to_write,
-        "summary": summary_to_write,
-        "publisher": sanitize_tag(clues.get("publisher", "")),
-        "genre": genre_text,
-        "isbn": product.get("_abs_isbn", "") or "",
-        "album": album,
-        "audible_title": audible_title,
-        "audible_sequence": sequence,
-        "audible_year": year,
-        "cover_url": get_cover_url(product),
-        "audible_duration_minutes": get_audible_duration_minutes(product),
-        "audible_number_candidates": get_audible_number_candidates(product),
-        "duration": duration_result,
-        "edit_mode": edit_mode,
-        "recommended_edit_mode": recommended_edit_mode,
-    }
-
-
-def choose_best_title(audible_title: str, audible_series: str, local_title: str) -> str:
-    audible_title_clean = sanitize_book_title(audible_title)
-    audible_series_clean = sanitize_tag(audible_series)
-    local_title_clean = sanitize_book_title(local_title)
-
-    if not local_title_clean:
-        return audible_title_clean
-
-    if not audible_title_clean:
-        return local_title_clean
-
-    # If Audible uses the series name as the title, the local title is usually more specific.
-    if (
-        audible_series_clean
-        and normalize_for_match(audible_title_clean)
-        == normalize_for_match(audible_series_clean)
-        and normalize_for_match(local_title_clean)
-        != normalize_for_match(audible_title_clean)
-    ):
-        return local_title_clean
-
-    return audible_title_clean
-
-
-def build_metadata_args(metadata: dict) -> list[str]:
-    tag_map = {
-        "title": metadata.get("title", ""),
-        "artist": metadata.get("author", ""),
-        "album_artist": metadata.get("author", ""),
-        "album": metadata.get("title", ""),
-        "grouping": metadata.get("series", ""),
-        "mvnm": metadata.get("series", ""),
-        "mvin": metadata.get("sequence", ""),
-        "composer": metadata.get("narrator", ""),
-        "date": metadata.get("year", ""),
-        "genre": metadata.get("genre", ""),
-        "publisher": metadata.get("publisher", ""),
-        "subtitle": metadata.get("subtitle", ""),
-    }
-
-    if metadata.get("sequence"):
-        tag_map["track"] = metadata["sequence"]
-
-    if metadata.get("asin"):
-        tag_map["asin"] = metadata["asin"]
-
-    if metadata.get("write_summary") and metadata.get("summary"):
-        tag_map["comment"] = metadata["summary"]
-
-    if metadata.get("isbn"):
-        tag_map["isbn"] = metadata["isbn"]
-
-    args = []
-    for key, value in tag_map.items():
-        value = sanitize_tag(value)
-        if value:
-            args.extend(["-metadata", f"{key}={value}"])
-
-    return args
-
-
+@trace(ALTER, capture=[])
 def final_metadata_preview(metadata: dict) -> dict:
     preview = {
         "file_type": metadata.get("file_type", ""),
@@ -7018,7 +3381,6 @@ def final_metadata_preview(metadata: dict) -> dict:
         preview["isbn"] = metadata["isbn"]
 
     return {key: value for key, value in preview.items() if value}
-
 
 def ffmpeg_write_tags(source: Path, metadata: dict, backup: bool) -> None:
     tmp_path = source.with_name(f"{source.stem}.metadata-fixed{source.suffix}")
@@ -7052,7 +3414,6 @@ def ffmpeg_write_tags(source: Path, metadata: dict, backup: bool) -> None:
 
     tmp_path.replace(source)
 
-
 def download_cover_bytes(url: str) -> tuple[bytes, str]:
     from urllib.request import Request, urlopen
 
@@ -7084,14 +3445,11 @@ def download_cover_bytes(url: str) -> tuple[bytes, str]:
 
     raise RuntimeError(f"Unsupported cover image format from URL: {content_type}")
 
-
 def mp4_has_cover(tags) -> bool:
     return bool(tags.get("covr"))
 
-
 def mp3_has_cover(tags) -> bool:
     return bool(tags.getall("APIC"))
-
 
 def backup_existing_mp4_cover(source: Path, tags) -> Path | None:
     covers = tags.get("covr") or []
@@ -7112,7 +3470,6 @@ def backup_existing_mp4_cover(source: Path, tags) -> Path | None:
 
     return backup_path
 
-
 def backup_existing_mp3_cover(source: Path, tags) -> Path | None:
     covers = tags.getall("APIC")
 
@@ -7130,7 +3487,6 @@ def backup_existing_mp3_cover(source: Path, tags) -> Path | None:
 
     return backup_path
 
-
 def mp4_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
     if image_format == "png":
         cover = MP4Cover(image_bytes, imageformat=MP4Cover.FORMAT_PNG)
@@ -7138,7 +3494,6 @@ def mp4_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
         cover = MP4Cover(image_bytes, imageformat=MP4Cover.FORMAT_JPEG)
 
     tags["covr"] = [cover]
-
 
 def mp3_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
     tags.delall("APIC")
@@ -7154,7 +3509,7 @@ def mp3_set_cover(tags, image_bytes: bytes, image_format: str) -> None:
         )
     )
 
-
+@trace(ALTER, capture=[])
 def compare_tags_for_write(
     current_tags: dict,
     metadata: dict,
@@ -7206,7 +3561,7 @@ def compare_tags_for_write(
     ]
     return len(changed) == 0, changed
 
-
+@trace(ALTER, capture=[], show_result=False)
 def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dict, list[str]]:
     """Return a copy of metadata where already-populated fields keep their current value.
 
@@ -7236,7 +3591,7 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
             filled.append(field)
     return merged, filled
 
-
+@trace(CHOOSE, capture=[])
 def decide_write(
     current_tags: dict,
     metadata: dict,
@@ -7275,7 +3630,6 @@ def decide_write(
             write_note = f"fill-missing: filled {', '.join(filled_fields)}"
 
     return effective_metadata, skip_write, write_note, filled_fields
-
 
 def write_tags(
     source: Path,
@@ -7330,7 +3684,6 @@ def write_tags(
     ffmpeg_write_tags(source, metadata, backup=backup)
     return "ffmpeg"
 
-
 def find_audio_files(root: Path) -> list[Path]:
     files = []
 
@@ -7345,7 +3698,6 @@ def find_audio_files(root: Path) -> list[Path]:
 
     return sorted(files)
 
-
 def collect_audio_files(root: Path) -> list[Path]:
     if root.is_file():
         if not is_supported_audio_file(root):
@@ -7354,7 +3706,6 @@ def collect_audio_files(root: Path) -> list[Path]:
         return [root]
 
     return find_audio_files(root)
-
 
 def _build_report_item(result: "ItemResult") -> dict:
     clues = result.clues or {}
@@ -7404,7 +3755,6 @@ def _build_report_item(result: "ItemResult") -> dict:
             "duration_diff_pct": duration.get("diff_percent"),
         }
     return item
-
 
 def print_plan(
     file_path: Path, query: str, score: float, metadata: dict, clues: dict,
@@ -7524,7 +3874,6 @@ def print_plan(
             print(f"  output: json sidecar -> {get_m4b_tool_metadata_path(file_path, clues)}")
     print()
 
-
 def print_asin_verification_report(asin_matches: list[dict]) -> None:
     print("ASIN VERIFICATION REPORT:")
 
@@ -7573,7 +3922,6 @@ def print_asin_verification_report(asin_matches: list[dict]) -> None:
             print(f"    ... {len(items) - 10} more")
         print()
 
-
 def matches_ignored_folders(file_path: Path, folders: list[str]) -> tuple[bool, str]:
     """Return True when any *directory* in the path begins with an ignore token.
 
@@ -7594,7 +3942,6 @@ def matches_ignored_folders(file_path: Path, folders: list[str]) -> tuple[bool, 
             return True, folder
 
     return False, ""
-
 
 def matches_skip_patterns(
     file_path: Path, clues: dict, patterns: list[str]
@@ -7628,25 +3975,10 @@ def matches_skip_patterns(
 
     return False, ""
 
-
-
-def sequence_values_differ(left: str, right: str) -> bool:
-    """Return True when two non-empty book sequence values disagree."""
-    left = clean_sequence(str(left or ""))
-    right = clean_sequence(str(right or ""))
-    if not left or not right:
-        return False
-    try:
-        return float(left) != float(right)
-    except ValueError:
-        return left != right
-
-
 def append_unique_reason(reasons: list[str], reason: str) -> None:
     reason = clean_text(reason)
     if reason and reason not in reasons:
         reasons.append(reason)
-
 
 def build_manual_review_item(
     file_path: Path,
@@ -7690,7 +4022,6 @@ def build_manual_review_item(
         "duration": duration,
     }
 
-
 def append_manual_review(
     manual_review: list[dict],
     file_path: Path,
@@ -7727,7 +4058,6 @@ def append_manual_review(
             status=status,
         )
     )
-
 
 def selected_match_review_reasons(
     metadata: dict,
@@ -7782,7 +4112,6 @@ def selected_match_review_reasons(
         )
 
     return reasons
-
 
 def print_manual_review_report(manual_review: list[dict]) -> None:
     print("MANUAL REVIEW REPORT:")
@@ -7856,7 +4185,6 @@ def print_duration_review_report(duration_review: list[dict], threshold: float) 
         )
     print()
 
-
 def detect_asin_conflicts(results: list["ItemResult"]) -> None:
     """Flag matched items where the same Audible ASIN was selected for multiple
     books in the same series with disagreeing local/Audible sequence numbers.
@@ -7920,7 +4248,6 @@ def detect_asin_conflicts(results: list["ItemResult"]) -> None:
             if reason not in result.review_reasons:
                 result.review_reasons.append(reason)
 
-
 # Local (non-NAS) cache of each file's embedded ASIN, keyed by path + mtime, so the
 # whole-library scan that powers the duplicate-ASIN guard is a one-time cost: after the
 # first run only new/changed files are re-probed. Stored under reports/ (bind-mounted,
@@ -7929,14 +4256,12 @@ DISK_ASIN_CACHE_PATH = Path(
     os.environ.get("DISK_ASIN_CACHE_PATH", "/app/reports/.disk-asin-cache.json")
 )
 
-
 def _load_disk_asin_cache() -> dict[str, dict]:
     try:
         data = json.loads(DISK_ASIN_CACHE_PATH.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
-
 
 def _save_disk_asin_cache(cache: dict[str, dict]) -> None:
     try:
@@ -7946,7 +4271,6 @@ def _save_disk_asin_cache(cache: dict[str, dict]) -> None:
         )
     except OSError:
         pass
-
 
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     """Map each ASIN already present on disk -> set of file paths that carry it.
@@ -8016,7 +4340,6 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
             asin_map.setdefault(asin, set()).add(key)
     return asin_map
 
-
 def detect_global_asin_duplicates(
     results: list["ItemResult"], disk_asin_map: dict[str, set[str]]
 ) -> None:
@@ -8081,7 +4404,6 @@ def detect_global_asin_duplicates(
                 )
                 if reason not in result.review_reasons:
                     result.review_reasons.append(reason)
-
 
 def print_run_summary(
     found: int,
@@ -8149,7 +4471,6 @@ def print_run_summary(
 
     print_duration_review_report(duration_review, duration_review_threshold)
     print_manual_review_report(manual_review)
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -8440,7 +4761,37 @@ def main():
         help="Milliseconds to sleep after each Audible API call per worker.",
     )
 
+    parser.add_argument(
+        "--debug-trace",
+        action="store_true",
+        dest="debug_trace",
+        help="Enable function-level debug tracing (output to stderr or --debug-trace-file).",
+    )
+
+    parser.add_argument(
+        "--debug-trace-file",
+        default=None,
+        dest="debug_trace_file",
+        metavar="PATH",
+        help="Write debug trace output to this file instead of stderr.",
+    )
+
+    parser.add_argument(
+        "--debug-trace-categories",
+        default=None,
+        dest="debug_trace_categories",
+        metavar="CATS",
+        help="Comma-separated trace categories to enable (choose,alter,score). Default: all.",
+    )
+
     args = parser.parse_args()
+
+    if args.debug_trace:
+        cats = None
+        if args.debug_trace_categories:
+            cats = [c.strip() for c in args.debug_trace_categories.split(",") if c.strip()]
+        from app.debug_trace import configure as trace_configure
+        trace_configure(enabled=True, file_path=args.debug_trace_file, categories=cats)
 
     if args.workers is None:
         args.workers = 5 if args.metadata_json_only else 1
@@ -8994,7 +5345,6 @@ def main():
     if not args.apply:
         print()
         print("Dry-run only. Re-run with --apply to write tags.")
-
 
 if __name__ == "__main__":
     main()
