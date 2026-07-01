@@ -440,12 +440,29 @@ def strip_edition_marker(value: str) -> str:
 
 GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
     r"^\s*(?:a|an|the)?\s*"
-    r"(?:[a-z0-9'’]+[\s-]+){0,6}?"
+    r"(?:[a-z0-9’’]+[\s-]+){0,6}?"
     r"(?:"
     r"lit\s*rpg|litrpg|game\s*lit|gamelit|isekai|xianxia|wuxia|"
     r"cultivation|progression\s+fantasy|slice[\s-]*of[\s-]*life|"
     r"fantasy\s+adventure"
     r")\s*$",
+    re.IGNORECASE,
+)
+
+# Matches the omnibus/collection label word(s) at the start of a title.
+# Used to detect when a range-numbered book’s title is purely a collection
+# descriptor (possibly followed by a redundant book-range suffix).
+_OMNIBUS_LABEL_RE = re.compile(
+    r"^\s*(?:the\s+)?"
+    r"(?:"
+    r"omnibus(?:es)?|"
+    r"complete(?:\s+(?:series|collection|edition|works?))?|"
+    r"publisher’?s?\s+pack|"
+    r"box[\s-]*set|"
+    r"bundle|"
+    r"collect(?:ed(?:\s+(?:edition|works?))?|ion(?:\s+edition)?)?|"
+    r"collector’?s?\s+edition"
+    r")",
     re.IGNORECASE,
 )
 
@@ -480,6 +497,31 @@ def is_marketing_descriptor(value: str) -> bool:
         GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(value)
         or (candidate and candidate != value and GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(candidate))
     )
+
+
+def _is_omnibus_descriptor(text: str, book_number: str) -> bool:
+    """Return True when text is an omnibus/collection label, optionally followed
+    by a book-range suffix that matches book_number.
+
+    Used to detect titles like "Omnibus, Books 1-3" or "Complete Series, Books
+    1-5" when book_number is already a range so the range is redundant in the
+    folder name.  Only fires for range book numbers (those with '-') to avoid
+    collapsing single-volume books that happen to have an omnibus-like label.
+    """
+    text = clean_text(text)
+    if not text or "-" not in book_number:
+        return False
+    m = _OMNIBUS_LABEL_RE.match(text)
+    if not m:
+        return False
+    remainder = text[m.end():].strip(" ,-_.:;")
+    if not remainder:
+        return True
+    num_pat = number_match_pattern(book_number)
+    if not num_pat:
+        return False
+    label_opt = r"(?:books?|vols?\.?|volumes?|v)?\s*"
+    return bool(re.fullmatch(rf"{label_opt}{num_pat}", remainder, flags=re.IGNORECASE))
 
 
 def remove_trailing_marketing_descriptor(value: str) -> str:
@@ -2999,6 +3041,13 @@ def build_book_folder_name(metadata: dict[str, Any]) -> str:
         }:
             return sanitize_path_name(prefix, "Unknown Title")
         series_remainder = strip_series_prefix(title, series)
+        # Omnibus/collection label ± redundant range → use sequence prefix only.
+        # The range in `number` already captures the span; repeating it in the
+        # folder title ("Book 1-3 - Omnibus, Books 1-3") adds no information.
+        # Only fires for range book_numbers so individual books inside a
+        # collection container (each with a single number) are never collapsed.
+        if _is_omnibus_descriptor(series_remainder, number):
+            return sanitize_path_name(prefix, "Unknown Title")
         if (
             normalize_for_compare(series_remainder)
             == normalize_for_compare(display_book_number(number))
