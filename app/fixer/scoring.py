@@ -517,10 +517,16 @@ def strong_identity_overrides_number_conflict(
         # is the base series title with no number (e.g. local "Series 2" vs
         # Audible "Series" sequence=1). If the local number and the Audible
         # sequence disagree, the candidate is a different book.
+        # Exception: fractional prequel/novella numbers within 1 of the catalog
+        # sequence are compatible (e.g. local "0.5 - Dominion" vs Audible seq "0").
         _, audible_seq = get_primary_series(product)
         audible_seq_norm = normalize_book_number(str(audible_seq or ""))
         if audible_seq_norm and local_title_number != audible_seq_norm:
-            return False
+            try:
+                if abs(float(local_title_number) - float(audible_seq_norm)) >= 1.0:
+                    return False
+            except (ValueError, TypeError):
+                return False
 
     duration = compare_duration(
         local_minutes=local_duration_minutes,

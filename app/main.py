@@ -2304,15 +2304,43 @@ def refresh_cached_multipart_audio_profiles(
 
 
 def _read_sidecar_book(source_path: Path) -> dict | None:
-    """Return the applied book metadata from the libraforge.json sidecar, if present."""
+    """Return the applied book metadata from libraforge.json, if present.
+
+    Checks sidecar.book first (multifile grouped books), then falls back to
+    marker.audible (single-file books whose metadata is written to ID3 tags).
+    Merges sidecar.audible.asin because the fixer stores ASIN there, not in
+    sidecar.book.
+    """
     lf_path = source_path.parent / "libraforge.json"
     if not lf_path.is_file():
         return None
     try:
         lf = json.loads(lf_path.read_text(encoding="utf-8"))
-        book = (lf.get("sidecar") or {}).get("book")
+        sidecar = lf.get("sidecar") or {}
+        book = sidecar.get("book")
         if book and isinstance(book, dict) and book.get("title"):
-            return book
+            result = dict(book)
+            audible_asin = (sidecar.get("audible") or {}).get("asin") or ""
+            if audible_asin and not result.get("asin"):
+                result["asin"] = audible_asin
+            return result
+        # Fallback: single-file books write marker.audible (no sidecar.book)
+        marker_audible = (lf.get("marker") or {}).get("audible") or {}
+        ma_title = marker_audible.get("chosen_title") or marker_audible.get("title") or ""
+        if ma_title:
+            raw_asin = marker_audible.get("asin") or ""
+            return {
+                "title": ma_title,
+                "subtitle": "",
+                "author": marker_audible.get("author", ""),
+                "narrator": marker_audible.get("narrator", ""),
+                "series": marker_audible.get("series", ""),
+                "sequence": marker_audible.get("sequence", ""),
+                "year": str(marker_audible.get("year", "") or ""),
+                "summary": "",
+                "genre": "",
+                "asin": raw_asin if raw_asin != "NOREALASIN" else "",
+            }
     except (json.JSONDecodeError, OSError):
         pass
     return None
@@ -2450,18 +2478,15 @@ def inspect_manual_review_target(
     # the right match but corrupt the "Current" column when showing post-apply state.
     sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path)
     if sidecar_book:
+        # Take all fields stored in the sidecar (no preset list) so genre and any
+        # future fields come through without code changes here.
         metadata = {
-            "title": sidecar_book.get("title", "") or clues.get("raw_title", ""),
-            "subtitle": sidecar_book.get("subtitle", "") or "",
-            "author": sidecar_book.get("author", ""),
-            "narrator": sidecar_book.get("narrator", ""),
-            "series": sidecar_book.get("series", ""),
-            "sequence": sidecar_book.get("sequence", ""),
-            "year": sidecar_book.get("year", ""),
-            "summary": sidecar_book.get("summary", ""),
-            "publisher": sidecar_book.get("publisher", "") or clues.get("publisher", ""),
+            **sidecar_book,
+            # Prefer stored title but fall back to raw parsed title if blank.
+            "title": sidecar_book.get("title") or clues.get("raw_title", ""),
+            # Publisher is not stored in the sidecar; read from clues (embedded tags).
+            "publisher": sidecar_book.get("publisher") or clues.get("publisher", ""),
             "cover_url": "",
-            "asin": sidecar_book.get("asin", "") or "",
             "local_duration_minutes": clues.get("local_duration_minutes"),
             "raw_title": clues.get("raw_title", ""),
             "book_number_source": clues.get("book_number_source", ""),
