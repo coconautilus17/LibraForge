@@ -73,11 +73,22 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     ):
         changes.append("title")
 
+    # Detect the case where the structured path parser merged the embedded title
+    # and series into one series string (e.g. embedded title="Courts", series=
+    # "Magic Eater" → path series="Courts Magic Eater"). The embedded tags are
+    # already more granular; overriding would corrupt both fields.
+    _path_series_norm = normalize_for_match(path_meta.get("series", ""))
+    _is_title_series_merge = bool(
+        current_title_norm
+        and current_series_norm
+        and _path_series_norm
+        and _path_series_norm
+        == normalize_for_match(f"{clues.get('title', '')} {clues.get('series', '')}")
+    )
     if (
         path_meta.get("series")
-        and normalize_for_match(path_meta.get("series", "")) != normalize_for_match(
-            clues.get("series", "")
-        )
+        and not _is_title_series_merge
+        and _path_series_norm != normalize_for_match(clues.get("series", ""))
     ):
         changes.append("series")
 
@@ -105,7 +116,7 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     if not path_title_is_series_label:
         clues["raw_title"] = path_meta.get("raw_title", clues.get("raw_title", ""))
         clues["title"] = path_meta.get("title", clues.get("title", ""))
-    if path_meta.get("series"):
+    if path_meta.get("series") and not _is_title_series_merge:
         clues["series"] = path_meta["series"]
     if path_meta.get("book_number"):
         clues["book_number"] = path_meta["book_number"]

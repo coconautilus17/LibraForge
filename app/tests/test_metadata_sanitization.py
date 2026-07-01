@@ -27,8 +27,8 @@ def load_module(name: str, relative_path: str):
 
 
 FIXER = load_module(
-    "fixer_v4_16_sanitization",
-    "scripts/audible-metadata-fixer-v4_16.py",
+    "fixer_v5_sanitization",
+    "scripts/audible-metadata-fixer-v5.py",
 )
 ORGANIZER = load_module(
     "organizer_v3_13_sanitization",

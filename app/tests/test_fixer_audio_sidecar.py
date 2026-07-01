@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 
 
 def load_fixer():
-    path = ROOT / "scripts/audible-metadata-fixer-v4_16.py"
+    path = ROOT / "scripts/audible-metadata-fixer-v5.py"
     spec = importlib.util.spec_from_file_location("fixer_audio_sidecar", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -39,13 +39,18 @@ class FixerAudioSidecarTests(unittest.TestCase):
             for chapter_file in chapter_files:
                 chapter_file.touch()
 
-            sidecar = folder / f"{folder.name}{FIXER.M4B_TOOL_METADATA_SUFFIX}"
-            original = {
+            # v5 writes everything to libraforge.json with existing metadata
+            # nested under "sidecar", not as a standalone flat sidecar file.
+            lf_path = folder / "libraforge.json"
+            existing_sidecar = {
                 "book": {"title": "Existing Title", "author": "Existing Author"},
                 "audible": {"asin": "B012345678"},
                 "source": {"group_search": {"applied": True}},
             }
-            sidecar.write_text(json.dumps(original), encoding="utf-8")
+            lf_path.write_text(
+                json.dumps({"schema_version": 2, "sidecar": existing_sidecar}),
+                encoding="utf-8",
+            )
             summary = {
                 "file_count": 2,
                 "probed_file_count": 2,
@@ -60,16 +65,16 @@ class FixerAudioSidecarTests(unittest.TestCase):
             )
 
             payload = json.loads(written.read_text(encoding="utf-8"))
-            self.assertEqual(payload["book"], original["book"])
-            self.assertEqual(payload["audible"], original["audible"])
-            self.assertEqual(payload["audio_summary"], summary)
+            sc = payload["sidecar"]
+            self.assertEqual(sc["book"], existing_sidecar["book"])
+            self.assertEqual(sc["audible"], existing_sidecar["audible"])
+            self.assertEqual(sc["audio_summary"], summary)
             self.assertEqual(
-                payload["source"]["chapter_files"],
+                sc["source"]["chapter_files"],
                 [str(folder / "Part 1.m4a"), str(folder / "Part 2.m4a")],
             )
-            self.assertEqual(payload["source"]["group_search"]["file_count"], 2)
-            self.assertIn("audio_profile_updated_at", payload)
-            self.assertFalse(sidecar.with_name(f".{sidecar.name}.tmp").exists())
+            self.assertEqual(sc["source"]["group_search"]["file_count"], 2)
+            self.assertIn("audio_profile_updated_at", sc)
 
 
 if __name__ == "__main__":

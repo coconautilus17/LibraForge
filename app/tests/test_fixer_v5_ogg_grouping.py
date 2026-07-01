@@ -64,9 +64,12 @@ class OggGroupingTests(unittest.TestCase):
             FIXER.should_write_json_sidecar(rep, {"group_search": {"applied": True}})
         )
 
-    def test_single_ogg_writes_a_sidecar_like_opus(self):
-        # .ogg now in SIDECAR_OUTPUT, so even a lone file is sidecar-routed.
-        self.assertTrue(FIXER.should_write_json_sidecar(Path("/b/only.ogg")))
+    def test_single_ogg_writes_direct_tags_not_sidecar(self):
+        # A lone .ogg (no group_search.applied) must write tags directly, not a
+        # sidecar -- same rule as single .mp3. Only grouped multi-part books
+        # get a sidecar so that book-level metadata is not stamped onto every
+        # chapter file individually.
+        self.assertFalse(FIXER.should_write_json_sidecar(Path("/b/only.ogg")))
 
     def test_organizer_recognizes_grouped_ogg_book(self):
         files = bare_number_ogg("/book/Shadow Slave Vol 9 (1301-1900)", 1301, 5)

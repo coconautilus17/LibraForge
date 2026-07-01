@@ -870,9 +870,17 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
         else ""
     )
     known_author_norm = normalize_for_match(clean_author_value(known_author))
+    # If the generic regex captured a trailing label word ("- Book", "- Volume") as
+    # part of the series, let the explicit "Series - Book N - Title" patterns below
+    # handle the string instead of returning a mangled series here.
+    _series_candidate = series_number_title.group("series").strip() if series_number_title else ""
+    _series_ends_with_label = bool(
+        re.search(r"\b(?:book|volume|vol\.?|part)$", _series_candidate, re.IGNORECASE)
+    )
     series_number_series_ok = bool(
         series_number_title
-        and series_number_title.group("series").strip().lower()
+        and not _series_ends_with_label
+        and _series_candidate.lower()
         not in {"book", "books", "volume", "volumes", "vol", "vols", "side story"}
     )
     if (
