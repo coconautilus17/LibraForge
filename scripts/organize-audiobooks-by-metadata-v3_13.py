@@ -366,6 +366,8 @@ def is_release_bracket_token(value: str) -> bool:
         return True
     if re.fullmatch(r"\d{2,4}", token):
         return True
+    if re.fullmatch(r"\d+k(?:bps)?", token, flags=re.IGNORECASE):
+        return True
     if re.fullmatch(r"(?:eng|en|english|heb|he|jpn|jp|ja|japanese)", token, flags=re.IGNORECASE):
         return True
     if _NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token):
@@ -438,12 +440,29 @@ def strip_edition_marker(value: str) -> str:
 
 GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
     r"^\s*(?:a|an|the)?\s*"
-    r"(?:[a-z0-9'’]+[\s-]+){0,6}?"
+    r"(?:[a-z0-9’’]+[\s-]+){0,6}?"
     r"(?:"
     r"lit\s*rpg|litrpg|game\s*lit|gamelit|isekai|xianxia|wuxia|"
     r"cultivation|progression\s+fantasy|slice[\s-]*of[\s-]*life|"
     r"fantasy\s+adventure"
     r")\s*$",
+    re.IGNORECASE,
+)
+
+# Matches the omnibus/collection label word(s) at the start of a title.
+# Used to detect when a range-numbered book’s title is purely a collection
+# descriptor (possibly followed by a redundant book-range suffix).
+_OMNIBUS_LABEL_RE = re.compile(
+    r"^\s*(?:the\s+)?"
+    r"(?:"
+    r"omnibus(?:es)?|"
+    r"complete(?:\s+(?:series|collection|edition|works?))?|"
+    r"publisher’?s?\s+pack|"
+    r"box[\s-]*set|"
+    r"bundle|"
+    r"collect(?:ed(?:\s+(?:edition|works?))?|ion(?:\s+edition)?)?|"
+    r"collector’?s?\s+edition"
+    r")",
     re.IGNORECASE,
 )
 
@@ -478,6 +497,31 @@ def is_marketing_descriptor(value: str) -> bool:
         GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(value)
         or (candidate and candidate != value and GENERIC_MARKETING_DESCRIPTOR_RE.fullmatch(candidate))
     )
+
+
+def _is_omnibus_descriptor(text: str, book_number: str) -> bool:
+    """Return True when text is an omnibus/collection label, optionally followed
+    by a book-range suffix that matches book_number.
+
+    Used to detect titles like "Omnibus, Books 1-3" or "Complete Series, Books
+    1-5" when book_number is already a range so the range is redundant in the
+    folder name.  Only fires for range book numbers (those with '-') to avoid
+    collapsing single-volume books that happen to have an omnibus-like label.
+    """
+    text = clean_text(text)
+    if not text or "-" not in book_number:
+        return False
+    m = _OMNIBUS_LABEL_RE.match(text)
+    if not m:
+        return False
+    remainder = text[m.end():].strip(" ,-_.:;")
+    if not remainder:
+        return True
+    num_pat = number_match_pattern(book_number)
+    if not num_pat:
+        return False
+    label_opt = r"(?:books?|vols?\.?|volumes?|v)?\s*"
+    return bool(re.fullmatch(rf"{label_opt}{num_pat}", remainder, flags=re.IGNORECASE))
 
 
 def remove_trailing_marketing_descriptor(value: str) -> str:
@@ -1243,6 +1287,11 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         # Bold Beginnings" → "Bold Beginnings"), but only when the result is
         # non-trivial so "The Bright Lord" (series "The Bright") stays intact.
         cleaned = sanitize_path_name(title, "") or fallback
+        # Strip technical release tokens (bitrate, codec, year) that survive
+        # sanitize_path_name.  cleanup_title_artifacts is intentionally skipped
+        # for trusted titles to avoid wiping genre keywords, but release tokens
+        # such as (128k) or [WEB] are never real title content.
+        cleaned = strip_release_bracket_tokens(cleaned).strip(" -_.,") or cleaned
         # Strip trailing marketing descriptor suffix if present.
         without_suffix = remove_trailing_marketing_descriptor(cleaned)
         if without_suffix and without_suffix != cleaned:
@@ -1255,6 +1304,14 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
             numbered = clean_title_from_number(cleaned)
             if numbered and not title_is_bad_after_cleanup(numbered):
                 cleaned = numbered
+        elif stripped != cleaned and title_is_bad_after_cleanup(stripped) and series_clean and book_number:
+            # strip_series_prefix left only "Book N" or a similar bare label —
+            # the full title is just <Series> + sequence. Collapse it to the
+            # series name so build_book_folder_name() emits "Book 001" instead
+            # of repeating the series name as the folder title.
+            redundant = strip_redundant_series_sequence_title(cleaned, series_clean, book_number)
+            if redundant and not title_is_bad_after_cleanup(redundant):
+                cleaned = redundant
         return cleaned or fallback
     cleaned_seed = cleanup_title_artifacts(title)
     if not cleaned_seed and series:
@@ -1906,6 +1963,8 @@ def parse_legacy_series_container(name: str) -> dict[str, str]:
     Supported forms:
       Series - Author - Narrator
       Author - Series (#1-6)
+      Series (Book 1 & 2)
+      Series (Books 1-3)
     """
     cleaned = sanitize_path_name(cleanup_title_artifacts(name), "")
     if not cleaned:
@@ -1923,6 +1982,13 @@ def parse_legacy_series_container(name: str) -> dict[str, str]:
         if re.search(r"\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)", right) or re.search(r"\bbooks?\s*#?\d", right, flags=re.IGNORECASE):
             series = re.sub(r"\s*\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)\s*$", "", right).strip()
             return {"series": clean_series_name(series), "author": left, "narrator": ""}
+    if len(parts) == 1:
+        # "Series Name (Book 1 & 2)" or "Series Name (Books 1-3)" collection container.
+        book_range = re.search(r"\(books?\s+[^)]+\)", parts[0], flags=re.IGNORECASE)
+        if book_range:
+            series_part = parts[0][:book_range.start()].strip(" -_.,")
+            if series_part:
+                return {"series": clean_series_name(series_part), "author": "", "narrator": ""}
     return {}
 
 
@@ -2618,6 +2684,26 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
                 path_book_number = path_series_suffix_number
                 break
 
+    # When trusted sidecar metadata reports an omnibus range (e.g. "001-003")
+    # but the book folder name is shaped like "<Series> N", the folder path is
+    # the authoritative clue about which individual book this is.  The fixer
+    # likely matched the omnibus Audible entry instead of the single book.
+    if trusted_metadata and not path_book_number and "-" in str(tag_book_number) and series:
+        for suffix_source in (item.source_path.name, item.representative.stem):
+            p = small_series_suffix_number_from_text(suffix_source, series)
+            if p and "-" not in p:
+                try:
+                    rng_parts = str(tag_book_number).split("-")
+                    if int(rng_parts[0]) <= int(p) <= int(rng_parts[-1]):
+                        book_number = p
+                        tag_book_number = p
+                        title = series
+                        metadata_title = series
+                        add_review_reason("omnibus range in sidecar overridden by single-book path number")
+                        break
+                except (ValueError, IndexError):
+                    pass
+
     # Some Audible/fixer marker payloads can carry a bad sequence even though
     # the chosen title and path both clearly expose the real sequence, e.g.
     # title="Corruption Wielder 2", path="Corruption Wielder Book 2",
@@ -2683,10 +2769,9 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
             and has_distinct_book_title(path_title, series, book_number)
             and not is_marketing_descriptor(path_title)
         ):
-            # title == series is a strong signal the metadata is incomplete or
-            # wrong-matched. Prefer the path title regardless of source trust.
-            use_path_title = True
-            add_review_reason("title matches series name; path title used instead")
+            # title == series: no distinct book title in metadata; collapse to
+            # sequence only ("Book N") rather than using the noisy path title.
+            add_review_reason("title matches series name; using sequence only")
         elif trusted_metadata and path_title_differs:
             if title_conflict_should_trigger_review(
                 metadata_title=metadata_title,
@@ -2956,6 +3041,13 @@ def build_book_folder_name(metadata: dict[str, Any]) -> str:
         }:
             return sanitize_path_name(prefix, "Unknown Title")
         series_remainder = strip_series_prefix(title, series)
+        # Omnibus/collection label ± redundant range → use sequence prefix only.
+        # The range in `number` already captures the span; repeating it in the
+        # folder title ("Book 1-3 - Omnibus, Books 1-3") adds no information.
+        # Only fires for range book_numbers so individual books inside a
+        # collection container (each with a single number) are never collapsed.
+        if _is_omnibus_descriptor(series_remainder, number):
+            return sanitize_path_name(prefix, "Unknown Title")
         if (
             normalize_for_compare(series_remainder)
             == normalize_for_compare(display_book_number(number))
@@ -3714,10 +3806,10 @@ def print_move(move: dict[str, Any]) -> None:
     if metadata.get("book_number"):
         label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
         print(f"  Number: {label} {display_book_number(metadata['book_number'])}")
-    # Always display directory paths for consistency. Folder moves already use
-    # folder paths; loose-file moves show the containing folder and destination
-    # folder so both kinds look the same.
-    source_display = move["source"] if move["kind"] == "folder" else move["source"].parent
+    # Folder moves show directory paths. Loose-file moves show the actual file
+    # path so the report captures which specific file is moving (the parent
+    # directory is ambiguous when the file lives directly in the scan root).
+    source_display = move["source"]
     target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
     print("  MOVE:")
     print(f"    {source_display}")
