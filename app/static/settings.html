@@ -42,6 +42,7 @@
       <a href="#title-noise">Title noise</a>
       <a href="#publishers">Publishers</a>
       <a href="#library">Library</a>
+      <a href="#reports">Reports</a>
       <a href="#accounts">Accounts</a>
       <a href="#absSection">Audiobookshelf</a>
       <a href="#abs-tract">Goodreads/Kindle</a>
@@ -137,6 +138,39 @@
         <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Persistent skip patterns <span style="color:var(--muted);font-size:0.9em">(one per line, merged into the run when "Include persistent patterns" is checked on the Forge page)</span></p>
         <textarea id="persistentSkipPatterns" rows="4" placeholder="Casual Farming&#10;Sample Chapter" style="font-family:var(--font-mono);font-size:0.85em;width:100%;box-sizing:border-box"></textarea>
       </div>
+    </section>
+
+    <!-- Report retention -->
+    <section id="reports" class="card settings-card">
+      <h2>Report retention</h2>
+      <p>LibraForge saves a <code>.report.json</code> and <code>.log.txt</code> file for every run. Enable either or both limits below; they are applied automatically after each completed run and when you click <strong>Save</strong>.</p>
+      <div class="retention-rules">
+        <div class="retention-rule">
+          <label class="retention-toggle">
+            <input type="checkbox" id="retentionAgeEnabled" />
+            <span>Delete reports older than</span>
+          </label>
+          <div class="retention-control">
+            <input type="number" id="retentionAgeDays" min="1" max="3650" value="30" style="width:70px" />
+            <span>days</span>
+          </div>
+        </div>
+        <div class="retention-rule">
+          <label class="retention-toggle">
+            <input type="checkbox" id="retentionCountEnabled" />
+            <span>Keep only the most recent</span>
+          </label>
+          <div class="retention-control">
+            <input type="number" id="retentionCount" min="1" max="9999" value="20" style="width:70px" />
+            <span>reports</span>
+          </div>
+        </div>
+      </div>
+      <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <button id="retentionSaveBtn" class="secondary" type="button">Save</button>
+        <button id="retentionPruneBtn" class="secondary" type="button">Prune now</button>
+      </div>
+      <p id="retentionStatus" class="note" style="margin-top:8px"></p>
     </section>
 
     <!-- Audible accounts -->
@@ -377,6 +411,12 @@
       border-radius: 4px;
     }
     h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    .retention-rules { display:flex; flex-direction:column; gap:10px; margin:14px 0 0; }
+    .retention-rule { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .retention-toggle { display:flex; align-items:center; gap:8px; font-size:0.9em; cursor:pointer; min-width:220px; }
+    .retention-control { display:flex; align-items:center; gap:6px; font-size:0.9em; }
+    .retention-control input[type=number] { padding:4px 8px; }
+    .retention-rule:has(input[type=checkbox]:not(:checked)) .retention-control { opacity:0.45; pointer-events:none; }
     #step2 textarea { font-family: var(--font-mono); font-size: 0.82em; }
 
     .account-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; flex-wrap:wrap; }
@@ -679,6 +719,62 @@
           absTractStatus.style.color = "var(--muted)";
         } catch (err) { absTractStatus.textContent = err.message; absTractStatus.style.color = "var(--danger)"; }
         finally { absTractSaveBtn.disabled = false; }
+      });
+
+      // ── Report retention ──────────────────────────────────────────────────
+      const retentionAgeEnabled = $("retentionAgeEnabled");
+      const retentionAgeDays    = $("retentionAgeDays");
+      const retentionCountEnabled = $("retentionCountEnabled");
+      const retentionCount      = $("retentionCount");
+      const retentionSaveBtn    = $("retentionSaveBtn");
+      const retentionPruneBtn   = $("retentionPruneBtn");
+      const retentionStatus     = $("retentionStatus");
+
+      function setRetentionStatus(msg, color) {
+        retentionStatus.textContent = msg;
+        retentionStatus.style.color = color || "var(--muted)";
+      }
+
+      fetch("/api/settings/retention").then((r) => r.json()).then((d) => {
+        retentionAgeEnabled.checked = !!d.max_age_days_enabled;
+        retentionAgeDays.value      = d.max_age_days ?? 30;
+        retentionCountEnabled.checked = !!d.max_count_enabled;
+        retentionCount.value        = d.max_count ?? 20;
+      }).catch(() => {});
+
+      retentionSaveBtn.addEventListener("click", async () => {
+        retentionSaveBtn.disabled = true; setRetentionStatus("");
+        try {
+          const res = await fetch("/api/settings/retention", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              max_age_days_enabled: retentionAgeEnabled.checked,
+              max_age_days: Number(retentionAgeDays.value) || 30,
+              max_count_enabled: retentionCountEnabled.checked,
+              max_count: Number(retentionCount.value) || 20,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to save.");
+          // Prune immediately after saving
+          const prune = await fetch("/api/reports/prune", { method: "POST" });
+          const pruneData = await prune.json();
+          const pruned = pruneData.count || 0;
+          setRetentionStatus(pruned ? `Saved. ${pruned} old report${pruned === 1 ? "" : "s"} pruned.` : "Saved.");
+        } catch (err) { setRetentionStatus(err.message, "var(--danger)"); }
+        finally { retentionSaveBtn.disabled = false; }
+      });
+
+      retentionPruneBtn.addEventListener("click", async () => {
+        retentionPruneBtn.disabled = true; setRetentionStatus("");
+        try {
+          const res = await fetch("/api/reports/prune", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to prune.");
+          const n = data.count || 0;
+          setRetentionStatus(n ? `${n} report${n === 1 ? "" : "s"} deleted.` : "Nothing to prune under current settings.");
+        } catch (err) { setRetentionStatus(err.message, "var(--danger)"); }
+        finally { retentionPruneBtn.disabled = false; }
       });
 
       // ── Clean up sidecars ─────────────────────────────────────────────────
