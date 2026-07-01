@@ -485,7 +485,7 @@ function renderManualReviewList() {
   }
 }
 
-async function loadManualTarget(path) {
+async function loadManualTarget(path, useBackupTags = false) {
   $("manualMeta").textContent = "Inspecting selected target...";
   $("manualSearchResults").innerHTML = "";
   const res = await fetch('/api/manual-review/load', {
@@ -494,6 +494,7 @@ async function loadManualTarget(path) {
     body: JSON.stringify({
       path,
       script_name: $('script').value,
+      use_backup_tags: useBackupTags,
     }),
   });
   const data = await res.json();
@@ -742,6 +743,13 @@ async function searchManualTarget() {
     return;
   }
 
+  // When "search from original backup" is active, reload the displayed metadata
+  // from pre-apply backup tags before running the search so the form reflects
+  // what the file contained before the fixer ever touched it.
+  if ($('force').checked && $('forceOriginal').checked) {
+    await loadManualTarget(manualContext.path, true);
+  }
+
   const provider = $('manualProvider').value;
   let res;
 
@@ -988,7 +996,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       const reloadRes = await fetch('/api/manual-review/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: manualContext.path, script_name: $('script').value }),
+        body: JSON.stringify({ path: manualContext.path, script_name: $('script').value, use_backup_tags: false }),
       });
       if (reloadRes.ok) {
         const reloadData = await reloadRes.json();
@@ -1031,8 +1039,11 @@ function syncForceOriginal() {
   fo.disabled = !forceOn;
   fo.closest('label').style.opacity = forceOn ? '' : '0.4';
   if (!forceOn) fo.checked = false;
+  const note = $('manualBackupNote');
+  if (note) note.hidden = !(forceOn && fo.checked);
 }
 $('force').addEventListener('change', syncForceOriginal);
+$('forceOriginal').addEventListener('change', syncForceOriginal);
 syncForceOriginal();
 
 $('workers').addEventListener('input', () => {
