@@ -1620,11 +1620,9 @@ def write_marker(
 
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     suffix = source.suffix.lower()
-
-    if suffix in SIDECAR_OUTPUT_AUDIO_EXTENSIONS:
-        return True
-
     group_search = (clues or {}).get("group_search", {}) or {}
+    # Sidecar only for grouped multi-part books: stamping every chapter file with
+    # book-level metadata is wrong. Standalone single files get direct tag writes.
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
 
 def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
@@ -1929,7 +1927,7 @@ def write_audiobookshelf_metadata_json(
         target = get_audiobookshelf_metadata_path(source, clues, alone_in_folder)
 
     authors = [
-        {"name": name.strip()}
+        name.strip()
         for name in re.split(r"\s*,\s*", metadata.get("author", "") or "")
         if name.strip()
     ]
@@ -1940,10 +1938,9 @@ def write_audiobookshelf_metadata_json(
     ]
     series = []
     if metadata.get("series"):
-        series.append({
-            "name": metadata["series"],
-            "sequence": metadata.get("sequence", "") or "",
-        })
+        series_name = metadata["series"]
+        seq = metadata.get("sequence", "") or ""
+        series.append(f"{series_name} #{seq}" if seq else series_name)
 
     payload = {
         "title": metadata.get("title", "") or "",

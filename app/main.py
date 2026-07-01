@@ -943,6 +943,7 @@ class AudibleSearchRequest(BaseModel):
 class ManualReviewLoadRequest(BaseModel):
     path: str
     script_name: str = Field(default_factory=default_fixer_script)
+    use_backup_tags: bool = False
 
 
 class ManualReviewDiscoverRequest(BaseModel):
@@ -2302,10 +2303,91 @@ def refresh_cached_multipart_audio_profiles(
     }
 
 
+def _read_sidecar_book(source_path: Path) -> dict | None:
+    """Return the applied book metadata from the libraforge.json sidecar, if present."""
+    lf_path = source_path.parent / "libraforge.json"
+    if not lf_path.is_file():
+        return None
+    try:
+        lf = json.loads(lf_path.read_text(encoding="utf-8"))
+        book = (lf.get("sidecar") or {}).get("book")
+        if book and isinstance(book, dict) and book.get("title"):
+            return book
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _sum_group_duration(folder: Path, group_files: list[Path]) -> float | None:
+    """Sum per-file duration_minutes from the folder-level libraforge.json file_cache.
+
+    Falls back to filename-only matching so durations survive after the organizer
+    moves files to a new folder path.
+    """
+    lf_path = folder / "libraforge.json"
+    if not lf_path.is_file():
+        return None
+    try:
+        lf = json.loads(lf_path.read_text(encoding="utf-8"))
+        cache = lf.get("file_cache") or {}
+        if not cache:
+            return None
+        total = 0.0
+        found = 0
+        for f in group_files:
+            dur = (cache.get(str(f)) or {}).get("duration_minutes")
+            if dur is not None:
+                total += float(dur)
+                found += 1
+        if found > 0:
+            return round(total, 2)
+        # Paths may have changed (organizer moved files). Try filename-only match.
+        by_name = {Path(k).name: v for k, v in cache.items()}
+        for f in group_files:
+            dur = (by_name.get(f.name) or {}).get("duration_minutes")
+            if dur is not None:
+                total += float(dur)
+                found += 1
+        return round(total, 2) if found > 0 else None
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+
+
+def _probe_and_cache_group_duration(
+    group_files: list[Path], fixer_module, max_files: int = 200
+) -> float | None:
+    """Probe all files concurrently for duration and save to libraforge.json file_cache.
+
+    Skips groups larger than max_files to avoid multi-second hangs on extreme
+    cases (e.g. 600-file .ogg chapter splits).  Results are cached so the next
+    manual-review load is instant.
+    """
+    if not group_files or len(group_files) > max_files:
+        return None
+    workers = min(16, len(group_files))
+    per_file: list[tuple[dict, float | None]] = [({}, None)] * len(group_files)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(fixer_module.probe_file, f): i for i, f in enumerate(group_files)}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                per_file[idx] = fut.result()
+            except Exception:
+                pass
+    try:
+        fixer_module._save_group_file_cache(group_files, per_file)
+    except Exception:
+        pass
+    total = sum(float(dur or 0) for _, dur in per_file)
+    found = sum(1 for _, dur in per_file if dur is not None)
+    return round(total, 2) if found > 0 else None
+
+
 def inspect_manual_review_target(
     *,
     path: str,
     script_name: str = "",
+    use_backup_tags: bool = False,
 ) -> dict[str, Any]:
     script_name = script_name or default_fixer_script()
     target_path = validate_audiobook_path(path)
@@ -2316,14 +2398,11 @@ def inspect_manual_review_target(
     )
     if sidecar_context is not None:
         files, group_map, processing_items = sidecar_context
-    elif target_path.is_file():
-        # Single file with no sidecar: skip sibling scan and chapter probing entirely.
-        # build_multi_part_group_map on the parent would ffprobe every sibling, which
-        # can take 10+ seconds when the parent is a large flat directory over NFS.
-        if not fixer_module.is_supported_audio_file(target_path):
-            raise HTTPException(status_code=400, detail=f"Unsupported audiobook file: {target_path}")
-        files, group_map, processing_items = [target_path], {}, [target_path]
     else:
+        # fixer_processing_context uses the cached chapter-count reader so sibling
+        # scanning stays fast even for large multifile folders.
+        if target_path.is_file() and not fixer_module.is_supported_audio_file(target_path):
+            raise HTTPException(status_code=400, detail=f"Unsupported audiobook file: {target_path}")
         files, group_map, processing_items = fixer_processing_context(
             target_path=target_path,
             fixer_module=fixer_module,
@@ -2340,34 +2419,70 @@ def inspect_manual_review_target(
     # Strip the group from group_map when it has more than a few files so
     # build_search_context falls through to the single-file path.
     group_key = source_path.parent
-    if len(group_map.get(group_key) or []) > 4:
+    real_group = group_map.get(group_key) or []
+    if len(real_group) > 4:
         effective_group_map: dict = {}
     else:
         effective_group_map = group_map
-    # Use original pre-apply tags (format_tags from backup) so the manual
-    # review form reflects what the file looked like before the fixer wrote to
-    # it. Falls back to probing the live file when no backup exists.
     queries, clues, _ = fixer_module.build_search_context(
-        source_path, effective_group_map, use_backup_tags=True
+        source_path, effective_group_map, use_backup_tags=use_backup_tags
     )
+    # When the group_map was stripped to avoid ffprobing a large group, the clues
+    # won't have group_search.applied. Restore it so apply writes a folder-level
+    # sidecar instead of tagging an individual chapter file.
+    # Also compute the total duration: prefer the cached libraforge.json file_cache,
+    # fall back to a concurrent ffprobe pass (one-time cost, results saved to cache).
+    if not effective_group_map and real_group:
+        gs = clues.setdefault("group_search", {})
+        gs["applied"] = True
+        gs.setdefault("folder", str(group_key))
+        gs.setdefault("file_count", len(real_group))
+        total_dur = _sum_group_duration(group_key, real_group)
+        if total_dur is None:
+            total_dur = _probe_and_cache_group_duration(real_group, fixer_module)
+        if total_dur is not None:
+            clues["local_duration_minutes"] = total_dur
     display_path = fixer_module.get_processing_display_path(source_path, group_map)
 
-    metadata = {
-        "title": clues.get("title", "") or clues.get("raw_title", ""),
-        "subtitle": "",
-        "author": clues.get("author", ""),
-        "narrator": clues.get("narrator", ""),
-        "series": clues.get("series", ""),
-        "sequence": clues.get("book_number", ""),
-        "year": "",
-        "summary": "",
-        "publisher": clues.get("publisher", ""),
-        "cover_url": "",
-        "asin": "",
-        "local_duration_minutes": clues.get("local_duration_minutes"),
-        "raw_title": clues.get("raw_title", ""),
-        "book_number_source": clues.get("book_number_source", ""),
-    }
+    # For live display (use_backup_tags=False), prefer the libraforge.json sidecar.book
+    # over the search-context clues. build_search_clues_from_file applies path-based
+    # overrides (folder name -> title, hierarchy -> series) that are useful for finding
+    # the right match but corrupt the "Current" column when showing post-apply state.
+    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path)
+    if sidecar_book:
+        metadata = {
+            "title": sidecar_book.get("title", "") or clues.get("raw_title", ""),
+            "subtitle": sidecar_book.get("subtitle", "") or "",
+            "author": sidecar_book.get("author", ""),
+            "narrator": sidecar_book.get("narrator", ""),
+            "series": sidecar_book.get("series", ""),
+            "sequence": sidecar_book.get("sequence", ""),
+            "year": sidecar_book.get("year", ""),
+            "summary": sidecar_book.get("summary", ""),
+            "publisher": sidecar_book.get("publisher", "") or clues.get("publisher", ""),
+            "cover_url": "",
+            "asin": sidecar_book.get("asin", "") or "",
+            "local_duration_minutes": clues.get("local_duration_minutes"),
+            "raw_title": clues.get("raw_title", ""),
+            "book_number_source": clues.get("book_number_source", ""),
+        }
+    else:
+        metadata = {
+            "title": clues.get("title", "") or clues.get("raw_title", ""),
+            "subtitle": "",
+            "author": clues.get("author", ""),
+            "narrator": clues.get("narrator", ""),
+            "series": clues.get("series", ""),
+            "sequence": clues.get("book_number", ""),
+            "year": "",
+            "summary": "",
+            "publisher": clues.get("publisher", ""),
+            "cover_url": "",
+            "asin": "",
+            "local_duration_minutes": clues.get("local_duration_minutes"),
+            "raw_title": clues.get("raw_title", ""),
+            "book_number_source": clues.get("book_number_source", ""),
+        }
 
     return {
         "path": str(target_path),
@@ -5621,7 +5736,7 @@ def discover_manual_review(req: ManualReviewDiscoverRequest) -> dict[str, Any]:
 
 @app.post("/api/manual-review/load")
 def load_manual_review_target(req: ManualReviewLoadRequest) -> dict[str, Any]:
-    return inspect_manual_review_target(path=req.path, script_name=req.script_name)
+    return inspect_manual_review_target(path=req.path, script_name=req.script_name, use_backup_tags=req.use_backup_tags)
 
 
 @app.get("/api/manual-review/current-cover")
