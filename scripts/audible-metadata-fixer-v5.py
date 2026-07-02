@@ -2792,7 +2792,7 @@ def search_item(
                 multi_part_group_map,
                 use_backup_tags=args.force_original,
                 reprobe=args.reprobe,
-                save_probe_cache=args.backup and args.apply,
+                save_probe_cache=args.backup,
             )
             with search_context_lock:
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
@@ -5080,9 +5080,8 @@ def main():
                         query=query_str, status="skipped",
                     )
                     w_manual_review.extend(_local_mr)
-                    if args.apply:
-                        _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-                        write_skip_marker(file_path, clues, alone=_alone)
+                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                    write_skip_marker(file_path, clues, alone=_alone)
 
             elif result.status == "failed":
                 w_failed = 1
