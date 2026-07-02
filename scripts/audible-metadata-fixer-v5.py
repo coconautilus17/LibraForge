@@ -919,10 +919,18 @@ def looks_like_chapter_part_filename(file_path: Path) -> bool:
     return any(re.search(pattern, name, flags=re.IGNORECASE) for pattern in patterns)
 
 def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
-    """Recognize groups named with a shared identity plus `- 01`, `- 02`, etc."""
+    """Recognize groups named with a shared identity plus `- 01`, `- 02`, etc.
+
+    The part number may be the last thing in the filename ("Book - 01.mp3")
+    or sit between the shared identity and a varying chapter title ("Book -
+    01 - Opening Credits.m4b"). Only the identity prefix has to match across
+    files; the trailing chapter title is intentionally ignored here so a
+    "Preface"/"Chapter 40"-style suffix that varies per file doesn't block
+    grouping.
+    """
     grouped: dict[tuple[str, int], list[tuple[Path, int]]] = {}
     for file_path in file_paths:
-        match = re.match(r"^(.+?)\s*[-_.]\s*(\d{2,4})$", file_path.stem)
+        match = re.match(r"^(.+?)\s*[-_.]\s*(\d{2,4})(?:\s*[-_.]\s*\S.*)?$", file_path.stem)
         if not match:
             continue
         prefix = normalize_part_filename(match.group(1))
