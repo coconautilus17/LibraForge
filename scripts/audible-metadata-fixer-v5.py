@@ -2792,7 +2792,7 @@ def search_item(
                 multi_part_group_map,
                 use_backup_tags=args.force_original,
                 reprobe=args.reprobe,
-                save_probe_cache=args.backup,
+                save_probe_cache=args.backup and args.apply,
             )
             with search_context_lock:
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
