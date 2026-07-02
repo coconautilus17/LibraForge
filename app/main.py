@@ -2573,6 +2573,13 @@ def inspect_manual_review_target(
 
 
 def extract_current_cover(source_path: Path) -> tuple[bytes, str]:
+    embedded = _embedded_cover_bytes(source_path)
+    if embedded:
+        return embedded
+
+    # Fallback for files with no readable covr/APIC tag but a raw embedded
+    # picture/video stream ffmpeg can pull out (rare; mutagen normally finds
+    # the real cover first).
     cmd = [
         "ffmpeg",
         "-v",
@@ -4078,6 +4085,38 @@ def _book_author(folder: Path, scan_root: Path) -> str:
             return ""
 
 
+def _embedded_cover_bytes(audio_file: Path) -> tuple[bytes, str] | None:
+    """Return (cover_bytes, media_type) from an audio file's own cover tag (covr/APIC).
+
+    Reads the semantic cover tag via mutagen rather than picking an arbitrary
+    embedded picture/video stream by position -- an M4B can carry several
+    embedded images (per-chapter thumbnails, stray art), and only the first
+    covr/APIC entry is the actual front cover.
+    """
+    try:
+        suffix = audio_file.suffix.lower()
+        if suffix in (".m4b", ".m4a", ".mp4"):
+            tags = MP4(str(audio_file)).tags
+            if tags and "covr" in tags and tags["covr"]:
+                cover_item = tags["covr"][0]
+                from mutagen.mp4 import MP4Cover  # noqa: PLC0415
+                fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
+                media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
+                return (bytes(cover_item), media)
+        elif suffix == ".mp3":
+            from mutagen.id3 import ID3  # noqa: PLC0415
+            tags = ID3(str(audio_file))
+            for key in tags.keys():
+                if key.startswith("APIC"):
+                    apic = tags[key]
+                    mime = getattr(apic, "mime", "image/jpeg")
+                    media = "image/png" if "png" in mime else "image/jpeg"
+                    return (bytes(apic.data), media)
+    except Exception:
+        pass
+    return None
+
+
 def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
     """Return (cover_bytes, media_type) from a file cover or embedded audio tag."""
     for name in _COVER_NAMES:
@@ -4103,27 +4142,9 @@ def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
                 if candidates:
                     break
     for audio_file in candidates[:1]:
-        try:
-            suffix = audio_file.suffix.lower()
-            if suffix in (".m4b", ".m4a", ".mp4"):
-                tags = MP4(str(audio_file)).tags
-                if tags and "covr" in tags and tags["covr"]:
-                    cover_item = tags["covr"][0]
-                    from mutagen.mp4 import MP4Cover  # noqa: PLC0415
-                    fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
-                    media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
-                    return (bytes(cover_item), media)
-            elif suffix == ".mp3":
-                from mutagen.id3 import ID3  # noqa: PLC0415
-                tags = ID3(str(audio_file))
-                for key in tags.keys():
-                    if key.startswith("APIC"):
-                        apic = tags[key]
-                        mime = getattr(apic, "mime", "image/jpeg")
-                        media = "image/png" if "png" in mime else "image/jpeg"
-                        return (bytes(apic.data), media)
-        except Exception:
-            pass
+        result = _embedded_cover_bytes(audio_file)
+        if result:
+            return result
     return None
 
 
