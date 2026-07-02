@@ -8,8 +8,8 @@ entries, and the true front cover doesn't always land on ffmpeg's video
 stream index 0 -- reproduced live on a real file where -map 0:v:0 returned
 an unrelated leftover image while mutagen's covr[0] was the correct cover.
 """
+import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,7 +27,7 @@ def _make_silent_m4a(path: Path) -> None:
     )
 
 
-@unittest.skipUnless(sys.platform.startswith("linux"), "ffmpeg fixture requires the container env")
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build the MP4 fixture")
 class EmbeddedCoverSelectionTests(unittest.TestCase):
     def test_first_covr_entry_is_used_when_multiple_covers_exist(self):
         from mutagen.mp4 import MP4, MP4Cover

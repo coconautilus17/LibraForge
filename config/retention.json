@@ -1,0 +1,6 @@
+{
+  "max_age_days_enabled": false,
+  "max_age_days": 30,
+  "max_count_enabled": true,
+  "max_count": 30
+}
