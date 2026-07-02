@@ -452,6 +452,33 @@ def _write_libraforge(path: Path, payload: dict) -> None:
     except OSError:
         pass
 
+def _libraforge_folder_file_belongs_to(payload: dict, source: Path) -> bool:
+    """True when a folder-level libraforge.json's recorded data covers `source`.
+
+    A folder-level file is meant for a single grouped book or a lone file --
+    but a shared "dumping ground" folder (e.g. an unsorted-books root) can
+    hold several unrelated, independently-processed loose files. If a
+    folder-level libraforge.json already names a different file as its
+    owner, it must never be read as -- or overwritten with -- `source`'s
+    data. An empty/fresh payload has no conflicting claim yet, so it's
+    treated as available.
+    """
+    if not payload:
+        return True
+    source_str = str(source)
+    for section_key in ("sidecar", "marker", "scan_cache"):
+        src = (payload.get(section_key) or {}).get("source") or {}
+        root_file = src.get("root_file")
+        chapter_files = src.get("chapter_files") or []
+        if root_file or chapter_files:
+            return root_file == source_str or source_str in chapter_files
+    # Marker and backup record only a bare filename (no full source.* block).
+    for section_key in ("marker", "backup"):
+        named_file = (payload.get(section_key) or {}).get("source_file")
+        if named_file:
+            return named_file == source.name
+    return True
+
 def _load_libraforge_raw(
     source: Path, clues: dict | None = None, alone: bool = False
 ) -> tuple[Path, dict]:
@@ -460,7 +487,9 @@ def _load_libraforge_raw(
     Multi-file (grouped) books and single-file books alone in their folder
     use a folder-level ``libraforge.json``.  Single-file books sharing a
     folder with other books use a per-file ``<name>.libraforge.json``.
-    Detection is by existence: folder-level is checked first.
+    Detection is by existence: folder-level is checked first, but only when
+    it actually belongs to `source` (see _libraforge_folder_file_belongs_to)
+    -- otherwise it's another book's data and must not be read or clobbered.
 
     Returns (libraforge_path, payload). payload is {} when nothing exists yet.
     Migrates old backup/marker files and old group sidecars on first access.
@@ -483,12 +512,18 @@ def _load_libraforge_raw(
                 except OSError:
                     pass
 
+    folder_lf_blocked = False
     if folder_lf.is_file():
-        _cleanup_orphans()
         try:
-            return folder_lf, json.loads(folder_lf.read_text(encoding="utf-8"))
+            folder_payload = json.loads(folder_lf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return folder_lf, {}
+            folder_payload = {}
+        if _libraforge_folder_file_belongs_to(folder_payload, source):
+            _cleanup_orphans()
+            return folder_lf, folder_payload
+        # Belongs to a different file sharing this folder (e.g. a shared
+        # unsorted root). Never read from or write to it for `source`.
+        folder_lf_blocked = True
 
     if file_lf.is_file():
         _cleanup_orphans()
@@ -497,8 +532,9 @@ def _load_libraforge_raw(
             payload = json.loads(file_lf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
-        # If the book is now alone in its folder, migrate file-level to folder-level.
-        if alone:
+        # If the book is now alone in its folder, migrate file-level to
+        # folder-level -- unless that path is already claimed by another file.
+        if alone and not folder_lf_blocked:
             _write_libraforge(folder_lf, payload)
             try:
                 file_lf.unlink()
@@ -509,7 +545,8 @@ def _load_libraforge_raw(
 
     # Determine write path for new data
     group_search = (clues or {}).get("group_search", {}) or {}
-    lf_path = folder_lf if (group_search.get("applied") or alone) else file_lf
+    wants_folder_level = bool(group_search.get("applied") or alone)
+    lf_path = folder_lf if (wants_folder_level and not folder_lf_blocked) else file_lf
 
     payload: dict = {}
     old_to_remove: list[Path] = []
@@ -528,7 +565,8 @@ def _load_libraforge_raw(
             if sd.get("file_cache"):
                 payload["file_cache"] = sd["file_cache"]
             old_to_remove.append(old_group_sidecar)
-            lf_path = folder_lf
+            if not folder_lf_blocked:
+                lf_path = folder_lf
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -1660,6 +1698,7 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
         **payload.get("marker", {}),
         "applied": False,
         "processed_at": datetime.now(timezone.utc).isoformat(),
+        "source_file": source.name,
         "audible": {
             **existing_audible,
             "asin": asin_to_write,
@@ -5041,8 +5080,9 @@ def main():
                         query=query_str, status="skipped",
                     )
                     w_manual_review.extend(_local_mr)
-                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-                    write_skip_marker(file_path, clues, alone=_alone)
+                    if args.apply:
+                        _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                        write_skip_marker(file_path, clues, alone=_alone)
 
             elif result.status == "failed":
                 w_failed = 1
