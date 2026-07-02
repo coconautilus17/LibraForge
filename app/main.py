@@ -681,7 +681,32 @@ def pick_sidecar(path: Path, sidecars: list[Path]) -> Path | None:
         if per_file in sidecars:
             return per_file
 
-    return sidecars[0] if sidecars else None
+        # No name-based match. A folder can hold several independent,
+        # single-file books (e.g. a mixed classics dump) where only some
+        # have been processed -- guessing by position (e.g. sidecars[0])
+        # would silently attach an unrelated sibling's metadata. Every
+        # sidecar records the exact file(s) it covers under source.*, so
+        # trust only a candidate that explicitly claims this file.
+        target_str = str(path)
+        for sidecar in sidecars:
+            try:
+                payload = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            source = (payload.get("sidecar") or payload).get("source", {}) or {}
+            covered = set(source.get("chapter_files") or [])
+            root_file = source.get("root_file")
+            if root_file:
+                covered.add(root_file)
+            if target_str in covered:
+                return sidecar
+        return None
+
+    # `path` is a directory with no folder-level or preferred-name match
+    # above. A single remaining sidecar unambiguously belongs to it (e.g.
+    # a multi-part group's sidecar named after its anchor file); with 2+
+    # candidates we can't tell which one covers this folder.
+    return sidecars[0] if len(sidecars) == 1 else None
 
 
 def load_json(path: Path) -> dict[str, Any]:
