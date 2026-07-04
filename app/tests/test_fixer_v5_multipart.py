@@ -75,26 +75,45 @@ class MultiPartGroupingTests(unittest.TestCase):
         grouped = {p for fs in groups.values() for p in fs}
         return files, groups, grouped
 
-    def test_part_files_group_despite_high_chapter_counts(self):
-        # The real _unorganized case: two parts with 10+ chapters each plus a
-        # complete edition. Parts must group; the complete file stays separate.
+    def test_high_chapter_part_files_are_not_forced_together(self):
+        # A "Part N" filename token is not proof of a real split -- it can just
+        # as easily be two separate (or duplicate) complete recordings sharing
+        # a naming convention. A real high embedded chapter count outranks the
+        # filename, so these must NOT be grouped just because they say "Part".
+        # The tool leaves this for the user to merge or leave as-is.
         names = [
             "LotR1 - The Fellowship of the Ring - Part 1 (read by Phil Dragash).m4b",
             "LotR1 - The Fellowship of the Ring - Part 2 (read by Phil Dragash).m4b",
             "The Lord of the Rings The Fellowship of the Ring.m4b",
         ]
         chapters = {names[0]: 12, names[1]: 10, names[2]: 22}
-        files, groups, grouped = self._group(names, chapters)
-        self.assertEqual(groups[Path("/book")], files[:2])
-        self.assertNotIn(files[2], grouped)  # complete edition processed alone
+        _files, groups, _grouped = self._group(names, chapters)
+        self.assertEqual(groups, {})
 
-    def test_part_inside_parens_groups(self):
+    def test_part_inside_parens_high_chapters_not_forced_together(self):
         names = [
             "Ready Player One (RP1SFX 9 Part 1).m4b",
             "Ready Player One (RP1SFX 9 Part 2).m4b",
             "Ready Player One.m4b",
         ]
         chapters = {names[0]: 32, names[1]: 8, names[2]: 40}
+        _files, groups, _grouped = self._group(names, chapters)
+        self.assertEqual(groups, {})
+
+    def test_low_chapter_part_files_group_excluding_unrelated_complete_edition(self):
+        # The narrow, safe case a part marker still helps with: two low-chapter
+        # "Part N" files alongside an unrelated high-chapter complete edition.
+        # Without marker-based candidate selection, the complete edition's real
+        # chapter count would poison the whole folder's validation and reject
+        # the legitimate parts too. The marker lets the parts be considered on
+        # their own, while the complete edition (no marker, real chapters) is
+        # still correctly rejected as its own book.
+        names = [
+            "Some Book - Part 1.m4b",
+            "Some Book - Part 2.m4b",
+            "Some Book Complete Edition.m4b",
+        ]
+        chapters = {names[0]: 2, names[1]: 2, names[2]: 40}
         files, groups, grouped = self._group(names, chapters)
         self.assertEqual(groups[Path("/book")], files[:2])
         self.assertNotIn(files[2], grouped)
