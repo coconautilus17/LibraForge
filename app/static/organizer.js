@@ -3,6 +3,8 @@ let pollTimer = null;
 let latestMoveItems = [];
 let latestStats = {};
 let currentOrgReportId = null;
+let lastRequest = null;
+let noSidecarsHandledForRun = null;
 
 // Strip the trailing filename from a path so only the directory is shown.
 // Paths ending in a known audio extension are treated as files; others as dirs.
@@ -143,12 +145,48 @@ function showOrgApplyConfirm(req) {
   });
 }
 
-async function startRun() {
-  const req = collectRequest();
-  if (req.apply) {
+function buildNoSidecarsConfirmDialog() {
+  if ($('orgNoSidecarsDialog')) return;
+  const dlg = document.createElement('dialog');
+  dlg.id = 'orgNoSidecarsDialog';
+  dlg.className = 'manual-apply-dialog org-confirm-dialog';
+  dlg.innerHTML = `
+    <h3 class="manual-apply-title org-confirm-danger-title">Fixer was not applied</h3>
+    <p>No item in this scan has a fixer/marker sidecar. Multi-file book handling (grouping split chapters, and title/author/series identity across them) relies on metadata the fixer script writes -- without it, folder names and moves for split books may be wrong.</p>
+    <div class="manual-apply-actions">
+      <button id="orgNoSidecarsCancel" class="secondary">Cancel</button>
+      <button id="orgNoSidecarsContinue" class="danger">Continue anyway</button>
+    </div>`;
+  document.body.appendChild(dlg);
+}
+
+function showNoSidecarsConfirm() {
+  buildNoSidecarsConfirmDialog();
+  const dlg = $('orgNoSidecarsDialog');
+  return new Promise((resolve) => {
+    const onOk = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    const onBackdrop = (e) => { if (e.target === dlg) onCancel(); };
+    function cleanup() {
+      $('orgNoSidecarsContinue').removeEventListener('click', onOk);
+      $('orgNoSidecarsCancel').removeEventListener('click', onCancel);
+      dlg.removeEventListener('click', onBackdrop);
+      dlg.close();
+    }
+    $('orgNoSidecarsContinue').addEventListener('click', onOk);
+    $('orgNoSidecarsCancel').addEventListener('click', onCancel);
+    dlg.addEventListener('click', onBackdrop);
+    dlg.showModal();
+  });
+}
+
+async function startRun(reqOverride) {
+  const req = reqOverride || collectRequest();
+  if (req.apply && !reqOverride) {
     const ok = await showOrgApplyConfirm(req);
     if (!ok) return;
   }
+  lastRequest = req;
 
   const res = await fetch('/api/organizer/runs', {
     method: 'POST',
@@ -176,6 +214,17 @@ async function poll() {
   if (!res.ok) return;
   const state = await res.json();
   render(state);
+
+  if (state.stats?.no_sidecars_warning && noSidecarsHandledForRun !== currentRun) {
+    noSidecarsHandledForRun = currentRun;
+    const req = lastRequest;
+    showNoSidecarsConfirm().then((proceed) => {
+      if (proceed && req) {
+        startRun({ ...req, acknowledge_no_sidecars: true });
+      }
+    });
+  }
+
   if (['completed', 'failed', 'cancelled'].includes(state.status)) {
     clearInterval(pollTimer);
     clearActiveRun(RUN_KEY);
