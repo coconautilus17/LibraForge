@@ -993,6 +993,67 @@ def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
                 best = candidate
     return best
 
+# Explicit, high-confidence "this file is one slice of a larger book" markers.
+# Centralised here so new spellings only need adding to this list. A *confident*
+# match (an explicit word, not just a bare trailing number) is strong enough to
+# group files even when they carry their own embedded chapters -- a dramatised
+# "Part 1" can legitimately hold 10+ chapters. New patterns must capture the
+# part index as group(1).
+_PART_MARKER_PATTERNS = [
+    re.compile(r"\bpart\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\bpt\.?\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b(?:disc|disk|cd)\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b0*(\d{1,3})\s+of\s+0*\d{1,3}\b", re.IGNORECASE),  # "1 of 3"
+]
+
+def detect_part_marker(stem: str) -> tuple[str, int] | None:
+    """Return (identity_prefix, part_index) for an explicit multi-part marker.
+
+    Recognises 'Part N', 'Pt N', 'Disc/CD N' and 'N of M' anywhere in the name,
+    including inside parentheses. The last marker wins so a leading series number
+    (e.g. 'LotR1 - ... - Part 2') does not shadow the real part index. Returns
+    None when no confident marker is present.
+    """
+    best: tuple[int, int, int] | None = None  # (start, end, index)
+    for pattern in _PART_MARKER_PATTERNS:
+        for match in pattern.finditer(stem):
+            if best is None or match.start() > best[0]:
+                best = (match.start(), match.end(), int(match.group(1)))
+    if best is None:
+        return None
+    start, end, index = best
+    identity = normalize_part_filename(stem[:start] + " " + stem[end:])
+    return (identity or "_", index)
+
+def marker_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Recognize groups sharing an explicit part marker (Part N, Disc N, N of M).
+
+    Bare numeric prefixes (LotR1/LotR2) are deliberately not treated as parts
+    here to avoid merging distinct series entries -- only detect_part_marker's
+    explicit-word matches count.
+    """
+    grouped: dict[str, list[tuple[Path, int]]] = {}
+    for file_path in file_paths:
+        marker = detect_part_marker(file_path.stem)
+        if marker is None:
+            continue
+        identity, index = marker
+        grouped.setdefault(identity, []).append((file_path, index))
+
+    best: set[Path] = set()
+    for matches in grouped.values():
+        numbers = sorted(index for _path, index in matches)
+        if (
+            len(matches) >= 2
+            and len(numbers) == len(set(numbers))
+            and numbers[0] in {0, 1}
+            and numbers == list(range(numbers[0], numbers[0] + len(numbers)))
+        ):
+            candidate = {path for path, _index in matches}
+            if len(candidate) > len(best):
+                best = candidate
+    return best
+
 # Leading ordinal: a number at the *start* of the name followed by a separator
 # and a title, e.g. "0. Opening Credits ...", "10. Suspect Alchemy ...",
 # "001 - ...". Leading zeros are tolerated; the captured value is the index.
@@ -1062,20 +1123,40 @@ def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
 def part_sequence_files(file_paths: list[Path]) -> set[Path]:
     """Files that belong to a recognized numbered part sequence.
 
-    Prefers trailing "- 01" numbering (shared-prefix groups); falls back to
-    leading-ordinal chapter splits. Used both to choose grouping candidates and
-    to mark a file as a safe chapter part during validation.
+    Prefers an explicit part marker (Part N, Disc N, "N of M") found anywhere
+    in the name; falls back to trailing "- 01" numbering (shared-prefix
+    groups); falls back to leading-ordinal chapter splits. Used both to choose
+    grouping candidates and to mark a file as a safe chapter part during
+    validation.
     """
     return (
-        numeric_part_sequence_files(file_paths)
+        marker_sequence_files(file_paths)
+        or numeric_part_sequence_files(file_paths)
         or leading_ordinal_sequence_files(file_paths)
     )
+
+def confident_part_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Subset of part_sequence_files() strong enough to override the
+    embedded-chapter-count veto: an explicit marker (Part N, Disc N, N of M),
+    as opposed to a bare trailing/leading number.
+    """
+    return marker_sequence_files(file_paths)
 
 def classify_multi_part_file_safety(
     file_path: Path,
     chapter_count: int | None,
     numeric_part_sequence: bool = False,
+    confident_part: bool = False,
 ) -> tuple[bool, str]:
+    # An explicit part marker (Part N, N of M, Disc N) in a contiguous sequence is
+    # strong evidence the file is one slice of a larger book, even when it carries
+    # its own embedded chapters. A dramatised "Part 1" with 12 chapters plus a
+    # "Part 2" with 10 is one book, so this overrides the chapter-count veto below.
+    if confident_part:
+        if chapter_count is None:
+            return True, "explicit part marker (chapter metadata unreadable)"
+        return True, f"explicit part marker overrides embedded chapter count ({chapter_count})"
+
     if chapter_count is None:
         return False, "chapter metadata unreadable"
 
@@ -1120,6 +1201,7 @@ def validate_multi_part_group_files(
     checked = []
     unsafe = []
     numeric_parts = part_sequence_files(file_paths)
+    confident_parts = confident_part_sequence_files(file_paths)
 
     for file_path in sorted(file_paths, key=natural_audio_sort_key):
         if not is_chapter_metadata_candidate(file_path):
@@ -1130,6 +1212,7 @@ def validate_multi_part_group_files(
             file_path=file_path,
             chapter_count=chapter_count,
             numeric_part_sequence=file_path in numeric_parts,
+            confident_part=file_path in confident_parts,
         )
         item = {
             "file": str(file_path),
