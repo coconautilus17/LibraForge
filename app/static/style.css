@@ -3196,32 +3196,35 @@ button.danger:hover:not(:disabled) {
 
 /* Start Here legend/guide */
 .start-here-guide {
-  margin: 18px 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  margin: 20px 0;
+  padding: 16px 20px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
 }
 
 .start-here-guide > summary {
   color: var(--accent);
-  font-size: 13px;
-  font-weight: 720;
+  font-size: 18px;
+  font-weight: 800;
   cursor: pointer;
 }
 
 .guide-section {
-  margin-top: 16px;
-  padding-top: 14px;
+  margin-top: 18px;
+  padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 
 .guide-section:first-of-type {
   border-top: none;
-  padding-top: 8px;
+  padding-top: 10px;
 }
 
 .guide-section h3 {
-  margin: 0 0 8px;
-  font-size: 14px;
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--text);
 }
 
 .guide-section ul {
@@ -3281,3 +3284,34 @@ button.danger:hover:not(:disabled) {
    block. */
 .lib-badge { display: inline-block; font-size: 0.7em; padding: 1px 6px; border-radius: 99px; background: var(--border); color: var(--text-soft); }
 .lib-badge.owned { background: #3a2f12; color: #e9c46a; }
+
+.guide-badge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.guide-badge-table th,
+.guide-badge-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.guide-badge-table th {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+
+.guide-badge-table td:first-child {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.guide-badge-table tbody tr:last-child td {
+  border-bottom: none;
+}
