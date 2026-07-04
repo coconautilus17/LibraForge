@@ -3193,3 +3193,85 @@ button.danger:hover:not(:disabled) {
 }
 
 .suspect-recommendation em { color: var(--accent); font-style: normal; }
+
+/* Start Here legend/guide */
+.start-here-guide {
+  margin: 18px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.start-here-guide > summary {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.guide-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.guide-section:first-of-type {
+  border-top: none;
+  padding-top: 8px;
+}
+
+.guide-section h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.guide-section ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-section li {
+  margin-bottom: 6px;
+}
+
+.guide-smart-detail {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+}
+
+.guide-smart-detail summary {
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.guide-smart-detail p {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.guide-force-note {
+  margin: 10px 0 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-badge-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-badge-sample {
+  flex-shrink: 0;
+  min-width: 108px;
+}

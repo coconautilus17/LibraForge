@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260704-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260704-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -48,6 +48,40 @@
       <h1>What needs attention</h1>
       <p>Point LibraForge at a folder and it'll tell you what's missing, what's ready, and what's already in shape - across tagging, conversion, and organization.</p>
     </div>
+
+    <details id="startHereGuide" class="start-here-guide">
+      <summary>Guide: what the badges and modes mean</summary>
+
+      <div class="guide-section">
+        <h3>Edit modes</h3>
+        <ul>
+          <li><span class="match-mode-badge">Full metadata</span> writes everything the match provided: title, author, series, sequence, narrator, year, genre, ASIN.</li>
+          <li><span class="match-mode-badge">Series only</span> writes only series/sequence and leaves title and other fields untouched. Used when the match confirms series and author confidently but title identity is uncertain, so a possibly-correct local title is never clobbered.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Write modes</h3>
+        <ul>
+          <li><strong>Smart</strong>: only writes if the current embedded tags differ from the match.</li>
+          <li><strong>Fill missing fields only</strong>: never touches a field that already has a value, only fills blanks.</li>
+          <li><strong>Overwrite</strong>: always writes every matched field, unconditionally.</li>
+        </ul>
+
+        <details class="guide-smart-detail">
+          <summary>How does Smart mode decide what counts as "already matching"?</summary>
+          <p>Smart mode compares each field the match would write against what's already embedded in the file: title, author, series, genre, and ASIN, plus sequence, narrator, and year when the edit mode is Full. It only marks the book <span class="match-status-badge status-smart-skipped">Smart-skipped</span> (nothing written) when every one of those checked fields already matches. If even one differs, the file is written normally.</p>
+        </details>
+
+        <p class="guide-force-note"><strong>Force reprocess</strong> only bypasses the "already processed" check, so the book is re-searched and re-matched from scratch. It does not override what the write mode decides once a fresh match is found:</p>
+        <ul>
+          <li><strong>Smart + Force</strong>: re-matches from scratch, but if the fresh match's fields are identical to what's already embedded, the book still shows <span class="match-status-badge status-smart-skipped">Smart-skipped</span>. Force restarts the search, not the write.</li>
+          <li><strong>Fill missing + Force</strong>: still only fills currently-blank fields either way, a no-op if nothing's blank.</li>
+          <li><strong>Overwrite + Force</strong>: the only combination that reliably rewrites everything, since Overwrite always writes the full fresh match regardless of what's already there.</li>
+        </ul>
+      </div>
+
+    </details>
 
     <div class="pick-row">
       <input id="folderPath" type="text" list="folderSuggestions"
