@@ -40,6 +40,7 @@ def product(
     narrators=("Narrator Y",),
     minutes=600,
     year="2020-01-01",
+    language="",
 ):
     return {
         "asin": asin,
@@ -50,6 +51,7 @@ def product(
         "narrators": [{"name": name} for name in narrators],
         "runtime_length_min": minutes,
         "release_date": year,
+        "language": language,
     }
 
 
@@ -449,6 +451,62 @@ class CrossSeriesSameAuthorTests(unittest.TestCase):
         )
         score = FIXER.score_product_for_metadata(clues, p, 600.0)
         self.assertGreaterEqual(score, 0.70, f"Iron Teeth 3 should still match The Iron Teeth 3 (score={score})")
+
+
+class LanguagePenaltyTests(unittest.TestCase):
+    """Non-English editions must not beat an English match via duration coincidence.
+
+    e.g. "Le Hobbit" or "Herejes de Dune" scoring above an English original
+    because runtime happened to align.
+    """
+
+    def test_non_english_product_is_penalized(self):
+        clues = {
+            "title": "Dune Messiah",
+            "raw_title": "Dune Messiah",
+            "author": "Frank Herbert",
+            "narrator": "",
+            "book_number": "",
+            "book_number_source": "",
+        }
+        p = product(
+            asin="B0DUNEFR",
+            title="Dune Messiah",
+            authors=("Frank Herbert",),
+            minutes=600,
+            language="french",
+        )
+        p_en = product(
+            asin="B0DUNEEN",
+            title="Dune Messiah",
+            authors=("Frank Herbert",),
+            minutes=600,
+            language="english",
+        )
+        score_fr = FIXER.score_product_for_metadata(clues, p, 600.0)
+        score_en = FIXER.score_product_for_metadata(clues, p_en, 600.0)
+        self.assertLess(score_fr, score_en)
+
+    def test_missing_language_is_not_penalized(self):
+        clues = {
+            "title": "Dune Messiah",
+            "raw_title": "Dune Messiah",
+            "author": "Frank Herbert",
+            "narrator": "",
+            "book_number": "",
+            "book_number_source": "",
+        }
+        p = product(asin="B0DUNE01", title="Dune Messiah", authors=("Frank Herbert",), minutes=600)
+        score_no_lang = FIXER.score_product_for_metadata(clues, p, 600.0)
+        p_en = product(
+            asin="B0DUNE02",
+            title="Dune Messiah",
+            authors=("Frank Herbert",),
+            minutes=600,
+            language="english",
+        )
+        score_en = FIXER.score_product_for_metadata(clues, p_en, 600.0)
+        self.assertEqual(score_no_lang, score_en)
 
 
 if __name__ == "__main__":

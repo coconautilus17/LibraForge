@@ -979,6 +979,13 @@ def score_product_for_metadata(
     if _asin_identity:
         score = max(score, 0.75)
 
+    # Language penalty: non-English products score lower for English-language
+    # libraries. Prevents foreign-language editions (French, Spanish, etc.)
+    # from being chosen over English matches via duration coincidence.
+    product_language = str(product.get("language", "") or "").lower()
+    if product_language and product_language != "english":
+        score -= 0.30
+
     return round(min(max(score, 0.0), 1.0), 4)
 
 
