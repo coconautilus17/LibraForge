@@ -5483,6 +5483,9 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         client = audible.Client(auth=auth)
         from audible.aescipher import decrypt_voucher_from_licenserequest  # noqa: PLC0415
 
+        activation_bytes_cache: str | None = None
+        activation_bytes_error: Exception | None = None
+
         total = len(req.items)
         state.total = total
         set_run_phase(state, "downloading", "Downloading", f"0 of {total}")
@@ -5533,10 +5536,38 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                 # AAX (Adrm) decrypts with account activation_bytes; AAXC (Mpeg) with a
                 # per-file voucher. Resolve the right material up front so a decryption
                 # failure doesn't leave the encrypted source on disk.
+                #
+                # Activation bytes are an account/device property, not a per-book one, and
+                # live-fetching them hits Audible's legacy CloudFront-fronted activation
+                # endpoint. Fetching it once per book (instead of once per run) fires that
+                # request repeatedly in quick succession, which trips CloudFront's abuse
+                # protection and makes every Adrm item in the batch fail. Fetch it once,
+                # reuse for the rest of the run, and persist it to the auth file so future
+                # runs skip the live fetch entirely. A failed fetch is cached too (not just
+                # a successful one) so a persistent block (e.g. CloudFront rejecting the
+                # request) fails every remaining Adrm item immediately instead of retrying
+                # the live call once per book, which would keep hammering the endpoint.
                 drm_type = content_license.get("drm_type", "")
                 base = _safe_component(item.title or item.asin)
                 if drm_type == "Adrm":
-                    decrypt_kwargs = {"activation_bytes": auth.get_activation_bytes()}
+                    if activation_bytes_cache is None and activation_bytes_error is None:
+                        log("  fetching account activation bytes (first AAX title this run)...")
+                        try:
+                            activation_bytes_cache = auth.get_activation_bytes()
+                            log("  activation bytes obtained")
+                            try:
+                                auth.to_file()
+                            except Exception:
+                                pass
+                        except Exception as ab_exc:  # noqa: BLE001
+                            activation_bytes_error = ab_exc
+                    elif activation_bytes_error is not None:
+                        log("  activation bytes already failed earlier this run; skipping live retry")
+                    else:
+                        log("  reusing activation bytes fetched earlier this run")
+                    if activation_bytes_error is not None:
+                        raise activation_bytes_error
+                    decrypt_kwargs = {"activation_bytes": activation_bytes_cache}
                     enc_path = book_dir / f"{base}.aax"
                 else:
                     voucher = decrypt_voucher_from_licenserequest(auth, lr)
