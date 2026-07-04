@@ -1385,6 +1385,20 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     }
 
 
+# Scan-root/staging folder names a loose file can sit directly inside --
+# never a real book title, so title-recovery must not pick these up as a
+# fallback candidate.
+GENERIC_TITLE_RECOVERY_FOLDER_NAMES = {
+    "audiobooks",
+    "books",
+    "library",
+    "media",
+    "unorganized",
+    "_unorganized",
+    "unknown",
+}
+
+
 def is_invalid_local_title(value: str, author: str = "") -> bool:
     title_norm = normalize_for_match(value)
     author_norm = normalize_for_match(clean_author_value(author))
@@ -1422,6 +1436,7 @@ def recover_invalid_local_title(clues: dict, file_path: Path) -> dict:
         if (
             candidate_norm
             and candidate_norm not in {series_norm, author_norm}
+            and candidate_norm not in GENERIC_TITLE_RECOVERY_FOLDER_NAMES
             and not is_invalid_local_title(candidate, clues.get("author", ""))
         ):
             clues["raw_title"] = candidate

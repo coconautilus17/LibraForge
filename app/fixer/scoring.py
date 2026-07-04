@@ -565,6 +565,22 @@ def has_strong_local_number(clues: dict) -> bool:
     return str(clues.get("book_number_source", "")).strip() in {"title", "path"}
 
 
+def local_number_unconfirmed_by_candidate(clues: dict, product: dict) -> bool:
+    """True when local has a confident, explicit book number but the candidate
+    carries no sequence data at all to confirm or refute it.
+
+    A candidate missing sequence entirely is not evidence it's the right
+    book -- it's frequently an incomplete catalog entry, a different book in
+    the series, or the series landing page. High title/author/duration
+    agreement alone must not promote this to a confident, auto-write score;
+    without a number to compare, the identity is genuinely unconfirmed.
+    """
+    if not has_strong_local_number(clues):
+        return False
+    _series, audible_sequence = get_primary_series(product)
+    return not str(audible_sequence).strip()
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def has_sequence_conflict(
     clues: dict,
@@ -631,8 +647,23 @@ def has_sequence_conflict(
     # Audible The Elder Empire: Sea, Book 2
     #
     # It must NOT fire when the titles themselves carry conflicting numbers.
+    #
+    # Gated to a small (<=1) gap: a genuine numbering-scheme difference (e.g.
+    # a local omnibus count vs. a sub-series count) is a consistent, small
+    # offset. A larger gap in high title-similarity territory is usually a
+    # recurring saga tagline the series reuses across several volumes (e.g.
+    # "From Human to Dragon to God" appearing in multiple Dragon Emperor
+    # books) rather than evidence of a different numbering scheme -- title
+    # agreement there does not identify which specific book this is.
+    try:
+        sequence_gap = abs(int(float(audible_sequence)) - int(local_number))
+    except ValueError:
+        sequence_gap = None
+
     if (
         not explicit_title_number_conflict
+        and sequence_gap is not None
+        and sequence_gap <= 1
         and title_score >= 0.85
         and duration_result["status"] in {"perfect", "strong", "acceptable"}
         and (author_good or narrator_good)
@@ -852,6 +883,16 @@ def score_product_for_metadata(
             _series_token_jaccard = len(_ls_toks & _as_toks) / len(_union) if _union else 1.0
             if _series_token_jaccard >= 0.65:
                 series_score = 1.0
+            else:
+                # Not confirmed as the same series. The character-based
+                # SequenceMatcher ratio is mechanically inflated by substring
+                # containment regardless of true similarity (e.g. "Summoner"
+                # vs "Summoner School" scores ~0.7 despite being different,
+                # unrelated series by the same author). A coincidental
+                # substring relationship is not evidence of a real match, so
+                # it earns no series credit here -- other genuine signals
+                # (title, author, duration) still apply on their own merits.
+                series_score = 0.0
 
         if series_score >= 0.85:
             series_match = True
@@ -945,18 +986,24 @@ def score_product_for_metadata(
     if series_match and sequence_match:
         score += 0.10
 
+    # A candidate missing sequence entirely cannot confirm or refute a
+    # confident local book number -- title/author/duration agreement alone
+    # must not promote it to an auto-write floor. See
+    # local_number_unconfirmed_by_candidate() docstring.
+    _number_unconfirmed = local_number_unconfirmed_by_candidate(clues, product)
+
     # Duration-confirmed matches should pass even when title formatting differs.
     if duration_result["status"] in {"perfect", "strong", "acceptable"}:
         if series_match and (author_good or narrator_good):
             score = max(score, 0.82)
-        elif title_score >= 0.75 and (author_good or narrator_good):
+        elif title_score >= 0.75 and (author_good or narrator_good) and not _number_unconfirmed:
             score = max(score, 0.80)
 
     # Extra safety for title + duration + author/narrator cases.
     # This helps cases like Alaska Kingdom where local track is wrong,
     # but title, author/narrator, and duration identify the correct book.
     if duration_result["status"] in {"perfect", "strong"} and title_score >= 0.80:
-        if author_good or narrator_good:
+        if (author_good or narrator_good) and not _number_unconfirmed:
             score = max(score, 0.90)
 
     # Series-grouping correction path.
@@ -971,6 +1018,7 @@ def score_product_for_metadata(
         duration_result["status"] == "perfect"
         and title_score >= 0.80
         and (author_good or narrator_good)
+        and not _number_unconfirmed
     ):
         score = 1.0
 
