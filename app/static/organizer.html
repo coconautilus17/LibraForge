@@ -153,6 +153,17 @@
     </section>
 
     <section class="card">
+      <div class="section-head">
+        <h2>Suspicion Report</h2>
+        <button class="secondary" id="suspectReportBtn" hidden>Generate Suspicion Report</button>
+      </div>
+      <p class="note">Analyzes the organizer report for items that deserve a closer look before applying moves -- bitrate artifacts in titles, sequence conflicts, loose-root files, and more.</p>
+      <div id="suspectReportWidget" hidden>
+        <div id="suspectReportList"></div>
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Planned Moves</h2>
       <p class="note">Each card represents one move from the scan root into the destination library root.</p>
       <div id="moveRiskSummary" class="review-alert">No move data yet.</div>
@@ -169,17 +180,6 @@
         <strong id="moveCount">Showing 0 of 0 planned moves</strong>
       </div>
       <div id="moveItems" class="results-grid"></div>
-    </section>
-
-    <section class="card">
-      <div class="section-head">
-        <h2>Suspicion Report</h2>
-        <button class="secondary" id="suspectReportBtn" hidden>Generate Suspicion Report</button>
-      </div>
-      <p class="note">Analyzes the organizer report for items that deserve a closer look before applying moves -- bitrate artifacts in titles, sequence conflicts, loose-root files, and more.</p>
-      <div id="suspectReportWidget" hidden>
-        <div id="suspectReportList"></div>
-      </div>
     </section>
 
     <section class="card">
