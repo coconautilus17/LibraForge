@@ -2470,6 +2470,18 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
     return None
 
 
+def any_item_has_sidecar(items: list[BookItem]) -> bool:
+    """True if at least one item in the scan has a usable fixer/marker sidecar.
+
+    Used as a cheap library-wide signal, not a per-item check: multi-file
+    book handling (grouping, title/author/series across chapters) leans on
+    metadata the fixer script writes, so a scan root where nothing has ever
+    been touched by the fixer is a sign the organizer is being run on raw,
+    unprocessed audio rather than something to detect and reimplement here.
+    """
+    return any(metadata_from_sidecar(item) is not None for item in items)
+
+
 def metadata_from_tags(item: BookItem) -> dict[str, Any]:
     tags = run_ffprobe(item.representative)
     filename_title = item.representative.stem
@@ -3958,6 +3970,17 @@ def main() -> None:
             "--skip-pattern 'Casual Farming'."
         ),
     )
+    parser.add_argument(
+        "--acknowledge-no-sidecars",
+        action="store_true",
+        help=(
+            "Proceed even though no scanned item has a fixer/marker sidecar. "
+            "Without this flag, a scan root where nothing has ever been "
+            "processed by the fixer prints NO_SIDECARS_FOUND and exits "
+            "before planning any moves, since multi-file book handling "
+            "leans on metadata the fixer writes."
+        ),
+    )
     parser.add_argument("--no-companions", action="store_true", help="Do not move known companion files with loose audio files.")
     parser.add_argument("--remove-empty-dirs", action="store_true", help="After applying moves, remove empty source directories up to the scan root.")
     parser.add_argument("--structure-cache", default=str(DEFAULT_STRUCTURE_CACHE), help="Persistent library structure cache JSON.")
@@ -4006,6 +4029,11 @@ def main() -> None:
         items = [item for item in items if all(audio_file.suffix.lower() == ".m4b" for audio_file in item.audio_files)]
     if args.max_items > 0:
         items = items[:args.max_items]
+
+    if items and not args.acknowledge_no_sidecars and not any_item_has_sidecar(items):
+        print(f"Found book items: {len(items)}")
+        print("NO_SIDECARS_FOUND")
+        return
 
     planned_moves: list[dict[str, Any]] = []
     skipped_reviews: list[dict[str, Any]] = []
