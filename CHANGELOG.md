@@ -52,19 +52,12 @@ onward is tracked here going forward.
 - Docs: README discloses WIP status and heavy AI involvement; Planned section corrected
   against verified current state
 
-### 2026-07-01 to 07-03 (PR #123-132)
-- Suspect Report: new review-script pass (`review-libraforge-report.py`) that flags
-  likely-wrong matches after a run - bitrate tokens leaked into titles, ABS-style
-  duplicated title brackets, redundant series prefixes, generic omnibus titles, and more
-  - surfaced through a shared UI widget on both Metadata Forge and Folder Forge
-  (Organizer gets its own new detections on top); manual review performance improved via
-  script filtering and caching
-- Organizer: fixed several title-source bugs; report retention (max age / max count)
-  settings added to Settings; fixed multi-file grouping to recognize part numbers
-  embedded mid-filename, not just trailing ones; fixed cross-contamination between books
-  sharing a folder in `libraforge.json`
-- Manual Review: display fixes; cover extraction now reads the real embedded cover tag
-  instead of ffmpeg's first video stream (fixes wrong covers on some files)
+### 2026-07-02 to 07-03 (PR #130-132)
+- Organizer/Fixer: fixed multi-file grouping to recognize part numbers embedded
+  mid-filename, not just trailing ones; fixed metadata cross-contamination between
+  distinct books sharing a folder-level `libraforge.json`
+- Manual Review: cover extraction now reads the real embedded cover tag instead of
+  ffmpeg's first video stream (fixes wrong covers on some files)
 
 ---
 
@@ -73,6 +66,17 @@ onward is tracked here going forward.
 Everything below was already shipped in a tagged GitHub Release before this
 file started tracking versions; kept for history. See the Releases page for
 the actual per-version release notes.
+
+### 2026-06-30 to 07-01 (PR #123-129)
+- Suspect Report: new review-script pass (`review-libraforge-report.py`) that flags
+  likely-wrong matches after a run - bitrate tokens leaked into titles, ABS-style
+  duplicated title brackets, redundant series prefixes, generic omnibus titles, and more
+  - surfaced through a shared UI widget on both Metadata Forge and Folder Forge
+  (Organizer gets its own new detections on top); manual review performance improved via
+  script filtering and caching
+- Organizer: fixed several title-source bugs
+- Manual Review: display fixes
+- Settings: report retention (max age / max count) settings added
 
 ### 2026-06-29 to 06-30 (PR #95-122)
 - Providers: Goodreads and Kindle (via `abs-tract`) added as opt-in fallback providers
