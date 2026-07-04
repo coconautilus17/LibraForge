@@ -5614,6 +5614,12 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         # Invalidate target-folder owned cache so a re-open reflects new books.
         with _OWNED_ASIN_LOCK:
             _OWNED_ASIN_CACHE.pop(str(target), None)
+        try:
+            write_final_report(state)
+        except Exception:
+            pass
+        with runs_lock:
+            runs.pop(run_id, None)
 
 
 @app.post("/api/library/download/runs")
