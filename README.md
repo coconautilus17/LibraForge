@@ -68,21 +68,27 @@ once via the `ABS_API_KEY` environment variable (an env-set key is managed by th
 and cannot be removed from the UI).
 
 ### Planned
-- **Full debug mode** - toggleable debug overlay surfacing raw API responses, per-file
-  decision traces, and internal state. Requires extracting complex logic into standalone
-  modules first (see below).
 - **Script modularisation** - complex functions split out of `app.js` and `main.py` into
-  dedicated, standardised modules with clean interface contracts. Prerequisite for debug
-  mode and long-term maintainability.
+  dedicated, standardised modules with clean interface contracts (the fixer itself is
+  already split into `app/fixer/{scoring,parsing,clues,tagging,search}.py`).
 - **Mobile-friendly web UI** - responsive layout pass so manual review and run controls
   are usable on a phone.
-- **Full provider validation** - end-to-end tests for the individual sources aggregated
-  by abs-agg (LibriVox, Storytel, BookBeat, Big Finish, and others) and the various
-  Audiobookshelf metadata providers, to confirm every response shape is correctly
-  normalised to the shared metadata schema with no silent field drops.
+- **Pipeline unification** - persistent stage stepper across pages, and an optional
+  "run full pipeline" mode chaining fixer -> m4b-tool -> organizer automatically.
+- **Full provider validation** - end-to-end tests for the abs-agg sources that don't
+  have dedicated tests yet: **LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD
+  Audiothek, Die drei ???**. Confirmed working today: Audible, Audiobookshelf, and (via
+  dedicated special-provider detection + tests) GraphicAudio and Soundbooth Theater,
+  plus Goodreads and Kindle via abs-tract. The untested ones only go through abs-agg's
+  generic keyword search path, with no confirmation that every response shape
+  normalises to the shared metadata schema without silent field drops.
 - Local agent advisory review (read-only LLM suggestions, no automatic writes).
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
+
+Debug tracing already exists today (opt-in, `app/debug_trace.py`, toggleable in
+Settings) and writes to a log file/stderr - a raw log is the intended form for this,
+not a UI feature, so no further work is planned there.
 
 ---
 
