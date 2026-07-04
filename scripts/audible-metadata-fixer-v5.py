@@ -2443,7 +2443,20 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
                 not clues.get("title")
                 or is_generic_chapter_title(clues.get("title", ""))
                 or (
+                    # The title contains the *real* author's name as noise
+                    # (e.g. "John Smith - Book Title") and the path parser
+                    # correctly separated it -- confirmed by the parsed
+                    # author matching the already-known author, not merely
+                    # by the parsed author fragment happening to be a
+                    # substring of the title. A mis-parse of an unrelated
+                    # filename shape (e.g. "Author - Title - Series" parsed
+                    # backwards) must not swap in a bogus title just because
+                    # its bogus author guess is textually contained in the
+                    # real title.
                     descriptive_path_meta.get("author")
+                    and clues.get("author")
+                    and normalize_for_match(descriptive_path_meta.get("author", ""))
+                    == normalize_for_match(clues.get("author", ""))
                     and normalize_for_match(descriptive_path_meta.get("author", ""))
                     in normalize_for_match(clues.get("title", ""))
                 )

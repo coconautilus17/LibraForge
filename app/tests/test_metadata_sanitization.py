@@ -1014,6 +1014,52 @@ class MetadataTitleFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_loose_root_file_title_is_not_corrupted_by_scan_root_folder_name(self):
+        """Regression (2026-07-04 matcher run): a loose file sitting directly
+        in the scan root (no book-specific subfolder) ended up with
+        clues["title"] == "unorganized" -- the literal scan-root folder name.
+
+        Root cause was two stacked bugs:
+        1. The descriptive-path title/author merge trusted a mis-parsed path
+           author ("Anarchism Audiobook") as grounds to override the title
+           whenever it happened to be a substring of the real title, even
+           though it did not match the already-known real author
+           ("Ruth Kinna"). That swapped title -> "Ruth Kinna", author stayed
+           "Ruth Kinna" -- title == author, tripping is_invalid_local_title.
+        2. recover_invalid_local_title()'s candidate list then tried
+           file_path.parent.name ("_unorganized") unguarded against generic
+           scan-root/staging folder names, and it passed every check.
+        """
+        path = Path(
+            "/audiobooks/_unorganized/"
+            "Ruth Kinna - Anarchism Audiobook - Bolinda Beginner Guides.mp3"
+        )
+        tags = {
+            "album": "Anarchism: Bolinda Beginner Guides",
+            "artist": "Ruth Kinna",
+            "title": "Anarchism Audiobook - Bolinda Beginner Guides",
+        }
+
+        with patch.object(FIXER, "read_file_tags", return_value=tags):
+            clues = FIXER.build_search_clues_from_file(path)
+
+        self.assertNotEqual(clues["title"].strip().lower(), "unorganized")
+        self.assertIn("anarchism", clues["title"].lower())
+        self.assertEqual(clues["author"], "Ruth Kinna")
+
+    def test_recover_invalid_local_title_skips_generic_scan_root_folder_name(self):
+        """Direct unit test for bug 2 above, independent of bug 1's trigger."""
+        clues = {
+            "title": "",
+            "author": "Ruth Kinna",
+            "album": "",
+        }
+        path = Path("/audiobooks/_unorganized/some-book.mp3")
+
+        recovered = FIXER.recover_invalid_local_title(dict(clues), path)
+
+        self.assertNotEqual(recovered["title"].strip().lower(), "unorganized")
+
 
 if __name__ == "__main__":
     unittest.main()
