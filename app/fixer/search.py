@@ -403,12 +403,17 @@ def detect_special_provider(clues: dict) -> str | None:
         if "soundbooth" in _cv.lower():
             return "soundbooththeater"
 
-    # 4. "[Dramatized Adaptation]" in subtitle or narrator tag -- both are used
-    #    by GA/SBT productions; narrator is more common in practice.
+    # 4. "[Dramatized Adaptation]" marker in the title, subtitle, or narrator tag.
+    #    All three are used by GA/SBT productions; the marker frequently lands in
+    #    the title (e.g. "Storm Front (Dramatized Adaptation)") where the earlier
+    #    publisher/series/composer signals never see it, so a title-only marker
+    #    must still trigger the dedicated-catalog search.
+    title = clues.get("title", "") or ""
     subtitle = clues.get("subtitle", "") or ""
     narrator = clues.get("narrator", "") or ""
-    for _sig in (subtitle, narrator):
-        if "dramatized" in _sig.lower() and "adaptation" in _sig.lower():
+    for _sig in (title, subtitle, narrator):
+        _sig_lower = _sig.lower()
+        if "dramatized" in _sig_lower and "adaptation" in _sig_lower:
             return "graphicaudio"
 
     return None
