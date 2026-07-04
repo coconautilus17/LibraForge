@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260704-4" />
+  <link rel="stylesheet" href="/static/style.css?v=20260704-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -112,7 +112,7 @@
             </tr>
             <tr>
               <td><span class="match-manual-badge">Manually Applied</span></td>
-              <td>This book's metadata was set by hand via Manual Review, not the automatic run.</td>
+              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it permanently from then on (regardless of score), so a later run can never overwrite your manual work by accident. Force reprocess is the only way to make it reprocess again.</td>
             </tr>
             <tr>
               <td><span class="match-score-badge">87%</span></td>
@@ -146,8 +146,9 @@
         <h3>metadata.json</h3>
         <p>An Audiobookshelf-native <code>metadata.json</code> sidecar is written for every matched book. It's LibraForge's one guaranteed, universal output, independent of audio format or whether embedded-tag writing is even possible or desired (<code>--metadata-json-only</code> skips tags entirely; metadata.json is written either way).</p>
         <p>On repeat runs it follows the same write-mode skip logic as tags, so there is no needless rewrite once nothing's changed. But it is not the same file as <code>libraforge.json</code>, which sits right alongside it and holds LibraForge's own internal tracking: whether and how a book was processed, cached duration data, and more.</p>
-        <p><strong>Because they're separate files:</strong> Audiobookshelf's own <strong>Store metadata with item</strong> server setting writes its own <code>metadata.json</code> into the book's folder when enabled (otherwise Audiobookshelf keeps it internally, under <code>/metadata/items/</code>). If that setting is on, Audiobookshelf may overwrite the <code>metadata.json</code> LibraForge wrote. This is safe. It never touches <code>libraforge.json</code>, so LibraForge still knows what it already did and won't reprocess or conflict on the next run.</p>
-        <p><strong>Metadata priority</strong> is configured per library, in Audiobookshelf's own Scanner settings tab: it's an ordered list of sources (folder names, embedded audio tags, and metadata files such as <code>metadata.json</code> or <code>.opf</code>). A lower-priority source only fills in fields a higher-priority source left empty, it does not override a value the higher-priority source already set. Since LibraForge's matched data lands in both the embedded tags and <code>metadata.json</code>, put metadata files at the top of that priority list if you want LibraForge's matches to be authoritative in Audiobookshelf. See Audiobookshelf's own <a href="https://www.audiobookshelf.org/guides/book-scanner/" target="_blank" rel="noopener noreferrer">Book Scanner guide</a> for the full breakdown.</p>
+        <p><strong>Because they're separate files:</strong> Audiobookshelf's own <strong>Store metadata with item</strong> server setting only controls where Audiobookshelf writes its own copy of <code>metadata.json</code>: next to the book if enabled, or internally under <code>/metadata/items/</code> if not. Either way it never touches <code>libraforge.json</code>, so LibraForge's own tracking is unaffected.</p>
+        <p><strong>Recommended setup:</strong> keep Store metadata with item OFF, so Audiobookshelf never overwrites the <code>metadata.json</code> LibraForge wrote. This still works because Audiobookshelf's scanner reads whatever <code>metadata.json</code> is already sitting in the book's folder regardless of that setting, it only governs Audiobookshelf's own writes, not what the scanner reads. Then set the library's Scanner metadata priority to <strong>Audiobookshelf metadata file</strong> highest, <strong>Audio file meta tags</strong> second, <strong>Folder structure</strong> lowest, so LibraForge's matches win. See Audiobookshelf's own <a href="https://www.audiobookshelf.org/guides/book-scanner/" target="_blank" rel="noopener noreferrer">Book Scanner guide</a> for the exact settings.</p>
+        <img class="guide-screenshot" src="/static/abs-scanner-metadata-priority.png?v=20260704-1" alt="Audiobookshelf Scanner metadata priority list, showing Audiobookshelf metadata file as highest priority, Audio file meta tags OR ebook metadata second, and Folder structure as lowest priority" />
       </div>
 
       <div class="guide-section">
