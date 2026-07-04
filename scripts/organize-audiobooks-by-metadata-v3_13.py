@@ -1860,6 +1860,37 @@ def validate_multi_part_group_files(file_paths: list[Path]) -> dict[str, Any]:
     }
 
 
+def matches_skip_patterns(
+    source_path: Path, metadata: dict[str, Any], patterns: list[str]
+) -> tuple[bool, str]:
+    """Return True when a book should be skipped by user-supplied patterns.
+
+    Patterns are case-insensitive plain substrings checked against the source
+    path and the inferred metadata fields. Mirrors the fixer's
+    ``matches_skip_patterns`` so the same skip list works consistently across
+    both tools.
+    """
+    if not patterns:
+        return False, ""
+
+    haystack = " ".join(
+        [
+            str(source_path),
+            metadata.get("title", ""),
+            metadata.get("series", ""),
+            metadata.get("author", ""),
+            metadata.get("narrator", ""),
+        ]
+    ).lower()
+
+    for pattern in patterns:
+        needle = str(pattern or "").strip().lower()
+        if needle and needle in haystack:
+            return True, pattern
+
+    return False, ""
+
+
 def should_ignore_path(path: Path, root: Path) -> bool:
     try:
         relative_parts = path.relative_to(root).parts
@@ -3751,6 +3782,71 @@ def move_folder_contents(source: Path, target: Path) -> None:
     source.rmdir()
 
 
+def execute_planned_move(
+    move: dict[str, Any],
+    *,
+    merge_existing_targets: bool,
+    remove_empty_dirs: bool,
+    root: Path,
+) -> None:
+    """Execute one planned move: relocate the book (folder or loose file) and
+    its companions, then optionally clean up now-empty source parents.
+
+    Raises on any filesystem error so the caller can count the move as
+    failed and continue with the rest of the batch instead of aborting the
+    whole run on one bad move.
+    """
+    source: Path = move["source"]
+    target: Path = move["target"]
+    original_parent = source.parent
+
+    if move["kind"] == "folder":
+        if target.exists() and merge_existing_targets:
+            move_folder_contents(source, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+        # Companions inside the folder moved with it; strip per-file prefix
+        # from .metadata.json and .libraforge.json so ABS and the fixer
+        # can locate them without the audio filename prefix.
+        for companion in move.get("companions", []):
+            if companion.name.endswith(".metadata.json"):
+                moved = target / companion.name
+                final = target / "metadata.json"
+                if moved.exists() and not final.exists():
+                    moved.rename(final)
+            elif companion.name.endswith(".libraforge.json") and companion.name != "libraforge.json":
+                moved = target / companion.name
+                final = target / "libraforge.json"
+                if moved.exists() and not final.exists():
+                    moved.rename(final)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        for companion in move.get("companions", []):
+            if companion.stem == source.stem:
+                # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
+                # keep the same stem, just change the extension.
+                companion_target = target.with_suffix(companion.suffix)
+            else:
+                # Suffix companion (e.g. Book.m4b.libraforge.json):
+                # append the suffix after the full audio filename.
+                suffix = companion.name.removeprefix(source.name)
+                companion_target = target.with_name(target.name + suffix)
+            shutil.move(str(companion), str(companion_target))
+            if companion_target.name.endswith(".metadata.json"):
+                final = companion_target.parent / "metadata.json"
+                if not final.exists():
+                    companion_target.rename(final)
+            elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
+                final = companion_target.parent / "libraforge.json"
+                if not final.exists():
+                    companion_target.rename(final)
+
+    if remove_empty_dirs:
+        remove_empty_parents(original_parent, root)
+
+
 def count_audio_extension(root: Path, extension: str) -> int:
     count = 0
     for audio_file in root.rglob(f"*{extension}"):
@@ -3826,6 +3922,23 @@ def print_move(move: dict[str, Any]) -> None:
     print()
 
 
+def print_failed_move(move: dict[str, Any]) -> None:
+    metadata = move["metadata"]
+    print("FAILED BOOK:")
+    print(f"  Kind:   {move['kind']}")
+    print(f"  Title:  {metadata['title']}")
+    print(f"  Author: {metadata['author']}")
+    print(f"  Files:  {move['audio_count']}")
+    source_display = move["source"]
+    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
+    print("  MOVE:")
+    print(f"    {source_display}")
+    print("  TO:")
+    print(f"    {target_display}")
+    print(f"  Error: {move.get('error', 'unknown error')}")
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Organize audiobook files/folders into Audiobookshelf-friendly folders using metadata and a structure cache."
@@ -3835,6 +3948,16 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Actually move files/folders. Default is dry-run.")
     parser.add_argument("--m4b-only", action="store_true", help="Only process items whose audio files are all .m4b.")
     parser.add_argument("--allow-unknown-author", action="store_true", help="Allow moves whose metadata has no author. Disabled by default.")
+    parser.add_argument(
+        "--skip-pattern",
+        action="append",
+        default=[],
+        help=(
+            "Skip books whose source path or inferred metadata contains this "
+            "case-insensitive text. Can be used multiple times, e.g. "
+            "--skip-pattern 'Casual Farming'."
+        ),
+    )
     parser.add_argument("--no-companions", action="store_true", help="Do not move known companion files with loose audio files.")
     parser.add_argument("--remove-empty-dirs", action="store_true", help="After applying moves, remove empty source directories up to the scan root.")
     parser.add_argument("--structure-cache", default=str(DEFAULT_STRUCTURE_CACHE), help="Persistent library structure cache JSON.")
@@ -3892,6 +4015,7 @@ def main() -> None:
     skipped_already_target = 0
     skipped_conflicts = 0
     skipped_ambiguous_structure = 0
+    skipped_pattern_match = 0
     matched_existing_structure = 0
     ambiguous_structure = 0
 
@@ -3911,6 +4035,26 @@ def main() -> None:
     for index, item, metadata in inferred_items:
         metadata = apply_run_author_correction(metadata, run_author_corrections)
         metadata = normalize_metadata_title_for_target(metadata)
+
+        skip_due_to_pattern, skip_pattern = matches_skip_patterns(
+            source_path=item.source_path,
+            metadata=metadata,
+            patterns=args.skip_pattern,
+        )
+        if skip_due_to_pattern:
+            skipped_pattern_match += 1
+            target_dir = build_default_target_dir(destination_root, metadata)
+            reason = f"skipped: matched skip pattern: {skip_pattern}"
+            skipped_reviews.append(make_skipped_review_move(
+                item=item,
+                metadata=metadata,
+                target=target_dir,
+                reason=reason,
+                structure="skipped_pattern_match",
+            ))
+            print(f"SKIP: matched skip pattern: {skip_pattern} | {item.source_path}", file=sys.stderr)
+            continue
+
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
             target_dir = build_default_target_dir(destination_root, metadata)
@@ -4004,6 +4148,7 @@ def main() -> None:
     print(f"MP3 files included: {mp3_files}")
     print(f"OPUS files included: {opus_files}")
     print(f"Skipped unknown author: {skipped_unknown_author}")
+    print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
     print(f"Skipped conflicts: {skipped_conflicts}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")
@@ -4019,60 +4164,34 @@ def main() -> None:
         print("No moves needed.")
         return
 
+    moves_succeeded = 0
+    failed_moves: list[dict[str, Any]] = []
     for move in planned_moves:
         print_move(move)
         if not args.apply:
             continue
 
-        source: Path = move["source"]
-        target: Path = move["target"]
-        original_parent = source.parent
+        try:
+            execute_planned_move(
+                move,
+                merge_existing_targets=args.merge_existing_targets,
+                remove_empty_dirs=args.remove_empty_dirs,
+                root=root,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed_moves.append({**move, "error": str(exc)})
+            print(f"FAILED: {move['source']} -> {move['target']} | {exc}", file=sys.stderr)
+            continue
+        moves_succeeded += 1
 
-        if move["kind"] == "folder":
-            if target.exists() and args.merge_existing_targets:
-                move_folder_contents(source, target)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), str(target))
-            # Companions inside the folder moved with it; strip per-file prefix
-            # from .metadata.json and .libraforge.json so ABS and the fixer
-            # can locate them without the audio filename prefix.
-            for companion in move.get("companions", []):
-                if companion.name.endswith(".metadata.json"):
-                    moved = target / companion.name
-                    final = target / "metadata.json"
-                    if moved.exists() and not final.exists():
-                        moved.rename(final)
-                elif companion.name.endswith(".libraforge.json") and companion.name != "libraforge.json":
-                    moved = target / companion.name
-                    final = target / "libraforge.json"
-                    if moved.exists() and not final.exists():
-                        moved.rename(final)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            for companion in move.get("companions", []):
-                if companion.stem == source.stem:
-                    # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
-                    # keep the same stem, just change the extension.
-                    companion_target = target.with_suffix(companion.suffix)
-                else:
-                    # Suffix companion (e.g. Book.m4b.libraforge.json):
-                    # append the suffix after the full audio filename.
-                    suffix = companion.name.removeprefix(source.name)
-                    companion_target = target.with_name(target.name + suffix)
-                shutil.move(str(companion), str(companion_target))
-                if companion_target.name.endswith(".metadata.json"):
-                    final = companion_target.parent / "metadata.json"
-                    if not final.exists():
-                        companion_target.rename(final)
-                elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
-                    final = companion_target.parent / "libraforge.json"
-                    if not final.exists():
-                        companion_target.rename(final)
-
-        if args.remove_empty_dirs:
-            remove_empty_parents(original_parent, root)
+    if args.apply:
+        print(f"Moves succeeded: {moves_succeeded}")
+        print(f"Moves failed: {len(failed_moves)}")
+        if failed_moves:
+            print("Failed moves:")
+            print()
+            for move in failed_moves:
+                print_failed_move(move)
 
     if skipped_reviews:
         print("Skipped review items:")

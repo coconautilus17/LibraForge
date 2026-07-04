@@ -56,6 +56,14 @@ async function loadScripts() {
 }
 
 function collectRequest() {
+  const prefs = window.LibraForgePrefs?.get() || {};
+  const skipPatterns = $('skipPatterns').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  if ($('usePersistentSkip')?.checked) {
+    const persistent = (prefs.persistentSkipPatterns || '').split('\n').map(s => s.trim()).filter(Boolean);
+    for (const p of persistent) {
+      if (!skipPatterns.includes(p)) skipPatterns.push(p);
+    }
+  }
   return {
     script_name: $('script').value,
     root_path: $('rootPath').value.trim(),
@@ -71,6 +79,7 @@ function collectRequest() {
     remove_empty_dirs: $('removeEmptyDirs').checked,
     max_items: parseInt($('maxItems').value || '0', 10),
     progress_every: parseInt($('progressEvery').value || '25', 10),
+    skip_patterns: skipPatterns,
   };
 }
 
@@ -193,6 +202,7 @@ function render(state) {
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
   latestStats = stats;
   renderStats(stats);
+  renderApplyResult(stats);
   latestMoveItems = stats.move_items || [];
   populateReviewReasonFilter(latestMoveItems);
   renderRisks(latestMoveItems);
@@ -215,6 +225,7 @@ function renderStats(stats) {
     stat('Found Items', stats.found_items, 'Organizer items scanned after filtering.'),
     stat('Ignored MP3', stats.ignored_mp3_files, 'MP3 files skipped outside organizer processing.'),
     stat("Skipped Unknown", stats.skipped_unknown_author, "Items without author metadata, blocked by default."),
+    stat("Skipped By Pattern", stats.skipped_pattern_match, "Items whose source path or metadata matched a configured skip pattern."),
     stat('Skipped Existing', stats.skipped_existing_book_folders, 'Folders treated as already organized.'),
     stat("Cached Structures", stats.structure_cache_entries, "Existing series destinations indexed from the library."),
     stat("Existing Matches", stats.matched_existing_structure, "Moves routed into an indexed series folder."),
@@ -227,6 +238,46 @@ function renderStats(stats) {
     stat('Mode', stats.mode || '-', 'Dry run or apply.'),
   ].join('');
 }
+
+function renderApplyResult(stats) {
+  const summaryEl = $('applyResultSummary');
+  const sectionEl = $('failedMovesSection');
+  const listEl = $('failedMovesList');
+  const succeeded = stats.moves_succeeded || 0;
+  const failed = stats.moves_failed || 0;
+  const attempted = succeeded + failed;
+
+  if (stats.mode !== 'APPLY' || attempted === 0) {
+    summaryEl.hidden = true;
+    sectionEl.hidden = true;
+    return;
+  }
+
+  summaryEl.hidden = false;
+  summaryEl.className = failed ? 'review-alert danger' : 'review-alert';
+  summaryEl.innerHTML = failed
+    ? `<strong>${succeeded} succeeded, ${failed} failed.</strong> See Failed Moves below.`
+    : `<strong>${succeeded} succeeded, 0 failed.</strong>`;
+
+  const failedItems = stats.failed_move_items || [];
+  sectionEl.hidden = failedItems.length === 0;
+  listEl.innerHTML = failedItems.map((item) => `
+    <article class="result-card review-card">
+      <div class="result-head">
+        <div>
+          <h3>${escapeHtml(item.title || 'Unknown Title')}</h3>
+          <p>${escapeHtml(item.author || 'Unknown Author')}</p>
+        </div>
+      </div>
+      <div class="review-alert danger"><strong>Error:</strong> ${escapeHtml(item.error || 'unknown error')}</div>
+      <div class="result-meta">
+        <span>From: ${escapeHtml(item.source || '-')}</span>
+        <span>To: ${escapeHtml(item.target || '-')}</span>
+      </div>
+    </article>
+  `).join('');
+}
+
 function isReviewMove(item) {
   return (item.review_reasons || []).length > 0
     || !item.author
