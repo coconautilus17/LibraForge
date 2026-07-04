@@ -81,6 +81,60 @@
         </ul>
       </div>
 
+      <div class="guide-section">
+        <h3>Match badges</h3>
+        <p>Every status and badge a book can show in a report, and what it means for that file.</p>
+
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-status-badge status-matched">Matched</span></span>
+          <span>A confident match was found. Will write or wrote metadata per the active write/edit mode.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-status-badge status-smart-skipped">Smart-skipped</span></span>
+          <span>Write mode is Smart and every checked field already matched. Nothing written.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-status-badge status-skipped">Skipped</span></span>
+          <span>Explicitly excluded before matching (skip pattern, ignored folder). The badge also shows the reason.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-status-badge status-unmatched">Not Matched</span></span>
+          <span>No confident match found. Needs Manual Review.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-status-badge status-error">Error</span></span>
+          <span>Something failed while processing this file.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-manual-badge">Manually Applied</span></span>
+          <span>This book's metadata was set by hand via Manual Review, not the automatic run.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-score-badge">87%</span></span>
+          <span>Match confidence.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-mode-badge">Full metadata</span></span>
+          <span>Which edit mode was used for this book: Full metadata or Series only.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-provider-badge">Audible</span></span>
+          <span>Which source produced the match: Audible, ABS, abs-agg (LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???), GraphicAudio, Soundbooth Theater, Goodreads, or Kindle.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="match-write-badge">written</span></span>
+          <span>What actually happened on disk: written, smart-skipped, no-op, skipped, or error.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="reason-badge danger">no match</span></span>
+          <span>Manual Review reason tag (red): no match, asin conflict, low score, missing metadata, unsafe match, no metadata, status:skipped, mode:none, or an N% duration-diff tag.</span>
+        </div>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="reason-badge recommended">manually applied</span></span>
+          <span>Manual Review reason tag (green): manually applied.</span>
+        </div>
+      </div>
+
     </details>
 
     <div class="pick-row">
