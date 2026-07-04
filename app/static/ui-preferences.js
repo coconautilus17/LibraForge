@@ -281,6 +281,18 @@
     return `custom-${slug || Date.now()}`;
   }
 
+  // The Publishers and Title noise lists render asynchronously after the
+  // initial page load, so a URL fragment like /settings#accounts can resolve
+  // to the browser's native scroll-to-anchor before those lists exist -- once
+  // they render, the growth in page height leaves the anchor scrolled well
+  // past its target. Re-apply the scroll after each list finishes loading.
+  function reapplyHashScroll() {
+    const hash = window.location.hash;
+    if (!hash || hash.length < 2) return;
+    const target = document.getElementById(hash.slice(1));
+    if (target) target.scrollIntoView({ block: "start" });
+  }
+
   function initializeTitleNoiseSettings() {
     const defaultsContainer = document.getElementById("titleNoiseDefaults");
     const customContainer = document.getElementById("titleNoiseCustom");
@@ -355,6 +367,7 @@
       policy = data;
       render();
       status.textContent = "Using shared defaults and local overrides.";
+      reapplyHashScroll();
     };
 
     addButton.addEventListener("click", () => {
@@ -494,6 +507,7 @@
       policy = data;
       render();
       status.textContent = "Using shared defaults and local overrides.";
+      reapplyHashScroll();
     };
 
     addButton.addEventListener("click", () => {
