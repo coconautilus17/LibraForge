@@ -3026,6 +3026,7 @@ def search_item(
                             match_ambiguity = None
                             effective_min_score = _asin_threshold
                             result.source_provider = ""  # ASIN overrides any prior special-provider match
+                            queries = []  # ASIN hit is definitive; skip keyword searches
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
