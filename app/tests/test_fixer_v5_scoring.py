@@ -509,5 +509,178 @@ class LanguagePenaltyTests(unittest.TestCase):
         self.assertEqual(score_no_lang, score_en)
 
 
+class MissingCandidateSequenceTests(unittest.TestCase):
+    """A candidate that carries no sequence info at all must not be trusted as
+    confidently as one that confirms the local book number.
+
+    Regression (2026-07-04 matcher run against real _unorganized data):
+    "Building Harem Town 2" (local book_number=2, path-sourced) matched an
+    Audible entry with empty series/sequence at score 0.80 (full write) via
+    the title_score>=0.75 duration-confirmed floor -- that entry is a
+    different book in the series (or an incomplete catalog listing), not
+    book 2. Same pattern hit Dragon Conjurer 2-9 and The Duelist 2-3.
+    """
+
+    def test_missing_candidate_sequence_does_not_reach_high_confidence_floor(self):
+        clues = {
+            "title": "Building Harem Town 2",
+            "raw_title": "Building Harem Town 2",
+            "author": "Eric Vall",
+            "narrator": "",
+            "series": "Building Harem Town",
+            "book_number": "2",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B0HAREM01",
+            title="Building Harem Town",
+            authors=("Eric Vall",),
+            minutes=634.02,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 634.0237324333334)
+        self.assertLess(score, 0.80)
+
+    def test_confirmed_candidate_sequence_still_reaches_high_confidence(self):
+        """The guard must not suppress a genuinely confirmed sequence match."""
+        clues = {
+            "title": "Building Harem Town 5",
+            "raw_title": "Building Harem Town 5",
+            "author": "Eric Vall",
+            "narrator": "",
+            "series": "Building Harem Town",
+            "book_number": "5",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B0HAREM05",
+            title="Building Harem Town 5",
+            series="Building Harem Town",
+            sequence="5",
+            authors=("Eric Vall",),
+            minutes=634.0,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 634.0)
+        self.assertGreaterEqual(score, 0.80)
+
+    def test_weak_track_derived_number_is_not_guarded(self):
+        """Track-derived numbers are weak metadata; do not gate on them."""
+        clues = {
+            "title": "Some Book 2",
+            "raw_title": "Some Book 2",
+            "author": "Eric Vall",
+            "narrator": "",
+            "series": "Some Book",
+            "book_number": "2",
+            "book_number_source": "track",
+        }
+        p = product(
+            asin="B0SOME01",
+            title="Some Book",
+            authors=("Eric Vall",),
+            minutes=634.02,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 634.0237324333334)
+        self.assertGreaterEqual(score, 0.80)
+
+
+class RecurringSubtitleSequenceConflictTests(unittest.TestCase):
+    """A recurring saga tagline shared across many books must not override a
+    confident, explicit sequence disagreement in the same series.
+
+    Regression (2026-07-04 matcher run): local "Dragon Emperor 9" (sequence 9
+    from both folder and filename) has embedded title "From Human to Dragon
+    to God" -- a tagline this series reuses loosely across several volumes
+    (book 8: "Human to Dragon to God", book 13: "From Human to Dragon to
+    God"). It matched Audible's "Dragon Emperor 12" (sequence 12) at score
+    1.0 full write via the parallel/companion-series leniency in
+    has_sequence_conflict(), which forgives title+duration+author agreement
+    regardless of how large the sequence gap is. That leniency exists for a
+    real case (different numbering *schemes*, e.g. an omnibus-numbered local
+    book 3 matching a differently-numbered sub-series book 2 -- see
+    test_parallel_series_numbering_still_allowed) where the gap is a small,
+    consistent offset. A 3-book gap in the *same* series numbering is not a
+    scheme difference; it's the wrong book.
+    """
+
+    def test_large_sequence_gap_in_same_series_is_a_conflict(self):
+        clues = {
+            "title": "From Human to Dragon to God",
+            "raw_title": "From Human to Dragon to God",
+            "series": "Dragon Emperor",
+            "author": "Eric Vall",
+            "narrator": "",
+            "book_number": "9",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B0DRAGON12",
+            title="Dragon Emperor 12",
+            subtitle="From Human to Dragon to God",
+            series="Dragon Emperor",
+            sequence="12",
+            authors=("Eric Vall",),
+            narrators=("Alex Perone", "Marissa Parness"),
+            minutes=470.0,
+        )
+        self.assertTrue(FIXER.has_sequence_conflict(clues, p, 480.03))
+        self.assertLess(FIXER.score_product_for_metadata(clues, p, 480.03), 0.70)
+
+    def test_adjacent_gap_parallel_numbering_still_allowed(self):
+        """Existing off-by-one companion-numbering leniency must survive."""
+        clues = {
+            "title": "Of Dawn and Darkness",
+            "raw_title": "Book 003 - Of Dawn and Darkness",
+            "series": "The Elder Empire Sea",
+            "author": "Will Wight",
+            "narrator": "Nar",
+            "book_number": "3",
+            "book_number_source": "path",
+        }
+        par = product(
+            asin="B0PAR", title="Of Dawn and Darkness", series="The Elder Empire Sea",
+            sequence="2", authors=("Will Wight",), narrators=("Nar",), minutes=601,
+        )
+        self.assertFalse(FIXER.has_sequence_conflict(clues, par, 600.0))
+
+
+class SubstringSeriesCoincidentalMatchTests(unittest.TestCase):
+    """A partial-substring series name (not confirmed as the same series by
+    the token-jaccard bar) must not let its raw SequenceMatcher ratio inflate
+    the additive score enough to clear min_score on its own.
+
+    Regression (2026-07-04 matcher run): local "Summoner School 2" (series
+    "Summoner School") matched Audible "Summoner 2" (series "Summoner") at
+    score 0.8128 -- a different, shorter series by the same prolific author
+    that happens to share the word "summoner" and, coincidentally, book
+    number 2. The jaccard gate already blocks forcing series_score to 1.0
+    and blocks crediting the sequence-match bonus (see
+    CrossSeriesSameAuthorTests for the Arena/Arena Road case this
+    protects), but the raw substring-inflated SequenceMatcher ratio still
+    flows into the additive score at full strength.
+    """
+
+    def test_summoner_school_2_does_not_match_summoner_2(self):
+        clues = {
+            "title": "Summoner School 2",
+            "raw_title": "Summoner School 2",
+            "series": "Summoner School",
+            "author": "Eric Vall",
+            "narrator": "",
+            "book_number": "2",
+            "book_number_source": "path",
+        }
+        p = product(
+            asin="B07MXR8LR9",
+            title="Summoner 2",
+            series="Summoner",
+            sequence="2",
+            authors=("Eric Vall",),
+            narrators=("Joshua Story",),
+            minutes=458.0,
+        )
+        score = FIXER.score_product_for_metadata(clues, p, 458.6784981166667)
+        self.assertLess(score, 0.70, f"score={score}")
+
+
 if __name__ == "__main__":
     unittest.main()

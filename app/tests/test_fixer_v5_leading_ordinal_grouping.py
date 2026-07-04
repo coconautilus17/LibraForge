@@ -97,6 +97,19 @@ class LeadingOrdinalSequenceTests(unittest.TestCase):
         files = speedrunning_parts(2)
         self.assertEqual(FIXER.leading_ordinal_sequence_files(files), set())
 
+    def test_bare_space_separator_is_detected(self):
+        """Regression (2026-07-04): a leading zero-padded number followed by
+        a plain space (no punctuation) -- "001 Author - Title - Chapter.mp3"
+        -- is a common release convention (e.g. Eric Vall's Pocket Dungeon
+        2-6) that the punctuation-only separator never matched, silently
+        leaving every chapter to be processed as its own book.
+        """
+        files = [
+            Path(f"/pd/{i:03d} Eric Vall - Pocket Dungeon 2 - Chapter {i}.mp3")
+            for i in range(1, 26)
+        ]
+        self.assertEqual(FIXER.leading_ordinal_sequence_files(files), set(files))
+
 
 class LeadingOrdinalGroupMapTests(unittest.TestCase):
     def test_low_chapter_parts_are_grouped(self):

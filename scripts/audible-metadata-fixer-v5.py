@@ -1056,8 +1056,11 @@ def marker_sequence_files(file_paths: list[Path]) -> set[Path]:
 
 # Leading ordinal: a number at the *start* of the name followed by a separator
 # and a title, e.g. "0. Opening Credits ...", "10. Suspect Alchemy ...",
-# "001 - ...". Leading zeros are tolerated; the captured value is the index.
-_LEADING_ORDINAL_RE = re.compile(r"^\s*0*(\d{1,4})\s*[.)\]_-]\s+(?=\S)")
+# "001 - ...", "001 Author - Book Title - Chapter ...". The punctuation
+# separator is optional -- some release conventions (e.g. Eric Vall's Pocket
+# Dungeon rips) use a bare space between the zero-padded index and the rest
+# of the name. Leading zeros are tolerated; the captured value is the index.
+_LEADING_ORDINAL_RE = re.compile(r"^\s*0*(\d{1,4})\s*[.)\]_-]?\s+(?=\S)")
 
 def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
     """Longest run of tokens shared at the END of every token list."""
@@ -1077,16 +1080,33 @@ def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
             break
     return common
 
+def _common_leading_tokens(token_lists: list[list[str]]) -> list[str]:
+    """Longest run of tokens shared at the START of every token list."""
+    if not token_lists:
+        return []
+    common = list(token_lists[0])
+    for tokens in token_lists[1:]:
+        shared = 0
+        while shared < len(common) and shared < len(tokens) and common[shared] == tokens[shared]:
+            shared += 1
+        common = common[:shared]
+        if not common:
+            break
+    return common
+
 def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
     """Recognize ONE book split into many leading-ordinal-numbered parts.
 
     Example: "0. Opening Credits - The Book - Narrator", "1. Time Starts Now -
-    The Book - Narrator", ... "71. ...". The chapter title varies per file, so
-    these cannot be grouped by a shared prefix the way trailing "- 01" numbering
-    is; instead group them when:
+    The Book - Narrator", ... "71. ...". The varying part (chapter title) can
+    sit at either end of the shared identity -- after the number and before
+    the book/narrator suffix ("0. Opening Credits - The Book - Narrator"), or
+    after the book/author identity and before the chapter title ("001 Author
+    - The Book - Opening Credits"). Group them when:
       * every matched ordinal is unique and they form a contiguous run from 0/1,
       * there are at least MIN_LEADING_ORDINAL_PARTS of them,
-      * the parts share a common trailing identity (the book/narrator suffix).
+      * the parts share a common identity at the front OR the back (whichever
+        side isn't the varying chapter title).
     Distinct full books that happen to be leading-numbered in one folder are
     still rejected by the embedded-chapter-count check in
     classify_multi_part_file_safety (a real book carries many chapters).
@@ -1115,7 +1135,11 @@ def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
         return set()
 
     token_lists = [by_number[n][1] for n in numbers]
-    if len(_common_trailing_tokens(token_lists)) < MIN_SHARED_IDENTITY_TOKENS:
+    shared_identity = max(
+        len(_common_trailing_tokens(token_lists)),
+        len(_common_leading_tokens(token_lists)),
+    )
+    if shared_identity < MIN_SHARED_IDENTITY_TOKENS:
         return set()
 
     return {by_number[n][0] for n in numbers}
