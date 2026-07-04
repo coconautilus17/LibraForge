@@ -1,6 +1,8 @@
 # LibraForge
 
-> **Note:** This tool is in active development. Features and interfaces may change.
+> **Note:** This tool is a work in progress. Features, interfaces, and behavior are
+> liable to change without notice. AI (Claude) is used heavily in building this project,
+> across code, tests, and documentation, under human review and direction throughout.
 
 Self-hosted Audible metadata matching, M4B conversion, Audiobookshelf-style library
 organisation, and direct Audible downloading - four tools in one Docker container, with
