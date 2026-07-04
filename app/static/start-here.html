@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260704-5" />
+  <link rel="stylesheet" href="/static/style.css?v=20260704-6" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -79,6 +79,17 @@
           <li><strong>Fill missing + Force</strong>: still only fills currently-blank fields either way, a no-op if nothing's blank.</li>
           <li><strong>Overwrite + Force</strong>: the only combination that reliably rewrites everything, since Overwrite always writes the full fresh match regardless of what's already there.</li>
         </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Suggested Workflow</h3>
+        <ol>
+          <li><strong>Optional: stage new books in one folder</strong>, e.g. <code>_unorganized</code>, before running anything. Not strictly necessary, Metadata Forge can point at any folder, but keeping newly-added books separate from your already-organized library makes it obvious what still needs matching.</li>
+          <li><strong>Run a dry run first, with Back up and cache original metadata enabled.</strong> Apply stays off, so nothing is written yet, but this pre-populates the metadata cache (original tags plus full audio probe: duration, chapters, ASIN, codec info) so every later run is fast and never re-probes your files.</li>
+          <li>Review the dry-run report: Matched books show what would be written, Manual Review lists anything uncertain.</li>
+          <li>Enable Apply to write the matched books for real. (Apply also creates the backup automatically if step 2 was skipped.)</li>
+          <li>Handle anything in Manual Review by hand, or re-run with Force reprocess if a match was wrong, it reads from the cache too, so it still doesn't re-probe.</li>
+        </ol>
       </div>
 
       <div class="guide-section">
@@ -159,7 +170,7 @@
           <li><strong>M4B Tool report</strong>: conversion/merge outcomes.</li>
           <li><strong>Folder Forge report</strong>: planned/applied moves.</li>
           <li><strong>Library Downloader report</strong>: per-book download outcome.</li>
-          <li><strong>Suspect Report</strong>: generated on demand from an existing Metadata Forge report. Re-checks Matched items for signs of a false-positive match (series/title confusion) without re-running the whole match pipeline.</li>
+          <li><strong>Suspect Report</strong>: generate a report based on the last run. Targets full matches passing certain triggers, to simplify finding a bad full write manually. Note: some false positives will always show up, the idea is to significantly narrow down manually reviewing a full run report, without affecting the actual matching capability.</li>
         </ul>
       </div>
 

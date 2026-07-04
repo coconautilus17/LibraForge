@@ -3227,7 +3227,8 @@ button.danger:hover:not(:disabled) {
   color: var(--text);
 }
 
-.guide-section ul {
+.guide-section ul,
+.guide-section ol {
   margin: 0;
   padding-left: 18px;
   font-size: 13px;
