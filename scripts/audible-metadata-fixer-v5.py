@@ -1128,6 +1128,13 @@ def part_sequence_files(file_paths: list[Path]) -> set[Path]:
     groups); falls back to leading-ordinal chapter splits. Used both to choose
     grouping candidates and to mark a file as a safe chapter part during
     validation.
+
+    This only narrows *which files* are considered as a candidate sequence --
+    it never overrides the embedded-chapter-count safety check. A filename
+    marker alone cannot distinguish a real multi-part split from two separate
+    (or duplicate) complete recordings that happen to share a naming token, so
+    a file with a real high chapter count is still rejected as a likely
+    complete audiobook regardless of what its name says.
     """
     return (
         marker_sequence_files(file_paths)
@@ -1135,28 +1142,11 @@ def part_sequence_files(file_paths: list[Path]) -> set[Path]:
         or leading_ordinal_sequence_files(file_paths)
     )
 
-def confident_part_sequence_files(file_paths: list[Path]) -> set[Path]:
-    """Subset of part_sequence_files() strong enough to override the
-    embedded-chapter-count veto: an explicit marker (Part N, Disc N, N of M),
-    as opposed to a bare trailing/leading number.
-    """
-    return marker_sequence_files(file_paths)
-
 def classify_multi_part_file_safety(
     file_path: Path,
     chapter_count: int | None,
     numeric_part_sequence: bool = False,
-    confident_part: bool = False,
 ) -> tuple[bool, str]:
-    # An explicit part marker (Part N, N of M, Disc N) in a contiguous sequence is
-    # strong evidence the file is one slice of a larger book, even when it carries
-    # its own embedded chapters. A dramatised "Part 1" with 12 chapters plus a
-    # "Part 2" with 10 is one book, so this overrides the chapter-count veto below.
-    if confident_part:
-        if chapter_count is None:
-            return True, "explicit part marker (chapter metadata unreadable)"
-        return True, f"explicit part marker overrides embedded chapter count ({chapter_count})"
-
     if chapter_count is None:
         return False, "chapter metadata unreadable"
 
@@ -1201,7 +1191,6 @@ def validate_multi_part_group_files(
     checked = []
     unsafe = []
     numeric_parts = part_sequence_files(file_paths)
-    confident_parts = confident_part_sequence_files(file_paths)
 
     for file_path in sorted(file_paths, key=natural_audio_sort_key):
         if not is_chapter_metadata_candidate(file_path):
@@ -1212,7 +1201,6 @@ def validate_multi_part_group_files(
             file_path=file_path,
             chapter_count=chapter_count,
             numeric_part_sequence=file_path in numeric_parts,
-            confident_part=file_path in confident_parts,
         )
         item = {
             "file": str(file_path),
