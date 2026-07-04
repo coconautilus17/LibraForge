@@ -3193,3 +3193,159 @@ button.danger:hover:not(:disabled) {
 }
 
 .suspect-recommendation em { color: var(--accent); font-style: normal; }
+
+/* Start Here legend/guide */
+.start-here-guide {
+  margin: 20px 0;
+  padding: 16px 20px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.start-here-guide > summary {
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.guide-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.guide-section:first-of-type {
+  border-top: none;
+  padding-top: 10px;
+}
+
+.guide-section h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.guide-section ul,
+.guide-section ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-section li {
+  margin-bottom: 6px;
+}
+
+.guide-workflow-note {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.guide-workflow li {
+  margin-bottom: 10px;
+}
+
+.guide-step-title {
+  display: block;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.guide-step-detail {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.guide-smart-detail {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+}
+
+.guide-smart-detail summary {
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.guide-smart-detail p {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.guide-force-note {
+  margin: 10px 0 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-badge-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.guide-badge-sample {
+  flex-shrink: 0;
+  min-width: 108px;
+}
+
+/* Reused from downloader.html's owned-badge styling, scoped for the Start
+   Here guide sample since this page doesn't share that page's local style
+   block. */
+.lib-badge { display: inline-block; font-size: 0.7em; padding: 1px 6px; border-radius: 99px; background: var(--border); color: var(--text-soft); }
+.lib-badge.owned { background: #3a2f12; color: #e9c46a; }
+
+.guide-badge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.guide-badge-table th,
+.guide-badge-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.guide-badge-table th {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+
+.guide-badge-table td:first-child {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.guide-badge-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.guide-screenshot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

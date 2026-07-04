@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260704-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260704-7" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -48,6 +48,146 @@
       <h1>What needs attention</h1>
       <p>Point LibraForge at a folder and it'll tell you what's missing, what's ready, and what's already in shape - across tagging, conversion, and organization.</p>
     </div>
+
+    <details id="startHereGuide" class="start-here-guide">
+      <summary>Guide: what the badges and modes mean</summary>
+
+      <div class="guide-section">
+        <h3>Edit modes</h3>
+        <ul>
+          <li><span class="match-mode-badge">Full metadata</span> writes everything the match provided: title, author, series, sequence, narrator, year, genre, ASIN.</li>
+          <li><span class="match-mode-badge">Series only</span> writes only the series name, not the sequence number, and leaves title and other fields untouched. Used when the match confirms series and author confidently but title identity is uncertain, so a possibly-correct local title is never clobbered, and the sequence number is left alone since this mode exists precisely for cases where that number isn't trustworthy yet.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Write modes</h3>
+        <ul>
+          <li><strong>Smart</strong>: only writes if the current embedded tags differ from the match.</li>
+          <li><strong>Fill missing fields only</strong>: never touches a field that already has a value, only fills blanks.</li>
+          <li><strong>Overwrite</strong>: always writes every matched field, unconditionally.</li>
+        </ul>
+
+        <details class="guide-smart-detail">
+          <summary>How does Smart mode decide what counts as "already matching"?</summary>
+          <p>Smart mode compares each field the match would write against what's already embedded in the file: title, author, series, genre, and ASIN, plus sequence, narrator, and year when the edit mode is Full. It only marks the book <span class="match-status-badge status-smart-skipped">Smart-skipped</span> (nothing written) when every one of those checked fields already matches. If even one differs, the file is written normally.</p>
+        </details>
+
+        <p class="guide-force-note"><strong>Force reprocess</strong> only bypasses the "already processed" check, so the book is re-searched and re-matched from scratch. It does not override what the write mode decides once a fresh match is found:</p>
+        <ul>
+          <li><strong>Smart + Force</strong>: re-matches from scratch, but if the fresh match's fields are identical to what's already embedded, the book still shows <span class="match-status-badge status-smart-skipped">Smart-skipped</span>. Force restarts the search, not the write.</li>
+          <li><strong>Fill missing + Force</strong>: still only fills currently-blank fields either way, a no-op if nothing's blank.</li>
+          <li><strong>Overwrite + Force</strong>: the only combination that reliably rewrites everything, since Overwrite always writes the full fresh match regardless of what's already there.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Suggested Workflow</h3>
+        <p class="guide-workflow-note">Optional first step: stage new books in one folder, e.g. <code>_unorganized</code>. Not strictly necessary, but keeps newly-added books separate from your organized library.</p>
+        <ol class="guide-workflow">
+          <li><span class="guide-step-title">Dry run with backup</span><span class="guide-step-detail">Metadata Forge, Apply off, Back up and cache on. Pre-populates the cache before anything is written.</span></li>
+          <li><span class="guide-step-title">Review report, generate Suspect Report</span><span class="guide-step-detail">Check Matched and Manual Review, then run Suspect Report to catch likely false positives.</span></li>
+          <li><span class="guide-step-title">Fix bad matches manually</span><span class="guide-step-detail">Resolve anything in Manual Review by hand.</span></li>
+          <li><span class="guide-step-title">Apply</span><span class="guide-step-detail">Writes the matched metadata for real.</span></li>
+          <li><span class="guide-step-title">Organizer: Index library (one time only)</span><span class="guide-step-detail">Refreshes the destination-structure cache before the first real run.</span></li>
+          <li><span class="guide-step-title">Organizer: dry run + consolidate</span><span class="guide-step-detail">Previews the planned moves. Consolidation should always be checked as a full-root dry run first.</span></li>
+          <li><span class="guide-step-title">Review the plan, generate Suspect Report</span><span class="guide-step-detail">Catch bad destination paths and move anything wrong manually.</span></li>
+          <li><span class="guide-step-title">Apply</span><span class="guide-step-detail">Commits the previewed moves.</span></li>
+        </ol>
+      </div>
+
+      <div class="guide-section">
+        <h3>Report Badge Legend</h3>
+        <p>Every status and badge a book can show in a report, and what it means for that file.</p>
+
+        <table class="guide-badge-table">
+          <thead>
+            <tr><th>Badge</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="match-status-badge status-matched">Matched</span></td>
+              <td>A confident match was found. Will write or wrote metadata per the active write/edit mode.</td>
+            </tr>
+            <tr>
+              <td><span class="match-status-badge status-smart-skipped">Smart-skipped</span></td>
+              <td>Write mode is Smart and every checked field already matched. Nothing written.</td>
+            </tr>
+            <tr>
+              <td><span class="match-status-badge status-skipped">Skipped</span></td>
+              <td>Explicitly excluded before matching (skip pattern, ignored folder). The badge also shows the reason.</td>
+            </tr>
+            <tr>
+              <td><span class="match-status-badge status-unmatched">Not Matched</span></td>
+              <td>No confident match found. Needs Manual Review.</td>
+            </tr>
+            <tr>
+              <td><span class="match-status-badge status-error">Error</span></td>
+              <td>Something failed while processing this file.</td>
+            </tr>
+            <tr>
+              <td><span class="match-manual-badge">Manually Applied</span></td>
+              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it permanently from then on (regardless of score), so a later run can never overwrite your manual work by accident. Force reprocess is the only way to make it reprocess again.</td>
+            </tr>
+            <tr>
+              <td><span class="match-score-badge">87%</span></td>
+              <td>Match confidence.</td>
+            </tr>
+            <tr>
+              <td><span class="match-mode-badge">Full metadata</span></td>
+              <td>Which edit mode was used for this book: Full metadata or Series only.</td>
+            </tr>
+            <tr>
+              <td><span class="match-provider-badge">Audible</span></td>
+              <td>Which source produced the match: Audible, ABS, abs-agg (LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???), GraphicAudio, Soundbooth Theater, Goodreads, or Kindle.</td>
+            </tr>
+            <tr>
+              <td><span class="match-write-badge">written</span></td>
+              <td>What actually happened on disk: written, smart-skipped, no-op, skipped, or error.</td>
+            </tr>
+            <tr>
+              <td><span class="reason-badge danger">no match</span></td>
+              <td>Manual Review reason tag (red): no match, asin conflict, low score, missing metadata, unsafe match, no metadata, status:skipped, mode:none, or an N% duration-diff tag.</td>
+            </tr>
+            <tr>
+              <td><span class="reason-badge recommended">manually applied</span></td>
+              <td>Manual Review reason tag (green): manually applied.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="guide-section">
+        <h3>metadata.json</h3>
+        <p>An Audiobookshelf-native <code>metadata.json</code> sidecar is written for every matched book. It's LibraForge's one guaranteed, universal output, independent of audio format or whether embedded-tag writing is even possible or desired (<code>--metadata-json-only</code> skips tags entirely; metadata.json is written either way).</p>
+        <p>On repeat runs it follows the same write-mode skip logic as tags, so there is no needless rewrite once nothing's changed. But it is not the same file as <code>libraforge.json</code>, which sits right alongside it and holds LibraForge's own internal tracking: whether and how a book was processed, cached duration data, and more.</p>
+        <p><strong>Because they're separate files:</strong> Audiobookshelf's own <strong>Store metadata with item</strong> server setting only controls where Audiobookshelf writes its own copy of <code>metadata.json</code>: next to the book if enabled, or internally under <code>/metadata/items/</code> if not. Either way it never touches <code>libraforge.json</code>, so LibraForge's own tracking is unaffected.</p>
+        <p><strong>Recommended setup:</strong> keep Store metadata with item OFF, so Audiobookshelf never overwrites the <code>metadata.json</code> LibraForge wrote. This still works because Audiobookshelf's scanner reads whatever <code>metadata.json</code> is already sitting in the book's folder regardless of that setting, it only governs Audiobookshelf's own writes, not what the scanner reads. Then set the library's Scanner metadata priority to <strong>Audiobookshelf metadata file</strong> highest, <strong>Audio file meta tags</strong> second, <strong>Folder structure</strong> lowest, so LibraForge's matches win. See Audiobookshelf's own <a href="https://www.audiobookshelf.org/guides/book-scanner/" target="_blank" rel="noopener noreferrer">Book Scanner guide</a> for the exact settings.</p>
+        <img class="guide-screenshot" src="/static/abs-scanner-metadata-priority.png?v=20260704-2" alt="Audiobookshelf Scanner metadata priority list: Audiobookshelf metadata file (highest priority), Audio file meta tags OR ebook metadata, Folder structure, NFO file, desc.txt &amp; reader.txt files, and OPF file (lowest priority)" />
+      </div>
+
+      <div class="guide-section">
+        <h3>Report types</h3>
+        <p>What each tool produces, and where to find it.</p>
+        <ul>
+          <li><strong>Metadata Forge report</strong>: per-book match/write outcome (the badges above), downloadable after a run.</li>
+          <li><strong>M4B Tool report</strong>: conversion/merge outcomes.</li>
+          <li><strong>Folder Forge report</strong>: planned/applied moves.</li>
+          <li><strong>Library Downloader report</strong>: per-book download outcome.</li>
+          <li><strong>Suspect Report</strong>: generate a report based on the last run. Targets full matches passing certain triggers, to simplify finding a bad full write manually. Note: some false positives will always show up, the idea is to significantly narrow down manually reviewing a full run report, without affecting the actual matching capability.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Owned badge &amp; duplicate handling</h3>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="lib-badge owned">Owned</span></span>
+          <span>This title's ASIN is already in your Audiobookshelf library, or, if ABS isn't connected, found via a local ASIN-tag scan fallback.</span>
+        </div>
+        <p>Duplicate handling when downloading an Owned title: <strong>Keep both copies</strong>, <strong>Replace the existing copy</strong>, or <strong>Choose per item</strong>.</p>
+      </div>
+
+    </details>
 
     <div class="pick-row">
       <input id="folderPath" type="text" list="folderSuggestions"
