@@ -17,6 +17,7 @@ config/publishers.local.json
 config/abs-agg.json
 config/abs-tract.json
 config/abs.json
+config/retention.json
 archive/
 output/
 docker-compose.override.yml
