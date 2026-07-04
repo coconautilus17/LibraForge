@@ -1860,6 +1860,37 @@ def validate_multi_part_group_files(file_paths: list[Path]) -> dict[str, Any]:
     }
 
 
+def matches_skip_patterns(
+    source_path: Path, metadata: dict[str, Any], patterns: list[str]
+) -> tuple[bool, str]:
+    """Return True when a book should be skipped by user-supplied patterns.
+
+    Patterns are case-insensitive plain substrings checked against the source
+    path and the inferred metadata fields. Mirrors the fixer's
+    ``matches_skip_patterns`` so the same skip list works consistently across
+    both tools.
+    """
+    if not patterns:
+        return False, ""
+
+    haystack = " ".join(
+        [
+            str(source_path),
+            metadata.get("title", ""),
+            metadata.get("series", ""),
+            metadata.get("author", ""),
+            metadata.get("narrator", ""),
+        ]
+    ).lower()
+
+    for pattern in patterns:
+        needle = str(pattern or "").strip().lower()
+        if needle and needle in haystack:
+            return True, pattern
+
+    return False, ""
+
+
 def should_ignore_path(path: Path, root: Path) -> bool:
     try:
         relative_parts = path.relative_to(root).parts
@@ -3835,6 +3866,16 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Actually move files/folders. Default is dry-run.")
     parser.add_argument("--m4b-only", action="store_true", help="Only process items whose audio files are all .m4b.")
     parser.add_argument("--allow-unknown-author", action="store_true", help="Allow moves whose metadata has no author. Disabled by default.")
+    parser.add_argument(
+        "--skip-pattern",
+        action="append",
+        default=[],
+        help=(
+            "Skip books whose source path or inferred metadata contains this "
+            "case-insensitive text. Can be used multiple times, e.g. "
+            "--skip-pattern 'Casual Farming'."
+        ),
+    )
     parser.add_argument("--no-companions", action="store_true", help="Do not move known companion files with loose audio files.")
     parser.add_argument("--remove-empty-dirs", action="store_true", help="After applying moves, remove empty source directories up to the scan root.")
     parser.add_argument("--structure-cache", default=str(DEFAULT_STRUCTURE_CACHE), help="Persistent library structure cache JSON.")
@@ -3892,6 +3933,7 @@ def main() -> None:
     skipped_already_target = 0
     skipped_conflicts = 0
     skipped_ambiguous_structure = 0
+    skipped_pattern_match = 0
     matched_existing_structure = 0
     ambiguous_structure = 0
 
@@ -3911,6 +3953,26 @@ def main() -> None:
     for index, item, metadata in inferred_items:
         metadata = apply_run_author_correction(metadata, run_author_corrections)
         metadata = normalize_metadata_title_for_target(metadata)
+
+        skip_due_to_pattern, skip_pattern = matches_skip_patterns(
+            source_path=item.source_path,
+            metadata=metadata,
+            patterns=args.skip_pattern,
+        )
+        if skip_due_to_pattern:
+            skipped_pattern_match += 1
+            target_dir = build_default_target_dir(destination_root, metadata)
+            reason = f"skipped: matched skip pattern: {skip_pattern}"
+            skipped_reviews.append(make_skipped_review_move(
+                item=item,
+                metadata=metadata,
+                target=target_dir,
+                reason=reason,
+                structure="skipped_pattern_match",
+            ))
+            print(f"SKIP: matched skip pattern: {skip_pattern} | {item.source_path}", file=sys.stderr)
+            continue
+
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
             target_dir = build_default_target_dir(destination_root, metadata)
@@ -4004,6 +4066,7 @@ def main() -> None:
     print(f"MP3 files included: {mp3_files}")
     print(f"OPUS files included: {opus_files}")
     print(f"Skipped unknown author: {skipped_unknown_author}")
+    print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
     print(f"Skipped conflicts: {skipped_conflicts}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")

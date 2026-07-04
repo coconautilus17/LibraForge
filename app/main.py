@@ -440,7 +440,7 @@ SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
 )
-ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves):\s+(\d+)\s*$")
+ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves):\s+(\d+)\s*$")
 ORGANIZER_MODE_RE = re.compile(r"^Mode:\s+(APPLY|DRY RUN|INDEX ONLY)\s*$")
 ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure):\s+(.+)$")
 ORGANIZER_PROGRESS_RE = re.compile(r"^Scanning\s+(\d+)/(\d+):\s+(.+)$")
@@ -1070,6 +1070,7 @@ class OrganizerRunRequest(BaseModel):
     remove_empty_dirs: bool = False
     max_items: int = 0
     progress_every: int = 25
+    skip_patterns: list[str] = Field(default_factory=list)
 
 
 class TitleNoiseCustomPattern(BaseModel):
@@ -3095,6 +3096,7 @@ def initial_organizer_stats() -> dict[str, Any]:
         "ambiguous_structure_matches": 0,
         "skipped_ambiguous_structure": 0,
         "skipped_unknown_author": 0,
+        "skipped_pattern_match": 0,
         "skipped_already_target": 0,
         "skipped_conflicts": 0,
         "planned_moves": 0,
@@ -3145,6 +3147,7 @@ def parse_organizer_line(state: RunState, line: str) -> None:
             "Ignored MP3 files": "ignored_mp3_files",
             "Skipped likely existing book folders": "skipped_existing_book_folders",
             "Skipped unknown author": "skipped_unknown_author",
+            "Skipped by pattern": "skipped_pattern_match",
             "Skipped already in target folder": "skipped_already_target",
             "Skipped conflicts": "skipped_conflicts",
             "Structure cache entries": "structure_cache_entries",
@@ -3263,6 +3266,10 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         cmd += ["--max-items", str(req.max_items)]
     if req.progress_every >= 0:
         cmd += ["--progress-every", str(req.progress_every)]
+    for pattern in req.skip_patterns:
+        pattern = pattern.strip()
+        if pattern:
+            cmd += ["--skip-pattern", pattern]
 
     return cmd
 
