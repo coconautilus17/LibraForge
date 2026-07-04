@@ -143,6 +143,27 @@
         <p><strong>Recommended metadata priority</strong>, per Audiobookshelf's own documented scanning behavior: <code>metadata.json</code>, then embedded tags, then folder/filename structure. metadata.json wins, so it's the authoritative source for what Audiobookshelf displays. Embedded tags matter mainly for portability outside ABS (playing the file elsewhere). Folder structure is ABS's last resort when nothing else is present.</p>
       </div>
 
+      <div class="guide-section">
+        <h3>Report types</h3>
+        <p>What each tool produces, and where to find it.</p>
+        <ul>
+          <li><strong>Metadata Forge report</strong>: per-book match/write outcome (the badges above), downloadable after a run.</li>
+          <li><strong>M4B Tool report</strong>: conversion/merge outcomes.</li>
+          <li><strong>Folder Forge report</strong>: planned/applied moves.</li>
+          <li><strong>Library Downloader report</strong>: per-book download outcome.</li>
+          <li><strong>Suspect Report</strong>: generated on demand from an existing Metadata Forge report. Re-checks Matched items for signs of a false-positive match (series/title confusion) without re-running the whole match pipeline.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
+        <h3>Owned badge &amp; duplicate handling</h3>
+        <div class="guide-badge-row">
+          <span class="guide-badge-sample"><span class="lib-badge owned">Owned</span></span>
+          <span>This title's ASIN is already in your Audiobookshelf library, or, if ABS isn't connected, found via a local ASIN-tag scan fallback.</span>
+        </div>
+        <p>Duplicate handling when downloading an Owned title: <strong>Keep both copies</strong>, <strong>Replace the existing copy</strong>, or <strong>Choose per item</strong>.</p>
+      </div>
+
     </details>
 
     <div class="pick-row">

@@ -3275,3 +3275,9 @@ button.danger:hover:not(:disabled) {
   flex-shrink: 0;
   min-width: 108px;
 }
+
+/* Reused from downloader.html's owned-badge styling, scoped for the Start
+   Here guide sample since this page doesn't share that page's local style
+   block. */
+.lib-badge { display: inline-block; font-size: 0.7em; padding: 1px 6px; border-radius: 99px; background: var(--border); color: var(--text-soft); }
+.lib-badge.owned { background: #3a2f12; color: #e9c46a; }
