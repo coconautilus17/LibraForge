@@ -135,6 +135,14 @@
         </div>
       </div>
 
+      <div class="guide-section">
+        <h3>metadata.json</h3>
+        <p>An Audiobookshelf-native <code>metadata.json</code> sidecar is written for every matched book. It's LibraForge's one guaranteed, universal output, independent of audio format or whether embedded-tag writing is even possible or desired (<code>--metadata-json-only</code> skips tags entirely; metadata.json is written either way).</p>
+        <p>On repeat runs it follows the same write-mode skip logic as tags, so there is no needless rewrite once nothing's changed. But it is not the same file as <code>libraforge.json</code>, which sits right alongside it and holds LibraForge's own internal tracking: whether and how a book was processed, cached duration data, and more.</p>
+        <p><strong>Because they're separate files:</strong> if you use Audiobookshelf's own "save metadata to file" feature (editing metadata inside ABS itself), ABS overwrites <code>metadata.json</code> with its version. This is safe. It never touches <code>libraforge.json</code>, so LibraForge still knows what it already did and won't reprocess or conflict on the next run.</p>
+        <p><strong>Recommended metadata priority</strong>, per Audiobookshelf's own documented scanning behavior: <code>metadata.json</code>, then embedded tags, then folder/filename structure. metadata.json wins, so it's the authoritative source for what Audiobookshelf displays. Embedded tags matter mainly for portability outside ABS (playing the file elsewhere). Folder structure is ABS's last resort when nothing else is present.</p>
+      </div>
+
     </details>
 
     <div class="pick-row">
