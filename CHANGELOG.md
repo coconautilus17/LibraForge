@@ -1,10 +1,34 @@
 # Changelog
 
-All notable changes. No tagged releases yet - tracking by PR.
+All notable changes, tracked by PR. This file wasn't kept in sync with the
+GitHub Releases for v0.1.0-v0.2.1 (see the Releases page for those); v0.2.2
+onward is tracked here going forward.
 
 ---
 
-## Unreleased
+## v0.2.2 (2026-07-05)
+
+### 2026-07-04 to 07-05 (PR #150-154)
+- Organizer: ported the fixer's skip-pattern matcher (matching UI, `--skip-pattern`);
+  the apply loop had zero error handling - one bad move (blocked path, permission
+  error, vanished source) crashed the whole run and silently dropped every remaining
+  planned move. Now isolates per-move failures with a "Moves succeeded/failed"
+  summary and a Failed Moves list; detects a scan with zero fixer sidecars and warns
+  before planning ("Fixer was not applied - Continue anyway?"), since multi-file
+  metadata quality leans on fixer-written sidecars; moved Suspicion Report above
+  Planned Moves so it isn't buried after a real run
+- Fixer: fixed several matcher regressions found via a real run against
+  `_unorganized` - a candidate missing sequence data entirely could still reach
+  auto-write confidence via title+duration+author agreement alone; a same-series
+  numbering-scheme override ignored sequence disagreements regardless of gap size;
+  a coincidental substring series name (same author, different series) let its raw
+  similarity ratio carry the score past the write threshold; a common release
+  naming convention (`001 Author - Book N - Chapter X.mp3`, bare space after the
+  index) was never recognized as a multi-part group, and once combined with a
+  merged single-file edition in the same folder, exploded every chapter into its
+  own wrong match; a loose file sitting directly in the scan root could have its
+  title corrupted into the literal scan-root folder name
+- Docs: CHANGELOG and README brought up to date against current features
 
 ### 2026-07-04 (PR #133-149)
 - Library Downloader: fixed the CloudFront/activation-bytes rate-limit bug at its root -
@@ -28,19 +52,31 @@ All notable changes. No tagged releases yet - tracking by PR.
 - Docs: README discloses WIP status and heavy AI involvement; Planned section corrected
   against verified current state
 
-### 2026-07-01 to 07-03 (PR #123-132)
+### 2026-07-02 to 07-03 (PR #130-132)
+- Organizer/Fixer: fixed multi-file grouping to recognize part numbers embedded
+  mid-filename, not just trailing ones; fixed metadata cross-contamination between
+  distinct books sharing a folder-level `libraforge.json`
+- Manual Review: cover extraction now reads the real embedded cover tag instead of
+  ffmpeg's first video stream (fixes wrong covers on some files)
+
+---
+
+## Previously released (v0.1.0 - v0.2.1)
+
+Everything below was already shipped in a tagged GitHub Release before this
+file started tracking versions; kept for history. See the Releases page for
+the actual per-version release notes.
+
+### 2026-06-30 to 07-01 (PR #123-129)
 - Suspect Report: new review-script pass (`review-libraforge-report.py`) that flags
   likely-wrong matches after a run - bitrate tokens leaked into titles, ABS-style
   duplicated title brackets, redundant series prefixes, generic omnibus titles, and more
   - surfaced through a shared UI widget on both Metadata Forge and Folder Forge
   (Organizer gets its own new detections on top); manual review performance improved via
   script filtering and caching
-- Organizer: fixed several title-source bugs; report retention (max age / max count)
-  settings added to Settings; fixed multi-file grouping to recognize part numbers
-  embedded mid-filename, not just trailing ones; fixed cross-contamination between books
-  sharing a folder in `libraforge.json`
-- Manual Review: display fixes; cover extraction now reads the real embedded cover tag
-  instead of ffmpeg's first video stream (fixes wrong covers on some files)
+- Organizer: fixed several title-source bugs
+- Manual Review: display fixes
+- Settings: report retention (max age / max count) settings added
 
 ### 2026-06-29 to 06-30 (PR #95-122)
 - Providers: Goodreads and Kindle (via `abs-tract`) added as opt-in fallback providers
