@@ -3782,6 +3782,71 @@ def move_folder_contents(source: Path, target: Path) -> None:
     source.rmdir()
 
 
+def execute_planned_move(
+    move: dict[str, Any],
+    *,
+    merge_existing_targets: bool,
+    remove_empty_dirs: bool,
+    root: Path,
+) -> None:
+    """Execute one planned move: relocate the book (folder or loose file) and
+    its companions, then optionally clean up now-empty source parents.
+
+    Raises on any filesystem error so the caller can count the move as
+    failed and continue with the rest of the batch instead of aborting the
+    whole run on one bad move.
+    """
+    source: Path = move["source"]
+    target: Path = move["target"]
+    original_parent = source.parent
+
+    if move["kind"] == "folder":
+        if target.exists() and merge_existing_targets:
+            move_folder_contents(source, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+        # Companions inside the folder moved with it; strip per-file prefix
+        # from .metadata.json and .libraforge.json so ABS and the fixer
+        # can locate them without the audio filename prefix.
+        for companion in move.get("companions", []):
+            if companion.name.endswith(".metadata.json"):
+                moved = target / companion.name
+                final = target / "metadata.json"
+                if moved.exists() and not final.exists():
+                    moved.rename(final)
+            elif companion.name.endswith(".libraforge.json") and companion.name != "libraforge.json":
+                moved = target / companion.name
+                final = target / "libraforge.json"
+                if moved.exists() and not final.exists():
+                    moved.rename(final)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        for companion in move.get("companions", []):
+            if companion.stem == source.stem:
+                # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
+                # keep the same stem, just change the extension.
+                companion_target = target.with_suffix(companion.suffix)
+            else:
+                # Suffix companion (e.g. Book.m4b.libraforge.json):
+                # append the suffix after the full audio filename.
+                suffix = companion.name.removeprefix(source.name)
+                companion_target = target.with_name(target.name + suffix)
+            shutil.move(str(companion), str(companion_target))
+            if companion_target.name.endswith(".metadata.json"):
+                final = companion_target.parent / "metadata.json"
+                if not final.exists():
+                    companion_target.rename(final)
+            elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
+                final = companion_target.parent / "libraforge.json"
+                if not final.exists():
+                    companion_target.rename(final)
+
+    if remove_empty_dirs:
+        remove_empty_parents(original_parent, root)
+
+
 def count_audio_extension(root: Path, extension: str) -> int:
     count = 0
     for audio_file in root.rglob(f"*{extension}"):
@@ -3854,6 +3919,23 @@ def print_move(move: dict[str, Any]) -> None:
     print(f"    {source_display}")
     print("  TO:")
     print(f"    {target_display}")
+    print()
+
+
+def print_failed_move(move: dict[str, Any]) -> None:
+    metadata = move["metadata"]
+    print("FAILED BOOK:")
+    print(f"  Kind:   {move['kind']}")
+    print(f"  Title:  {metadata['title']}")
+    print(f"  Author: {metadata['author']}")
+    print(f"  Files:  {move['audio_count']}")
+    source_display = move["source"]
+    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
+    print("  MOVE:")
+    print(f"    {source_display}")
+    print("  TO:")
+    print(f"    {target_display}")
+    print(f"  Error: {move.get('error', 'unknown error')}")
     print()
 
 
@@ -4082,60 +4164,34 @@ def main() -> None:
         print("No moves needed.")
         return
 
+    moves_succeeded = 0
+    failed_moves: list[dict[str, Any]] = []
     for move in planned_moves:
         print_move(move)
         if not args.apply:
             continue
 
-        source: Path = move["source"]
-        target: Path = move["target"]
-        original_parent = source.parent
+        try:
+            execute_planned_move(
+                move,
+                merge_existing_targets=args.merge_existing_targets,
+                remove_empty_dirs=args.remove_empty_dirs,
+                root=root,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed_moves.append({**move, "error": str(exc)})
+            print(f"FAILED: {move['source']} -> {move['target']} | {exc}", file=sys.stderr)
+            continue
+        moves_succeeded += 1
 
-        if move["kind"] == "folder":
-            if target.exists() and args.merge_existing_targets:
-                move_folder_contents(source, target)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), str(target))
-            # Companions inside the folder moved with it; strip per-file prefix
-            # from .metadata.json and .libraforge.json so ABS and the fixer
-            # can locate them without the audio filename prefix.
-            for companion in move.get("companions", []):
-                if companion.name.endswith(".metadata.json"):
-                    moved = target / companion.name
-                    final = target / "metadata.json"
-                    if moved.exists() and not final.exists():
-                        moved.rename(final)
-                elif companion.name.endswith(".libraforge.json") and companion.name != "libraforge.json":
-                    moved = target / companion.name
-                    final = target / "libraforge.json"
-                    if moved.exists() and not final.exists():
-                        moved.rename(final)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            for companion in move.get("companions", []):
-                if companion.stem == source.stem:
-                    # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
-                    # keep the same stem, just change the extension.
-                    companion_target = target.with_suffix(companion.suffix)
-                else:
-                    # Suffix companion (e.g. Book.m4b.libraforge.json):
-                    # append the suffix after the full audio filename.
-                    suffix = companion.name.removeprefix(source.name)
-                    companion_target = target.with_name(target.name + suffix)
-                shutil.move(str(companion), str(companion_target))
-                if companion_target.name.endswith(".metadata.json"):
-                    final = companion_target.parent / "metadata.json"
-                    if not final.exists():
-                        companion_target.rename(final)
-                elif companion_target.name.endswith(".libraforge.json") and companion_target.name != "libraforge.json":
-                    final = companion_target.parent / "libraforge.json"
-                    if not final.exists():
-                        companion_target.rename(final)
-
-        if args.remove_empty_dirs:
-            remove_empty_parents(original_parent, root)
+    if args.apply:
+        print(f"Moves succeeded: {moves_succeeded}")
+        print(f"Moves failed: {len(failed_moves)}")
+        if failed_moves:
+            print("Failed moves:")
+            print()
+            for move in failed_moves:
+                print_failed_move(move)
 
     if skipped_reviews:
         print("Skipped review items:")

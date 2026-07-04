@@ -142,7 +142,14 @@
 
     <section class="card">
       <h2>Summary</h2>
+      <div id="applyResultSummary" class="review-alert" hidden></div>
       <div id="stats" class="stats-grid"></div>
+    </section>
+
+    <section class="card" id="failedMovesSection" hidden>
+      <h2>Failed Moves</h2>
+      <p class="note">Moves that could not complete during apply. Every other move in the batch still ran; these need a manual look before re-running.</p>
+      <div id="failedMovesList"></div>
     </section>
 
     <section class="card">

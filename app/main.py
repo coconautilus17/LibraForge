@@ -440,9 +440,9 @@ SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
 )
-ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves):\s+(\d+)\s*$")
+ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves|Moves succeeded|Moves failed):\s+(\d+)\s*$")
 ORGANIZER_MODE_RE = re.compile(r"^Mode:\s+(APPLY|DRY RUN|INDEX ONLY)\s*$")
-ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure):\s+(.+)$")
+ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure|Error):\s+(.+)$")
 ORGANIZER_PROGRESS_RE = re.compile(r"^Scanning\s+(\d+)/(\d+):\s+(.+)$")
 ORGANIZER_INDEX_PROGRESS_RE = re.compile(r"^Indexing structure\s+(\d+)/(\d+):\s+(.+)$")
 M4B_SPINNER_RE = re.compile(r"^\s*(\d+)\s+remaining\s+/\s+(\d+)\s+total")
@@ -3100,15 +3100,20 @@ def initial_organizer_stats() -> dict[str, Any]:
         "skipped_already_target": 0,
         "skipped_conflicts": 0,
         "planned_moves": 0,
+        "moves_succeeded": 0,
+        "moves_failed": 0,
         "mode": "",
         "move_items": [],
+        "failed_move_items": [],
     }
 
 
 def finalize_organizer_move(state: RunState) -> None:
     current_move = state.parser_state.pop("organizer_current_move", None)
+    is_failure = state.parser_state.pop("organizer_current_move_is_failure", False)
     if current_move:
-        state.stats.setdefault("move_items", []).append(current_move)
+        key = "failed_move_items" if is_failure else "move_items"
+        state.stats.setdefault(key, []).append(current_move)
 
 
 def parse_organizer_line(state: RunState, line: str) -> None:
@@ -3155,6 +3160,8 @@ def parse_organizer_line(state: RunState, line: str) -> None:
             "Ambiguous structure matches": "ambiguous_structure_matches",
             "Skipped ambiguous structure": "skipped_ambiguous_structure",
             "Planned moves": "planned_moves",
+            "Moves succeeded": "moves_succeeded",
+            "Moves failed": "moves_failed",
         }[m.group(1)]
         state.stats[key] = int(m.group(2))
         set_run_phase(state, "summarizing", "Calculating move summary", line)
@@ -3175,9 +3182,10 @@ def parse_organizer_line(state: RunState, line: str) -> None:
         set_run_phase(state, "caching", "Structure cache updated", "Cache is ready for next run.")
         return
 
-    if line == "BOOK:":
+    if line in ("BOOK:", "FAILED BOOK:"):
         finalize_organizer_move(state)
         state.parser_state["organizer_current_move"] = {"companions": []}
+        state.parser_state["organizer_current_move_is_failure"] = line == "FAILED BOOK:"
         state.parser_state["organizer_section"] = ""
         apply_mode = state.stats.get("mode") == "APPLY"
         state.parser_state["organizer_moves_started"] = apply_mode
@@ -3206,6 +3214,7 @@ def parse_organizer_line(state: RunState, line: str) -> None:
             "Series": "series",
             "Number": "number",
             "Structure": "structure",
+            "Error": "error",
         }[m.group(1)]
         value = m.group(2).strip()
         if key == "files" and value.isdigit():
