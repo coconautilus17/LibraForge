@@ -2528,6 +2528,14 @@ summary:focus-visible {
   color: var(--text);
 }
 
+.dryrun-notice.danger {
+  border-left-color: var(--danger);
+}
+
+.dryrun-notice.danger strong {
+  color: var(--danger);
+}
+
 .manual-nav-heading {
   margin: 0 0 14px;
   font-size: 13px;
