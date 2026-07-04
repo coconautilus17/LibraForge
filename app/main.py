@@ -1071,6 +1071,7 @@ class OrganizerRunRequest(BaseModel):
     max_items: int = 0
     progress_every: int = 25
     skip_patterns: list[str] = Field(default_factory=list)
+    acknowledge_no_sidecars: bool = False
 
 
 class TitleNoiseCustomPattern(BaseModel):
@@ -3105,6 +3106,7 @@ def initial_organizer_stats() -> dict[str, Any]:
         "mode": "",
         "move_items": [],
         "failed_move_items": [],
+        "no_sidecars_warning": False,
     }
 
 
@@ -3180,6 +3182,11 @@ def parse_organizer_line(state: RunState, line: str) -> None:
 
     if line == "Structure cache rebuild complete.":
         set_run_phase(state, "caching", "Structure cache updated", "Cache is ready for next run.")
+        return
+
+    if line == "NO_SIDECARS_FOUND":
+        state.stats["no_sidecars_warning"] = True
+        set_run_phase(state, "summarizing", "No fixer sidecars found", line)
         return
 
     if line in ("BOOK:", "FAILED BOOK:"):
@@ -3279,6 +3286,8 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         pattern = pattern.strip()
         if pattern:
             cmd += ["--skip-pattern", pattern]
+    if req.acknowledge_no_sidecars:
+        cmd.append("--acknowledge-no-sidecars")
 
     return cmd
 
