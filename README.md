@@ -17,6 +17,9 @@ a vanilla-JS web UI. Every write operation defaults to a dry run.
 ### Start Here (`/`)
 Pick a folder and get a one-glance scan summary: how many books need metadata, need
 conversion, and are ready to organise. Links through to the right tool for each stage.
+A collapsible guide explains Edit and Write modes, Match badges, `metadata.json` vs the
+Audiobookshelf Scanner, Report types, the Owned badge, and a suggested end-to-end
+workflow through Metadata Forge and Folder Forge.
 
 ### Metadata Forge (`/forge`)
 Searches Audible (or another provider) and writes matched metadata to your files.
@@ -33,8 +36,14 @@ Searches Audible (or another provider) and writes matched metadata to your files
   ASIN mismatch flags the book for manual review.
 - **Manual Review:** load any book or folder, search Audible manually, and apply per
   book with an explicit `Full metadata` or `Series only` mode.
-- **Providers:** Audible (direct), **Audiobookshelf** (via its own search API), and
-  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others).
+- **Suspect Report:** a rule-based script pass over completed write matches that flags
+  likely-wrong ones (bitrate leaked into a title, duplicated title brackets, redundant
+  series prefixes, generic omnibus titles, and more) for a quick second look - no LLM
+  involved, cheap enough to run after every apply.
+- **Providers:** Audible (direct), **Audiobookshelf** (via its own search API),
+  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads /
+  Kindle** (via `abs-tract`) as an opt-in fallback for no-match, series-only, or
+  low-score books.
 
 ### M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
@@ -45,7 +54,8 @@ rate and channel layout.
 ### Folder Forge (`/organizer`)
 Plans and applies `Author/Series/Book N - Title` destination moves with a dry-run
 preview and structured review reasons. **Index library and exit** rebuilds the
-destination-structure cache on its own.
+destination-structure cache on its own. Shares the same Suspect Report widget as
+Metadata Forge to flag planned moves worth a second look.
 
 ### Library Downloader (`/library`)
 Browse your Audible library and download purchases straight into a mounted folder,
@@ -55,19 +65,25 @@ Books already in your library are flagged as **Owned**; a per-run or per-book ru
 controls duplicate handling (Keep both / Replace), and an optional pass auto-organises
 the downloads when finished.
 
-### Accounts (`/auth-setup`)
-Guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**, each with a
-recognisable name, and **switch between them in one click**, rename them, or **disconnect**
-cleanly (deregisters the device with Audible, then removes the login; offers retry or
-local-only delete if Audible is unreachable). The active account is shared by every tool.
+### Settings (`/settings`)
+One consolidated page for everything global: Appearance, Title noise, Publishers,
+Library, Reports (retention policy), Accounts, Audiobookshelf, Goodreads/Kindle,
+Developer, and sidecar cleanup. The gear icon in the header links here from every page;
+the old `/auth-setup` URL still works and redirects to the Accounts section.
 
-This page also configures the **Audiobookshelf** and abs-agg providers. Paste an
-Audiobookshelf API key (create one in ABS Settings → Users → API Keys) into the masked
-field and click **Save and verify**; the key is stored server-side and never shown back in
-the browser. Use **Remove key** to delete it with one click. ABS is also what makes the
-Library Downloader's "already owned" detection instant. The key can alternatively be set
-once via the `ABS_API_KEY` environment variable (an env-set key is managed by the operator
-and cannot be removed from the UI).
+**Accounts:** guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**,
+each with a recognisable name, and **switch between them in one click**, rename them, or
+**disconnect** cleanly (deregisters the device with Audible, then removes the login;
+offers retry or local-only delete if Audible is unreachable). The active account is
+shared by every tool.
+
+**Audiobookshelf / abs-agg:** paste an Audiobookshelf API key (create one in ABS
+Settings → Users → API Keys) into the masked field and click **Save and verify**; the
+key is stored server-side and never shown back in the browser. Use **Remove key** to
+delete it with one click. ABS is also what makes the Library Downloader's "already
+owned" detection instant. The key can alternatively be set once via the `ABS_API_KEY`
+environment variable (an env-set key is managed by the operator and cannot be removed
+from the UI).
 
 ### Planned
 - **Script modularisation** - complex functions split out of `app.js` and `main.py` into
@@ -84,7 +100,10 @@ and cannot be removed from the UI).
   plus Goodreads and Kindle via abs-tract. The untested ones only go through abs-agg's
   generic keyword search path, with no confirmation that every response shape
   normalises to the shared metadata schema without silent field drops.
-- Local agent advisory review (read-only LLM suggestions, no automatic writes).
+- ~~Local agent advisory review (read-only LLM suggestions, no automatic writes)~~ -
+  redacted. Superseded by the **Suspect Report** (see Metadata Forge and Folder Forge
+  below): a plain, resource-friendly script that iterates over write matches and flags
+  likely-wrong ones by rule, with no LLM in the loop.
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
 
@@ -117,7 +136,7 @@ cp .env.example .env      # then edit AUDIOBOOKS_PATH / AUDIBLE_AUTH_PATH, and U
 make up                   # re-run to apply
 ```
 
-Connect an Audible account from the **Accounts** page, or skip Audible and use
+Connect an Audible account from **Settings → Accounts**, or skip Audible and use
 Audiobookshelf / abs-agg as providers. For HTTPS, attach to your reverse proxy network
 via `docker-compose.override.yml` (git-ignored).
 
@@ -147,15 +166,15 @@ AUDIOBOOKS_PATH=/path/to/your/audiobooks \
   docker compose -f docker-compose.dist.yml up -d
 ```
 
-Then open **http://127.0.0.1:5056** and connect an Audible account on the
-Accounts page (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
+Then open **http://127.0.0.1:5056** and connect an Audible account under
+Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
 `docker pull ghcr.io/coconautilus17/libraforge:latest`.
 
 ### Optional companion services
 
 | Service | Purpose | Required? |
 |---|---|---|
-| [Audiobookshelf](https://www.audiobookshelf.org/) | Metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and add it on the Accounts page. | No |
+| [Audiobookshelf](https://www.audiobookshelf.org/) | Metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and add it under Settings → Accounts. | No |
 | [abs-agg](https://github.com/Vito0912/abs-agg) | Aggregates metadata from LibriVox, Storytel, BookBeat, Big Finish, and others. Deploy on the same Docker network; set the URL in provider settings. | No |
 
 ---
