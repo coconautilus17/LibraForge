@@ -9,6 +9,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).parents[2]
@@ -44,19 +45,34 @@ class OggGroupingTests(unittest.TestCase):
     def test_ogg_is_a_full_peer_of_opus(self):
         self.assertIn(".ogg", FIXER.MULTI_PART_AUDIO_EXTENSIONS)
         self.assertIn(".ogg", FIXER.SIDECAR_OUTPUT_AUDIO_EXTENSIONS)
-        # .ogg has no MP4-style chapters and is not tagged in-place by mutagen.
-        self.assertNotIn(".ogg", FIXER.CHAPTER_METADATA_EXTENSIONS)
+        # ffprobe can read chapter markers from OGG/MP3/OPUS too (e.g. ID3
+        # CHAP/CTOC in podcast-style MP3s), so .ogg gets the same embedded-
+        # chapter safety check as .m4a/.m4b/.mp4 (issue #140).
+        self.assertIn(".ogg", FIXER.CHAPTER_METADATA_EXTENSIONS)
 
     def test_per_chapter_ogg_dump_groups_as_one_book(self):
         files = bare_number_ogg("/book/Shadow Slave Vol 9 (1301-1900)", 1301, 8)
 
         def reader(_path):
-            raise AssertionError("ogg should skip chapter-metadata probing")
+            return 0  # no embedded chapters -- the common case for real dumps
 
         groups = FIXER.build_multi_part_group_map(files, chapter_count_reader=reader)
         self.assertEqual(groups[files[0].parent], files)
         # The whole folder collapses to a single processing item.
         self.assertEqual(FIXER.build_processing_items(files, groups), [files[0]])
+
+    def test_ogg_folder_with_complete_audiobook_is_not_grouped(self):
+        # A mislabeled complete .ogg audiobook sitting alongside real
+        # chapter-split parts must now be caught, same as .m4b (issue #140).
+        complete = Path("/book/Mixed/Complete Audiobook.ogg")
+        files = [Path("/book/Mixed/Chapter 1.ogg"), Path("/book/Mixed/Chapter 2.ogg"), complete]
+
+        def reader(path):
+            return 40 if path == complete else 0
+
+        validation = FIXER.validate_multi_part_group_files(files, chapter_count_reader=reader)
+        self.assertFalse(validation["safe"])
+        self.assertTrue(any(u["file"] == str(complete) for u in validation["unsafe_files"]))
 
     def test_grouped_ogg_routes_to_m4b_tool_sidecar(self):
         rep = Path("/book/Shadow Slave Vol 9 (1301-1900)/1301.ogg")
@@ -74,13 +90,49 @@ class OggGroupingTests(unittest.TestCase):
     def test_organizer_recognizes_grouped_ogg_book(self):
         files = bare_number_ogg("/book/Shadow Slave Vol 9 (1301-1900)", 1301, 5)
         self.assertIn(".ogg", ORGANIZER.MULTI_PART_AUDIO_EXTENSIONS)
-        self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
+        with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0):
+            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
 
     def test_fixer_and_organizer_multipart_sets_stay_in_sync(self):
         self.assertEqual(
             FIXER.MULTI_PART_AUDIO_EXTENSIONS,
             ORGANIZER.MULTI_PART_AUDIO_EXTENSIONS,
         )
+
+    def test_fixer_and_organizer_chapter_metadata_sets_stay_in_sync(self):
+        self.assertEqual(
+            FIXER.CHAPTER_METADATA_EXTENSIONS,
+            ORGANIZER.CHAPTER_METADATA_EXTENSIONS,
+        )
+
+
+class Mp3OpusChapterValidationTests(unittest.TestCase):
+    """ffprobe can read embedded chapter markers from MP3/OPUS too (e.g. ID3
+    CHAP/CTOC in podcast-style MP3s), so these formats get the same
+    embedded-chapter safety check as .m4a/.m4b/.mp4 instead of being accepted
+    unconditionally (issue #140)."""
+
+    def test_mp3_and_opus_are_chapter_metadata_candidates(self):
+        self.assertIn(".mp3", FIXER.CHAPTER_METADATA_EXTENSIONS)
+        self.assertIn(".opus", FIXER.CHAPTER_METADATA_EXTENSIONS)
+        self.assertIn(".mp3", ORGANIZER.CHAPTER_METADATA_EXTENSIONS)
+        self.assertIn(".opus", ORGANIZER.CHAPTER_METADATA_EXTENSIONS)
+
+    def test_mp3_folder_with_complete_audiobook_is_not_grouped(self):
+        complete = Path("/book/Mixed Mp3/Complete Audiobook.mp3")
+        files = [Path("/book/Mixed Mp3/Chapter 1.mp3"), Path("/book/Mixed Mp3/Chapter 2.mp3"), complete]
+
+        def reader(path):
+            return 40 if path == complete else 0
+
+        validation = FIXER.validate_multi_part_group_files(files, chapter_count_reader=reader)
+        self.assertFalse(validation["safe"])
+        self.assertTrue(any(u["file"] == str(complete) for u in validation["unsafe_files"]))
+
+    def test_real_mp3_chapter_split_still_groups(self):
+        files = [Path("/book/Real Split/Chapter 1.mp3"), Path("/book/Real Split/Chapter 2.mp3")]
+        validation = FIXER.validate_multi_part_group_files(files, chapter_count_reader=lambda _p: 0)
+        self.assertTrue(validation["safe"])
 
 
 if __name__ == "__main__":
