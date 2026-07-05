@@ -222,6 +222,67 @@ def extract_any_visible_number(item: dict[str, Any], local: dict[str, Any], matc
 
 
 # ---------------------------------------------------------------------------
+# Potential-series sibling detection
+#
+# When a book has no series set, check whether other locally-scanned books by
+# the same author share a title pattern like "<Base> N" / "<Base> M" -- e.g.
+# "Metal Mage 15" alongside "Metal Mage 14", "Metal Mage 13" -- as best-effort
+# evidence that it's actually part of a series the source data just never
+# labeled. This is a heuristic, not a requirement: a missing series is still
+# flagged even when no siblings are found.
+# ---------------------------------------------------------------------------
+
+_TRAILING_NUMBER_RE = re.compile(r"^(.*?)[\s:,\-]+#?\s*(\d{1,3})\s*$")
+
+
+def split_title_and_trailing_number(title: Any) -> tuple[str, str] | None:
+    """Split "Metal Mage 15" into (normalized base "metal mage", number "15").
+
+    None when the title has no bare trailing number to split on.
+    """
+    title_s = clean_text(title)
+    if not title_s:
+        return None
+    match = _TRAILING_NUMBER_RE.match(title_s)
+    if not match:
+        return None
+    base = normalize(match.group(1))
+    if not base:
+        return None
+    return base, normalize_number(match.group(2))
+
+
+def build_series_sibling_index(
+    entries: list[tuple[str, str, str, str]],
+) -> dict[tuple[str, str], list[dict[str, str]]]:
+    """entries: (author_key, base_title_key, number, original_title) for every
+    locally-scanned item in the report with a resolvable base+number.
+    """
+    index: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    for author_key, base_key, number, original_title in entries:
+        index[(author_key, base_key)].append({"title": original_title, "number": number})
+    return index
+
+
+def find_potential_series_siblings(
+    sibling_index: dict[tuple[str, str], list[dict[str, str]]],
+    author: Any,
+    title: Any,
+) -> list[dict[str, str]]:
+    """Other locally-scanned books by the same author sharing title's base,
+    excluding title's own number. Empty when title has no bare trailing
+    number or no siblings share it.
+    """
+    split = split_title_and_trailing_number(title)
+    author_key = normalize(author)
+    if not split or not author_key:
+        return []
+    base_key, own_number = split
+    siblings = sibling_index.get((author_key, base_key), [])
+    return [s for s in siblings if s["number"] != own_number]
+
+
+# ---------------------------------------------------------------------------
 # Filtering helpers
 # ---------------------------------------------------------------------------
 
@@ -314,7 +375,7 @@ def recommendation_for_reasons(reasons: list[dict[str, Any]]) -> str:
         return "verify_sequence_before_apply"
     if {"title_mismatch", "series_mismatch", "author_mismatch"} & codes:
         return "compare_against_runner_up_or_search_manually"
-    if {"series_only_mode"} & codes:
+    if {"series_only_mode", "missing_title", "missing_author", "missing_series"} & codes:
         return "verify_metadata_completeness"
     if {"duplicate_asin", "duplicate_local_identity"} & codes:
         return "check_duplicate_or_alternate_edition"
@@ -325,7 +386,11 @@ def recommendation_for_reasons(reasons: list[dict[str, Any]]) -> str:
 # Per-item review
 # ---------------------------------------------------------------------------
 
-def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
+def review_metadata_item(
+    item: dict[str, Any],
+    args: argparse.Namespace,
+    sibling_index: dict[tuple[str, str], list[dict[str, str]]] | None = None,
+) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
     local = item.get("local") or {}
     match = item.get("match") or {}
@@ -469,6 +534,30 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
                 {"local_author": local.get("author"), "match_author": match.get("author"), "similarity": round(author_score, 3)},
             )
 
+    # --- Missing title/author/series on a match this run will actually write ---
+    # This match is being treated as correct -- these fields are just missing,
+    # whether from bad source tagging or never having been set at all. Still
+    # worth a second look before writing incomplete metadata to disk.
+    final_title = clean_text(match.get("title")) or local_title
+    final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
+    final_series = clean_text(match.get("series")) or local_series
+    if not final_title:
+        add_reason(reasons, "missing_title", "high", "No title available for this match.")
+    if not final_author:
+        add_reason(reasons, "missing_author", "high", "No author available for this match.")
+    if not final_series:
+        siblings = find_potential_series_siblings(sibling_index or {}, final_author, final_title)
+        evidence: dict[str, Any] = {"title": final_title, "author": final_author}
+        if siblings:
+            evidence["potential_series_siblings"] = siblings
+            message = (
+                f"No series set, but {len(siblings)} other local book(s) by the same author "
+                "share a matching title pattern -- likely part of a series."
+            )
+        else:
+            message = "No series set for this book (may be a standalone title, or missing source data)."
+        add_reason(reasons, "missing_series", "high", message, evidence)
+
     if not reasons:
         return None
 
@@ -544,7 +633,11 @@ def add_metadata_cross_item_suspects(
         })
 
 
-def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
+def review_organizer_item(
+    item: dict[str, Any],
+    args: argparse.Namespace,
+    sibling_index: dict[tuple[str, str], list[dict[str, str]]] | None = None,
+) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
 
     for reason in item.get("review_reasons") or []:
@@ -561,6 +654,18 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
         add_reason(reasons, "unknown_author", "high", "Organizer item has unknown/missing author.")
     if not title or title.casefold().startswith("unknown"):
         add_reason(reasons, "unknown_title", "medium", "Organizer item has unknown/missing title.")
+    if not series:
+        siblings = find_potential_series_siblings(sibling_index or {}, author, title)
+        evidence: dict[str, Any] = {"title": title, "author": author}
+        if siblings:
+            evidence["potential_series_siblings"] = siblings
+            message = (
+                f"No series set, but {len(siblings)} other local book(s) by the same author "
+                "share a matching title pattern -- likely part of a series."
+            )
+        else:
+            message = "No series set for this planned move (may be a standalone title, or missing source data)."
+        add_reason(reasons, "missing_series", "high", message, evidence)
 
     visible_source = extract_strong_number_from_text(source) or extract_series_suffix_number(source, series)
     visible_target = extract_strong_number_from_text(target)
@@ -657,9 +762,18 @@ def extract_suspects(report: dict[str, Any], args: argparse.Namespace) -> tuple[
     if kind == "metadata_fixer":
         report_items = report.get("report_items") or []
         if report_items:
+            sibling_entries = []
+            for item in report_items:
+                loc = item.get("local") or {}
+                split = split_title_and_trailing_number(loc.get("title"))
+                author_key = normalize(loc.get("author"))
+                if split and author_key:
+                    sibling_entries.append((author_key, split[0], split[1], clean_text(loc.get("title"))))
+            sibling_index = build_series_sibling_index(sibling_entries)
+
             for index, item in enumerate(report_items, start=1):
                 item.setdefault("id", item.get("id") or index)
-                suspect = review_metadata_item(item, args)
+                suspect = review_metadata_item(item, args, sibling_index)
                 if suspect:
                     suspects.append(suspect)
                 elif (
@@ -684,9 +798,18 @@ def extract_suspects(report: dict[str, Any], args: argparse.Namespace) -> tuple[
                                          "recommendation": recommendation_for_reasons(reasons), "reasons": reasons})
 
     elif kind == "organizer":
-        for index, item in enumerate((report.get("stats") or {}).get("move_items") or [], start=1):
+        move_items = (report.get("stats") or {}).get("move_items") or []
+        sibling_entries = []
+        for item in move_items:
+            split = split_title_and_trailing_number(item.get("title"))
+            author_key = normalize(item.get("author"))
+            if split and author_key:
+                sibling_entries.append((author_key, split[0], split[1], clean_text(item.get("title"))))
+        sibling_index = build_series_sibling_index(sibling_entries)
+
+        for index, item in enumerate(move_items, start=1):
             item.setdefault("id", item.get("id") or index)
-            suspect = review_organizer_item(item, args)
+            suspect = review_organizer_item(item, args, sibling_index)
             if suspect:
                 suspects.append(suspect)
 
