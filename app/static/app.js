@@ -5,6 +5,7 @@ let manualContext = null;
 let manualCurrentCoverUrl = '';
 let manualReviewItems = [];
 let manualSearchResultsCache = [];
+let goodreadsBreakerHandledForRun = null;
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser, saveActiveRun, clearActiveRun, loadActiveRun } = window.UiCommon;
@@ -171,7 +172,75 @@ async function poll() {
     showWorkerDrainBanner(false);
     $('startBtn').disabled = false;
     $('cancelBtn').disabled = true;
+    if (state.stats?.goodreads_circuit_tripped && goodreadsBreakerHandledForRun !== currentRun) {
+      goodreadsBreakerHandledForRun = currentRun;
+      showGoodreadsBreakerWarning(state.stats.search_workers);
+    }
   }
+}
+
+// Given the effective search-worker count this run used, decide what to
+// suggest for the next Goodreads-enabled run: cap at 5, then step down by one
+// each time the breaker keeps tripping; at 1 worker there is nothing left to
+// lower, so the likely cause is Goodreads-side congestion, not our own rate.
+function computeGoodreadsWorkerSuggestion(currentWorkers) {
+  const n = Number(currentWorkers);
+  if (!Number.isFinite(n) || n <= 0) return { kind: 'unknown' };
+  if (n > 5) return { kind: 'lower', current: n, suggested: 5 };
+  if (n > 1) return { kind: 'lower', current: n, suggested: n - 1 };
+  return { kind: 'wait_only', current: n };
+}
+
+function buildGoodreadsBreakerDialog() {
+  if ($('goodreadsBreakerDialog')) return;
+  const dlg = document.createElement('dialog');
+  dlg.id = 'goodreadsBreakerDialog';
+  dlg.className = 'manual-apply-dialog org-confirm-dialog';
+  dlg.innerHTML = `
+    <h3 class="manual-apply-title org-confirm-danger-title">Goodreads rate limit hit</h3>
+    <p>This run tried the Goodreads (abs-tract) fallback and got blocked enough times in a
+    row that the circuit breaker opened, skipping Goodreads/Kindle lookups for the rest of
+    the cooldown window. Books affected are marked with a "GR LIMITED" badge in the match
+    report instead of being counted as genuine no-matches.</p>
+    <p id="goodreadsBreakerAdvice"></p>
+    <div class="manual-apply-actions">
+      <button id="goodreadsBreakerOk" class="primary">Got it</button>
+    </div>`;
+  document.body.appendChild(dlg);
+}
+
+function showGoodreadsBreakerWarning(searchWorkers) {
+  buildGoodreadsBreakerDialog();
+  const dlg = $('goodreadsBreakerDialog');
+  const suggestion = computeGoodreadsWorkerSuggestion(searchWorkers);
+  let advice;
+  if (suggestion.kind === 'lower') {
+    advice = `Wait about 2 minutes after this run finishes before starting another
+      Goodreads-enabled run, and lower search workers from ${suggestion.current} to
+      ${suggestion.suggested} to ease off Goodreads next time.`;
+  } else if (suggestion.kind === 'wait_only') {
+    advice = `This run already used just 1 search worker, so lowering it further won't
+      help. Goodreads may simply be under heavy traffic right now, independent of our
+      request rate -- it's best to wait and try again another time rather than retrying
+      immediately.`;
+  } else {
+    advice = `Wait about 2 minutes after this run finishes before starting another
+      Goodreads-enabled run, and consider lowering the search worker count if this
+      keeps happening.`;
+  }
+  $('goodreadsBreakerAdvice').textContent = advice;
+  return new Promise((resolve) => {
+    const onOk = () => { cleanup(); resolve(); };
+    const onBackdrop = (e) => { if (e.target === dlg) onOk(); };
+    function cleanup() {
+      $('goodreadsBreakerOk').removeEventListener('click', onOk);
+      dlg.removeEventListener('click', onBackdrop);
+      dlg.close();
+    }
+    $('goodreadsBreakerOk').addEventListener('click', onOk);
+    dlg.addEventListener('click', onBackdrop);
+    dlg.showModal();
+  });
 }
 
 function showWorkerDrainBanner(visible) {
@@ -206,11 +275,11 @@ function render(state) {
   $('tail').scrollTop = $('tail').scrollHeight;
   renderDownloadLinks($('downloadLinks'), state.downloads || {});
   renderPhaseCounters(state);
-  renderStats(state.stats || {}, state.started_at, state.finished_at);
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
   currentReportId = state.id || null;
   renderMatchReport(state.report_items || []);
+  renderStats(state.stats || {}, state.started_at, state.finished_at);
 }
 
 function renderPhaseCounters(state) {
@@ -289,6 +358,7 @@ function renderStats(stats, startedAt, finishedAt) {
     provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
+    stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads (abs-tract) circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -1161,6 +1231,7 @@ function buildMatchReportCards() {
       const hasMatch = !!item.match;
       if (statusFilter === 'matched' && !hasMatch) continue;
       if (statusFilter === 'goodreads' && (item.provider || '').toLowerCase() !== 'goodreads') continue;
+      if (statusFilter === 'gr_limited' && !item.goodreads_rate_limited) continue;
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
       if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
       if (statusFilter === 'written' && writeAction !== 'written') continue;
@@ -1244,6 +1315,7 @@ function buildMatchCard(item) {
       ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
       ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
+      ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
     </div>
   `;

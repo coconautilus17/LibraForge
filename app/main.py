@@ -420,6 +420,8 @@ PROCESSING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Processing:\s+(.+)$")
 WRITING_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+Writing:\s+(.+)$")
 PASS1_PROGRESS_RE = re.compile(r"^PASS 1 PROGRESS:\s+completed\s+(\d+)/(\d+)\s*$")
 FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
+SEARCH_WORKERS_RE = re.compile(r"^Search workers:\s+(\d+)\s*$")
+GOODREADS_CIRCUIT_TRIPPED_SENTINEL = "GOODREADS_CIRCUIT_TRIPPED"
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
 DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
@@ -1173,6 +1175,8 @@ def initial_stats(threshold: float) -> dict[str, Any]:
         "skip_reasons": {},
         "error_count": 0,
         "provider_breakdown": {},
+        "search_workers": None,
+        "goodreads_circuit_tripped": False,
     }
 
 
@@ -1343,6 +1347,15 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             "Preparing run",
             f"Found {state.total} processing items",
         )
+        return
+
+    m = SEARCH_WORKERS_RE.match(line)
+    if m:
+        state.stats["search_workers"] = int(m.group(1))
+        return
+
+    if line == GOODREADS_CIRCUIT_TRIPPED_SENTINEL:
+        state.stats["goodreads_circuit_tripped"] = True
         return
 
     m = PASS1_PROGRESS_RE.match(line)

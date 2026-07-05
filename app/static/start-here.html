@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Start Here</title>
   <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260704-7" />
+  <link rel="stylesheet" href="/static/style.css?v=20260705-8" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -140,6 +140,10 @@
             <tr>
               <td><span class="match-provider-badge">Audible</span></td>
               <td>Which source produced the match: Audible, ABS, abs-agg (LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???), GraphicAudio, Soundbooth Theater, Goodreads, or Kindle.</td>
+            </tr>
+            <tr>
+              <td><span class="match-gr-limited-badge">GR LIMITED</span></td>
+              <td>Goodreads (abs-tract) was tried for this book but the circuit breaker was open (Goodreads was rate-limiting us), so the lookup was skipped rather than counted as a genuine no-match. A warning explains this and suggests a lower search-worker count when a run trips the breaker.</td>
             </tr>
             <tr>
               <td><span class="match-write-badge">written</span></td>

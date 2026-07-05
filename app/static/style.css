@@ -2969,7 +2969,8 @@ button.danger:hover:not(:disabled) {
 .match-mode-badge,
 .match-provider-badge,
 .match-manual-badge,
-.match-write-badge {
+.match-write-badge,
+.match-gr-limited-badge {
   display: inline-block;
   padding: 2px 7px;
   border-radius: 99px;
@@ -2978,11 +2979,12 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.match-score-badge    { background: var(--accent-soft);           color: var(--accent);  }
-.match-mode-badge     { background: var(--warning-soft);          color: var(--warning); }
-.match-provider-badge { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
-.match-manual-badge   { background: rgb(0 160 100 / 15%);         color: #00c878;        }
-.match-write-badge    { background: var(--accent-soft);           color: var(--accent);  }
+.match-score-badge      { background: var(--accent-soft);           color: var(--accent);  }
+.match-mode-badge       { background: var(--warning-soft);          color: var(--warning); }
+.match-provider-badge   { background: rgb(120 80 200 / 15%);        color: #b09eff;        }
+.match-manual-badge     { background: rgb(0 160 100 / 15%);         color: #00c878;        }
+.match-write-badge      { background: var(--accent-soft);           color: var(--accent);  }
+.match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
 
 /* Card list: 2-column grid */
 .mrep-controls {
