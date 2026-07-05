@@ -6148,8 +6148,13 @@ def get_latest_report() -> dict[str, Any]:
             report = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        cmd0 = (report.get("command") or [""])[0]
-        if "python" in cmd0 or "fixer" in cmd0:
+        # command[0] is always the interpreter ("python"/"python3") for every
+        # script, fixer or organizer -- checking it here always matched, so
+        # this never actually filtered out organizer reports. Check the
+        # script path itself instead, using the same naming convention
+        # is_fixer_script_name() uses elsewhere (startswith "audible-metadata-fixer").
+        command = report.get("command") or []
+        if any(Path(part).name.startswith("audible-metadata-fixer") for part in command):
             return report_for_api(report)
     raise HTTPException(status_code=404, detail="No fixer reports found")
 
