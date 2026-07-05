@@ -59,11 +59,22 @@ _GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
 
 
 def _pick_genre(genres: list[str]) -> str:
-    """Return the first genre that isn't a generic format label, or ''."""
+    """Return every genre that isn't a generic format label, joined by ", ".
+
+    Providers can return several real genres (e.g. ["Fantasy", "Romance"]) --
+    keep all of them, not just the first, so the joined result matches what a
+    provider's own listing shows instead of silently dropping the rest.
+    """
+    seen: set[str] = set()
+    kept: list[str] = []
     for g in genres:
-        if g.strip().lower() not in _GENRE_BLOCKLIST:
-            return g.strip()
-    return ""
+        cleaned = g.strip()
+        key = cleaned.lower()
+        if not cleaned or key in _GENRE_BLOCKLIST or key in seen:
+            continue
+        seen.add(key)
+        kept.append(cleaned)
+    return ", ".join(kept)
 
 
 M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
@@ -2430,7 +2441,7 @@ def _read_sidecar_book(source_path: Path) -> dict | None:
                 "sequence": marker_audible.get("sequence", ""),
                 "year": str(marker_audible.get("year", "") or ""),
                 "summary": "",
-                "genre": "",
+                "genre": marker_audible.get("genre", ""),
                 "asin": raw_asin if raw_asin != "NOREALASIN" else "",
             }
     except (json.JSONDecodeError, OSError):

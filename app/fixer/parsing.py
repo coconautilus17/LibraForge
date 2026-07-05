@@ -1314,6 +1314,7 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     album = sanitize_technical_labels(first_existing_tag(tags, ["album"]))
     artist = first_existing_tag(tags, ["album_artist", "artist", "author"])
     narrator = first_existing_tag(tags, ["composer", "narrator", "performer"])
+    genre = first_existing_tag(tags, ["genre"])
     track = first_existing_tag(tags, ["track", "tracknumber"])
     grouping = sanitize_technical_labels(
         first_existing_tag(tags, ["grouping", "contentgroup", "series"])
@@ -1381,6 +1382,7 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         "book_number_source": book_number_source,
         "author": clean_author_value(artist),
         "narrator": narrator,
+        "genre": genre,
         "album": album,
     }
 

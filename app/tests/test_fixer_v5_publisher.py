@@ -157,6 +157,23 @@ class FillMarkerHelperTests(unittest.TestCase):
         _merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
         self.assertEqual(filled, [])
 
+    def test_genre_is_filled_when_missing(self):
+        # genre was missing from field_map entirely, so it never respected
+        # fill-missing's "only write empty fields" contract -- it always took
+        # the fresh match value regardless of what the file already had.
+        current = {"title": "The Book", "artist": "Jane Doe"}
+        metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["genre"], "Fantasy")
+        self.assertIn("genre", filled)
+
+    def test_genre_is_preserved_when_already_present(self):
+        current = {"title": "The Book", "artist": "Jane Doe", "genre": "Horror"}
+        metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["genre"], "Horror")
+        self.assertNotIn("genre", filled)
+
 
 if __name__ == "__main__":
     unittest.main()

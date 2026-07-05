@@ -1654,7 +1654,7 @@ def should_skip_due_to_marker(
     return False, ""
 
 # Fields the fixer fills into file tags / metadata.json, in report order.
-FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin")
+FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin", "genre")
 
 def marker_real_asin(marker: dict) -> str:
     """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
@@ -1746,6 +1746,7 @@ def write_marker(
             "series": metadata.get("series", ""),
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
+            "genre": metadata.get("genre", ""),
             "cover_url": metadata.get("cover_url", ""),
             "duration_minutes": metadata.get("audible_duration_minutes"),
             "number_candidates": metadata.get("audible_number_candidates", []),
@@ -3752,6 +3753,7 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
         "narrator": ["composer"],
         "year":     ["date", "year"],
         "asin":     ["asin"],
+        "genre":    ["genre"],
     }
     merged = dict(metadata)
     filled: list[str] = []

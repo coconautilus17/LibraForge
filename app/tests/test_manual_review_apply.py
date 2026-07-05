@@ -1,9 +1,65 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import main
+
+
+class SidecarBookGenreTests(unittest.TestCase):
+    """_read_sidecar_book's single-file fallback (marker.audible, used when
+    there's no sidecar.book) used to hardcode genre to "" regardless of what
+    was actually embedded in the file -- Manual Review would show a blank
+    "Current" genre for a previously-processed single-file book even though
+    its real genre was written correctly."""
+
+    def test_single_file_marker_surfaces_real_genre(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            audio = folder / "Book.m4b"
+            audio.write_bytes(b"")
+            # _read_sidecar_book always reads the flat "libraforge.json" in the
+            # parent folder -- a file alone in its own dedicated folder (not
+            # sharing it with siblings) gets its marker written there directly.
+            marker_path = folder / "libraforge.json"
+            marker_path.write_text(json.dumps({
+                "marker": {
+                    "audible": {
+                        "chosen_title": "Book",
+                        "author": "Jane Doe",
+                        "genre": "Fantasy",
+                    },
+                },
+            }), encoding="utf-8")
+
+            result = main._read_sidecar_book(audio)
+
+        self.assertEqual(result["genre"], "Fantasy")
+
+
+class PickGenreTests(unittest.TestCase):
+    """_pick_genre used to return only the first non-generic genre, silently
+    dropping the rest of a provider's multi-genre response."""
+
+    def test_keeps_every_non_generic_genre(self):
+        self.assertEqual(
+            main._pick_genre(["Fantasy", "Romance", "Mystery"]),
+            "Fantasy, Romance, Mystery",
+        )
+
+    def test_drops_only_the_blocklisted_generic_label(self):
+        self.assertEqual(
+            main._pick_genre(["Audiobook", "Fantasy", "Romance"]),
+            "Fantasy, Romance",
+        )
+
+    def test_deduplicates_case_insensitively(self):
+        self.assertEqual(main._pick_genre(["Fantasy", "fantasy", "Romance"]), "Fantasy, Romance")
+
+    def test_all_generic_returns_empty(self):
+        self.assertEqual(main._pick_genre(["Audiobook", "Audiobooks"]), "")
 
 
 class ManualReviewApplyTests(unittest.TestCase):
