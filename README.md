@@ -225,10 +225,8 @@ localhost-only; do not change this without adding access control.
 
 ## Reporting issues
 
-Found a bug? See [docs/reporting-issues.md](docs/reporting-issues.md) for the fastest
-way to get it fixed - it comes down to enabling debug trace before you reproduce it,
-then attaching the run's JSON report and the debug log to a
-[GitHub issue](https://github.com/coconautilus17/LibraForge/issues).
+Found a bug? See [docs/reporting-issues.md](docs/reporting-issues.md): enable debug,
+reproduce, attach the JSON report + debug log, and point out the specific failure.
 
 ## Development
 

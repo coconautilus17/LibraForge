@@ -10,9 +10,9 @@ body:
         `[Author Name]` if needed.
 
         Before filing, see
-        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md) -
-        enabling debug trace and attaching the run's JSON report (redacted) is far more
-        useful here than a single excerpt.
+        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md):
+        enable debug, reproduce, attach the JSON report + debug log, and point out the
+        specific book/path that's wrong.
 
   - type: input
     id: book-title
