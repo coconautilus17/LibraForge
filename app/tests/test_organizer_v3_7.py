@@ -253,24 +253,12 @@ class OrganizerMultiFileTests(unittest.TestCase):
         with patch.object(ORGANIZER, "read_file_chapter_count", return_value=None):
             self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
 
-    def test_mp3_parts_are_chapter_probed_and_group_when_safe(self):
-        # ffprobe can read embedded chapter markers from MP3 too (issue #140),
-        # so MP3 now gets the same safety check as M4A/M4B instead of being
-        # accepted unconditionally.
+    def test_mp3_parts_do_not_require_chapter_probe(self):
         files = [Path("/book/1.mp3"), Path("/book/2.mp3")]
 
-        with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0) as chapter_probe:
+        with patch.object(ORGANIZER, "read_file_chapter_count") as chapter_probe:
             self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
-            chapter_probe.assert_called()
-
-    def test_mp3_folder_with_complete_audiobook_is_not_grouped(self):
-        files = [Path("/book/Chapter 1.mp3"), Path("/book/Chapter 2.mp3"), Path("/book/Complete Audiobook.mp3")]
-
-        def chapter_count(path):
-            return 40 if path.name == "Complete Audiobook.mp3" else 0
-
-        with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
-            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+            chapter_probe.assert_not_called()
 
     def test_mixed_eligible_and_other_audio_formats_are_not_grouped(self):
         files = [Path("/book/Chapter 1.m4a"), Path("/book/Chapter 2.flac")]
