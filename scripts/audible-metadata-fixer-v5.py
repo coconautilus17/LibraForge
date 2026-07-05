@@ -356,15 +356,19 @@ except (ValueError, OSError):
 # Formats that should be treated as a single audiobook when multiple files
 # exist in the same folder. MP3/OPUS/OGG were already supported for tagging;
 # M4A/M4B are included for chapter-split MP4 audiobook containers. OGG behaves
-# like OPUS here (no embedded MP4 chapters, no in-place mutagen tagging), so a
-# folder of per-chapter OGG files (e.g. "1301.ogg".."1900.ogg") groups as one
-# book and is written via an m4b-tool sidecar.
+# like OPUS here (not tagged in-place by mutagen), so a folder of per-chapter
+# OGG files (e.g. "1301.ogg".."1900.ogg") groups as one book and is written
+# via an m4b-tool sidecar.
 MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg", ".m4a", ".m4b"}
 
 # Formats that can commonly contain embedded chapter metadata. When these
 # appear in a multi-file folder, validate that each file is really a chapter
 # part and not a complete chapterized audiobook before grouping the folder.
-CHAPTER_METADATA_EXTENSIONS = {".m4a", ".m4b", ".mp4"}
+# ffprobe can read chapter markers from all of these (not just MP4-style
+# atoms -- e.g. ID3 CHAP/CTOC frames in podcast-style MP3s, or OGG/OPUS
+# comment-based chapters), so every multi-part-eligible format gets the same
+# safety check; none is exempted just because chapters are less common there.
+CHAPTER_METADATA_EXTENSIONS = {".m4a", ".m4b", ".mp4", ".mp3", ".ogg", ".opus"}
 MAX_CHAPTERS_PER_MULTI_PART_FILE = 1
 # Some split M4A chapter files contain tiny internal chapter atoms, usually
 # one wrapper chapter plus the actual chapter. Treat low-count embedded
@@ -1209,10 +1213,10 @@ def validate_multi_part_group_files(
 ) -> dict:
     """Validate an accepted multi-file audiobook candidate.
 
-    MP3/OPUS do not need chapter-metadata validation here. M4A/M4B/MP4 can
-    contain embedded chapters, so high chapter counts are treated as complete
-    audiobooks and are not grouped. Low embedded chapter counts are allowed
-    only for filenames that clearly look like chapter/section parts.
+    All CHAPTER_METADATA_EXTENSIONS formats can contain embedded chapters, so
+    high chapter counts are treated as complete audiobooks and are not
+    grouped. Low embedded chapter counts are allowed only for filenames that
+    clearly look like chapter/section parts.
     """
     chapter_count_reader = chapter_count_reader or read_file_chapter_count
     checked = []
@@ -2696,10 +2700,11 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
     run concurrently with `workers` threads. Results are written back to disk so
     the next run is instant.
 
-    All multi-part audio files are written to the cache regardless of type.
-    chapter_count is populated only for is_chapter_metadata_candidate files
-    (m4a/m4b/mp4); other types (ogg/mp3/opus) are recorded with chapter_count=None
-    so the cache covers every multi-file book for m4b merging and format support.
+    All multi-part audio files are written to the cache regardless of type,
+    so it covers every multi-file book for m4b merging and format support.
+    Every CHAPTER_METADATA_EXTENSIONS format is probed for a real
+    chapter_count; any other (currently none, since that set matches every
+    multi-part-eligible format) would be recorded with chapter_count=None.
     """
     grouped: dict[Path, list[Path]] = {}
     for fp in files:
