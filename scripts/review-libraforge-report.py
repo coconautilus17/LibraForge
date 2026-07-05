@@ -473,9 +473,18 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     # This match is being treated as correct -- these fields are just missing,
     # whether from bad source tagging or never having been set at all. Still
     # worth a second look before writing incomplete metadata to disk.
+    #
+    # match is the confirmed write payload -- it must NOT fall back to local
+    # here (unlike final_title/final_author, which fall back because the
+    # fixer's own upstream validation already guarantees match has *a* title
+    # and author whenever status is "matched", so the fallback never actually
+    # fires there in practice). local.series is often just noise parsed from
+    # the folder name (e.g. "001 Eric Vall - Pocket Dungeon") -- falling back
+    # to it here previously made this check never fire, since local almost
+    # always has *something* even when the confirmed match has no series.
     final_title = clean_text(match.get("title")) or local_title
     final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
-    final_series = clean_text(match.get("series")) or local_series
+    final_series = clean_text(match.get("series"))
     if not final_title:
         add_reason(reasons, "missing_title", "high", "No title available for this match.")
     if not final_author:

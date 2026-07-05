@@ -43,6 +43,23 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_series", codes)
 
+    def test_missing_series_is_flagged_even_with_noisy_local_series(self):
+        # The confirmed match having no series must decide this, not local --
+        # local.series is often just noise parsed from the folder name (e.g.
+        # "001 Eric Vall - Pocket Dungeon"). Falling back to it here silently
+        # swallowed every real case, since local almost always has *something*
+        # even when the confirmed match has no series at all.
+        item = self._base_item(
+            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": "001 Eric Vall - Pocket Dungeon"},
+            match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertIn("missing_series", codes)
+
     def test_present_series_is_not_flagged(self):
         item = self._base_item()
 
