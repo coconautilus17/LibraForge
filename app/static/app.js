@@ -1175,8 +1175,8 @@ async function probeSuspectReport(reportId) {
   btn.hidden = false;
   try {
     const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/suspect-review`);
-    if (res.ok) {
-      const data = await res.json();
+    const data = res.ok ? await res.json() : null;
+    if (data && data.exists !== false) {
       renderSuspectReport(data);
     } else {
       btn.textContent = 'Generate Suspicion Report';
