@@ -67,6 +67,39 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_missing_series_flagged_even_when_smart_skipped(self):
+        # missing_series describes the book's current state, not the risk of
+        # a fresh write -- it must fire even when write_action is not
+        # "would_write" (e.g. smart-skipped because an earlier run already
+        # wrote this same incomplete match, so there's nothing new to write
+        # this time). Confirmed against a real report: 6 of 9 items with no
+        # series on the confirmed match were smart-skipped and were being
+        # silently excluded entirely before this fix.
+        item = self._base_item(
+            write_action="smart_skipped",
+            match={"title": "Metal Mage 15", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertEqual(codes, {"missing_series"})
+
+    def test_mismatch_checks_do_not_fire_when_not_would_write(self):
+        # Everything except missing_title/author/series is specifically about
+        # the risk of a fresh write this run -- these must stay gated.
+        item = self._base_item(
+            write_action="smart_skipped",
+            score=0.1,
+            local={"title": "Totally Different Title", "author": "Eric Vall"},
+            match={"title": "Metal Mage 15", "author": "Eric Vall", "series": "Metal Mage"},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
+
     def test_missing_title_and_author_flagged(self):
         item = self._base_item(
             local={"title": "", "author": ""},

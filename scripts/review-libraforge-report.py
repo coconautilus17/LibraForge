@@ -338,163 +338,169 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     provider = clean_text(item.get("provider", ""))
     write_action = clean_text(item.get("write_action", ""))
     was_manually_applied = bool(item.get("was_manually_applied"))
-
-    # Only review items that will actually be written to disk.
-    # write_skipped / smart_skipped / skipped items are already handled by the fixer -- not a risk.
-    if write_action != "would_write":
-        return None
-
-    # --- Mode ---
-    if status == "matched":
-        if mode in {"none", "unknown"}:
-            add_reason(reasons, "unsafe_match", "high", f"Match mode is {mode!r}.", {"mode": mode})
-        elif mode == "series_only":
-            add_reason(reasons, "series_only_mode", "medium", "Series-only match: metadata may be incomplete.", {"mode": mode})
-
-    # --- Score -- provider-aware ---
-    is_gr = provider in GR_PROVIDERS
-    try:
-        score_f = float(score) if score is not None else None
-    except (TypeError, ValueError):
-        score_f = None
-
-    effective_threshold = args.goodreads_low_score if is_gr else args.low_score
-    already_flagged_for_skip = any(r["code"] in {"no_match", "score_below_minimum"} for r in reasons)
-    if score_f is not None and score_f < effective_threshold and not already_flagged_for_skip:
-        add_reason(
-            reasons, "low_score", "medium" if is_gr else "high",
-            f"Match score {score_f:.3f} is below {'Goodreads/Kindle' if is_gr else 'Audible'} review threshold {effective_threshold:.3f}.",
-            {"score": score_f, "threshold": effective_threshold, "provider": provider or "audible"},
-        )
-
-    # --- Duration -- only flag real mismatches ---
-    if duration_status == "mismatch":
-        add_reason(
-            reasons, "duration_mismatch", "high",
-            "Local and provider audio durations differ beyond the mismatch threshold.",
-            {
-                "duration_status": duration_status,
-                "local_minutes": local.get("duration_minutes"),
-                "match_minutes": match.get("duration_minutes"),
-                "diff_pct": match.get("duration_diff_pct"),
-            },
-        )
-    # "unknown" is expected for GR (no duration data); "acceptable"/"strong"/"perfect" are fine.
-
-    # --- Sequence ---
-    local_seq = normalize_number(local.get("sequence"))
-    match_seq = normalize_number(match.get("sequence"))
-
-    if local_seq and match_seq and local_seq != match_seq:
-        item_path_seq = item.get("path") or item.get("source") or ""
-        in_omnibus_folder = any(_MULTI_BOOK_KW.search(p) for p in Path(item_path_seq).parts if p) if item_path_seq else False
-        seq_evidence: dict[str, Any] = {"local_sequence": local_seq, "match_sequence": match_seq}
-        if in_omnibus_folder:
-            seq_evidence["omnibus_context"] = "Path contains an omnibus/multi-book folder; local_sequence may reflect folder position, not the actual book number."
-        add_reason(
-            reasons, "sequence_conflict", "high",
-            "Local sequence and provider sequence disagree.",
-            seq_evidence,
-        )
-    elif local_seq and not match_seq and mode == "full" and not is_gr:
-        # GR/Kindle routinely omit sequence -- don't flag.
-        # Omnibus/box-set/multi-book products on Audible also rarely carry a sequence number.
-        item_path = item.get("path") or item.get("source") or ""
-        if (local.get("series") or match.get("series")) and not is_multi_book(local, match, item_path):
-            add_reason(
-                reasons, "provider_missing_sequence", "medium",
-                "Local item has a sequence but the Audible match has none.",
-                {"local_sequence": local_seq},
-            )
-
-    # --- Visible number conflicts -- deduplicated by number value ---
-    visible_numbers = extract_any_visible_number(item, local, match)
-    # Group sources that agree on the same number value.
-    number_to_sources: dict[str, list[str]] = defaultdict(list)
-    for src, num in visible_numbers.items():
-        number_to_sources[num].append(src)
-
-    for number, sources in number_to_sources.items():
-        sources_str = ", ".join(sources)
-        if local_seq and number != local_seq:
-            corroborates_match = bool(match_seq and number == match_seq)
-            add_reason(
-                reasons, "visible_number_conflict", "high",
-                f"Visible number {number!r} (from {sources_str}) conflicts with local sequence {local_seq!r}."
-                + (" Visible number matches provider sequence -- local_sequence was likely extracted incorrectly." if corroborates_match else ""),
-                {"visible_number": number, "sources": sources, "local_sequence": local_seq,
-                 **({"corroborates_match_sequence": match_seq} if corroborates_match else {})},
-            )
-        elif match_seq and number != match_seq and not local_seq:
-            # Only flag match-sequence conflict when there's no local_seq (already covered above)
-            add_reason(
-                reasons, "visible_number_conflict", "medium",
-                f"Visible number {number!r} (from {sources_str}) conflicts with provider sequence {match_seq!r}.",
-                {"visible_number": number, "sources": sources, "match_sequence": match_seq},
-            )
-
-    # --- Title similarity ---
     local_title = clean_text(local.get("title"))
-    match_title = clean_text(match.get("title"))
-    if local_title and match_title:
-        title_score = title_similarity(local_title, match_title, clean_text(match.get("subtitle")))
-        if title_score < args.title_similarity:
-            add_reason(
-                reasons, "title_mismatch", "medium",
-                "Local title and provider title have low similarity.",
-                {"local_title": local_title, "match_title": match_title, "similarity": round(title_score, 3)},
-            )
-
-    # --- Series similarity -- skip folder-like local series or empty GR series ---
     local_series = clean_text(local.get("series"))
-    match_series = clean_text(match.get("series"))
-    if local_series and match_series and not is_folder_like_series(local_series):
-        series_score = series_similarity(local_series, match_series)
-        if series_score < args.series_similarity:
-            add_reason(
-                reasons, "series_mismatch", "high",
-                "Local series and provider series have low similarity.",
-                {"local_series": local_series, "match_series": match_series, "similarity": round(series_score, 3)},
-            )
 
-    # --- Author similarity ---
-    local_author = normalize_person_list(local.get("author"))
-    match_author = normalize_person_list(match.get("author"))
-    if local_author and match_author and local_author not in match_author and match_author not in local_author:
-        author_score = SequenceMatcher(None, local_author, match_author).ratio()
-        if author_score < args.author_similarity:
-            add_reason(
-                reasons, "author_mismatch", "high",
-                "Local author and provider author have low similarity.",
-                {"local_author": local.get("author"), "match_author": match.get("author"), "similarity": round(author_score, 3)},
-            )
-
-    # --- Missing title/author/series on a match this run will actually write ---
-    # This match is being treated as correct -- these fields are just missing,
-    # whether from bad source tagging or never having been set at all. Still
-    # worth a second look before writing incomplete metadata to disk.
+    # --- Missing title/author/series ---
+    # This describes the book's *current* state, not the risk of a fresh
+    # write -- it must fire even when write_action != "would_write" (e.g.
+    # smart-skipped because an earlier run already wrote this same
+    # incomplete match, so there's nothing new to write this time). Gating
+    # this behind write_action == "would_write" like every check below
+    # silently excluded the majority of real cases: on a real report, 6 of 9
+    # items with no series on the confirmed match were smart-skipped and
+    # never reviewed at all.
     #
-    # match is the confirmed write payload -- it must NOT fall back to local
-    # here (unlike final_title/final_author, which fall back because the
+    # match is the confirmed write payload -- final_series must NOT fall back
+    # to local (unlike final_title/final_author, which fall back because the
     # fixer's own upstream validation already guarantees match has *a* title
     # and author whenever status is "matched", so the fallback never actually
     # fires there in practice). local.series is often just noise parsed from
     # the folder name (e.g. "001 Eric Vall - Pocket Dungeon") -- falling back
     # to it here previously made this check never fire, since local almost
     # always has *something* even when the confirmed match has no series.
-    final_title = clean_text(match.get("title")) or local_title
-    final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
-    final_series = clean_text(match.get("series"))
-    if not final_title:
-        add_reason(reasons, "missing_title", "high", "No title available for this match.")
-    if not final_author:
-        add_reason(reasons, "missing_author", "high", "No author available for this match.")
-    if not final_series:
-        add_reason(
-            reasons, "missing_series", "high",
-            "No series set for this book (may be a standalone title, or missing source data).",
-            {"title": final_title, "author": final_author},
-        )
+    if status == "matched":
+        final_title = clean_text(match.get("title")) or local_title
+        final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
+        final_series = clean_text(match.get("series"))
+        if not final_title:
+            add_reason(reasons, "missing_title", "high", "No title available for this match.")
+        if not final_author:
+            add_reason(reasons, "missing_author", "high", "No author available for this match.")
+        if not final_series:
+            add_reason(
+                reasons, "missing_series", "high",
+                "No series set for this book (may be a standalone title, or missing source data).",
+                {"title": final_title, "author": final_author},
+            )
+
+    # Every check below is specifically about the risk of a write happening
+    # *this run* -- only review items that will actually be written to disk.
+    # write_skipped / smart_skipped / skipped items are already handled by
+    # the fixer, so there's no fresh risk for these checks to catch.
+    if write_action == "would_write":
+        # --- Mode ---
+        if status == "matched":
+            if mode in {"none", "unknown"}:
+                add_reason(reasons, "unsafe_match", "high", f"Match mode is {mode!r}.", {"mode": mode})
+            elif mode == "series_only":
+                add_reason(reasons, "series_only_mode", "medium", "Series-only match: metadata may be incomplete.", {"mode": mode})
+
+        # --- Score -- provider-aware ---
+        is_gr = provider in GR_PROVIDERS
+        try:
+            score_f = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            score_f = None
+
+        effective_threshold = args.goodreads_low_score if is_gr else args.low_score
+        already_flagged_for_skip = any(r["code"] in {"no_match", "score_below_minimum"} for r in reasons)
+        if score_f is not None and score_f < effective_threshold and not already_flagged_for_skip:
+            add_reason(
+                reasons, "low_score", "medium" if is_gr else "high",
+                f"Match score {score_f:.3f} is below {'Goodreads/Kindle' if is_gr else 'Audible'} review threshold {effective_threshold:.3f}.",
+                {"score": score_f, "threshold": effective_threshold, "provider": provider or "audible"},
+            )
+
+        # --- Duration -- only flag real mismatches ---
+        if duration_status == "mismatch":
+            add_reason(
+                reasons, "duration_mismatch", "high",
+                "Local and provider audio durations differ beyond the mismatch threshold.",
+                {
+                    "duration_status": duration_status,
+                    "local_minutes": local.get("duration_minutes"),
+                    "match_minutes": match.get("duration_minutes"),
+                    "diff_pct": match.get("duration_diff_pct"),
+                },
+            )
+        # "unknown" is expected for GR (no duration data); "acceptable"/"strong"/"perfect" are fine.
+
+        # --- Sequence ---
+        local_seq = normalize_number(local.get("sequence"))
+        match_seq = normalize_number(match.get("sequence"))
+
+        if local_seq and match_seq and local_seq != match_seq:
+            item_path_seq = item.get("path") or item.get("source") or ""
+            in_omnibus_folder = any(_MULTI_BOOK_KW.search(p) for p in Path(item_path_seq).parts if p) if item_path_seq else False
+            seq_evidence: dict[str, Any] = {"local_sequence": local_seq, "match_sequence": match_seq}
+            if in_omnibus_folder:
+                seq_evidence["omnibus_context"] = "Path contains an omnibus/multi-book folder; local_sequence may reflect folder position, not the actual book number."
+            add_reason(
+                reasons, "sequence_conflict", "high",
+                "Local sequence and provider sequence disagree.",
+                seq_evidence,
+            )
+        elif local_seq and not match_seq and mode == "full" and not is_gr:
+            # GR/Kindle routinely omit sequence -- don't flag.
+            # Omnibus/box-set/multi-book products on Audible also rarely carry a sequence number.
+            item_path = item.get("path") or item.get("source") or ""
+            if (local.get("series") or match.get("series")) and not is_multi_book(local, match, item_path):
+                add_reason(
+                    reasons, "provider_missing_sequence", "medium",
+                    "Local item has a sequence but the Audible match has none.",
+                    {"local_sequence": local_seq},
+                )
+
+        # --- Visible number conflicts -- deduplicated by number value ---
+        visible_numbers = extract_any_visible_number(item, local, match)
+        # Group sources that agree on the same number value.
+        number_to_sources: dict[str, list[str]] = defaultdict(list)
+        for src, num in visible_numbers.items():
+            number_to_sources[num].append(src)
+
+        for number, sources in number_to_sources.items():
+            sources_str = ", ".join(sources)
+            if local_seq and number != local_seq:
+                corroborates_match = bool(match_seq and number == match_seq)
+                add_reason(
+                    reasons, "visible_number_conflict", "high",
+                    f"Visible number {number!r} (from {sources_str}) conflicts with local sequence {local_seq!r}."
+                    + (" Visible number matches provider sequence -- local_sequence was likely extracted incorrectly." if corroborates_match else ""),
+                    {"visible_number": number, "sources": sources, "local_sequence": local_seq,
+                     **({"corroborates_match_sequence": match_seq} if corroborates_match else {})},
+                )
+            elif match_seq and number != match_seq and not local_seq:
+                # Only flag match-sequence conflict when there's no local_seq (already covered above)
+                add_reason(
+                    reasons, "visible_number_conflict", "medium",
+                    f"Visible number {number!r} (from {sources_str}) conflicts with provider sequence {match_seq!r}.",
+                    {"visible_number": number, "sources": sources, "match_sequence": match_seq},
+                )
+
+        # --- Title similarity ---
+        match_title = clean_text(match.get("title"))
+        if local_title and match_title:
+            title_score = title_similarity(local_title, match_title, clean_text(match.get("subtitle")))
+            if title_score < args.title_similarity:
+                add_reason(
+                    reasons, "title_mismatch", "medium",
+                    "Local title and provider title have low similarity.",
+                    {"local_title": local_title, "match_title": match_title, "similarity": round(title_score, 3)},
+                )
+
+        # --- Series similarity -- skip folder-like local series or empty GR series ---
+        match_series = clean_text(match.get("series"))
+        if local_series and match_series and not is_folder_like_series(local_series):
+            series_score = series_similarity(local_series, match_series)
+            if series_score < args.series_similarity:
+                add_reason(
+                    reasons, "series_mismatch", "high",
+                    "Local series and provider series have low similarity.",
+                    {"local_series": local_series, "match_series": match_series, "similarity": round(series_score, 3)},
+                )
+
+        # --- Author similarity ---
+        local_author = normalize_person_list(local.get("author"))
+        match_author = normalize_person_list(match.get("author"))
+        if local_author and match_author and local_author not in match_author and match_author not in local_author:
+            author_score = SequenceMatcher(None, local_author, match_author).ratio()
+            if author_score < args.author_similarity:
+                add_reason(
+                    reasons, "author_mismatch", "high",
+                    "Local author and provider author have low similarity.",
+                    {"local_author": local.get("author"), "match_author": match.get("author"), "similarity": round(author_score, 3)},
+                )
 
     if not reasons:
         return None
