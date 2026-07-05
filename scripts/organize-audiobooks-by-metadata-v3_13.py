@@ -185,6 +185,17 @@ class BookItem:
     source_path: Path
     audio_files: list[Path]
     representative: Path
+    # True when this "folder" item's audio_files is a proper subset of every
+    # audio file physically in source_path -- e.g. a recognized chapter-part
+    # sequence sharing its folder with a separately merged single-file edition
+    # of the same book. The move must relocate only audio_files (plus the
+    # group's own folder-level companions), not sweep the whole directory.
+    partial_group: bool = False
+    # Audio files physically in source_path but outside this group when
+    # partial_group is True (e.g. the separately merged single-file edition).
+    # Excluded from the folder move -- each is planned as its own loose_file
+    # item and must be left in place for that.
+    leftover_files: tuple[Path, ...] = ()
 
 
 def utc_now() -> str:
@@ -1803,6 +1814,188 @@ def numeric_part_sequence_files(file_paths: list[Path]) -> set[Path]:
     return best
 
 
+# Explicit, high-confidence "this file is one slice of a larger book" markers.
+# Centralised here so new spellings only need adding to this list. A *confident*
+# match (an explicit word, not just a bare trailing number) is strong enough to
+# group files even when they carry their own embedded chapters -- a dramatised
+# "Part 1" can legitimately hold 10+ chapters. New patterns must capture the
+# part index as group(1).
+_PART_MARKER_PATTERNS = [
+    re.compile(r"\bpart\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\bpt\.?\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b(?:disc|disk|cd)\s*0*(\d{1,3})\b", re.IGNORECASE),
+    re.compile(r"\b0*(\d{1,3})\s+of\s+0*\d{1,3}\b", re.IGNORECASE),  # "1 of 3"
+]
+
+
+def detect_part_marker(stem: str) -> tuple[str, int] | None:
+    """Return (identity_prefix, part_index) for an explicit multi-part marker.
+
+    Recognises 'Part N', 'Pt N', 'Disc/CD N' and 'N of M' anywhere in the name,
+    including inside parentheses. The last marker wins so a leading series number
+    (e.g. 'LotR1 - ... - Part 2') does not shadow the real part index. Returns
+    None when no confident marker is present.
+    """
+    best: tuple[int, int, int] | None = None  # (start, end, index)
+    for pattern in _PART_MARKER_PATTERNS:
+        for match in pattern.finditer(stem):
+            if best is None or match.start() > best[0]:
+                best = (match.start(), match.end(), int(match.group(1)))
+    if best is None:
+        return None
+    start, end, index = best
+    identity = normalize_part_filename(stem[:start] + " " + stem[end:])
+    return (identity or "_", index)
+
+
+def marker_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Recognize groups sharing an explicit part marker (Part N, Disc N, N of M).
+
+    Bare numeric prefixes (LotR1/LotR2) are deliberately not treated as parts
+    here to avoid merging distinct series entries -- only detect_part_marker's
+    explicit-word matches count.
+    """
+    grouped: dict[str, list[tuple[Path, int]]] = {}
+    for file_path in file_paths:
+        marker = detect_part_marker(file_path.stem)
+        if marker is None:
+            continue
+        identity, index = marker
+        grouped.setdefault(identity, []).append((file_path, index))
+
+    best: set[Path] = set()
+    for matches in grouped.values():
+        numbers = sorted(index for _path, index in matches)
+        if (
+            len(matches) >= 2
+            and len(numbers) == len(set(numbers))
+            and numbers[0] in {0, 1}
+            and numbers == list(range(numbers[0], numbers[0] + len(numbers)))
+        ):
+            candidate = {path for path, _index in matches}
+            if len(candidate) > len(best):
+                best = candidate
+    return best
+
+
+# Leading ordinal: a number at the *start* of the name followed by a separator
+# and a title, e.g. "0. Opening Credits ...", "10. Suspect Alchemy ...",
+# "001 - ...", "001 Author - Book Title - Chapter ...". The punctuation
+# separator is optional -- some release conventions (e.g. Eric Vall's Pocket
+# Dungeon rips) use a bare space between the zero-padded index and the rest
+# of the name. Leading zeros are tolerated; the captured value is the index.
+_LEADING_ORDINAL_RE = re.compile(r"^\s*0*(\d{1,4})\s*[.)\]_-]?\s+(?=\S)")
+
+MIN_LEADING_ORDINAL_PARTS = 3
+MIN_SHARED_IDENTITY_TOKENS = 2
+
+
+def _common_trailing_tokens(token_lists: list[list[str]]) -> list[str]:
+    """Longest run of tokens shared at the END of every token list."""
+    if not token_lists:
+        return []
+    common = list(token_lists[0])
+    for tokens in token_lists[1:]:
+        shared = 0
+        while (
+            shared < len(common)
+            and shared < len(tokens)
+            and common[-1 - shared] == tokens[-1 - shared]
+        ):
+            shared += 1
+        common = common[len(common) - shared:] if shared else []
+        if not common:
+            break
+    return common
+
+
+def _common_leading_tokens(token_lists: list[list[str]]) -> list[str]:
+    """Longest run of tokens shared at the START of every token list."""
+    if not token_lists:
+        return []
+    common = list(token_lists[0])
+    for tokens in token_lists[1:]:
+        shared = 0
+        while shared < len(common) and shared < len(tokens) and common[shared] == tokens[shared]:
+            shared += 1
+        common = common[:shared]
+        if not common:
+            break
+    return common
+
+
+def leading_ordinal_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Recognize ONE book split into many leading-ordinal-numbered parts.
+
+    Example: "0. Opening Credits - The Book - Narrator", "1. Time Starts Now -
+    The Book - Narrator", ... "71. ...". The varying part (chapter title) can
+    sit at either end of the shared identity -- after the number and before
+    the book/narrator suffix ("0. Opening Credits - The Book - Narrator"), or
+    after the book/author identity and before the chapter title ("001 Author
+    - The Book - Opening Credits"). Group them when:
+      * every matched ordinal is unique and they form a contiguous run from 0/1,
+      * there are at least MIN_LEADING_ORDINAL_PARTS of them,
+      * the parts share a common identity at the front OR the back (whichever
+        side isn't the varying chapter title).
+    Distinct full books that happen to be leading-numbered in one folder are
+    still rejected by the embedded-chapter-count check in
+    classify_multi_part_file_safety (a real book carries many chapters).
+    """
+    indexed: list[tuple[Path, int, list[str]]] = []
+    for file_path in file_paths:
+        match = _LEADING_ORDINAL_RE.match(file_path.stem)
+        if not match:
+            continue
+        rest = normalize_part_filename(file_path.stem[match.end():])
+        indexed.append((file_path, int(match.group(1)), rest.split()))
+
+    if len(indexed) < MIN_LEADING_ORDINAL_PARTS:
+        return set()
+
+    by_number: dict[int, tuple[Path, list[str]]] = {}
+    for file_path, number, tokens in indexed:
+        if number in by_number:
+            return set()  # duplicate index (e.g. two encodings of the same part)
+        by_number[number] = (file_path, tokens)
+
+    numbers = sorted(by_number)
+    if numbers[0] not in {0, 1}:
+        return set()
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return set()
+
+    token_lists = [by_number[n][1] for n in numbers]
+    shared_identity = max(
+        len(_common_trailing_tokens(token_lists)),
+        len(_common_leading_tokens(token_lists)),
+    )
+    if shared_identity < MIN_SHARED_IDENTITY_TOKENS:
+        return set()
+
+    return {by_number[n][0] for n in numbers}
+
+
+def part_sequence_files(file_paths: list[Path]) -> set[Path]:
+    """Files that belong to a recognized numbered part sequence.
+
+    Prefers an explicit part marker (Part N, Disc N, "N of M") found anywhere
+    in the name; falls back to trailing "- 01" numbering (shared-prefix
+    groups); falls back to leading-ordinal chapter splits.
+
+    This only narrows *which files* are considered as a candidate sequence --
+    it never overrides the embedded-chapter-count safety check. A filename
+    marker alone cannot distinguish a real multi-part split from two separate
+    (or duplicate) complete recordings that happen to share a naming token, so
+    a file with a real high chapter count is still rejected as a likely
+    complete audiobook regardless of what its name says.
+    """
+    return (
+        marker_sequence_files(file_paths)
+        or numeric_part_sequence_files(file_paths)
+        or leading_ordinal_sequence_files(file_paths)
+    )
+
+
 def classify_multi_part_file_safety(
     file_path: Path,
     chapter_count: int | None,
@@ -1832,7 +2025,7 @@ def classify_multi_part_file_safety(
 def validate_multi_part_group_files(file_paths: list[Path]) -> dict[str, Any]:
     checked_files = []
     unsafe_files = []
-    numeric_parts = numeric_part_sequence_files(file_paths)
+    numeric_parts = part_sequence_files(file_paths)
 
     for file_path in sorted(file_paths, key=natural_audio_sort_key):
         if file_path.suffix.lower() not in CHAPTER_METADATA_EXTENSIONS:
@@ -1935,7 +2128,7 @@ def looks_like_multi_file_book(audio_files: list[Path]) -> bool:
     if not suffixes or not suffixes <= MULTI_PART_AUDIO_EXTENSIONS:
         return False
 
-    numeric_parts = numeric_part_sequence_files(audio_files)
+    numeric_parts = part_sequence_files(audio_files)
     validation_files = (
         sorted(numeric_parts, key=natural_audio_sort_key)
         if len(numeric_parts) >= 2
@@ -1959,6 +2152,61 @@ def looks_like_multi_file_book(audio_files: list[Path]) -> bool:
             file=sys.stderr,
         )
     return False
+
+
+def is_multi_part_audio_candidate(source: Path) -> bool:
+    return source.suffix.lower() in MULTI_PART_AUDIO_EXTENSIONS
+
+
+def build_multi_part_group_map(files: list[Path]) -> dict[Path, list[Path]]:
+    """Ported from the fixer's build_multi_part_group_map: narrow each folder's
+    files down to the recognized part-sequence subset and validate only that
+    subset, so an unrelated extra file (e.g. a separately merged single-file
+    edition left alongside its own un-cleaned-up source chapters) can't poison
+    the whole folder's grouping decision.
+
+    Returns {folder: candidate_files} only for folders where a safe group was
+    found; the caller treats candidate_files as one book and anything else in
+    that same folder as its own separate item (mirroring the fixer's
+    build_processing_items).
+    """
+    grouped: dict[Path, list[Path]] = {}
+    for file_path in files:
+        if not is_multi_part_audio_candidate(file_path):
+            continue
+        grouped.setdefault(file_path.parent, []).append(file_path)
+
+    accepted: dict[Path, list[Path]] = {}
+    for parent, group_files in sorted(grouped.items()):
+        group_files = sorted(group_files, key=natural_audio_sort_key)
+        if len(group_files) <= 1:
+            continue
+
+        numeric_parts = part_sequence_files(group_files)
+        candidate_files = (
+            sorted(numeric_parts, key=natural_audio_sort_key)
+            if len(numeric_parts) >= 2
+            else group_files
+        )
+        validation = validate_multi_part_group_files(candidate_files)
+        if not validation.get("safe", True):
+            print(
+                f"WARNING: not grouping multi-file folder with embedded chapters: {parent}",
+                file=sys.stderr,
+            )
+            for unsafe in validation.get("unsafe_files", []):
+                print(
+                    "  unsafe: "
+                    f"{unsafe.get('file')} "
+                    f"chapters={unsafe.get('chapter_count')} "
+                    f"reason={unsafe.get('reason', '-')}",
+                    file=sys.stderr,
+                )
+            continue
+
+        accepted[parent] = candidate_files
+
+    return accepted
 
 
 def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
@@ -1986,8 +2234,20 @@ def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
             continue
 
         force_loose = current_path == root or contains_nested_supported_audio(current_path)
-        if not force_loose and looks_like_multi_file_book(audio_files):
-            items.append(BookItem("folder", current_path, audio_files, audio_files[0]))
+        group_files = None if force_loose else build_multi_part_group_map(audio_files).get(current_path)
+        if group_files:
+            # Mirrors the fixer's build_processing_items: the recognized group
+            # collapses to one representative item; anything else physically
+            # in this same folder (e.g. a separately merged single-file
+            # edition of the same book) is left as its own individual item
+            # instead of being silently swept in or silently dropped.
+            leftover_files = tuple(f for f in audio_files if f not in group_files)
+            items.append(BookItem(
+                "folder", current_path, group_files, group_files[0],
+                partial_group=bool(leftover_files), leftover_files=leftover_files,
+            ))
+            for audio_file in leftover_files:
+                items.append(BookItem("loose_file", audio_file, [audio_file], audio_file))
             continue
 
         for audio_file in audio_files:
@@ -3680,13 +3940,29 @@ def unique_target_path(target_dir: Path, filename: str, reserved_targets: set[Pa
         counter += 1
 
 
-def plan_folder_move(item: BookItem, target_dir: Path, reserved_targets: set[Path] | None = None, merge_existing: bool = False) -> tuple[bool, str]:
+def plan_folder_move(
+    item: BookItem,
+    target_dir: Path,
+    reserved_targets: set[Path] | None = None,
+    merge_existing: bool = False,
+    reserved_target_dirs: set[Path] | None = None,
+) -> tuple[bool, str]:
     reserved_targets = reserved_targets or set()
+    reserved_target_dirs = reserved_target_dirs or set()
     source_dir = item.source_path
     if source_dir == target_dir:
         return False, "already in target folder"
     if target_dir in reserved_targets:
         return False, "target folder already planned"
+    if target_dir in reserved_target_dirs:
+        # A different book item (folder or loose file) already claimed this same
+        # destination directory this run -- e.g. a chapter-split multi-part book
+        # and a separately merged single-file edition of the same book, sitting
+        # in different source locations but resolving to the identical target.
+        # Neither file would literally overwrite the other, but landing both in
+        # the same destination is a real duplicate-content conflict, not a safe
+        # automatic merge -- surface it for review instead of moving either.
+        return False, "target folder already used by another book this run"
     if target_dir.exists() and target_dir != source_dir and not merge_existing:
         return False, "target folder already exists"
     if source_dir in target_dir.parents:
@@ -3750,11 +4026,23 @@ def clean_loose_audio_filename(source_file: Path, target_dir: Path) -> str:
     return f"{stem}{source_file.suffix}"
 
 
-def plan_loose_file_move(item: BookItem, target_dir: Path, reserved_targets: set[Path] | None = None) -> tuple[bool, Path | None, str]:
+def plan_loose_file_move(
+    item: BookItem,
+    target_dir: Path,
+    reserved_targets: set[Path] | None = None,
+    reserved_target_dirs: set[Path] | None = None,
+) -> tuple[bool, Path | None, str]:
+    reserved_target_dirs = reserved_target_dirs or set()
     source_file = item.source_path
     filename = clean_loose_audio_filename(source_file, target_dir)
     if source_file.parent == target_dir and source_file.name == filename:
         return False, None, "already in target folder"
+    if target_dir in reserved_target_dirs:
+        # Same rationale as plan_folder_move: a different book item already
+        # claimed this destination directory this run. Uniquifying this file's
+        # name and nesting it alongside would silently mix two representations
+        # of what is likely the same book -- flag it instead.
+        return False, None, "target folder already used by another book this run"
     target_path = unique_target_path(target_dir, filename, reserved_targets)
     return True, target_path, ""
 
@@ -3813,7 +4101,25 @@ def execute_planned_move(
     original_parent = source.parent
 
     if move["kind"] == "folder":
-        if target.exists() and merge_existing_targets:
+        if move.get("partial_group"):
+            # This folder holds a recognized group *and* file(s) outside it
+            # (e.g. a separately merged single-file edition of the same book,
+            # planned as its own loose_file item) -- relocate everything
+            # except those leftover files and their own companions, and leave
+            # the source folder in place holding them.
+            excluded: set[Path] = set()
+            for leftover in move.get("leftover_files", []):
+                excluded.add(leftover)
+                excluded.update(companion_files_for(leftover))
+            target.mkdir(parents=True, exist_ok=True)
+            for child in sorted(source.iterdir()):
+                if child in excluded:
+                    continue
+                destination = target / child.name
+                if destination.exists():
+                    raise FileExistsError(f"target already exists: {destination}")
+                shutil.move(str(child), str(destination))
+        elif target.exists() and merge_existing_targets:
             move_folder_contents(source, target)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -3925,8 +4231,15 @@ def print_move(move: dict[str, Any]) -> None:
     # Folder moves show directory paths. Loose-file moves show the actual file
     # path so the report captures which specific file is moving (the parent
     # directory is ambiguous when the file lives directly in the scan root).
+    # Skipped-review moves never reach plan_loose_file_move, so their "target"
+    # is always the bare directory (like folder moves) regardless of kind --
+    # only an *accepted* loose_file move's target is a full file path needing
+    # .parent to show the containing directory.
     source_display = move["source"]
-    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
+    if move["kind"] == "folder" or move.get("skipped"):
+        target_display = move["target"]
+    else:
+        target_display = move["target"].parent
     print("  MOVE:")
     print(f"    {source_display}")
     print("  TO:")
@@ -4038,6 +4351,13 @@ def main() -> None:
     planned_moves: list[dict[str, Any]] = []
     skipped_reviews: list[dict[str, Any]] = []
     reserved_targets: set[Path] = set()
+    # Tracks destination directories claimed by any book item this run (folder
+    # or loose file), separately from reserved_targets' exact file/folder paths.
+    # A second, unrelated item resolving to the same destination directory --
+    # e.g. a chapter-split multi-part book and a separately merged single-file
+    # edition of the same book -- is a real duplicate-content conflict even
+    # though their exact file paths never collide.
+    reserved_target_dirs: set[Path] = set()
 
     skipped_unknown_author = 0
     skipped_already_target = 0
@@ -4116,7 +4436,11 @@ def main() -> None:
             continue
 
         if item.kind == "folder":
-            can_move, reason = plan_folder_move(item, target_dir, reserved_targets, merge_existing=args.merge_existing_targets)
+            can_move, reason = plan_folder_move(
+                item, target_dir, reserved_targets,
+                merge_existing=args.merge_existing_targets,
+                reserved_target_dirs=reserved_target_dirs,
+            )
             if not can_move:
                 if reason == "already in target folder":
                     skipped_already_target += 1
@@ -4132,6 +4456,7 @@ def main() -> None:
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
             reserved_targets.add(target_dir)
+            reserved_target_dirs.add(target_dir)
             folder_companions: list[Path] = []
             if not args.no_companions:
                 meta_sidecar = item.representative.with_name(
@@ -4147,16 +4472,31 @@ def main() -> None:
                 "companions": folder_companions,
                 "audio_count": len(item.audio_files),
                 "structure": structure_status,
+                "partial_group": item.partial_group,
+                "leftover_files": list(item.leftover_files),
             })
             continue
 
-        can_move, target_path, reason = plan_loose_file_move(item, target_dir, reserved_targets)
+        can_move, target_path, reason = plan_loose_file_move(
+            item, target_dir, reserved_targets, reserved_target_dirs=reserved_target_dirs,
+        )
         if not can_move:
-            skipped_already_target += 1
+            if reason == "already in target folder":
+                skipped_already_target += 1
+            else:
+                skipped_conflicts += 1
+                skipped_reviews.append(make_skipped_review_move(
+                    item=item,
+                    metadata=metadata,
+                    target=target_dir,
+                    reason=f"skipped conflict: {reason}",
+                    structure="skipped_conflict",
+                ))
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
             continue
         companions = [] if args.no_companions else companion_files_for(item.source_path)
         reserved_targets.add(target_path)
+        reserved_target_dirs.add(target_dir)
         planned_moves.append({
             "kind": item.kind,
             "source": item.source_path,
