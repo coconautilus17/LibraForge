@@ -224,7 +224,23 @@ class OrganizerMultiFileTests(unittest.TestCase):
         with patch.object(ORGANIZER, "read_file_chapter_count", return_value=1):
             self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
 
-    def test_zero_padded_numeric_m4b_parts_are_grouped(self):
+    def test_zero_padded_numeric_m4b_parts_group_alone(self):
+        files = [
+            Path("/book/Example Book 3 - 01.m4b"),
+            Path("/book/Example Book 3 - 02.m4b"),
+            Path("/book/Example Book 3 - 03.m4b"),
+        ]
+
+        with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0):
+            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
+
+    def test_numeric_parts_alongside_merged_edition_are_not_grouped(self):
+        # A recognized numbered-part sequence *plus* a separately merged
+        # complete edition in the same folder (e.g. an M4B Tool merge whose
+        # source chapters were never cleaned up) resolves to the same book
+        # identity as the parts, so it must not be silently swept into one
+        # folder move -- leave every file individual so the same-destination
+        # conflict check (see plan_folder_move/plan_loose_file_move) catches it.
         files = [
             Path("/book/Example Book 3 - 01.m4b"),
             Path("/book/Example Book 3 - 02.m4b"),
@@ -236,7 +252,7 @@ class OrganizerMultiFileTests(unittest.TestCase):
             return 30 if path.name == "Example Book 3.m4b" else 0
 
         with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
-            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
+            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
 
     def test_different_numeric_m4b_prefixes_are_not_grouped(self):
         files = [
@@ -266,6 +282,111 @@ class OrganizerMultiFileTests(unittest.TestCase):
         with patch.object(ORGANIZER, "read_file_chapter_count") as chapter_probe:
             self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
             chapter_probe.assert_not_called()
+
+    def test_leading_ordinal_bare_space_mp3_parts_are_grouped(self):
+        # Ported from the fixer's PR #154 fix: some release conventions (e.g.
+        # Eric Vall's Pocket Dungeon rips) use a bare space, not punctuation,
+        # between the zero-padded leading index and the rest of the name.
+        files = [
+            Path("/book/001 Eric Vall - Pocket Dungeon 2 - Opening Credits.mp3"),
+            Path("/book/002 Eric Vall - Pocket Dungeon 2 - Chapter 1.mp3"),
+            Path("/book/003 Eric Vall - Pocket Dungeon 2 - Chapter 2.mp3"),
+        ]
+
+        with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0):
+            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
+
+    def test_leading_ordinal_parts_alongside_merged_edition_are_not_grouped(self):
+        # The exact Pocket Dungeon scenario: a leading-ordinal chapter split
+        # plus a separately merged M4B whose source chapters were never
+        # cleaned up. Both represent the same book and must not be silently
+        # swept together.
+        files = [
+            Path("/book/001 Eric Vall - Pocket Dungeon 2 - Opening Credits.mp3"),
+            Path("/book/002 Eric Vall - Pocket Dungeon 2 - Chapter 1.mp3"),
+            Path("/book/003 Eric Vall - Pocket Dungeon 2 - Chapter 2.mp3"),
+            Path("/book/Eric Vall - [Pocket Dungeon-2] - Pocket Dungeon 2.m4b"),
+        ]
+
+        def chapter_count(path):
+            return 30 if path.suffix == ".m4b" else 0
+
+        with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
+            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+
+    def test_leading_ordinal_parts_alongside_merged_edition_not_grouped_for_ogg(self):
+        # Same shape, different formats -- proves the fix isn't mp3/m4b-specific
+        # but follows CHAPTER_METADATA_EXTENSIONS/MULTI_PART_AUDIO_EXTENSIONS.
+        files = [
+            Path("/book/001 Author - Book Two - Opening Credits.ogg"),
+            Path("/book/002 Author - Book Two - Chapter 1.ogg"),
+            Path("/book/003 Author - Book Two - Chapter 2.ogg"),
+            Path("/book/Author - Book Two (merged).m4a"),
+        ]
+
+        def chapter_count(path):
+            return 30 if path.suffix == ".m4a" else 0
+
+        with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
+            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+
+    def test_marker_sequence_files_ported_from_fixer(self):
+        files = [
+            Path("/book/My Book - Part 1.m4b"),
+            Path("/book/My Book - Part 2.m4b"),
+            Path("/book/My Book - Part 3.m4b"),
+        ]
+        self.assertEqual(set(files), ORGANIZER.marker_sequence_files(files))
+
+
+class OrganizerConflictDetectionTests(unittest.TestCase):
+    """A recognized multi-part group and a separately merged single-file
+    edition of the same book resolve to the identical destination directory.
+    Neither file literally overwrites the other, but landing both there is a
+    real duplicate-content conflict and must be surfaced, not silently
+    resolved by moving one and nesting the other alongside it."""
+
+    def _book_item(self, kind, source_path):
+        return ORGANIZER.BookItem(kind, source_path, [source_path], source_path)
+
+    def test_folder_move_conflicts_with_already_reserved_target_dir(self):
+        target_dir = Path("/library/Author/Series/Book 2")
+        item = self._book_item("folder", Path("/incoming/Book 2"))
+
+        can_move, reason = ORGANIZER.plan_folder_move(
+            item, target_dir, reserved_target_dirs={target_dir},
+        )
+
+        self.assertFalse(can_move)
+        self.assertIn("already used by another book", reason)
+
+    def test_loose_file_move_conflicts_with_already_reserved_target_dir(self):
+        target_dir = Path("/library/Author/Series/Book 2")
+        item = self._book_item(
+            "loose_file", Path("/incoming/Author - [Book-2] - Book 2.m4b"),
+        )
+
+        can_move, target_path, reason = ORGANIZER.plan_loose_file_move(
+            item, target_dir, reserved_target_dirs={target_dir},
+        )
+
+        self.assertFalse(can_move)
+        self.assertIsNone(target_path)
+        self.assertIn("already used by another book", reason)
+
+    def test_loose_file_move_succeeds_when_target_dir_not_reserved(self):
+        target_dir = Path("/library/Author/Series/Book 2")
+        item = self._book_item(
+            "loose_file", Path("/incoming/Author - [Book-2] - Book 2.m4b"),
+        )
+
+        can_move, target_path, reason = ORGANIZER.plan_loose_file_move(
+            item, target_dir, reserved_target_dirs=set(),
+        )
+
+        self.assertTrue(can_move)
+        self.assertEqual(target_path, target_dir / item.source_path.name)
+        self.assertEqual(reason, "")
 
 
 class OrganizerLooseFilenameTests(unittest.TestCase):
