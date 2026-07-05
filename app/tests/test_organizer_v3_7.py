@@ -224,23 +224,7 @@ class OrganizerMultiFileTests(unittest.TestCase):
         with patch.object(ORGANIZER, "read_file_chapter_count", return_value=1):
             self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
 
-    def test_zero_padded_numeric_m4b_parts_group_alone(self):
-        files = [
-            Path("/book/Example Book 3 - 01.m4b"),
-            Path("/book/Example Book 3 - 02.m4b"),
-            Path("/book/Example Book 3 - 03.m4b"),
-        ]
-
-        with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0):
-            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
-
-    def test_numeric_parts_alongside_merged_edition_are_not_grouped(self):
-        # A recognized numbered-part sequence *plus* a separately merged
-        # complete edition in the same folder (e.g. an M4B Tool merge whose
-        # source chapters were never cleaned up) resolves to the same book
-        # identity as the parts, so it must not be silently swept into one
-        # folder move -- leave every file individual so the same-destination
-        # conflict check (see plan_folder_move/plan_loose_file_move) catches it.
+    def test_zero_padded_numeric_m4b_parts_are_grouped(self):
         files = [
             Path("/book/Example Book 3 - 01.m4b"),
             Path("/book/Example Book 3 - 02.m4b"),
@@ -252,7 +236,7 @@ class OrganizerMultiFileTests(unittest.TestCase):
             return 30 if path.name == "Example Book 3.m4b" else 0
 
         with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
-            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+            self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
 
     def test_different_numeric_m4b_prefixes_are_not_grouped(self):
         files = [
@@ -296,39 +280,120 @@ class OrganizerMultiFileTests(unittest.TestCase):
         with patch.object(ORGANIZER, "read_file_chapter_count", return_value=0):
             self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
 
-    def test_leading_ordinal_parts_alongside_merged_edition_are_not_grouped(self):
+    def test_leading_ordinal_group_map_excludes_merged_edition(self):
         # The exact Pocket Dungeon scenario: a leading-ordinal chapter split
         # plus a separately merged M4B whose source chapters were never
-        # cleaned up. Both represent the same book and must not be silently
-        # swept together.
-        files = [
-            Path("/book/001 Eric Vall - Pocket Dungeon 2 - Opening Credits.mp3"),
-            Path("/book/002 Eric Vall - Pocket Dungeon 2 - Chapter 1.mp3"),
-            Path("/book/003 Eric Vall - Pocket Dungeon 2 - Chapter 2.mp3"),
-            Path("/book/Eric Vall - [Pocket Dungeon-2] - Pocket Dungeon 2.m4b"),
+        # cleaned up. build_multi_part_group_map must isolate just the three
+        # chapter parts -- the merged edition is a real, complete audiobook
+        # (high chapter count) and must not be pulled into the group, but its
+        # presence also must not block the parts from being recognized.
+        folder = Path("/book")
+        parts = [
+            folder / "001 Eric Vall - Pocket Dungeon 2 - Opening Credits.mp3",
+            folder / "002 Eric Vall - Pocket Dungeon 2 - Chapter 1.mp3",
+            folder / "003 Eric Vall - Pocket Dungeon 2 - Chapter 2.mp3",
         ]
+        merged = folder / "Eric Vall - [Pocket Dungeon-2] - Pocket Dungeon 2.m4b"
 
         def chapter_count(path):
             return 30 if path.suffix == ".m4b" else 0
 
         with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
-            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+            group_map = ORGANIZER.build_multi_part_group_map(parts + [merged])
 
-    def test_leading_ordinal_parts_alongside_merged_edition_not_grouped_for_ogg(self):
+        self.assertEqual(group_map.get(folder), sorted(parts, key=ORGANIZER.natural_audio_sort_key))
+
+    def test_leading_ordinal_group_map_excludes_merged_edition_for_ogg(self):
         # Same shape, different formats -- proves the fix isn't mp3/m4b-specific
         # but follows CHAPTER_METADATA_EXTENSIONS/MULTI_PART_AUDIO_EXTENSIONS.
-        files = [
-            Path("/book/001 Author - Book Two - Opening Credits.ogg"),
-            Path("/book/002 Author - Book Two - Chapter 1.ogg"),
-            Path("/book/003 Author - Book Two - Chapter 2.ogg"),
-            Path("/book/Author - Book Two (merged).m4a"),
+        folder = Path("/book")
+        parts = [
+            folder / "001 Author - Book Two - Opening Credits.ogg",
+            folder / "002 Author - Book Two - Chapter 1.ogg",
+            folder / "003 Author - Book Two - Chapter 2.ogg",
         ]
+        merged = folder / "Author - Book Two (merged).m4a"
 
         def chapter_count(path):
             return 30 if path.suffix == ".m4a" else 0
 
         with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
-            self.assertFalse(ORGANIZER.looks_like_multi_file_book(files))
+            group_map = ORGANIZER.build_multi_part_group_map(parts + [merged])
+
+        self.assertEqual(group_map.get(folder), sorted(parts, key=ORGANIZER.natural_audio_sort_key))
+
+    def test_build_book_items_splits_group_from_merged_edition(self):
+        # End-to-end: the recognized group becomes one "folder" BookItem, and
+        # the separately merged edition sharing its folder becomes its own
+        # loose_file item -- mirroring the fixer's build_processing_items,
+        # instead of either sweeping them together or exploding every file.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            book_dir = root / "Eric Vall - Pocket Dungeon 1-6 (64k)" / "Pocket Dungeon" / "Pocket Dungeon 2"
+            book_dir.mkdir(parents=True)
+            part_names = [
+                "001 Eric Vall - Pocket Dungeon 2 - Opening Credits.mp3",
+                "002 Eric Vall - Pocket Dungeon 2 - Chapter 1.mp3",
+                "003 Eric Vall - Pocket Dungeon 2 - Chapter 2.mp3",
+            ]
+            for name in part_names:
+                (book_dir / name).touch()
+            merged = book_dir / "Eric Vall - [Pocket Dungeon-2] - Pocket Dungeon 2.m4b"
+            merged.touch()
+
+            def chapter_count(path):
+                return 30 if path.suffix == ".m4b" else 0
+
+            with patch.object(ORGANIZER, "read_file_chapter_count", side_effect=chapter_count):
+                items = ORGANIZER.build_book_items(root, root)
+
+        folder_items = [item for item in items if item.kind == "folder"]
+        loose_items = [item for item in items if item.kind == "loose_file"]
+
+        self.assertEqual(len(folder_items), 1)
+        self.assertTrue(folder_items[0].partial_group)
+        self.assertEqual(len(folder_items[0].audio_files), 3)
+        self.assertEqual(folder_items[0].leftover_files, (merged,))
+
+        self.assertEqual(len(loose_items), 1)
+        self.assertEqual(loose_items[0].source_path, merged)
+
+    def test_execute_partial_group_move_leaves_leftover_file_behind(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            book_dir = root / "Pocket Dungeon 2"
+            book_dir.mkdir()
+            parts = []
+            for name in ["001 Opening Credits.mp3", "002 Chapter 1.mp3", "003 Chapter 2.mp3"]:
+                path = book_dir / name
+                path.touch()
+                parts.append(path)
+            merged = book_dir / "Pocket Dungeon 2.m4b"
+            merged.touch()
+            (book_dir / "libraforge.json").write_text("{}", encoding="utf-8")
+            (book_dir / "cover.jpg").touch()
+
+            target = root / "Author" / "Pocket Dungeon" / "Book 2"
+            move = {
+                "kind": "folder",
+                "source": book_dir,
+                "target": target,
+                "companions": [],
+                "partial_group": True,
+                "leftover_files": [merged],
+            }
+
+            ORGANIZER.execute_planned_move(
+                move, merge_existing_targets=False, remove_empty_dirs=False, root=root,
+            )
+
+            for path in parts:
+                self.assertTrue((target / path.name).exists())
+            self.assertTrue((target / "libraforge.json").exists())
+            self.assertTrue((target / "cover.jpg").exists())
+
+            self.assertTrue(merged.exists(), "leftover merged file must stay in the source folder")
+            self.assertFalse((target / merged.name).exists())
 
     def test_marker_sequence_files_ported_from_fixer(self):
         files = [
@@ -387,6 +452,56 @@ class OrganizerConflictDetectionTests(unittest.TestCase):
         self.assertTrue(can_move)
         self.assertEqual(target_path, target_dir / item.source_path.name)
         self.assertEqual(reason, "")
+
+
+class OrganizerPrintMoveTests(unittest.TestCase):
+    """A skipped-review move's "target" is always the bare directory (planning
+    never reaches plan_loose_file_move to append a filename), unlike an
+    accepted loose_file move whose "target" is the full file path. print_move
+    must not truncate the bare directory as if it were a file path -- that
+    silently dropped the last path segment (e.g. "Book 2") for every skipped
+    loose_file review, which is exactly what made the group-vs-merged-edition
+    conflict look like it was landing on the wrong, unrelated directory."""
+
+    def _capture(self, move):
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ORGANIZER.print_move(move)
+        return buf.getvalue()
+
+    def test_skipped_loose_file_review_shows_full_target_directory(self):
+        move = {
+            "kind": "loose_file",
+            "source": Path("/incoming/Book.m4b"),
+            "target": Path("/library/Author/Series/Book 2"),
+            "metadata": {"title": "Book 2", "author": "Author"},
+            "audio_count": 1,
+            "structure": "skipped_conflict",
+            "skipped": True,
+        }
+
+        output = self._capture(move)
+
+        self.assertIn("/library/Author/Series/Book 2", output)
+        self.assertNotIn("/library/Author/Series\n", output)
+
+    def test_accepted_loose_file_move_shows_containing_directory(self):
+        move = {
+            "kind": "loose_file",
+            "source": Path("/incoming/Book.m4b"),
+            "target": Path("/library/Author/Series/Book 2/Book 2.m4b"),
+            "metadata": {"title": "Book 2", "author": "Author"},
+            "audio_count": 1,
+            "structure": "new",
+        }
+
+        output = self._capture(move)
+
+        self.assertIn("/library/Author/Series/Book 2\n", output)
+        self.assertNotIn("Book 2.m4b\n", output)
 
 
 class OrganizerLooseFilenameTests(unittest.TestCase):

@@ -185,6 +185,17 @@ class BookItem:
     source_path: Path
     audio_files: list[Path]
     representative: Path
+    # True when this "folder" item's audio_files is a proper subset of every
+    # audio file physically in source_path -- e.g. a recognized chapter-part
+    # sequence sharing its folder with a separately merged single-file edition
+    # of the same book. The move must relocate only audio_files (plus the
+    # group's own folder-level companions), not sweep the whole directory.
+    partial_group: bool = False
+    # Audio files physically in source_path but outside this group when
+    # partial_group is True (e.g. the separately merged single-file edition).
+    # Excluded from the folder move -- each is planned as its own loose_file
+    # item and must be left in place for that.
+    leftover_files: tuple[Path, ...] = ()
 
 
 def utc_now() -> str:
@@ -2123,24 +2134,6 @@ def looks_like_multi_file_book(audio_files: list[Path]) -> bool:
         if len(numeric_parts) >= 2
         else audio_files
     )
-
-    if len(validation_files) != len(audio_files):
-        # The folder holds a recognized chapter-part sequence *and* at least one
-        # audio file outside it -- e.g. a separately merged single-file edition
-        # (any M4B/M4A/MP3/OGG/OPUS combination, not just MP3+M4B) left alongside
-        # its own un-cleaned-up source chapters. Both represent the same book
-        # identity and would resolve to the same destination, so don't silently
-        # pick one to group and drop the other: leave every file in this folder
-        # as its own item so they all surface individually, and rely on the
-        # same-destination conflict check (matching target dirs) to catch and
-        # flag the collision for manual review instead of moving anything.
-        print(
-            "WARNING: not grouping multi-file folder: extra audio file(s) found "
-            f"outside the recognized part sequence: {audio_files[0].parent}",
-            file=sys.stderr,
-        )
-        return False
-
     validation = validate_multi_part_group_files(validation_files)
     if validation["safe"]:
         return True
@@ -2159,6 +2152,61 @@ def looks_like_multi_file_book(audio_files: list[Path]) -> bool:
             file=sys.stderr,
         )
     return False
+
+
+def is_multi_part_audio_candidate(source: Path) -> bool:
+    return source.suffix.lower() in MULTI_PART_AUDIO_EXTENSIONS
+
+
+def build_multi_part_group_map(files: list[Path]) -> dict[Path, list[Path]]:
+    """Ported from the fixer's build_multi_part_group_map: narrow each folder's
+    files down to the recognized part-sequence subset and validate only that
+    subset, so an unrelated extra file (e.g. a separately merged single-file
+    edition left alongside its own un-cleaned-up source chapters) can't poison
+    the whole folder's grouping decision.
+
+    Returns {folder: candidate_files} only for folders where a safe group was
+    found; the caller treats candidate_files as one book and anything else in
+    that same folder as its own separate item (mirroring the fixer's
+    build_processing_items).
+    """
+    grouped: dict[Path, list[Path]] = {}
+    for file_path in files:
+        if not is_multi_part_audio_candidate(file_path):
+            continue
+        grouped.setdefault(file_path.parent, []).append(file_path)
+
+    accepted: dict[Path, list[Path]] = {}
+    for parent, group_files in sorted(grouped.items()):
+        group_files = sorted(group_files, key=natural_audio_sort_key)
+        if len(group_files) <= 1:
+            continue
+
+        numeric_parts = part_sequence_files(group_files)
+        candidate_files = (
+            sorted(numeric_parts, key=natural_audio_sort_key)
+            if len(numeric_parts) >= 2
+            else group_files
+        )
+        validation = validate_multi_part_group_files(candidate_files)
+        if not validation.get("safe", True):
+            print(
+                f"WARNING: not grouping multi-file folder with embedded chapters: {parent}",
+                file=sys.stderr,
+            )
+            for unsafe in validation.get("unsafe_files", []):
+                print(
+                    "  unsafe: "
+                    f"{unsafe.get('file')} "
+                    f"chapters={unsafe.get('chapter_count')} "
+                    f"reason={unsafe.get('reason', '-')}",
+                    file=sys.stderr,
+                )
+            continue
+
+        accepted[parent] = candidate_files
+
+    return accepted
 
 
 def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
@@ -2186,8 +2234,20 @@ def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
             continue
 
         force_loose = current_path == root or contains_nested_supported_audio(current_path)
-        if not force_loose and looks_like_multi_file_book(audio_files):
-            items.append(BookItem("folder", current_path, audio_files, audio_files[0]))
+        group_files = None if force_loose else build_multi_part_group_map(audio_files).get(current_path)
+        if group_files:
+            # Mirrors the fixer's build_processing_items: the recognized group
+            # collapses to one representative item; anything else physically
+            # in this same folder (e.g. a separately merged single-file
+            # edition of the same book) is left as its own individual item
+            # instead of being silently swept in or silently dropped.
+            leftover_files = tuple(f for f in audio_files if f not in group_files)
+            items.append(BookItem(
+                "folder", current_path, group_files, group_files[0],
+                partial_group=bool(leftover_files), leftover_files=leftover_files,
+            ))
+            for audio_file in leftover_files:
+                items.append(BookItem("loose_file", audio_file, [audio_file], audio_file))
             continue
 
         for audio_file in audio_files:
@@ -4041,7 +4101,25 @@ def execute_planned_move(
     original_parent = source.parent
 
     if move["kind"] == "folder":
-        if target.exists() and merge_existing_targets:
+        if move.get("partial_group"):
+            # This folder holds a recognized group *and* file(s) outside it
+            # (e.g. a separately merged single-file edition of the same book,
+            # planned as its own loose_file item) -- relocate everything
+            # except those leftover files and their own companions, and leave
+            # the source folder in place holding them.
+            excluded: set[Path] = set()
+            for leftover in move.get("leftover_files", []):
+                excluded.add(leftover)
+                excluded.update(companion_files_for(leftover))
+            target.mkdir(parents=True, exist_ok=True)
+            for child in sorted(source.iterdir()):
+                if child in excluded:
+                    continue
+                destination = target / child.name
+                if destination.exists():
+                    raise FileExistsError(f"target already exists: {destination}")
+                shutil.move(str(child), str(destination))
+        elif target.exists() and merge_existing_targets:
             move_folder_contents(source, target)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -4153,8 +4231,15 @@ def print_move(move: dict[str, Any]) -> None:
     # Folder moves show directory paths. Loose-file moves show the actual file
     # path so the report captures which specific file is moving (the parent
     # directory is ambiguous when the file lives directly in the scan root).
+    # Skipped-review moves never reach plan_loose_file_move, so their "target"
+    # is always the bare directory (like folder moves) regardless of kind --
+    # only an *accepted* loose_file move's target is a full file path needing
+    # .parent to show the containing directory.
     source_display = move["source"]
-    target_display = move["target"] if move["kind"] == "folder" else move["target"].parent
+    if move["kind"] == "folder" or move.get("skipped"):
+        target_display = move["target"]
+    else:
+        target_display = move["target"].parent
     print("  MOVE:")
     print(f"    {source_display}")
     print("  TO:")
@@ -4387,6 +4472,8 @@ def main() -> None:
                 "companions": folder_companions,
                 "audio_count": len(item.audio_files),
                 "structure": structure_status,
+                "partial_group": item.partial_group,
+                "leftover_files": list(item.leftover_files),
             })
             continue
 
