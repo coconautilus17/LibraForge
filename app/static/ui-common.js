@@ -280,7 +280,80 @@
     generic_omnibus_title: 'Title',
   };
 
+  // Cross-item suspects (duplicate ASIN / duplicate author+series+sequence
+  // across separate local files) have no single local/match pair -- the real
+  // evidence is the list of related files in `related_paths` and the reason's
+  // `evidence.titles`/`evidence.asin`. The normal compare-table render path
+  // leaves these cards with an empty "(cross-item)" header and no rows, so
+  // they get their own render path that lists the actual files involved.
+  function buildCrossItemSuspectCard(item) {
+    const sev = item.severity || 'info';
+    const sevCls = `sev-${sev}`;
+    const reasons = item.reasons || [];
+    const relatedPaths = item.related_paths || [];
+    const evidence = (reasons[0] && reasons[0].evidence) || {};
+    const titles = (evidence.titles || []).filter(Boolean);
+    const asin = evidence.asin || '';
+
+    const headerLabel = titles.length ? titles.join(' / ')
+      : (relatedPaths.length ? `${relatedPaths.length} related files` : '(cross-item)');
+
+    const article = document.createElement('article');
+    article.className = `mrep-card suspect-mrep-card ${sevCls}`;
+
+    const details = document.createElement('details');
+    details.className = 'mrep-details';
+
+    const summary = document.createElement('summary');
+    summary.className = 'mrep-head';
+    summary.innerHTML = `
+      <span class="suspect-sev-badge ${sevCls}">${escapeHtml(sev)}</span>
+      <span class="mrep-title">${escapeHtml(headerLabel)}</span>
+      <div class="mrep-badges">
+        ${asin ? `<span class="match-provider-badge">ASIN ${escapeHtml(asin)}</span>` : ''}
+        <span class="suspect-trigger-badge">${relatedPaths.length} file${relatedPaths.length === 1 ? '' : 's'}</span>
+      </div>
+    `;
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'mrep-body';
+
+    const pathsHtml = relatedPaths.length
+      ? relatedPaths.map((p) => {
+          // Book identity usually lives in the folder name, not the filename
+          // (e.g. "cover.m4b" repeated across every book) -- show the last
+          // two segments so the two files can actually be told apart.
+          const segments = p ? p.split('/').filter(Boolean) : [];
+          const shown = segments.length ? segments.slice(-2).join('/') : '(unknown path)';
+          return `<li title="${escapeHtml(p)}">${escapeHtml(shown)}</li>`;
+        }).join('')
+      : '<li>(no related files recorded)</li>';
+
+    const reasonsHtml = reasons.map(r =>
+      `<li><strong>${escapeHtml(r.code.replace(/_/g, ' '))}</strong>: ${escapeHtml(r.message)}</li>`
+    ).join('');
+
+    body.innerHTML = `
+      <div class="suspect-cross-item-paths">
+        <strong>Related files</strong>
+        <ul>${pathsHtml}</ul>
+      </div>
+      <div class="suspect-reasons-section">
+        <strong>Flags</strong>
+        <ul>${reasonsHtml}</ul>
+        <div class="suspect-recommendation">Recommendation: <em>${escapeHtml(item.recommendation || '')}</em></div>
+      </div>
+    `;
+
+    details.appendChild(body);
+    article.appendChild(details);
+    return article;
+  }
+
   function buildSuspectCard(item) {
+    if (item.status === 'cross_item') return buildCrossItemSuspectCard(item);
+
     const sev = item.severity || 'info';
     const sevCls = `sev-${sev}`;
     const local = item.local || {};
@@ -293,7 +366,7 @@
     const triggerLabels = [...new Set(reasons.map(r => SUSPECT_REASON_FIELDS[r.code]).filter(Boolean))];
     const triggerBadgesHtml = triggerLabels.map(l => `<span class="suspect-trigger-badge">${escapeHtml(l)}</span>`).join('');
 
-    const pathName = item.path ? item.path.split('/').pop() : '(cross-item)';
+    const pathName = item.path ? item.path.split('/').pop() : '(unknown)';
     const bookName = local.title || pathName;
     const scorePct = item.score != null && item.score > 0 ? Math.round(item.score * 100) : null;
     const providerLabel = item.provider || '';
