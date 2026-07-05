@@ -57,11 +57,7 @@ AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".
 # grouped (e.g. a folder of per-chapter .ogg files) is recognized as one
 # multi-file book here too.
 MULTI_PART_AUDIO_EXTENSIONS = {".mp3", ".opus", ".ogg", ".m4a", ".m4b"}
-# ffprobe can read chapter markers from all of these (not just MP4-style
-# atoms -- e.g. ID3 CHAP/CTOC frames in podcast-style MP3s), so every
-# multi-part-eligible format gets the same embedded-chapter safety check.
-# Keep in sync with the fixer's CHAPTER_METADATA_EXTENSIONS.
-CHAPTER_METADATA_EXTENSIONS = {".m4a", ".m4b", ".mp4", ".mp3", ".ogg", ".opus"}
+CHAPTER_METADATA_EXTENSIONS = {".m4a", ".m4b", ".mp4"}
 MAX_CHAPTERS_PER_MULTI_PART_FILE = 1
 MAX_LOW_EMBEDDED_CHAPTERS_PER_NAMED_PART_FILE = 3
 IGNORED_EXTENSIONS: set[str] = set()
