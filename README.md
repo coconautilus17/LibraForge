@@ -43,7 +43,12 @@ Searches Audible (or another provider) and writes matched metadata to your files
 - **Providers:** Audible (direct), **Audiobookshelf** (via its own search API),
   **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads /
   Kindle** (via `abs-tract`) as an opt-in fallback for no-match, series-only, or
-  low-score books.
+  low-score books. Goodreads rate-limits aggressively; a circuit breaker opens after
+  repeated failures and skips Goodreads/Kindle lookups for a cooldown window rather than
+  hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
+  the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
+  popup warns if you enabled the fallback with more than 5 search workers, since that's
+  what usually trips it.
 
 ### M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
@@ -55,7 +60,16 @@ rate and channel layout.
 Plans and applies `Author/Series/Book N - Title` destination moves with a dry-run
 preview and structured review reasons. **Index library and exit** rebuilds the
 destination-structure cache on its own. Shares the same Suspect Report widget as
-Metadata Forge to flag planned moves worth a second look.
+Metadata Forge (shown above the planned moves) to flag moves worth a second look.
+
+- **Skip patterns:** one pattern per line, matched case-insensitively against the source
+  path or inferred metadata; matching books are excluded from the plan entirely.
+- **Per-move failure isolation:** a blocked path, permission error, or vanished source no
+  longer aborts the whole run - each move fails independently, and a "Moves
+  succeeded/failed" summary with a Failed Moves list shows exactly what didn't land.
+- **No-sidecars warning:** if a scan finds zero fixer sidecars, Folder Forge asks
+  "Fixer was not applied - Continue anyway?" before planning, since move quality for
+  multi-file books leans on fixer-written sidecar metadata.
 
 ### Library Downloader (`/library`)
 Browse your Audible library and download purchases straight into a mounted folder,
@@ -64,6 +78,10 @@ no external tooling. Supports AAX (`activation_bytes`) and AAXC (per-file vouche
 Books already in your library are flagged as **Owned**; a per-run or per-book rule
 controls duplicate handling (Keep both / Replace), and an optional pass auto-organises
 the downloads when finished.
+
+> **Known issue:** downloads can currently fail due to a temporary issue with Amazon's
+> activation API (`activation_bytes`). This is on Amazon's side, not LibraForge's - if a
+> download fails, wait a bit and try again.
 
 ### Settings (`/settings`)
 One consolidated page for everything global: Appearance, Title noise, Publishers,
@@ -204,6 +222,13 @@ authentication - anyone who can reach the port has full access. Run it behind
 [Tailscale](https://tailscale.com/), a VPN, or a reverse proxy with authentication
 (e.g. Caddy `basicauth`, Authelia). The default `127.0.0.1` binding keeps it
 localhost-only; do not change this without adding access control.
+
+## Reporting issues
+
+Found a bug? See [docs/reporting-issues.md](docs/reporting-issues.md) for the fastest
+way to get it fixed - it comes down to enabling debug trace before you reproduce it,
+then attaching the run's JSON report and the debug log to a
+[GitHub issue](https://github.com/coconautilus17/LibraForge/issues).
 
 ## Development
 

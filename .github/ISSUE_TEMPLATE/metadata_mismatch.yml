@@ -9,6 +9,11 @@ body:
         personally identifying information.** Use placeholders like `[Book Title]` and
         `[Author Name]` if needed.
 
+        Before filing, see
+        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md) -
+        enabling debug trace and attaching the run's JSON report (redacted) is far more
+        useful here than a single excerpt.
+
   - type: input
     id: book-title
     attributes:

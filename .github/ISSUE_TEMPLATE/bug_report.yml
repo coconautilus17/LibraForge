@@ -8,6 +8,11 @@ body:
         Before reporting, check that you are on the latest `main` and that the container
         logs (`make logs`) do not show an obvious startup error.
 
+        For matching/scoring/organizer bugs, see
+        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md)
+        for how to enable debug trace and attach the JSON report - it's the fastest way
+        to get a fix.
+
         **Please redact any real paths, Audible user IDs, or auth file contents before
         submitting.**
 
