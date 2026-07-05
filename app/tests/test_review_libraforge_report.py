@@ -17,50 +17,6 @@ def make_args():
     return REVIEW.parse_args(["dummy-report.json"])
 
 
-class SplitTitleAndTrailingNumberTests(unittest.TestCase):
-    def test_splits_base_and_number(self):
-        self.assertEqual(
-            REVIEW.split_title_and_trailing_number("Metal Mage 15"),
-            ("metal mage", "15"),
-        )
-
-    def test_no_trailing_number_returns_none(self):
-        self.assertIsNone(REVIEW.split_title_and_trailing_number("Some Standalone Title"))
-
-    def test_blank_title_returns_none(self):
-        self.assertIsNone(REVIEW.split_title_and_trailing_number(""))
-
-
-class PotentialSeriesSiblingTests(unittest.TestCase):
-    def test_finds_siblings_by_same_author_and_title_base(self):
-        entries = [
-            ("eric vall", "metal mage", "13", "Metal Mage 13"),
-            ("eric vall", "metal mage", "14", "Metal Mage 14"),
-        ]
-        index = REVIEW.build_series_sibling_index(entries)
-
-        siblings = REVIEW.find_potential_series_siblings(index, "Eric Vall", "Metal Mage 15")
-
-        self.assertEqual(len(siblings), 2)
-        self.assertEqual({s["number"] for s in siblings}, {"13", "14"})
-
-    def test_no_siblings_for_different_author(self):
-        entries = [("someone else", "metal mage", "13", "Metal Mage 13")]
-        index = REVIEW.build_series_sibling_index(entries)
-
-        siblings = REVIEW.find_potential_series_siblings(index, "Eric Vall", "Metal Mage 15")
-
-        self.assertEqual(siblings, [])
-
-    def test_excludes_own_number(self):
-        entries = [("eric vall", "metal mage", "15", "Metal Mage 15 (duplicate rip)")]
-        index = REVIEW.build_series_sibling_index(entries)
-
-        siblings = REVIEW.find_potential_series_siblings(index, "Eric Vall", "Metal Mage 15")
-
-        self.assertEqual(siblings, [])
-
-
 class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
     def _base_item(self, **overrides):
         item = {
@@ -75,36 +31,22 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         item.update(overrides)
         return item
 
-    def test_missing_series_flagged_with_sibling_evidence(self):
+    def test_missing_series_is_flagged(self):
+        # This is a correct match, just missing series -- from bad source
+        # tagging or the data never existing in the first place. False
+        # positives here are fine (easy to dismiss in review).
         item = self._base_item(match={"title": "Metal Mage 15", "author": "Eric Vall", "series": ""})
-        sibling_index = REVIEW.build_series_sibling_index([
-            ("eric vall", "metal mage", "13", "Metal Mage 13"),
-            ("eric vall", "metal mage", "14", "Metal Mage 14"),
-        ])
 
-        result = REVIEW.review_metadata_item(item, make_args(), sibling_index)
+        result = REVIEW.review_metadata_item(item, make_args())
 
         self.assertIsNotNone(result)
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_series", codes)
-        missing_series_reason = next(r for r in result["reasons"] if r["code"] == "missing_series")
-        self.assertEqual(len(missing_series_reason["evidence"]["potential_series_siblings"]), 2)
-
-    def test_missing_series_flagged_without_sibling_evidence(self):
-        # False positives here are fine (easy to dismiss in review) -- a
-        # missing series still gets flagged even with no sibling evidence.
-        item = self._base_item(match={"title": "A Standalone Book", "author": "Eric Vall", "series": ""})
-
-        result = REVIEW.review_metadata_item(item, make_args(), {})
-
-        self.assertIsNotNone(result)
-        missing_series_reason = next(r for r in result["reasons"] if r["code"] == "missing_series")
-        self.assertNotIn("potential_series_siblings", missing_series_reason["evidence"])
 
     def test_present_series_is_not_flagged(self):
         item = self._base_item()
 
-        result = REVIEW.review_metadata_item(item, make_args(), {})
+        result = REVIEW.review_metadata_item(item, make_args())
 
         self.assertIsNone(result)
 
@@ -114,7 +56,7 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
             match={"title": "", "author": "", "series": "Metal Mage"},
         )
 
-        result = REVIEW.review_metadata_item(item, make_args(), {})
+        result = REVIEW.review_metadata_item(item, make_args())
 
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_title", codes)
@@ -123,23 +65,19 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
     def test_skipped_item_is_not_reviewed(self):
         item = self._base_item(write_action="write_skipped")
 
-        result = REVIEW.review_metadata_item(item, make_args(), {})
+        result = REVIEW.review_metadata_item(item, make_args())
 
         self.assertIsNone(result)
 
 
 class ReviewOrganizerItemMissingSeriesTests(unittest.TestCase):
-    def test_missing_series_flagged_with_sibling_evidence(self):
+    def test_missing_series_is_flagged(self):
         item = {
             "title": "Metal Mage 15", "author": "Eric Vall", "series": "",
             "number": "15", "source": "/lib/Metal Mage 15.m4b", "target": "/lib/Eric Vall/Metal Mage 15",
         }
-        sibling_index = REVIEW.build_series_sibling_index([
-            ("eric vall", "metal mage", "13", "Metal Mage 13"),
-            ("eric vall", "metal mage", "14", "Metal Mage 14"),
-        ])
 
-        result = REVIEW.review_organizer_item(item, make_args(), sibling_index)
+        result = REVIEW.review_organizer_item(item, make_args())
 
         self.assertIsNotNone(result)
         codes = {r["code"] for r in result["reasons"]}
@@ -151,7 +89,7 @@ class ReviewOrganizerItemMissingSeriesTests(unittest.TestCase):
             "number": "15", "source": "/lib/Metal Mage 15.m4b", "target": "/lib/Eric Vall/Metal Mage/Book 15",
         }
 
-        result = REVIEW.review_organizer_item(item, make_args(), {})
+        result = REVIEW.review_organizer_item(item, make_args())
 
         self.assertIsNone(result)
 
