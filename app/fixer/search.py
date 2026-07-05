@@ -215,7 +215,14 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
 # persistent failures and short-circuits further calls for a cooldown, so one
 # upstream block doesn't tax the rest of the run.
 _ABS_TRACT_BREAKER_LOCK = threading.Lock()
-_ABS_TRACT_BREAKER = {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
+_ABS_TRACT_BREAKER = {
+    "consecutive_failures": 0,
+    "open_until": 0.0,
+    "logged_open": False,
+    # Unlike logged_open/consecutive_failures, this never resets on success --
+    # it answers "did this run ever hit the breaker", for end-of-run reporting.
+    "ever_opened": False,
+}
 _ABS_TRACT_BREAKER_THRESHOLD = 2      # consecutive persistent failures before tripping
 _ABS_TRACT_BREAKER_COOLDOWN = 180.0   # seconds to stay open; measured recovery is ~90-105s
 
@@ -232,6 +239,18 @@ def _abs_tract_breaker_is_open() -> bool:
         return time.time() < _ABS_TRACT_BREAKER["open_until"]
 
 
+def abs_tract_breaker_ever_opened() -> bool:
+    """Whether the breaker has tripped at least once since it was last reset.
+
+    Unlike _abs_tract_breaker_is_open(), this stays True for the rest of the
+    run even after the cooldown elapses and calls start succeeding again, so
+    an end-of-run summary can report "Goodreads was rate-limited during this
+    run" instead of only knowing about it while the breaker is still open.
+    """
+    with _ABS_TRACT_BREAKER_LOCK:
+        return bool(_ABS_TRACT_BREAKER["ever_opened"])
+
+
 def _abs_tract_breaker_record(success: bool) -> None:
     with _ABS_TRACT_BREAKER_LOCK:
         if success:
@@ -241,6 +260,7 @@ def _abs_tract_breaker_record(success: bool) -> None:
         _ABS_TRACT_BREAKER["consecutive_failures"] += 1
         if _ABS_TRACT_BREAKER["consecutive_failures"] >= _ABS_TRACT_BREAKER_THRESHOLD:
             _ABS_TRACT_BREAKER["open_until"] = time.time() + _ABS_TRACT_BREAKER_COOLDOWN
+            _ABS_TRACT_BREAKER["ever_opened"] = True
 
 
 def _abs_tract_throttle() -> None:

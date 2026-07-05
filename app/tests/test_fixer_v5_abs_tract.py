@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -54,7 +55,12 @@ def fake_urlopen_for(payload, captured):
 
 def _reset_breaker():
     fixer._ABS_TRACT_BREAKER.update(
-        {"consecutive_failures": 0, "open_until": 0.0, "logged_open": False}
+        {
+            "consecutive_failures": 0,
+            "open_until": 0.0,
+            "logged_open": False,
+            "ever_opened": False,
+        }
     )
 
 
@@ -170,6 +176,69 @@ class AbsTractBreakerTests(unittest.TestCase):
             fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10, retries=1)
         self.assertEqual(fixer._ABS_TRACT_BREAKER["consecutive_failures"], 0)
         self.assertFalse(fixer._abs_tract_breaker_is_open())
+
+    def test_ever_opened_flag_is_sticky_across_recovery(self):
+        payload = {"matches": [{"title": "T", "author": "A"}]}
+
+        def always_fail(req, timeout=20):
+            raise TimeoutError("blocked")
+
+        with patch("time.sleep", lambda *_a: None), \
+                patch("urllib.request.urlopen", always_fail):
+            for _ in range(fixer._ABS_TRACT_BREAKER_THRESHOLD):
+                fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+        self.assertTrue(fixer.abs_tract_breaker_ever_opened())
+
+        # Cooldown elapses and a later call succeeds -- consecutive_failures and
+        # logged_open reset, but ever_opened must stay True for run-level reporting.
+        fixer._ABS_TRACT_BREAKER["open_until"] = 0.0
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload, {})):
+            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+        self.assertEqual(fixer._ABS_TRACT_BREAKER["consecutive_failures"], 0)
+        self.assertTrue(fixer.abs_tract_breaker_ever_opened())
+
+    def test_ever_opened_flag_false_when_never_tripped(self):
+        payload = {"matches": [{"title": "T", "author": "A"}]}
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload, {})):
+            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+        self.assertFalse(fixer.abs_tract_breaker_ever_opened())
+
+
+class GoodreadsBreakerStateTests(unittest.TestCase):
+    """The Goodreads-fallback block must distinguish 'breaker is open, we skipped
+    this book's lookup' from a genuine no-match, so the report can flag it instead
+    of silently miscounting it as a real miss."""
+
+    def setUp(self):
+        _reset_breaker()
+
+    def test_open_breaker_is_flagged_and_logged(self):
+        fixer._ABS_TRACT_BREAKER["open_until"] = time.time() + 100
+        log: list[str] = []
+        self.assertTrue(fixer.evaluate_goodreads_breaker_state(log))
+        self.assertTrue(any("circuit open" in line for line in log))
+
+    def test_closed_breaker_is_not_flagged(self):
+        log: list[str] = []
+        self.assertFalse(fixer.evaluate_goodreads_breaker_state(log))
+        self.assertEqual(log, [])
+
+
+class ReportItemGoodreadsRateLimitTests(unittest.TestCase):
+    def test_build_report_item_includes_goodreads_rate_limited_flag(self):
+        result = fixer.ItemResult(
+            index=1, file_path=Path("/x/a.m4b"), display_path=Path("a.m4b")
+        )
+        result.goodreads_rate_limited = True
+        item = fixer._build_report_item(result)
+        self.assertTrue(item["goodreads_rate_limited"])
+
+    def test_build_report_item_defaults_goodreads_rate_limited_false(self):
+        result = fixer.ItemResult(
+            index=1, file_path=Path("/x/a.m4b"), display_path=Path("a.m4b")
+        )
+        item = fixer._build_report_item(result)
+        self.assertFalse(item["goodreads_rate_limited"])
 
 
 class AbsTractClientTests(unittest.TestCase):
