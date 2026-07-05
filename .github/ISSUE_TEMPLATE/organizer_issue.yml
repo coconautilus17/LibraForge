@@ -9,9 +9,9 @@ body:
         descriptions instead of actual folder names where possible.
 
         Before filing, see
-        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md) -
-        the run's JSON report (redacted) shows the exact planned move and reasons, which
-        is more useful than retyping it here.
+        [docs/reporting-issues.md](https://github.com/coconautilus17/LibraForge/blob/main/docs/reporting-issues.md):
+        enable debug, reproduce, attach the JSON report + debug log, and point out the
+        specific book/path that moved wrong.
 
   - type: dropdown
     id: issue-type
