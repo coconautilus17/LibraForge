@@ -672,6 +672,15 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(parsed["series"], "Divine Apostasy")
         self.assertEqual(parsed["book_number"], "1")
 
+    def test_genre_tag_is_captured_as_a_clue(self):
+        # Local genre was never extracted into clues at all -- the "Local"
+        # column in match-report cards always showed blank regardless of what
+        # was actually embedded in the file.
+        parsed = FIXER.parse_title_series_number_from_metadata(
+            {"title": "Some Book", "album_artist": "Author", "genre": "Fantasy, Romance"}
+        )
+        self.assertEqual(parsed["genre"], "Fantasy, Romance")
+
     def test_release_bitrate_suffix_is_not_used_as_book_number(self):
         path = Path(
             "/library/Defiance of the Fall 15/"
