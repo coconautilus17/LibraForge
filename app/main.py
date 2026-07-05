@@ -6165,9 +6165,13 @@ def _suspect_review_path(report_id: str) -> Path:
 
 @app.get("/api/reports/{report_id}/suspect-review")
 def get_suspect_review(report_id: str) -> dict[str, Any]:
+    # Every report load probes this to decide the button state, and "not
+    # generated yet" is the common case, not an error -- 200 + exists:false
+    # keeps that out of the browser console instead of logging a 404 on
+    # every single page load.
     path = _suspect_review_path(report_id)
     if not path.exists():
-        raise HTTPException(status_code=404, detail="Suspect review not yet generated")
+        return {"exists": False}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
