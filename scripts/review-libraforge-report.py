@@ -314,7 +314,7 @@ def recommendation_for_reasons(reasons: list[dict[str, Any]]) -> str:
         return "verify_sequence_before_apply"
     if {"title_mismatch", "series_mismatch", "author_mismatch"} & codes:
         return "compare_against_runner_up_or_search_manually"
-    if {"series_only_mode"} & codes:
+    if {"series_only_mode", "missing_title", "missing_author", "missing_series"} & codes:
         return "verify_metadata_completeness"
     if {"duplicate_asin", "duplicate_local_identity"} & codes:
         return "check_duplicate_or_alternate_edition"
@@ -469,6 +469,24 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
                 {"local_author": local.get("author"), "match_author": match.get("author"), "similarity": round(author_score, 3)},
             )
 
+    # --- Missing title/author/series on a match this run will actually write ---
+    # This match is being treated as correct -- these fields are just missing,
+    # whether from bad source tagging or never having been set at all. Still
+    # worth a second look before writing incomplete metadata to disk.
+    final_title = clean_text(match.get("title")) or local_title
+    final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
+    final_series = clean_text(match.get("series")) or local_series
+    if not final_title:
+        add_reason(reasons, "missing_title", "high", "No title available for this match.")
+    if not final_author:
+        add_reason(reasons, "missing_author", "high", "No author available for this match.")
+    if not final_series:
+        add_reason(
+            reasons, "missing_series", "high",
+            "No series set for this book (may be a standalone title, or missing source data).",
+            {"title": final_title, "author": final_author},
+        )
+
     if not reasons:
         return None
 
@@ -561,6 +579,12 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
         add_reason(reasons, "unknown_author", "high", "Organizer item has unknown/missing author.")
     if not title or title.casefold().startswith("unknown"):
         add_reason(reasons, "unknown_title", "medium", "Organizer item has unknown/missing title.")
+    if not series:
+        add_reason(
+            reasons, "missing_series", "high",
+            "No series set for this planned move (may be a standalone title, or missing source data).",
+            {"title": title, "author": author},
+        )
 
     visible_source = extract_strong_number_from_text(source) or extract_series_suffix_number(source, series)
     visible_target = extract_strong_number_from_text(target)
@@ -684,7 +708,8 @@ def extract_suspects(report: dict[str, Any], args: argparse.Namespace) -> tuple[
                                          "recommendation": recommendation_for_reasons(reasons), "reasons": reasons})
 
     elif kind == "organizer":
-        for index, item in enumerate((report.get("stats") or {}).get("move_items") or [], start=1):
+        move_items = (report.get("stats") or {}).get("move_items") or []
+        for index, item in enumerate(move_items, start=1):
             item.setdefault("id", item.get("id") or index)
             suspect = review_organizer_item(item, args)
             if suspect:
