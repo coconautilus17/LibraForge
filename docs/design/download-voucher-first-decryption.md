@@ -61,3 +61,21 @@ if license_threshold_error is not None:
 | Any `licenserequest` call returns a "threshold" 403 | Cached; every remaining item in the run fails immediately without a live retry |
 
 If a future change touches this decryption branch, preserve the "try voucher first, `drm_type` is advisory only" ordering — this is the actual fix, not an incidental detail.
+
+## Concurrency: 3 downloads at a time
+
+`run_download_worker()` processes `LIBRARY_DOWNLOAD_CONCURRENCY = 3` items at once via a `ThreadPoolExecutor`, matching `audible-cli`'s own default (`audible download --jobs 3`). Confirmed live against a real 10-item run (2026-07-07): the voucher-first fix worked for all 8 owned titles, the 2 failures were unrelated ownership errors, and no CloudFront or threshold issues occurred.
+
+Introducing concurrency meant every per-run shared value the serial version relied on had to be made safe for multiple workers touching it at once, guarded by one `bookkeeping_lock` (`threading.RLock`, reentrant because `log()` is called from within other locked blocks):
+
+| Shared state | Why it needs the lock under concurrency |
+|---|---|
+| `activation_bytes_cache` / `activation_bytes_error` | The whole check-fetch-cache sequence is locked, not just the check — otherwise two workers discovering they both need it at the same moment would both fire a live fetch, reintroducing the exact CloudFront-hammering bug this caching was built to prevent. The second worker blocks on the lock and then sees the first one's cached result or error. |
+| `license_threshold_error` | Read and written under the lock so the moment one worker hits the threshold, every other worker's next check sees it and skips its own `licenserequest`. |
+| Folder-collision resolution (`keep_both` numbering) | Locked because it reads-then-creates a directory name from the shared `target` folder; without the lock two workers with the same computed folder name (e.g. duplicate titles) could race onto the same `(2)` suffix. |
+| `completed` / `failures` lists, `done_count`, `active_titles` | Appends/increments guarded so progress reporting (`state.current`, `state.percent`, `state.current_file`) stays consistent instead of torn between workers. |
+| `log()` / `state.lines_tail` / log file writes | Guarded so interleaved log lines from concurrent workers don't corrupt the tail buffer or the on-disk log file. |
+
+The actual network I/O and `ffmpeg` decrypt subprocess for each item run **outside** the lock — only the bookkeeping around them is serialized, so the concurrency gain is real, not illusory.
+
+Regression tests (`app/tests/test_library_download_activation_bytes.py::ConcurrentDownloadTests`) use real `time.sleep` inside mocked I/O to widen the race window rather than relying on fast mocks that could pass by accident: one proves peak in-flight items is >1 and <=3 (concurrency is real and capped), the other proves `activation_bytes` is still fetched exactly once across 6 items racing for it.

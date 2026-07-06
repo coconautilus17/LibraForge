@@ -5562,23 +5562,49 @@ def _embed_asin_tag(m4b_path: Path, asin: str) -> None:
         pass
 
 
+# Matches audible-cli's own default concurrency (`audible download --jobs 3`).
+# See docs/design/download-voucher-first-decryption.md for why this is safe
+# with respect to the CloudFront activation-bytes block and the license-grant
+# threshold: both are still detected and cached exactly once per run, guarded
+# by run_download_worker's bookkeeping_lock, regardless of how many workers
+# are in flight.
+LIBRARY_DOWNLOAD_CONCURRENCY = 3
+
+
 def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
     state = runs[run_id]
     state.status = "running"
     state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
     log_lines: list[str] = []
+    # Reentrant: log() is called from within other bookkeeping_lock-held
+    # blocks below, and a plain Lock would deadlock a thread against itself.
+    bookkeeping_lock = threading.RLock()
 
     def log(msg: str) -> None:
-        log_lines.append(msg)
-        state.lines_tail = log_lines[-40:]
-        try:
-            state.log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")  # type: ignore[union-attr]
-        except Exception:
-            pass
+        with bookkeeping_lock:
+            log_lines.append(msg)
+            state.lines_tail = log_lines[-40:]
+            try:
+                state.log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")  # type: ignore[union-attr]
+            except Exception:
+                pass
 
     target = Path(req.target_path)
     completed: list[Path] = []
     failures: list[dict[str, str]] = []
+    done_count = 0
+    active_titles: dict[int, str] = {}
+
+    def _update_progress_locked() -> None:
+        detail = ", ".join(active_titles[k] for k in sorted(active_titles))
+        state.current = done_count
+        state.current_file = detail
+        state.percent = round(done_count / total * 100, 1) if total else 0.0
+        label = f"{done_count} of {total} done"
+        if detail:
+            label += f" -- downloading: {detail}"
+        set_run_phase(state, "downloading", "Downloading", label)
+
     try:
         target.mkdir(parents=True, exist_ok=True)
         auth = audible.Authenticator.from_file(req.auth_file)
@@ -5602,31 +5628,40 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         total = len(req.items)
         state.total = total
         set_run_phase(state, "downloading", "Downloading", f"0 of {total}")
-        for idx, item in enumerate(req.items, 1):
-            state.current = idx
-            state.current_file = item.title or item.asin
-            state.percent = round((idx - 1) / total * 100, 1) if total else 0.0
-            set_run_phase(state, "downloading", "Downloading", f"{idx} of {total}: {state.current_file}")
-            log(f"[{idx}/{total}] {item.title or item.asin} ({item.asin})")
-            try:
-                if license_threshold_error is not None:
-                    log("  skipping: Audible license-grant threshold was hit earlier this run")
-                    raise license_threshold_error
 
-                folder_name = _safe_component(
-                    f"{item.author} - {item.title}".strip(" -") or item.title or item.asin
-                )
-                folder_name = f"{folder_name} [{item.asin}]"
-                book_dir = target / folder_name
-                if book_dir.exists():
-                    if item.dup_action == "keep_both":
-                        n = 2
-                        while (target / f"{folder_name} ({n})").exists():
-                            n += 1
-                        book_dir = target / f"{folder_name} ({n})"
-                    elif item.dup_action == "replace":
-                        shutil.rmtree(book_dir, ignore_errors=True)
-                book_dir.mkdir(parents=True, exist_ok=True)
+        def process_item(idx: int, item: LibraryDownloadItem) -> None:
+            nonlocal activation_bytes_cache, activation_bytes_error, license_threshold_error, done_count
+            display_title = item.title or item.asin
+            with bookkeeping_lock:
+                active_titles[idx] = display_title
+                _update_progress_locked()
+            log(f"[{idx}/{total}] {display_title} ({item.asin})")
+            try:
+                with bookkeeping_lock:
+                    threshold_hit = license_threshold_error
+                if threshold_hit is not None:
+                    log(f"  [{idx}/{total}] skipping: Audible license-grant threshold was hit earlier this run")
+                    raise threshold_hit
+
+                with bookkeeping_lock:
+                    # Folder collision resolution touches the shared target
+                    # directory, so concurrent workers must serialize it --
+                    # otherwise two items racing on the same computed name
+                    # (e.g. duplicate titles) could pick the same "(2)" suffix.
+                    folder_name = _safe_component(
+                        f"{item.author} - {item.title}".strip(" -") or item.title or item.asin
+                    )
+                    folder_name = f"{folder_name} [{item.asin}]"
+                    book_dir = target / folder_name
+                    if book_dir.exists():
+                        if item.dup_action == "keep_both":
+                            n = 2
+                            while (target / f"{folder_name} ({n})").exists():
+                                n += 1
+                            book_dir = target / f"{folder_name} ({n})"
+                        elif item.dup_action == "replace":
+                            shutil.rmtree(book_dir, ignore_errors=True)
+                    book_dir.mkdir(parents=True, exist_ok=True)
 
                 try:
                     lr = client.post(
@@ -5640,7 +5675,8 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     )
                 except Exception as lr_exc:  # noqa: BLE001
                     if "threshold" in str(lr_exc).lower():
-                        license_threshold_error = lr_exc
+                        with bookkeeping_lock:
+                            license_threshold_error = lr_exc
                         log("  Audible license-grant threshold hit -- stopping further license requests this run")
                     raise
                 content_license = lr.get("content_license", {})
@@ -5691,24 +5727,33 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     log(f"  no per-book voucher available ({v_exc}); falling back to account activation bytes")
 
                 if voucher_error is not None:
-                    if activation_bytes_cache is None and activation_bytes_error is None:
-                        log("  fetching account activation bytes (first title needing it this run)...")
-                        try:
-                            activation_bytes_cache = auth.get_activation_bytes()
-                            log("  activation bytes obtained")
+                    # Locked for the whole check-fetch-cache sequence (not just
+                    # the flag check) so two workers that both discover they
+                    # need activation_bytes at the same time don't both fire a
+                    # live fetch -- the second one blocks on the lock and then
+                    # sees the first one's cached result or error, exactly as
+                    # the single-threaded version fetched it once per run.
+                    with bookkeeping_lock:
+                        if activation_bytes_cache is None and activation_bytes_error is None:
+                            log("  fetching account activation bytes (first title needing it this run)...")
                             try:
-                                auth.to_file()
-                            except Exception:
-                                pass
-                        except Exception as ab_exc:  # noqa: BLE001
-                            activation_bytes_error = ab_exc
-                    elif activation_bytes_error is not None:
-                        log("  activation bytes already failed earlier this run; skipping live retry")
-                    else:
-                        log("  reusing activation bytes fetched earlier this run")
-                    if activation_bytes_error is not None:
-                        raise activation_bytes_error
-                    decrypt_kwargs = {"activation_bytes": activation_bytes_cache}
+                                activation_bytes_cache = auth.get_activation_bytes()
+                                log("  activation bytes obtained")
+                                try:
+                                    auth.to_file()
+                                except Exception:
+                                    pass
+                            except Exception as ab_exc:  # noqa: BLE001
+                                activation_bytes_error = ab_exc
+                        elif activation_bytes_error is not None:
+                            log("  activation bytes already failed earlier this run; skipping live retry")
+                        else:
+                            log("  reusing activation bytes fetched earlier this run")
+                        resolved_ab_value = activation_bytes_cache
+                        resolved_ab_error = activation_bytes_error
+                    if resolved_ab_error is not None:
+                        raise resolved_ab_error
+                    decrypt_kwargs = {"activation_bytes": resolved_ab_value}
                     enc_path = book_dir / f"{base}.aax"
 
                 decrypt_method = "activation_bytes" if voucher_error is not None else "voucher"
@@ -5729,12 +5774,24 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                 _embed_asin_tag(out_m4b, item.asin)
                 # No sidecar cover.jpg: Audible embeds full-quality cover art in the M4B.
 
-                completed.append(book_dir)
+                with bookkeeping_lock:
+                    completed.append(book_dir)
                 log(f"  done -> {out_m4b}")
             except Exception as exc:  # noqa: BLE001
-                failures.append({"asin": item.asin, "title": item.title, "error": str(exc)})
+                with bookkeeping_lock:
+                    failures.append({"asin": item.asin, "title": item.title, "error": str(exc)})
                 log(f"  FAILED: {exc}")
-            state.percent = round(idx / total * 100, 1) if total else 100.0
+            finally:
+                with bookkeeping_lock:
+                    done_count += 1
+                    active_titles.pop(idx, None)
+                    _update_progress_locked()
+
+        workers = min(LIBRARY_DOWNLOAD_CONCURRENCY, total) or 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(process_item, idx, item) for idx, item in enumerate(req.items, 1)]
+            for fut in as_completed(futures):
+                fut.result()  # process_item catches its own item-level errors; this only re-raises bugs
 
         state.stats["downloaded"] = len(completed)
         state.stats["failed"] = len(failures)

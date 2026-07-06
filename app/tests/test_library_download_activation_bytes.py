@@ -8,6 +8,8 @@ the repeated live calls.
 """
 
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -234,6 +236,131 @@ class VoucherFirstDecryptionTests(unittest.TestCase):
 
         self.assertEqual(auth_mock.get_activation_bytes.call_count, 1)
         self.assertEqual(len(decrypt_calls), 3)
+
+
+class ConcurrentDownloadTests(unittest.TestCase):
+    """run_download_worker now processes up to LIBRARY_DOWNLOAD_CONCURRENCY
+    items at once (matching audible-cli's own default --jobs 3), instead of
+    strictly one at a time. This must not reintroduce the exact bug the
+    caching above guards against: activation_bytes still has to be fetched
+    exactly once per run even when several workers race to request it at
+    the same moment, not once per worker. See
+    docs/design/download-voucher-first-decryption.md.
+    """
+
+    def _make_request(self, tmp_dir: str, n_items: int) -> LibraryDownloadRequest:
+        items = [
+            LibraryDownloadItem(asin=f"B0{i:08d}", title=f"Book {i}", author="Author")
+            for i in range(n_items)
+        ]
+        return LibraryDownloadRequest(
+            auth_file="/auth/fake.json", target_path=tmp_dir, items=items, organize=False
+        )
+
+    def test_up_to_three_items_download_concurrently(self):
+        """Prove items actually overlap in time (not still serial-in-disguise)
+        by having the mocked decrypt step hold briefly and recording the peak
+        number of simultaneously in-flight items."""
+        auth_mock = MagicMock()
+        auth_mock.get_activation_bytes.return_value = "1a2b3c4d"
+
+        lock = threading.Lock()
+        in_flight = 0
+        peak_in_flight = 0
+
+        def slow_decrypt(*_a, **_kw):
+            nonlocal in_flight, peak_in_flight
+            with lock:
+                in_flight += 1
+                peak_in_flight = max(peak_in_flight, in_flight)
+            time.sleep(0.15)
+            with lock:
+                in_flight -= 1
+
+        run_id = str(uuid.uuid4())
+        state = RunState(id=run_id)
+        runs[run_id] = state
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir, \
+                 patch("app.main.audible.Authenticator.from_file", return_value=auth_mock), \
+                 patch("app.main.audible.Client") as client_cls, \
+                 patch("app.main._ffmpeg_decrypt", side_effect=slow_decrypt), \
+                 patch("app.main.write_final_report"), \
+                 patch(
+                     "audible.aescipher.decrypt_voucher_from_licenserequest",
+                     return_value={"key": "k", "iv": "i"},
+                 ):
+                req = self._make_request(tmp_dir, n_items=6)
+                client = client_cls.return_value
+                client.post.return_value = {
+                    "content_license": {
+                        "drm_type": "Mpeg",
+                        "content_metadata": {"content_url": {"offline_url": "https://example.invalid/x"}},
+                        "license_response": "encrypted",
+                        "asin": req.items[0].asin,
+                    }
+                }
+
+                @contextmanager
+                def fake_raw_request(*_a, **_kw):
+                    yield _FakeResponse()
+
+                client.raw_request.side_effect = fake_raw_request
+                run_download_worker(run_id, req)
+        finally:
+            if state.log_path is not None:
+                Path(state.log_path).unlink(missing_ok=True)
+            runs.pop(run_id, None)
+
+        self.assertGreater(peak_in_flight, 1, "items never overlapped -- still effectively serial")
+        self.assertLessEqual(peak_in_flight, 3, "more than 3 items ran at once -- exceeds intended concurrency")
+        self.assertEqual(state.stats["downloaded"], 6)
+
+    def test_activation_bytes_fetched_once_under_concurrent_race(self):
+        """Widen the race window (a real sleep inside get_activation_bytes)
+        so that if the lock around the fetch-and-cache sequence were missing,
+        multiple workers would very likely call it concurrently and this
+        test would flake/fail -- not just pass by accident on fast mocks."""
+        auth_mock = MagicMock()
+
+        def slow_get_activation_bytes():
+            time.sleep(0.1)
+            return "1a2b3c4d"
+
+        auth_mock.get_activation_bytes.side_effect = slow_get_activation_bytes
+
+        run_id = str(uuid.uuid4())
+        state = RunState(id=run_id)
+        runs[run_id] = state
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir, \
+                 patch("app.main.audible.Authenticator.from_file", return_value=auth_mock), \
+                 patch("app.main.audible.Client") as client_cls, \
+                 patch("app.main._ffmpeg_decrypt"), \
+                 patch("app.main.write_final_report"):
+                req = self._make_request(tmp_dir, n_items=6)
+                client = client_cls.return_value
+                client.post.return_value = {
+                    "content_license": {
+                        "drm_type": "Adrm",
+                        "content_metadata": {"content_url": {"offline_url": "https://example.invalid/x"}},
+                    }
+                }
+
+                @contextmanager
+                def fake_raw_request(*_a, **_kw):
+                    yield _FakeResponse()
+
+                client.raw_request.side_effect = fake_raw_request
+                run_download_worker(run_id, req)
+        finally:
+            if state.log_path is not None:
+                Path(state.log_path).unlink(missing_ok=True)
+            runs.pop(run_id, None)
+
+        self.assertEqual(auth_mock.get_activation_bytes.call_count, 1)
+        auth_mock.to_file.assert_called_once()
+        self.assertEqual(state.stats["downloaded"], 6)
 
 
 if __name__ == "__main__":
