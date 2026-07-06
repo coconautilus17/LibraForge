@@ -71,6 +71,65 @@ Every consumer of "what does this book currently have" — `_build_report_item()
 `audible` and `local_before` dicts, `build_m4b_tool_metadata_payload()`'s
 equivalents — reads `clues.get("current")`, never a top-level `clues` field.
 
+## Matcher clue-gathering is completely unchanged — `clues` and `clues["current"]` are parallel, not competing
+
+A question worth re-confirming any time this doc is in doubt: **did adding
+`clues["current"]` change how the matcher recovers information from
+filenames/folder paths when tags are missing or wrong?** No — and this is
+verified by diff, not just design intent. `parse_title_series_number_from_metadata()`
+(the tag-text parser in `app/fixer/parsing.py`), `apply_structured_path_override()`,
+the descriptive/structured path parsers, `infer_group_identity_from_path()`,
+and `build_search_clues_from_file()`'s own body all have **zero changed
+lines** across the commits that introduced `clues["current"]`.
+`clues["current"]` is appended as a new, separate dict key *after* `clues`
+has already gone through its full existing resolution (tag parse → path
+override → hierarchy inference → filename ASIN recovery), from the exact
+same underlying raw tag read — it doesn't feed back into, replace, or weaken
+any of that. The matcher still finds books from whatever combination of
+tags/filename/path is available, exactly as before.
+
+**Concrete example** (this is a real, passing test:
+`test_fixer_v5_current_metadata.py::test_path_override_changes_clues_but_not_current`,
+so if this invariant is ever broken by a future change, that test fails
+immediately):
+
+A ripper mis-tagged this book — the title tag actually holds the narrator's
+name, and the real title only lives in the folder name (the series tag,
+however, happens to be tagged correctly):
+
+```
+Folder:   Manipulation - Magic Eater, Book 1 - Sean Oswald/
+File:     Manipulation - Magic Eater, Book 1 - Sean Oswald.m4b
+Raw tags: title="Sean Oswald", album="Sean Oswald",
+          album_artist="Sean Oswald", grouping="Magic Eater"
+```
+
+The matcher still needs the real title to find the right catalog match, so
+`clues` (completely unchanged behavior) recovers it from the folder name:
+
+| | value | source |
+|---|---|---|
+| `clues["title"]` | `"Manipulation"` | path override — the title tag was useless for matching |
+| `clues["series"]` | `"Magic Eater"` | the `grouping` tag — this one was tagged correctly |
+
+Meanwhile `clues["current"]` reports exactly what the file's own tags say
+right now, mis-tag and all — nothing recovered, nothing guessed:
+
+| | value | source |
+|---|---|---|
+| `clues["current"]["title"]` | `"Sean Oswald"` | the raw (wrong) title tag, verbatim |
+| `clues["current"]["series"]` | `"Magic Eater"` | the same `grouping` tag — agrees with `clues["series"]` here only because that particular tag wasn't mis-tagged |
+
+Both are correct for their own job: `clues["title"]` is what lets the
+matcher find "Manipulation" in the catalog despite the bad tag;
+`clues["current"]["title"]` is what a comparison card must show as this
+file's actual current metadata — which is genuinely wrong (it's the
+narrator's name) until the book is matched and its tags get rewritten.
+Title disagrees between the two because the tag was bad; series happens to
+agree because that tag wasn't. Neither function ever reads the other's
+output, so there's no path by which fixing/improving one could silently
+change the other.
+
 ## The persisted cache: `marker.audible` / `sidecar.book`
 
 Once written, `clues["current"]` becomes the source for two persisted
