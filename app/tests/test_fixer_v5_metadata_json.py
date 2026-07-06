@@ -312,10 +312,17 @@ class ReportItemCleanSkipFallbackTests(unittest.TestCase):
         self.assertEqual(item["match"]["asin"], "B0REAL1234")
 
     def test_fresh_clues_take_priority_over_marker_fallback(self):
+        # "local" must come from clues["current"] (the pure, matcher-untouched
+        # tag snapshot), not from top-level clue fields like "title"/"series",
+        # which pass through path/folder overrides meant only for the matcher.
         result = FIXER.ItemResult(
             index=1, file_path=self.media, display_path=self.media, status="matched",
             metadata={"title": "Fresh Match", "author": "Eric Vall"},
-            clues={"title": "Fresh Local", "author": "Eric Vall", "tag_series": "Fresh Series"},
+            clues={
+                "title": "Path-Derived Title",  # matcher-only, must not leak into "local"
+                "author": "Eric Vall",
+                "current": {"title": "Fresh Local", "author": "Eric Vall", "series": "Fresh Series"},
+            },
         )
         item = FIXER._build_report_item(result)
         self.assertEqual(item["local"]["title"], "Fresh Local")

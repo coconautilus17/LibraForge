@@ -11,168 +11,200 @@ currently has, and what we think it should have. The second half (`match`)
 always comes from a stored decision (a marker or a fresh probe result). This
 doc is about the first half (`local` / "Current").
 
-**Once a book has been processed at least one time, its `local`/"Current"
-side must be read from a durable on-disk cache. It must never come from a
-fresh re-probe of the file's tags, and it must never come from a
-before-the-last-write snapshot.**
+**"Local"/"Current" must be an exact, complete, field-for-field reflection of
+what the file's own tags actually say — every field, not just the ones that
+happen to be easy. If a tag is empty, the display is empty. Nothing else is
+acceptable.** Two independent contamination sources can break this, and both
+are guarded against below:
 
-The cache is written every time we write to the file, so it is guaranteed to
-mirror the file's actual embedded tags. Re-probing to populate a comparison
-card is redundant work that also risks re-introducing path/folder-derived
-noise into a field meant to show clean, embedded truth (see
-`tag_series` history below). Skipping the probe is not a performance
-shortcut we tolerate — it is the correct design once the cache exists.
+1. **Re-deriving it from search-clue machinery.** `clues` (built by
+   `build_search_clues_from_file()`/`build_multi_file_search_context()`) is a
+   **matcher-only** construct. Several of its fields — `title`, `series`,
+   `author`, `book_number` — are deliberately overwritten by path/folder-name
+   heuristics (`apply_structured_path_override`, `descriptive_path_meta`,
+   hierarchy-folder series inference, the whole folder-identity pass for
+   grouped books) whose only job is helping find the right catalog match.
+   None of that describes what is actually embedded in the file, and it must
+   never be used for comparison-card display. This class of bug is guarded
+   against by `read_current_book_metadata()` (see below), which is built
+   from raw tags only, before any such heuristic runs.
+2. **Reading a stale or incomplete cache.** Once a book has been processed,
+   display must come from the durable on-disk cache (never a fresh re-probe,
+   for performance) — but that cache must (a) actually be a live probe when it
+   was captured, not a stale backup/synthesized snapshot, and (b) actually
+   carry every field, including ones the tag *writer* only conditionally
+   touches (genre, subtitle, isbn, asin, publisher).
 
-## The two caches, and which one code should read
+## `clues["current"]`: the one true source
 
-Every successful write updates two files together, from the same
-`effective_metadata` dict, in the same code path
-(`scripts/audible-metadata-fixer-v5.py`, main gather loop ~line 5404-5466):
+`read_current_book_metadata(tags)` (`app/fixer/clues.py`) is a **pure**
+function: raw tags in, a flat dict out — `title`, `subtitle`, `author`,
+`narrator`, `series`, `sequence`, `genre`, `year`, `isbn`, `asin`,
+`publisher`, `summary`, `raw_title`. Every field is exactly what the tag
+says, or `""` if absent. It reuses `parse_title_series_number_from_metadata()`
+for the fields that legitimately need tag-*text* interpretation (e.g. a
+series name embedded in the title tag itself, like `"Foo: Bar Book 1"` — that
+is still 100% sourced from the tag, not the path) — but it is never touched
+by anything that looks at `file_path`.
 
-| Cache | Written by | Schema | Consumed by |
-|---|---|---|---|
-| `metadata.json` (Audiobookshelf-facing) | `write_audiobookshelf_metadata_json()` | ABS external shape: `authors`/`narrators`/`series` as lists, `series` combines name+`#seq` as one string, no `duration_minutes`, no `raw_title` | Audiobookshelf itself; not read back by LibraForge's own comparison code today |
-| `libraforge.json` → `marker.audible` (single-file) or `sidecar.book` (grouped) | `write_marker()` / `write_m4b_tool_metadata_sidecar()` | Internal shape: flat `title`/`author`/`narrator`/`series`/`sequence`/`genre`/`subtitle`/`summary`/`isbn`/`asin`/`cover_url` | `metadata_from_marker()`, `_read_sidecar_book()`, `_build_report_item()` |
+`build_search_context()` and `build_multi_file_search_context()` attach this
+as `clues["current"]`, built from a **genuine live tag probe**, alongside
+(but never mixed into) the matcher-oriented `clues` fields:
 
-Both files hold the same underlying truth in two serializations. **LibraForge's
-own code (Manual Review, the Suspicion Report) reads the `libraforge.json`
-side** (`marker.audible` / `sidecar.book`), not `metadata.json` directly,
-because its schema already matches the shape the UI and report need field for
-field — reading `metadata.json` instead would mean parsing `"Series #3"` back
-apart, rejoining author lists, and losing `duration_minutes`/`raw_title`
-entirely, for no benefit, since the two files are written in lockstep and are
-never allowed to diverge. If that guarantee is ever weakened (e.g. one write
-path updates one file but not the other), this doc's invariant breaks and
-needs re-auditing.
+- Single-file path: `read_tags_and_duration()` returns `(tags, duration,
+  is_live_probe)`. When `is_live_probe` is `False` (tags came from a cached
+  backup/sidecar snapshot — deliberately fine for the matcher, which doesn't
+  need a fresh read every run), one more cheap, targeted `read_file_tags()`
+  call is made specifically to build `current`, so display is never built
+  from a stale or field-incomplete cache. When `is_live_probe` is `True`
+  (the common case — no backup yet), the same tags are reused, no extra
+  probe.
+- Grouped/multi-part path: `current` comes from the **representative file's
+  own tags** (first file, natural sort) via the same live-probe guarantee —
+  never from the group's folder-name-driven identity resolution (title/
+  series/author there are deliberately parsed from the *folder name*, which
+  is correct for matching a chapter-split book but describes the folder, not
+  any one file).
 
-## The mistake this doc corrects: `local_before` is not "current"
+Every consumer of "what does this book currently have" — `_build_report_item()`
+(both the fresh-probe and clean-skip-fallback branches), `write_marker()`'s
+`audible` and `local_before` dicts, `build_m4b_tool_metadata_payload()`'s
+equivalents — reads `clues.get("current")`, never a top-level `clues` field.
 
-`marker.local_before` is a snapshot taken **immediately before** a write, of
-what `clues` looked like at probe time that run. It answers "what did this
-book look like before we fixed it," which is audit/history information.
+## The persisted cache: `marker.audible` / `sidecar.book`
 
-It is **not** the same thing as "what does this book currently have," except
-in the instant right after that write completes. The moment a *later* write
-happens, `local_before` is overwritten with a new pre-write snapshot and the
-old one is gone — but even before that, semantically, the file's actual
-current tags equal whatever was written last, i.e. `marker.audible`, not
-`local_before`.
+Once written, `clues["current"]` becomes the source for two persisted
+things, both from `write_marker()` (which runs on every write, single-file or
+grouped):
 
-Concretely: book has messy embedded tags (e.g. series `"Pocket Dungeon 4"`,
-an album-fallback artifact). Run 1 processes it, decides the correct series
-is `"Pocket Dungeon"`, writes the tags, and stores:
-- `marker.audible.series = "Pocket Dungeon"` (what's now embedded in the file)
-- `marker.local_before.series = ""` (tag_series was empty pre-fix — see
-  below; the raw pre-fix clue was the contaminated `"Pocket Dungeon 4"`)
+- **`marker.audible`** — the "match" record. For **unconditionally-written**
+  fields (title, author, series, sequence, narrator, year — the tag writer
+  always sets or clears these) this is simply the decided `metadata` value.
+  For **conditionally-written** fields (genre, subtitle, isbn, asin,
+  publisher — the writer only touches these `if <field>:`, otherwise leaving
+  whatever tag was already there untouched), the persisted value must be
+  `metadata.get(field) or current.get(field)` — the decided value if we have
+  one, else whatever the file already had, because that is what the write
+  policy actually leaves embedded. Getting this wrong was the exact bug
+  found in the 100-book validation below.
+- **`marker.local_before`** — a pre-write historical snapshot, built entirely
+  from `current` (never top-level `clues`). This is audit/history data
+  ("what did this book look like right before this write"), **not** a
+  current-state source — see the dedicated pitfall below.
 
-Run 2 is a clean skip (`marker_skip_is_clean()` is true — nothing changed, no
-fresh probe happens). A comparison card for this book must show
-**`"Pocket Dungeon"`** as "Current," because that is what is actually
-embedded in the file right now. Showing `local_before` here would surface
-stale, already-fixed data as if it were the book's present state — exactly
-the kind of contamination this whole effort has been about eliminating.
+Both `metadata.json` (Audiobookshelf-facing) and `marker.audible` are written
+together from the same `effective_metadata` in the same code path (main
+gather loop, `scripts/audible-metadata-fixer-v5.py` ~line 5404-5466).
+LibraForge's own comparison code reads the `libraforge.json` side
+(`marker.audible` / `sidecar.book`) rather than `metadata.json` directly,
+because its schema already matches field-for-field what the UI/report need —
+`metadata.json`'s ABS-external shape (author/narrator/series as lists,
+`"Series #3"` as one string) would need lossy reparsing for no benefit, since
+the two files are guaranteed to never diverge.
 
-**Fix applied:** `_build_report_item()` in
-`scripts/audible-metadata-fixer-v5.py` previously built the clean-skip
-fallback for `"local"` from `marker.local_before`. It now builds `"local"`
-from the same `meta = metadata_from_marker(stored)` dict already used to
-build `"match"` — i.e. from `marker.audible`. For a genuinely clean skip,
-`local` and `match` end up identical, which is correct: that equality *is*
-the definition of clean (nothing left to reconcile). The report still shows
-both columns so a reviewer can eyeball recent history without needing to know
-this internally — but they now report the same, correct, currently-embedded
-truth instead of one column silently regressing to pre-fix data.
+## Pitfall already found once: `local_before` is not "current"
 
-`local_before` remains useful for its actual purpose — audit/history, "what
-did we change this book from" — but must never again be used to answer
-"what does this book currently have."
+`marker.local_before` is a snapshot taken **immediately before** a write. It
+answers "what did this book look like before we fixed it" — audit/history
+information, not current state. The moment a write completes, the file's
+real current tags equal `marker.audible`, not `local_before` — and the
+*next* write makes even that stale, since `local_before` gets overwritten
+with a new pre-write snapshot referring to a different moment in time.
 
-## Where the fresh probe still legitimately happens
+`_build_report_item()`'s clean-skip fallback previously read `local_before`
+for `"local"`. It now reads `marker.audible` (via `metadata_from_marker()`),
+the same source used for `"match"` — for a genuinely clean skip the two
+columns end up identical, which is correct: that equality *is* the
+definition of clean (nothing left to reconcile).
 
-This rule is scoped to the **comparison-card display fields**
-(`title`/`subtitle`/`author`/`narrator`/`series`/`sequence`/`year`/`genre`/
-`summary`/`isbn`/`asin`/`cover_url`). It does not forbid every read of the
-file's tags forever:
+## Where a fresh probe still legitimately happens
 
 - **First-ever processing of a book** has no cache yet, so a probe is
-  required — that probe's result is what gets written into the caches for
-  every future run to reuse.
+  required — its result seeds `clues["current"]`, which then seeds the
+  persisted caches for every future run to reuse.
 - **Actively processing/matching a book this run** (status `matched`, not a
-  skip) necessarily reads tags as part of finding/scoring a candidate match.
-  `_build_report_item()` uses that already-fresh `clues` for `"local"` in
-  this case — this is not a redundant extra probe, it's the same probe that
-  drove the match, reused for display.
-- **Manual Review** (`inspect_manual_review_target()` /
-  `_read_sidecar_book()`) still calls `build_search_context()` every load, but
-  only uses its output (`clues`) for fields that are genuinely absent from
-  the cache: `publisher` (not part of the write schema — its own subsystem,
-  see `reference_abs_packages` memory), `local_duration_minutes` (audio
-  itself could change independent of tag writes), `raw_title`, and
-  `book_number_source` (search-query plumbing, not display truth). Every
-  cache-covered field (`title`/`subtitle`/`author`/`narrator`/`series`/
-  `sequence`/`year`/`summary`/`genre`/`isbn`/`asin`) is overridden by
-  `sidecar_book` when present — see `app/main.py` `inspect_manual_review_target()`,
-  the `sidecar_book` branch (~line 2583-2597). This already conforms to the
-  rule; nothing to fix here, but it's documented so the exceptions aren't
-  mistaken for a violation later.
+  skip) necessarily reads tags to find/score a candidate — `current` reuses
+  that same read (or the one extra live read described above when the
+  matcher's own tags came from a cache). Never a redundant second probe in
+  the common case.
+- **Manual Review** (`inspect_manual_review_target()` / `_read_sidecar_book()`)
+  still calls `build_search_context()` every load, but only uses `clues`
+  (not `current`) for fields genuinely absent from the persisted cache today:
+  `local_duration_minutes` (audio itself could change independent of tag
+  writes) and `book_number_source` (search-query plumbing, not display
+  truth). Every cache-covered field is overridden by `sidecar_book` when
+  present.
 - **`use_backup_tags=True`** (an explicit "show me the original backup, not
-  the applied state" request) intentionally bypasses the cache — that's the
-  point of the flag, not a violation.
+  the applied state" request) intentionally bypasses the cache.
+
+## Validated against 100 real books (2026-07-06)
+
+Ran a dry-run scan (`--max-files 140`, no `--apply`, no Goodreads) over
+`/audiobooks/_unorganized`, took the first 100 `REPORT_ITEM_JSON` items, and
+independently verified each one: a from-scratch mutagen probe (no import of
+any app matching/parsing code — just the raw MP4 atom / ID3 frame names
+documented in `mutagen_write_mp4_tags`/`mutagen_write_mp3_tags`) compared
+field-by-field against the report's `local` section.
+
+**Round 1** (before the fixes in this section): title/author/series/sequence
+matched exactly on all 99 single-file books. **Genre matched on only 13/99.**
+Root cause: `write_marker()` recorded `metadata.get("genre", "")` — blank
+whenever the match had no genre — even though the writer itself leaves a
+pre-existing genre tag untouched in that case (real values like
+`"Science Fiction & Fantasy:Fantasy:Epic"`, or junk like `"Audiobook"`,
+silently survived on disk while being reported as absent). One further,
+narrower case (`Ruth Kinna - Anarchism...`) showed `local.title`/
+`local.narrator` diverging from the real tags — traced to `clues["title"]`
+being a path/filename-derived override, i.e. exactly the matcher-only
+contamination this doc's rule #1 exists to prevent, and to `read_tags_and_duration`
+preferring a cached backup snapshot over a live probe (rule #2).
+
+**Fix:** introduced `clues["current"]` (`read_current_book_metadata()`) as
+described above, and re-routed every "local"/current-state consumer
+(`_build_report_item()`, `write_marker()`, `build_m4b_tool_metadata_payload()`,
+`metadata_from_marker()`) to read it exclusively.
+
+**Round 2** (after the fix, re-verified against real files, read-only):
+- Genre preservation re-confirmed against the same real files under the new
+  architecture (`write_marker()` now records `metadata.get("genre") or
+  current.get("genre", "")`).
+- The Anarchism book's `current.title`/`current.narrator` now correctly show
+  the real tag values (`"Anarchism"` / `"Miranda Nation"`) instead of the
+  filename-derived override / blank.
+- A live re-run of the same 100-book scan shows the previously-broken item's
+  `"local"` section fully populated and correct — title, subtitle, author,
+  narrator, summary, asin all present where the file has them, blank only
+  where it doesn't.
+
+**Known remaining gap, not yet exercised against real data:** subtitle and
+isbn now use the same `metadata.get(field) or current.get(field)` fallback
+as genre, and `current` now extracts both from raw tags — but the 100-book
+sample didn't happen to include a book where the match had no subtitle/isbn
+but the file already had one, so this specific fallback path is covered by
+unit tests (`test_fixer_v5_current_metadata.py`,
+`test_fixer_v5_marker_recovery.py`) but not yet by a real-book spot check.
+
+**Important caveat on already-written markers:** this fix changes what
+`write_marker()` records on the **next** write. It does not retroactively
+repair `libraforge.json` files already on disk from prior runs — a
+clean-skipped book's `marker.audible` still reflects whatever was recorded
+under the old (buggy) logic until that book is actually reprocessed (e.g.
+via `--force`). Healing the existing library's markers immediately would
+require a `--force --apply` run, which is a real write action and out of
+scope for this (read-only validation) pass.
 
 ## Conformance checklist (audit this doc against the code when either changes)
 
 | Site | Reads for "local"/"Current" | Conforms? |
 |---|---|---|
-| `_build_report_item()` (fixer report, clean-skip case) | `marker.audible` via `metadata_from_marker()` | Yes (fixed 2026-07-06) |
-| `_build_report_item()` (fixer report, fresh-match case) | `clues` from this run's own probe | Yes (probe already happened for matching, not redundant) |
-| `inspect_manual_review_target()` / `_read_sidecar_book()` | `sidecar.book` / `marker.audible`, with narrow named exceptions above | Yes |
-| `write_marker()` / `write_audiobookshelf_metadata_json()` | N/A (write side) | Both updated together from the same `effective_metadata`, every actual write — this is what makes the caches trustworthy |
+| `_build_report_item()` (fresh-probe case) | `clues["current"]` | Yes |
+| `_build_report_item()` (clean-skip case) | `marker.audible` via `metadata_from_marker()` | Yes |
+| `write_marker()` audible dict (conditional fields) | `metadata.get(field) or current.get(field)` | Yes |
+| `write_marker()` / `build_m4b_tool_metadata_payload()` `local_before` | `clues["current"]` exclusively | Yes |
+| `inspect_manual_review_target()` / `_read_sidecar_book()` | `sidecar.book` / `marker.audible`, narrow named exceptions above | Yes |
+| `write_marker()` / `write_audiobookshelf_metadata_json()` (write side) | N/A | Both updated together from the same `effective_metadata` every actual write — this is what makes the caches trustworthy |
 
-If a new comparison surface is added, it must read from `marker.audible` /
-`sidecar.book` (or, for external ABS consumption, `metadata.json` — same
-truth, different shape), and must not add a new tag re-probe to populate a
-"current state" field once a book has been processed once.
-
-## Validated against 100 real books (2026-07-06)
-
-Ran a dry-run scan (`--max-files 140`, no `--apply`, no Goodreads) over
-`/audiobooks/_unorganized`, took the first 100 `REPORT_ITEM_JSON` items (99
-single-file "tags"-output books, 1 grouped sidecar book), and independently
-verified each one: a from-scratch mutagen probe (no import of any app
-matching/parsing code — just the raw MP4 atom / ID3 frame names documented in
-`mutagen_write_mp4_tags`/`mutagen_write_mp3_tags`) compared field-by-field
-against the report's `local` section.
-
-- **title/author/series/sequence: 99/99 exact matches** once the marker
-  reader correctly handled both libraforge.json naming conventions (per-file
-  `<name>.libraforge.json` for loose files sharing a folder vs. folder-level
-  `libraforge.json` for a lone file). These fields are written
-  unconditionally on every apply (blank clears the tag), so marker.audible
-  always equals the file's real current tag — no drift possible.
-- **genre: only 13/99 exact matches, 85/99 wrong.** Root cause: the tag
-  writers only touch the genre atom/frame `if genre:` — when the decided
-  match had no genre, the file's pre-existing genre tag (real values like
-  `"Science Fiction & Fantasy:Fantasy:Epic"`, or junk like `"Audiobook"`) is
-  left completely untouched, but `write_marker()` was recording plain
-  `metadata.get("genre", "")`, i.e. blank, ignoring that the file's actual
-  resulting genre is whatever was already there. **Fixed:** `write_marker()`
-  now records `metadata.get("genre") or clues.get("genre", "")`, mirroring
-  the writer's own preserve-if-absent behavior so the persisted (and
-  therefore displayed) genre always matches what's truly embedded. Verified
-  end-to-end by re-deriving real clues from three of the mismatching real
-  files (read-only, no mutation) and confirming `write_marker()` now persists
-  the real genre instead of `""` (see git history for
-  `test_genre_falls_back_to_clues_when_match_has_none`).
-- **1 narrower, separate finding (not fixed here):** one low-score-rejected
-  match (`Ruth Kinna - Anarchism...`) showed `local.title`/`local.narrator`
-  diverging from the file's real tags. Root cause is different and lives
-  upstream in `read_tags_and_duration()`/`apply_structured_path_override()`
-  (search-clue construction prefers a cached metadata backup and a
-  filename-derived title override over a live probe) — a search/matching
-  concern, not a marker-persistence concern, and out of scope for this fix.
-  Flagged for awareness; revisit if it recurs at higher frequency.
-- **subtitle/isbn have the same theoretical "preserve if absent" write
-  policy as genre**, but `parse_title_series_number_from_metadata()` doesn't
-  currently extract them as clue keys at all, so there's no clue value to
-  fall back to yet. Not fixed here (would require adding new clue fields,
-  a larger change); noted for a future audit pass.
+If a new comparison surface is added, it must read `clues["current"]`
+(fresh-probe case) or `marker.audible`/`sidecar.book` (cached case) — never a
+top-level `clues` field, never `local_before`, and must not add a redundant
+tag re-probe once a book has been processed once.

@@ -86,6 +86,7 @@ try:
         choose_group_book_number,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        read_current_book_metadata,
     )
     from app.fixer.scoring import (
         AGGRESSIVE_SCORE_THRESHOLD,
@@ -211,6 +212,7 @@ except ModuleNotFoundError:
         choose_group_book_number,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        read_current_book_metadata,
     )
     from app.fixer.scoring import (
         AGGRESSIVE_SCORE_THRESHOLD,
@@ -1683,6 +1685,7 @@ def metadata_from_marker(marker: dict) -> dict:
         "genre": a.get("genre") or "",
         "summary": a.get("summary") or "",
         "isbn": a.get("isbn") or "",
+        "publisher": a.get("publisher") or "",
         "cover_url": a.get("cover_url") or "",
         "audible_duration_minutes": a.get("duration_minutes"),
         "audible_number_candidates": a.get("number_candidates") or [],
@@ -1729,6 +1732,20 @@ def write_marker(
     # Preserve any previously-recorded written fields so a fill-missing run that
     # adds one field doesn't erase the record of fields written by an earlier run.
     merged_written = sorted(set(existing_marker.get("written_fields") or []) | set(written_fields or []))
+    # Pure, matcher-untouched snapshot of the file's own tags (see
+    # read_current_book_metadata). Used below for two distinct reasons:
+    #   1. local_before must never carry path/folder-derived clue
+    #      contamination (it backs the report's clean-skip display).
+    #   2. mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch genre/
+    #      subtitle/isbn/asin/publisher `if <field>:` -- when the match
+    #      provides none, the file's pre-existing tag survives untouched, so
+    #      the *resulting* embedded value is the match's if we have one, else
+    #      whatever was already there. Recording plain metadata.get(field)
+    #      would claim these fields are blank when the file demonstrably
+    #      still has them (confirmed against 99 real books: 85/99 had a real
+    #      embedded genre silently misreported as "" before this fix).
+    # See docs/design/comparison-card-data-source.md.
+    current = clues.get("current") or {}
     payload["marker"] = {
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "applied": True,
@@ -1742,46 +1759,45 @@ def write_marker(
         "written_fields": merged_written,
         "duration": metadata.get("duration", {}),
         "audible": {
-            "asin": metadata.get("asin", ""),
+            "asin": metadata.get("asin") or current.get("asin", ""),
             "title": metadata.get("audible_title", metadata.get("title", "")),
             "chosen_title": metadata.get("title", ""),
-            "subtitle": metadata.get("subtitle", ""),
+            "subtitle": metadata.get("subtitle") or current.get("subtitle", ""),
             "author": metadata.get("author", ""),
             "narrator": metadata.get("narrator", ""),
             "series": metadata.get("series", ""),
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
-            # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
-            # tag `if genre:` -- when the match provided no genre, the file's
-            # pre-existing genre tag is left completely alone, not cleared. So
-            # the *resulting* embedded genre is metadata's genre if we have
-            # one, else whatever was already there. Recording plain
-            # metadata.get("genre") here would claim the file now has no
-            # genre when it actually still has its original one -- exactly
-            # the mismatch this comment is here to prevent regressing back to
-            # (confirmed against 99 real books: 85 had a real embedded genre
-            # silently misreported as "" before this fix).
-            "genre": metadata.get("genre") or clues.get("genre", ""),
+            "genre": metadata.get("genre") or current.get("genre", ""),
+            # Not gated by write_summary/current fallback like the fields
+            # above: this mirrors the decided match's description, the same
+            # unconditional value write_audiobookshelf_metadata_json always
+            # puts in metadata.json regardless of whether write_summary was
+            # set -- it is "what we decided this book's description is," not
+            # "what the comment tag currently holds."
             "summary": metadata.get("summary", ""),
-            "isbn": metadata.get("isbn", ""),
+            "isbn": metadata.get("isbn") or current.get("isbn", ""),
+            "publisher": metadata.get("publisher") or current.get("publisher", ""),
             "cover_url": metadata.get("cover_url", ""),
             "duration_minutes": metadata.get("audible_duration_minutes"),
             "number_candidates": metadata.get("audible_number_candidates", []),
         },
         "local_before": {
-            "raw_title": clues.get("raw_title", ""),
-            "title": clues.get("title", ""),
-            "author": clues.get("author", ""),
-            # tag_series (real embedded data), not "series" (a search clue
-            # that can be a path/folder-name guess) -- this snapshot backs
-            # the report's "local" column on later clean-skip runs, where no
-            # fresh probe happens, so it must not carry clue contamination.
-            "series": clues.get("tag_series", ""),
-            "number": clues.get("book_number", ""),
+            "raw_title": current.get("raw_title", ""),
+            "title": current.get("title", ""),
+            "author": current.get("author", ""),
+            "series": current.get("series", ""),
+            "number": current.get("sequence", ""),
             "number_source": clues.get("book_number_source", ""),
-            "narrator": clues.get("narrator", ""),
-            "genre": clues.get("genre", ""),
-            "duration_minutes": clues.get("local_duration_minutes"),
+            "narrator": current.get("narrator", ""),
+            "genre": current.get("genre", ""),
+            "subtitle": current.get("subtitle", ""),
+            "isbn": current.get("isbn", ""),
+            "asin": current.get("asin", ""),
+            "publisher": current.get("publisher", ""),
+            "year": current.get("year", ""),
+            "summary": current.get("summary", ""),
+            "duration_minutes": current.get("duration_minutes"),
         },
     }
     _write_libraforge(lf_path, payload)
@@ -1985,6 +2001,7 @@ def summarize_audio_stream_properties(file_paths: list[Path]) -> dict:
 def build_m4b_tool_metadata_payload(
     source: Path, metadata: dict, clues: dict, score: float
 ) -> dict:
+    current = clues.get("current") or {}
     sidecar_path = get_m4b_tool_metadata_path(source, clues)
     group_search = clues.get("group_search", {}) or {}
     chapter_files = []
@@ -2026,7 +2043,11 @@ def build_m4b_tool_metadata_payload(
             "cover_url": metadata.get("cover_url", ""),
         },
         "audible": {
-            "asin": metadata.get("asin", ""),
+            # metadata.get("asin") can be blank (e.g. a Goodreads match, which
+            # has no ASIN) -- the tag writer then leaves whatever ASIN the
+            # file already had untouched, so the *resulting* ASIN is
+            # current's, not blank. See write_marker's parallel comment.
+            "asin": metadata.get("asin") or current.get("asin", ""),
             "title": metadata.get("audible_title", ""),
             "sequence": metadata.get("audible_sequence", ""),
             "year": metadata.get("audible_year", ""),
@@ -2039,17 +2060,24 @@ def build_m4b_tool_metadata_payload(
             "duration": metadata.get("duration", {}),
         },
         "local_before": {
-            "raw_title": clues.get("raw_title", ""),
-            "title": clues.get("title", ""),
-            "author": clues.get("author", ""),
-            # tag_series, not "series" -- see write_marker's local_before for
-            # why: "series" is a search clue that can be a path/folder guess.
-            "series": clues.get("tag_series", ""),
-            "number": clues.get("book_number", ""),
+            # Pure, matcher-untouched snapshot of the file's own tags -- see
+            # read_current_book_metadata / docs/design/comparison-card-data-source.md.
+            # Never source this from top-level `clues` fields: those pass
+            # through path/folder overrides meant only to help the matcher.
+            "raw_title": current.get("raw_title", ""),
+            "title": current.get("title", ""),
+            "author": current.get("author", ""),
+            "series": current.get("series", ""),
+            "number": current.get("sequence", ""),
             "number_source": clues.get("book_number_source", ""),
-            "narrator": clues.get("narrator", ""),
-            "genre": clues.get("genre", ""),
-            "local_duration_minutes": clues.get("local_duration_minutes"),
+            "narrator": current.get("narrator", ""),
+            "genre": current.get("genre", ""),
+            "subtitle": current.get("subtitle", ""),
+            "isbn": current.get("isbn", ""),
+            "publisher": current.get("publisher", ""),
+            "year": current.get("year", ""),
+            "summary": current.get("summary", ""),
+            "local_duration_minutes": current.get("duration_minutes"),
         },
         "audio_summary": audio_summary,
         "source": {
@@ -2349,8 +2377,8 @@ def read_tags_and_duration(
     file_path: Path,
     use_backup_tags: bool = False,
     reprobe: bool = False,
-) -> tuple[dict, float | None]:
-    """Return (tags, duration_minutes) from backup when available, else probe.
+) -> tuple[dict, float | None, bool]:
+    """Return (tags, duration_minutes, is_live_probe) from backup when available, else probe.
 
     reprobe=True (--reprobe): always probe the file, ignoring any backup.
 
@@ -2362,9 +2390,19 @@ def read_tags_and_duration(
     last time) then fall back to format_tags, then probe if no backup exists.
     Duration always comes from the backup when available since it never changes
     with tag-only writes.
+
+    is_live_probe is True only when `tags` came from an actual probe_file()
+    disk read this call, never from a cached backup/sidecar snapshot. Cached
+    tags are a deliberate, matcher-only performance optimization (search
+    clues don't need a fresh read every run) -- but callers building a
+    "current metadata" display need a genuine live read, since a cached
+    snapshot can be incomplete (see _synthesize_applied_tags) or, for
+    use_backup_tags, deliberately pre-apply/stale. Those callers must do
+    their own read_file_tags() call when this is False.
     """
     if reprobe:
-        return probe_file(file_path)
+        tags, duration = probe_file(file_path)
+        return tags, duration, True
 
     # Folder-level libraforge (multi-file / grouped books).
     try:
@@ -2385,7 +2423,7 @@ def read_tags_and_duration(
                             else entry.get("format_tags")
                         )
                     if isinstance(tags, dict):
-                        return tags, float(duration)
+                        return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
 
@@ -2400,11 +2438,12 @@ def read_tags_and_duration(
             else:
                 tags = backup.get("applied_tags") or backup.get("format_tags")
             if isinstance(tags, dict):
-                return tags, float(duration)
+                return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
 
-    return probe_file(file_path)
+    tags, duration = probe_file(file_path)
+    return tags, duration, True
 
 @trace(ALTER, capture=["file_path"])
 def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> dict:
@@ -2572,10 +2611,10 @@ def build_multi_file_search_context(
         for fp in file_paths
     ]
     if save_probe_cache:
-        _save_group_file_cache(file_paths, per_file)
+        _save_group_file_cache(file_paths, [(tags, duration) for tags, duration, _ in per_file])
     clues_list = [
         build_search_clues_from_file(fp, tags=tags)
-        for fp, (tags, _) in zip(file_paths, per_file)
+        for fp, (tags, _, _) in zip(file_paths, per_file)
     ]
     folder = file_paths[0].parent
     folder_name = sanitize_technical_labels(folder.name)
@@ -2639,7 +2678,7 @@ def build_multi_file_search_context(
         book_number = folder_descriptive["book_number"]
         book_number_source = "path"
     local_duration_minutes = sum(
-        (duration or 0.0) for _, duration in per_file
+        (duration or 0.0) for _, duration, _ in per_file
     ) or None
 
     validation = validate_multi_part_group_files(file_paths)
@@ -2679,6 +2718,20 @@ def build_multi_file_search_context(
         clues["publisher"] = group_publisher
         canonical = match_canonical_publisher(group_publisher)
         clues["publisher_verified"] = bool(canonical)
+
+    # "current" is a pure, matcher-untouched snapshot of what the group's
+    # representative file (the first, by natural sort) actually has in its
+    # own tags -- comparison-card display must read this, never the
+    # folder-name-driven identity-resolution fields above (title/series/
+    # author here are deliberately built from parsed folder names, which is
+    # correct for finding the right match but describes the folder, not the
+    # file). See docs/design/comparison-card-data-source.md.
+    representative_tags, representative_duration, representative_is_live = per_file[0]
+    if not representative_is_live:
+        representative_tags = read_file_tags(file_paths[0])
+    current = read_current_book_metadata(representative_tags)
+    current["duration_minutes"] = local_duration_minutes
+    clues["current"] = current
 
     queries = build_search_queries_from_clues(clues)
     return queries, clues
@@ -2855,12 +2908,26 @@ def build_search_context(
         cache_key = f"group::{file_path.parent}"
         return queries, clues, cache_key
 
-    tags, duration = read_tags_and_duration(file_path, use_backup_tags=use_backup_tags, reprobe=reprobe)
+    tags, duration, is_live = read_tags_and_duration(
+        file_path, use_backup_tags=use_backup_tags, reprobe=reprobe
+    )
     if save_probe_cache and not should_write_json_sidecar(file_path, None):
         write_original_metadata_backup(file_path, tags=tags, duration_minutes=duration)
     queries, clues = build_search_queries_from_metadata(file_path, tags=tags)
     clues["local_duration_minutes"] = duration
     clues["_raw_tags"] = tags
+    # "current" is a pure, matcher-untouched snapshot of what the file's own
+    # tags say right now -- comparison-card display must read this, never
+    # the `clues` fields above (those pass through path/folder overrides
+    # meant only to help find the right match). `tags` itself may be a
+    # cached backup/sidecar snapshot rather than a live read (see
+    # read_tags_and_duration's is_live_probe); when it is, do one more
+    # cheap, targeted live probe so "current" is never built from stale
+    # cached data. See docs/design/comparison-card-data-source.md.
+    current_tags = tags if is_live else read_file_tags(file_path)
+    current = read_current_book_metadata(current_tags)
+    current["duration_minutes"] = duration
+    clues["current"] = current
     cache_key = f"file::{file_path}"
     return queries, clues, cache_key
 
@@ -3942,18 +4009,27 @@ def _build_report_item(result: "ItemResult") -> dict:
         meta = result.metadata or {}
     duration = meta.get("duration") or {}
     if clues:
+        # "current" is a pure, matcher-untouched snapshot of the file's own
+        # tags (see read_current_book_metadata) -- comparison-card display
+        # must never be built from other `clues` fields, which pass through
+        # path/folder overrides meant only to help the matcher find a match,
+        # not to describe what is actually embedded in the file. See
+        # docs/design/comparison-card-data-source.md.
+        current = clues.get("current") or {}
         local = {
-            "title": clues.get("title") or clues.get("raw_title") or "",
-            "author": clues.get("author") or "",
-            # tag_series (not "series") -- "series" is search-clue data that
-            # can be a path/folder-name guess; a report/UI must show the
-            # book's actual embedded tag, not a guess presented as if it
-            # were one.
-            "series": clues.get("tag_series") or "",
-            "sequence": str(clues.get("book_number") or ""),
-            "narrator": clues.get("narrator") or "",
-            "genre": clues.get("genre") or "",
-            "duration_minutes": clues.get("local_duration_minutes"),
+            "title": current.get("title") or "",
+            "subtitle": current.get("subtitle") or "",
+            "author": current.get("author") or "",
+            "narrator": current.get("narrator") or "",
+            "series": current.get("series") or "",
+            "sequence": str(current.get("sequence") or ""),
+            "year": current.get("year") or "",
+            "genre": current.get("genre") or "",
+            "isbn": current.get("isbn") or "",
+            "asin": current.get("asin") or "",
+            "publisher": current.get("publisher") or "",
+            "summary": current.get("summary") or "",
+            "duration_minutes": current.get("duration_minutes"),
         }
     else:
         # A cleanly-skipped file (already matched/marked good in a prior run)
@@ -3968,11 +4044,17 @@ def _build_report_item(result: "ItemResult") -> dict:
         # docs/design/comparison-card-data-source.md.
         local = {
             "title": meta.get("title") or "",
+            "subtitle": meta.get("subtitle") or "",
             "author": meta.get("author") or "",
+            "narrator": meta.get("narrator") or "",
             "series": meta.get("series") or "",
             "sequence": str(meta.get("sequence") or ""),
-            "narrator": meta.get("narrator") or "",
+            "year": meta.get("year") or "",
             "genre": meta.get("genre") or "",
+            "isbn": meta.get("isbn") or "",
+            "asin": meta.get("asin") or "",
+            "publisher": meta.get("publisher") or "",
+            "summary": meta.get("summary") or "",
             "duration_minutes": duration.get("local_minutes"),
         }
     item: dict = {
@@ -3999,6 +4081,7 @@ def _build_report_item(result: "ItemResult") -> dict:
             "year": meta.get("year") or "",
             "asin": meta.get("asin") or "",
             "isbn": meta.get("isbn") or "",
+            "publisher": meta.get("publisher") or "",
             "genre": meta.get("genre") or "",
             "cover_url": meta.get("cover_url") or "",
             "duration_minutes": meta.get("audible_duration_minutes"),

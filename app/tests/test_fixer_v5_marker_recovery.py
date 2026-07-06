@@ -206,7 +206,7 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "Fantasy")
 
-    def test_genre_falls_back_to_clues_when_match_has_none(self):
+    def test_genre_falls_back_to_current_when_match_has_none(self):
         # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
         # tag `if genre:` -- when the match provides no genre, the file's
         # pre-existing genre tag is left alone, not cleared. Confirmed against
@@ -214,20 +214,23 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
         # had a genre tag the writer had silently preserved, while
         # marker.audible.genre (and therefore the report's local/match
         # columns) claimed "" -- because it only ever recorded the match's
-        # own genre, never the clue snapshot of what was already embedded.
+        # own genre, never the pure current-tags snapshot of what was already
+        # embedded. clues["current"] (not top-level clue fields) is the
+        # source: see read_current_book_metadata /
+        # docs/design/comparison-card-data-source.md.
         FIXER.write_marker(
             self.media,
             {"asin": "B0X", "edit_mode": "full", "genre": ""},
-            {"genre": "Preserved From File"},
+            {"current": {"genre": "Preserved From File"}},
             1.0, "normal", False,
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "Preserved From File")
 
-    def test_genre_from_match_wins_over_clues_when_both_present(self):
+    def test_genre_from_match_wins_over_current_when_both_present(self):
         FIXER.write_marker(
             self.media,
             {"asin": "B0X", "edit_mode": "full", "genre": "New Genre"},
-            {"genre": "Old Genre"},
+            {"current": {"genre": "Old Genre"}},
             1.0, "normal", False,
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "New Genre")
@@ -250,11 +253,16 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
 
     def test_local_before_uses_real_tag_series_not_path_clue(self):
         # local_before backs the report's "local" column on a later clean-skip
-        # run (no fresh probe happens then) -- it must never store a
-        # path/folder-derived "series" clue as if it were real tag data.
+        # run (no fresh probe happens then) -- it must be built exclusively
+        # from clues["current"] (the pure, matcher-untouched tag snapshot),
+        # never from top-level `clues` fields like "series", which can be a
+        # path/folder-derived guess used only to help the matcher.
         FIXER.write_marker(
             self.media, {"asin": "B0X", "edit_mode": "full"},
-            {"series": "001 Eric Vall - Pocket Dungeon", "tag_series": "Pocket Dungeon", "genre": "Fantasy"},
+            {
+                "series": "001 Eric Vall - Pocket Dungeon",  # matcher-only path guess
+                "current": {"series": "Pocket Dungeon", "genre": "Fantasy"},
+            },
             1.0, "normal", False,
         )
         local_before = self._read_marker()["local_before"]
@@ -264,7 +272,7 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
     def test_local_before_series_blank_when_no_real_tag_series(self):
         FIXER.write_marker(
             self.media, {"asin": "B0X", "edit_mode": "full"},
-            {"series": "Pocket Dungeon 4", "tag_series": ""},
+            {"series": "Pocket Dungeon 4", "current": {"series": ""}},
             1.0, "normal", False,
         )
         self.assertEqual(self._read_marker()["local_before"]["series"], "")
