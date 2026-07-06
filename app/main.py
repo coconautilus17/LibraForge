@@ -5575,6 +5575,17 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
 
         activation_bytes_cache: str | None = None
         activation_bytes_error: Exception | None = None
+        # Audible enforces a separate, account-wide cap on how many license
+        # grants (licenserequest calls) can be issued in a period -- distinct
+        # from the CloudFront activation-bytes block and from concurrency: a
+        # fully serial run can still hit it on a large batch, and once hit it
+        # applies to every remaining item, not just a transient one. Detected
+        # by a 403 whose message mentions the account being "above threshold"
+        # for the license grant count (a known audible-cli-reported error).
+        # Cache it like activation_bytes_error so the rest of a large run
+        # fails fast locally instead of making one wasted live call per
+        # remaining book. See docs/design/download-voucher-first-decryption.md.
+        license_threshold_error: Exception | None = None
 
         total = len(req.items)
         state.total = total
@@ -5586,6 +5597,10 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
             set_run_phase(state, "downloading", "Downloading", f"{idx} of {total}: {state.current_file}")
             log(f"[{idx}/{total}] {item.title or item.asin} ({item.asin})")
             try:
+                if license_threshold_error is not None:
+                    log("  skipping: Audible license-grant threshold was hit earlier this run")
+                    raise license_threshold_error
+
                 folder_name = _safe_component(
                     f"{item.author} - {item.title}".strip(" -") or item.title or item.asin
                 )
@@ -5601,15 +5616,21 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                         shutil.rmtree(book_dir, ignore_errors=True)
                 book_dir.mkdir(parents=True, exist_ok=True)
 
-                lr = client.post(
-                    f"content/{item.asin}/licenserequest",
-                    body={
-                        "supported_drm_types": ["Mpeg", "Adrm"],
-                        "quality": req.quality,
-                        "consumption_type": "Download",
-                        "response_groups": "last_position_heard,pdf_url,content_reference,chapter_info",
-                    },
-                )
+                try:
+                    lr = client.post(
+                        f"content/{item.asin}/licenserequest",
+                        body={
+                            "supported_drm_types": ["Mpeg", "Adrm"],
+                            "quality": req.quality,
+                            "consumption_type": "Download",
+                            "response_groups": "last_position_heard,pdf_url,content_reference,chapter_info",
+                        },
+                    )
+                except Exception as lr_exc:  # noqa: BLE001
+                    if "threshold" in str(lr_exc).lower():
+                        license_threshold_error = lr_exc
+                        log("  Audible license-grant threshold hit -- stopping further license requests this run")
+                    raise
                 content_license = lr.get("content_license", {})
                 content_url = (
                     content_license.get("content_metadata", {})
@@ -5624,24 +5645,42 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     )
 
                 # AAX (Adrm) decrypts with account activation_bytes; AAXC (Mpeg) with a
-                # per-file voucher. Resolve the right material up front so a decryption
-                # failure doesn't leave the encrypted source on disk.
+                # per-file voucher. The declared drm_type is not a reliable signal for
+                # which material is actually available, though: live-probed 2026-07-07,
+                # titles Audible labels "Adrm" can still carry a usable per-book voucher
+                # in the same licenserequest response (confirmed for 3/3 titles that were
+                # previously stuck on the activation-bytes path). The voucher is derived
+                # entirely locally from already-known device/customer credentials plus
+                # this book's own encrypted voucher blob -- it never touches Audible's
+                # CloudFront-fronted activation endpoint -- so it's always preferred over
+                # activation_bytes when available, regardless of drm_type.
                 #
                 # Activation bytes are an account/device property, not a per-book one, and
-                # live-fetching them hits Audible's legacy CloudFront-fronted activation
-                # endpoint. Fetching it once per book (instead of once per run) fires that
-                # request repeatedly in quick succession, which trips CloudFront's abuse
-                # protection and makes every Adrm item in the batch fail. Fetch it once,
-                # reuse for the rest of the run, and persist it to the auth file so future
-                # runs skip the live fetch entirely. A failed fetch is cached too (not just
-                # a successful one) so a persistent block (e.g. CloudFront rejecting the
-                # request) fails every remaining Adrm item immediately instead of retrying
-                # the live call once per book, which would keep hammering the endpoint.
+                # live-fetching them hits that legacy activation endpoint. Fetching it once
+                # per book (instead of once per run) fires that request repeatedly in quick
+                # succession, which trips CloudFront's abuse protection and makes every
+                # activation-bytes-dependent item in the batch fail. Fetch it once, reuse
+                # for the rest of the run, and persist it to the auth file so future runs
+                # skip the live fetch entirely. A failed fetch is cached too (not just a
+                # successful one) so a persistent block fails every remaining item needing
+                # it immediately instead of retrying the live call once per book, which
+                # would keep hammering the endpoint. See
+                # docs/design/download-voucher-first-decryption.md.
                 drm_type = content_license.get("drm_type", "")
                 base = _safe_component(item.title or item.asin)
-                if drm_type == "Adrm":
+                voucher_error: Exception | None = None
+                try:
+                    voucher = decrypt_voucher_from_licenserequest(auth, lr)
+                    decrypt_kwargs = {"key": voucher["key"], "iv": voucher["iv"]}
+                    enc_path = book_dir / f"{base}.aaxc"
+                    log("  using per-book voucher (no account activation bytes needed)")
+                except Exception as v_exc:  # noqa: BLE001
+                    voucher_error = v_exc
+                    log(f"  no per-book voucher available ({v_exc}); falling back to account activation bytes")
+
+                if voucher_error is not None:
                     if activation_bytes_cache is None and activation_bytes_error is None:
-                        log("  fetching account activation bytes (first AAX title this run)...")
+                        log("  fetching account activation bytes (first title needing it this run)...")
                         try:
                             activation_bytes_cache = auth.get_activation_bytes()
                             log("  activation bytes obtained")
@@ -5659,12 +5698,9 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                         raise activation_bytes_error
                     decrypt_kwargs = {"activation_bytes": activation_bytes_cache}
                     enc_path = book_dir / f"{base}.aax"
-                else:
-                    voucher = decrypt_voucher_from_licenserequest(auth, lr)
-                    decrypt_kwargs = {"key": voucher["key"], "iv": voucher["iv"]}
-                    enc_path = book_dir / f"{base}.aaxc"
 
-                log(f"  downloading encrypted stream ({drm_type or 'unknown'} DRM)...")
+                decrypt_method = "activation_bytes" if voucher_error is not None else "voucher"
+                log(f"  downloading encrypted stream (declared drm_type={drm_type or 'unknown'}, decrypting via {decrypt_method})...")
                 with client.raw_request(  # type: ignore[union-attr]
                     "GET",
                     content_url,
