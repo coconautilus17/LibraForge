@@ -1321,6 +1321,13 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     )
 
     series = clean_series_value(grouping or album)
+    # Only a dedicated series-like tag (or a series name parsed out of the
+    # title tag below) counts as real embedded series metadata. Falling back
+    # to the album tag is a useful search clue (album often echoes the
+    # series), but album very often just duplicates the title itself (e.g.
+    # a standalone book's album == its title), so it must not be presented
+    # to a report/UI as if the book actually has a series tag.
+    series_from_real_tag = bool(grouping)
     title = raw_title
     book_number = ""
     book_number_source = ""
@@ -1333,6 +1340,7 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
 
     if match:
         series = clean_series_value(match.group("series").strip())
+        series_from_real_tag = True
         book_number = normalize_book_number(match.group("number"))
         book_number_source = "title"
         title = match.group("title").strip()
@@ -1345,6 +1353,7 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
 
     if roman_match:
         series = clean_series_value(roman_match.group("series").strip())
+        series_from_real_tag = True
         title = roman_match.group("title").strip()
         book_number = roman_to_int(roman_match.group("roman"))
         book_number_source = "title"
@@ -1358,6 +1367,7 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     if trailing_series:
         title = sanitize_book_title(trailing_series.group("title"))
         series = clean_series_value(trailing_series.group("series"))
+        series_from_real_tag = True
         book_number = normalize_book_number(trailing_series.group("number"))
         book_number_source = "title"
 
@@ -1378,6 +1388,10 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         "raw_title": raw_title,
         "title": title,
         "series": series,
+        # Real embedded series data only (dedicated tag, or parsed out of the
+        # title tag) -- never the album fallback, which usually just echoes
+        # the title. See "series" for the clue value search queries use.
+        "tag_series": series if series_from_real_tag else "",
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": clean_author_value(artist),

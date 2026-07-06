@@ -43,8 +43,99 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_series", codes)
 
+    def test_real_local_series_with_no_match_series_is_not_flagged(self):
+        # report_items' local.series is now real embedded-tag data (the fixer
+        # preserves it as "tag_series" before any path/folder-name override
+        # can replace the search-clue "series" -- see
+        # build_search_clues_from_file). If the book genuinely has a series
+        # locally and the confirmed match just didn't corroborate it, that's
+        # fine and must NOT be flagged: the match not listing a series is not
+        # the same as the book having no series.
+        item = self._base_item(
+            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": "Pocket Dungeon"},
+            match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
+
+    def test_no_series_anywhere_is_flagged(self):
+        item = self._base_item(
+            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+            match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertIn("missing_series", codes)
+
+    def test_unmatched_item_with_no_local_series_is_flagged(self):
+        # A cleaner completeness picture wants every book with no series
+        # identified anywhere, including ones that never matched at all --
+        # not just matched/would-write items.
+        item = self._base_item(
+            status="skipped",
+            write_action="write_skipped",
+            local={"title": "Some Book", "author": "Eric Vall", "series": ""},
+            match={},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertEqual(codes, {"missing_series"})
+
+    def test_unmatched_item_with_real_local_series_is_not_flagged(self):
+        item = self._base_item(
+            status="skipped",
+            write_action="write_skipped",
+            local={"title": "Some Book", "author": "Eric Vall", "series": "Some Series"},
+            match={},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
+
     def test_present_series_is_not_flagged(self):
         item = self._base_item()
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
+
+    def test_missing_series_flagged_even_when_smart_skipped(self):
+        # missing_series describes the book's current state, not the risk of
+        # a fresh write -- it must fire even when write_action is not
+        # "would_write" (e.g. smart-skipped because an earlier run already
+        # wrote this same incomplete match, so there's nothing new to write
+        # this time). Confirmed against a real report: 6 of 9 items with no
+        # series on the confirmed match were smart-skipped and were being
+        # silently excluded entirely before this fix.
+        item = self._base_item(
+            write_action="smart_skipped",
+            match={"title": "Metal Mage 15", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertEqual(codes, {"missing_series"})
+
+    def test_mismatch_checks_do_not_fire_when_not_would_write(self):
+        # Everything except missing_title/author/series is specifically about
+        # the risk of a fresh write this run -- these must stay gated.
+        item = self._base_item(
+            write_action="smart_skipped",
+            score=0.1,
+            local={"title": "Totally Different Title", "author": "Eric Vall"},
+            match={"title": "Metal Mage 15", "author": "Eric Vall", "series": "Metal Mage"},
+        )
 
         result = REVIEW.review_metadata_item(item, make_args())
 

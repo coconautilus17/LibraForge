@@ -38,6 +38,32 @@ class SidecarBookGenreTests(unittest.TestCase):
 
         self.assertEqual(result["genre"], "Fantasy")
 
+    def test_single_file_marker_surfaces_real_subtitle_summary_isbn(self):
+        # Same hardcoded-blank bug as genre had, for three more fields that
+        # write_marker now persists into marker.audible.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            audio = folder / "Book.m4b"
+            audio.write_bytes(b"")
+            marker_path = folder / "libraforge.json"
+            marker_path.write_text(json.dumps({
+                "marker": {
+                    "audible": {
+                        "chosen_title": "Book",
+                        "author": "Jane Doe",
+                        "subtitle": "A Subtitle",
+                        "summary": "A summary.",
+                        "isbn": "9781234567890",
+                    },
+                },
+            }), encoding="utf-8")
+
+            result = main._read_sidecar_book(audio)
+
+        self.assertEqual(result["subtitle"], "A Subtitle")
+        self.assertEqual(result["summary"], "A summary.")
+        self.assertEqual(result["isbn"], "9781234567890")
+
 
 class PickGenreTests(unittest.TestCase):
     """_pick_genre used to return only the first non-generic genre, silently

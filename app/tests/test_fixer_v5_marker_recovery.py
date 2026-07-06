@@ -84,6 +84,26 @@ class MetadataFromMarkerTests(unittest.TestCase):
         self.assertEqual(md["asin"], "")
         self.assertEqual(md["title"], "X")
 
+    def test_genre_subtitle_summary_isbn_round_trip(self):
+        # These four were written into marker.audible but never read back out
+        # by metadata_from_marker, so a recovered/re-filled book silently lost
+        # them even though the marker had the data on disk all along.
+        marker = {
+            "audible": {
+                "asin": "B0X",
+                "chosen_title": "Book",
+                "genre": "Fantasy",
+                "subtitle": "A Subtitle",
+                "summary": "A summary.",
+                "isbn": "9781234567890",
+            },
+        }
+        md = FIXER.metadata_from_marker(marker)
+        self.assertEqual(md["genre"], "Fantasy")
+        self.assertEqual(md["subtitle"], "A Subtitle")
+        self.assertEqual(md["summary"], "A summary.")
+        self.assertEqual(md["isbn"], "9781234567890")
+
 
 class MarkerSkipIsCleanTests(unittest.TestCase):
     def setUp(self):
@@ -185,6 +205,77 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
             self.media, {"asin": "B0X", "edit_mode": "full", "genre": "Fantasy"}, {}, 1.0, "normal", False,
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "Fantasy")
+
+    def test_genre_falls_back_to_current_when_match_has_none(self):
+        # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
+        # tag `if genre:` -- when the match provides no genre, the file's
+        # pre-existing genre tag is left alone, not cleared. Confirmed against
+        # 100 real _unorganized books: 85/99 single-file "tags"-output books
+        # had a genre tag the writer had silently preserved, while
+        # marker.audible.genre (and therefore the report's local/match
+        # columns) claimed "" -- because it only ever recorded the match's
+        # own genre, never the pure current-tags snapshot of what was already
+        # embedded. clues["current"] (not top-level clue fields) is the
+        # source: see read_current_book_metadata /
+        # docs/design/comparison-card-data-source.md.
+        FIXER.write_marker(
+            self.media,
+            {"asin": "B0X", "edit_mode": "full", "genre": ""},
+            {"current": {"genre": "Preserved From File"}},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["audible"]["genre"], "Preserved From File")
+
+    def test_genre_from_match_wins_over_current_when_both_present(self):
+        FIXER.write_marker(
+            self.media,
+            {"asin": "B0X", "edit_mode": "full", "genre": "New Genre"},
+            {"current": {"genre": "Old Genre"}},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["audible"]["genre"], "New Genre")
+
+    def test_subtitle_summary_isbn_are_persisted_in_marker(self):
+        # Same gap as genre: marker.audible silently dropped subtitle, summary,
+        # and isbn even though the tag writers put them on the actual file.
+        FIXER.write_marker(
+            self.media,
+            {
+                "asin": "B0X", "edit_mode": "full",
+                "subtitle": "A Subtitle", "summary": "A summary.", "isbn": "9781234567890",
+            },
+            {}, 1.0, "normal", False,
+        )
+        audible = self._read_marker()["audible"]
+        self.assertEqual(audible["subtitle"], "A Subtitle")
+        self.assertEqual(audible["summary"], "A summary.")
+        self.assertEqual(audible["isbn"], "9781234567890")
+
+    def test_local_before_uses_real_tag_series_not_path_clue(self):
+        # local_before backs the report's "local" column on a later clean-skip
+        # run (no fresh probe happens then) -- it must be built exclusively
+        # from clues["current"] (the pure, matcher-untouched tag snapshot),
+        # never from top-level `clues` fields like "series", which can be a
+        # path/folder-derived guess used only to help the matcher.
+        FIXER.write_marker(
+            self.media, {"asin": "B0X", "edit_mode": "full"},
+            {
+                "series": "001 Eric Vall - Pocket Dungeon",  # matcher-only path guess
+                "current": {"series": "Pocket Dungeon", "genre": "Fantasy"},
+            },
+            1.0, "normal", False,
+        )
+        local_before = self._read_marker()["local_before"]
+        self.assertEqual(local_before["series"], "Pocket Dungeon")
+        self.assertEqual(local_before["genre"], "Fantasy")
+
+    def test_local_before_series_blank_when_no_real_tag_series(self):
+        FIXER.write_marker(
+            self.media, {"asin": "B0X", "edit_mode": "full"},
+            {"series": "Pocket Dungeon 4", "current": {"series": ""}},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["local_before"]["series"], "")
 
 
 class MetadataJsonFillMissingTests(unittest.TestCase):

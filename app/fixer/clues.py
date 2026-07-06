@@ -28,6 +28,8 @@ from app.fixer.parsing import (
     clean_author_value,
     looks_like_person_name,
     sanitize_book_title,
+    first_existing_tag,
+    parse_title_series_number_from_metadata,
 )
 
 
@@ -125,6 +127,46 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
         clues["author"] = path_meta["author"]
 
     return clues
+
+
+@trace(ALTER, capture=[])
+def read_current_book_metadata(tags: dict) -> dict:
+    """Pure snapshot of what this file's own tags actually say, right now.
+
+    This is deliberately NOT a search clue and must never be touched by any
+    path/folder-name heuristic -- apply_structured_path_override, descriptive/
+    structured path parsing, hierarchy-folder series inference, filename-
+    derived ASIN recovery, and the multi-file group's folder-name-driven
+    identity resolution all exist purely to help the matcher find the right
+    book; none of it describes what is actually embedded in the file. Every
+    comparison-card "local"/"current" display (Suspicion Report, Manual
+    Review) must be built from this function's output instead of `clues`, so
+    a matcher heuristic can never leak into what claims to be the book's real
+    current metadata. See docs/design/comparison-card-data-source.md.
+
+    `tags` must come from a genuine, current disk probe (not a cached
+    backup/sidecar snapshot) -- callers are responsible for that guarantee.
+    Every field below is exactly what the tag says, or "" if the tag is
+    absent. No inference, no fallback guessing.
+    """
+    parsed = parse_title_series_number_from_metadata(tags)
+    publisher_scratch: dict = {}
+    capture_publisher_clue(publisher_scratch, tags)
+    return {
+        "raw_title": parsed["raw_title"],
+        "title": parsed["title"],
+        "subtitle": first_existing_tag(tags, ["subtitle", "tit3"]),
+        "author": parsed["author"],
+        "narrator": parsed["narrator"],
+        "series": parsed["tag_series"],
+        "sequence": parsed["book_number"],
+        "genre": parsed["genre"],
+        "year": first_existing_tag(tags, ["date", "year"]),
+        "isbn": first_existing_tag(tags, ["isbn"]),
+        "asin": first_existing_tag(tags, ["asin"]).upper(),
+        "publisher": publisher_scratch.get("publisher", ""),
+        "summary": first_existing_tag(tags, ["comment", "description"]),
+    }
 
 
 @trace(ALTER, capture=[])

@@ -174,6 +174,44 @@ class FillMarkerHelperTests(unittest.TestCase):
         self.assertEqual(merged["genre"], "Horror")
         self.assertNotIn("genre", filled)
 
+    def test_subtitle_is_filled_when_missing(self):
+        # subtitle was missing from field_map entirely -- same gap as genre
+        # had: fill-missing mode always overwrote it with the fresh match
+        # value instead of respecting an already-present local subtitle.
+        current = {"title": "The Book", "artist": "Jane Doe"}
+        metadata = {"title": "The Book", "author": "Jane Doe", "subtitle": "A Subtitle", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["subtitle"], "A Subtitle")
+        self.assertIn("subtitle", filled)
+
+    def test_subtitle_is_preserved_when_already_present(self):
+        current = {"title": "The Book", "artist": "Jane Doe", "subtitle": "Local Subtitle"}
+        metadata = {"title": "The Book", "author": "Jane Doe", "subtitle": "Match Subtitle", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["subtitle"], "Local Subtitle")
+        self.assertNotIn("subtitle", filled)
+
+
+class CompareTagsForWriteSubtitleTests(unittest.TestCase):
+    def test_subtitle_mismatch_is_reported_as_changed(self):
+        # compare_tags_for_write had no subtitle check at all, so smart mode
+        # could decide "everything already matches, skip the write" while a
+        # stale/wrong subtitle sat in the file forever.
+        current_tags = {"title": "The Book", "artist": "Jane Doe", "subtitle": "Old Subtitle"}
+        metadata = {"title": "The Book", "author": "Jane Doe", "subtitle": "New Subtitle"}
+        all_match, changed = FIXER.compare_tags_for_write(current_tags, metadata, edit_mode="full")
+        self.assertFalse(all_match)
+        self.assertIn("subtitle", changed)
+
+    def test_matching_subtitle_does_not_force_a_write(self):
+        current_tags = {
+            "title": "The Book", "artist": "Jane Doe", "subtitle": "Same Subtitle",
+            "grouping": "", "genre": "", "asin": "",
+        }
+        metadata = {"title": "The Book", "author": "Jane Doe", "subtitle": "Same Subtitle"}
+        all_match, changed = FIXER.compare_tags_for_write(current_tags, metadata, edit_mode="full")
+        self.assertNotIn("subtitle", changed)
+
 
 if __name__ == "__main__":
     unittest.main()

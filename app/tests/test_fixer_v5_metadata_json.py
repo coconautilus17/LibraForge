@@ -235,5 +235,100 @@ class ReportItemTests(unittest.TestCase):
         self.assertEqual(item["match"]["isbn"], "9781234567890")
 
 
+class ReportItemCleanSkipFallbackTests(unittest.TestCase):
+    # A cleanly-skipped file (already matched/marked good by a prior run)
+    # gets no fresh probe this run, so result.clues/result.metadata are never
+    # populated -- previously this meant the report's "local" and "match"
+    # sections were both silently blank for every clean-skip, which is most
+    # of a large library on a routine re-run. _build_report_item must fall
+    # back to the marker's own data in that case -- specifically to
+    # marker.audible (the last-applied, currently-embedded state), not
+    # marker.local_before (the snapshot from *before* that write, which goes
+    # stale the moment the write completes). See
+    # docs/design/comparison-card-data-source.md for the full rationale.
+    #
+    # local_before is deliberately given DIFFERENT values than audible below
+    # (narrator/duration only present in local_before, not audible) so a
+    # regression back to reading local_before would be caught here instead
+    # of being masked by fixture data that happens to agree either way.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+        self.media = self.folder / "Book.m4b"
+        self.media.write_bytes(b"")
+        (self.folder / "libraforge.json").write_text(json.dumps({
+            "marker": {
+                "duration": {"local_minutes": 615, "audible_minutes": 615},
+                "audible": {
+                    "asin": "B0REAL1234",
+                    "chosen_title": "Metal Mage 15",
+                    "author": "Eric Vall",
+                    "narrator": "Jeff Hays",
+                    "series": "Metal Mage",
+                    "sequence": "15",
+                    "genre": "Fantasy",
+                    "subtitle": "A LitRPG Adventure",
+                },
+                "local_before": {
+                    # Stale pre-fix snapshot: contaminated album-fallback
+                    # series and a different narrator/duration, standing in
+                    # for "what the file looked like before the last write
+                    # corrected it." None of these should leak into "local".
+                    "raw_title": "015 Metal Mage - Eric Vall",
+                    "title": "015 Metal Mage - Eric Vall",
+                    "author": "Eric Vall",
+                    "series": "",
+                    "number": "15",
+                    "narrator": "Stale Narrator",
+                    "genre": "",
+                    "duration_minutes": 612,
+                },
+            },
+        }), encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_clean_skip_local_falls_back_to_marker_audible_not_local_before(self):
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="skipped",
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["local"]["title"], "Metal Mage 15")
+        self.assertEqual(item["local"]["author"], "Eric Vall")
+        self.assertEqual(item["local"]["series"], "Metal Mage")
+        self.assertEqual(item["local"]["sequence"], "15")
+        self.assertEqual(item["local"]["narrator"], "Jeff Hays")
+        self.assertEqual(item["local"]["genre"], "Fantasy")
+        self.assertEqual(item["local"]["duration_minutes"], 615)
+
+    def test_clean_skip_match_falls_back_to_marker_audible(self):
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="skipped",
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["match"]["title"], "Metal Mage 15")
+        self.assertEqual(item["match"]["series"], "Metal Mage")
+        self.assertEqual(item["match"]["asin"], "B0REAL1234")
+
+    def test_fresh_clues_take_priority_over_marker_fallback(self):
+        # "local" must come from clues["current"] (the pure, matcher-untouched
+        # tag snapshot), not from top-level clue fields like "title"/"series",
+        # which pass through path/folder overrides meant only for the matcher.
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="matched",
+            metadata={"title": "Fresh Match", "author": "Eric Vall"},
+            clues={
+                "title": "Path-Derived Title",  # matcher-only, must not leak into "local"
+                "author": "Eric Vall",
+                "current": {"title": "Fresh Local", "author": "Eric Vall", "series": "Fresh Series"},
+            },
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["local"]["title"], "Fresh Local")
+        self.assertEqual(item["local"]["series"], "Fresh Series")
+        self.assertEqual(item["match"]["title"], "Fresh Match")
+
+
 if __name__ == "__main__":
     unittest.main()
