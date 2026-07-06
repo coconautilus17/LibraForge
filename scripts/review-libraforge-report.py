@@ -341,7 +341,7 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     local_title = clean_text(local.get("title"))
     local_series = clean_text(local.get("series"))
 
-    # --- Missing title/author/series ---
+    # --- Missing title/author (matched items only) ---
     # This describes the book's *current* state, not the risk of a fresh
     # write -- it must fire even when write_action != "would_write" (e.g.
     # smart-skipped because an earlier run already wrote this same
@@ -351,28 +351,37 @@ def review_metadata_item(item: dict[str, Any], args: argparse.Namespace) -> dict
     # items with no series on the confirmed match were smart-skipped and
     # never reviewed at all.
     #
-    # match is the confirmed write payload -- final_series must NOT fall back
-    # to local (unlike final_title/final_author, which fall back because the
-    # fixer's own upstream validation already guarantees match has *a* title
-    # and author whenever status is "matched", so the fallback never actually
-    # fires there in practice). local.series is often just noise parsed from
-    # the folder name (e.g. "001 Eric Vall - Pocket Dungeon") -- falling back
-    # to it here previously made this check never fire, since local almost
-    # always has *something* even when the confirmed match has no series.
+    # final_title/final_author fall back to local because the fixer's own
+    # upstream validation already guarantees match has *a* title and author
+    # whenever status is "matched", so the fallback never actually fires
+    # there in practice -- these two only make sense once a match exists.
     if status == "matched":
         final_title = clean_text(match.get("title")) or local_title
         final_author = clean_text(match.get("author")) or clean_text(local.get("author"))
-        final_series = clean_text(match.get("series"))
         if not final_title:
             add_reason(reasons, "missing_title", "high", "No title available for this match.")
         if not final_author:
             add_reason(reasons, "missing_author", "high", "No author available for this match.")
-        if not final_series:
-            add_reason(
-                reasons, "missing_series", "high",
-                "No series set for this book (may be a standalone title, or missing source data).",
-                {"title": final_title, "author": final_author},
-            )
+
+    # --- Missing series (any item, matched or not) ---
+    # Unlike title/author, this checks every item regardless of match status
+    # -- a cleaner completeness picture wants every book with no series
+    # identified anywhere, including ones that never matched at all or
+    # genuinely have no series (a false positive here is cheap to dismiss).
+    #
+    # local_series is real embedded-tag data now (build_search_clues_from_file
+    # preserves it in "tag_series" before any path/folder-name override can
+    # replace the search-clue "series"), so falling back to it is safe and
+    # correct: if local has a real series but the confirmed match doesn't,
+    # the book isn't missing anything -- the match just didn't corroborate
+    # it, which is fine and must not be flagged.
+    final_series = clean_text(match.get("series")) or local_series
+    if not final_series:
+        add_reason(
+            reasons, "missing_series", "high",
+            "No series set for this book (may be a standalone title, or missing source data).",
+            {"title": local_title or clean_text(match.get("title")), "author": clean_text(local.get("author")) or clean_text(match.get("author"))},
+        )
 
     # Every check below is specifically about the risk of a write happening
     # *this run* -- only review items that will actually be written to disk.

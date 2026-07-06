@@ -672,6 +672,41 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(parsed["series"], "Divine Apostasy")
         self.assertEqual(parsed["book_number"], "1")
 
+    def test_album_fallback_series_is_not_tag_series(self):
+        # No dedicated series tag -- the album fallback commonly just echoes
+        # the title (e.g. "Pocket Dungeon 4"), so it's a fine search clue but
+        # must never be presented as if the book actually has a series tag.
+        parsed = FIXER.parse_title_series_number_from_metadata(
+            {"title": "Pocket Dungeon 4", "album": "Pocket Dungeon 4", "album_artist": "Eric Vall"}
+        )
+        self.assertEqual(parsed["series"], "Pocket Dungeon 4")
+        self.assertEqual(parsed["tag_series"], "")
+
+    def test_dedicated_grouping_tag_is_real_tag_series(self):
+        parsed = FIXER.parse_title_series_number_from_metadata(
+            {
+                "title": "Pocket Dungeon 4",
+                "album": "Pocket Dungeon 4",
+                "grouping": "Pocket Dungeon",
+                "album_artist": "Eric Vall",
+            }
+        )
+        self.assertEqual(parsed["tag_series"], "Pocket Dungeon")
+
+    def test_series_parsed_from_title_tag_counts_as_real_tag_series(self):
+        # A series name embedded within the title tag itself (not a dedicated
+        # grouping tag, and not the album fallback) is still real tag data.
+        parsed = FIXER.parse_title_series_number_from_metadata(
+            {
+                "title": (
+                    "Shade's First Rule: A Fantasy LitRPG Adventure: "
+                    "Divine Apostasy, Book 1"
+                ),
+                "album_artist": "A. F. Kay",
+            }
+        )
+        self.assertEqual(parsed["tag_series"], "Divine Apostasy")
+
     def test_genre_tag_is_captured_as_a_clue(self):
         # Local genre was never extracted into clues at all -- the "Local"
         # column in match-report cards always showed blank regardless of what

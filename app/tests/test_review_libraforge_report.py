@@ -43,14 +43,26 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_series", codes)
 
-    def test_missing_series_is_flagged_even_with_noisy_local_series(self):
-        # The confirmed match having no series must decide this, not local --
-        # local.series is often just noise parsed from the folder name (e.g.
-        # "001 Eric Vall - Pocket Dungeon"). Falling back to it here silently
-        # swallowed every real case, since local almost always has *something*
-        # even when the confirmed match has no series at all.
+    def test_real_local_series_with_no_match_series_is_not_flagged(self):
+        # report_items' local.series is now real embedded-tag data (the fixer
+        # preserves it as "tag_series" before any path/folder-name override
+        # can replace the search-clue "series" -- see
+        # build_search_clues_from_file). If the book genuinely has a series
+        # locally and the confirmed match just didn't corroborate it, that's
+        # fine and must NOT be flagged: the match not listing a series is not
+        # the same as the book having no series.
         item = self._base_item(
-            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": "001 Eric Vall - Pocket Dungeon"},
+            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": "Pocket Dungeon"},
+            match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
+
+    def test_no_series_anywhere_is_flagged(self):
+        item = self._base_item(
+            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
             match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
         )
 
@@ -59,6 +71,35 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         self.assertIsNotNone(result)
         codes = {r["code"] for r in result["reasons"]}
         self.assertIn("missing_series", codes)
+
+    def test_unmatched_item_with_no_local_series_is_flagged(self):
+        # A cleaner completeness picture wants every book with no series
+        # identified anywhere, including ones that never matched at all --
+        # not just matched/would-write items.
+        item = self._base_item(
+            status="skipped",
+            write_action="write_skipped",
+            local={"title": "Some Book", "author": "Eric Vall", "series": ""},
+            match={},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertEqual(codes, {"missing_series"})
+
+    def test_unmatched_item_with_real_local_series_is_not_flagged(self):
+        item = self._base_item(
+            status="skipped",
+            write_action="write_skipped",
+            local={"title": "Some Book", "author": "Eric Vall", "series": "Some Series"},
+            match={},
+        )
+
+        result = REVIEW.review_metadata_item(item, make_args())
+
+        self.assertIsNone(result)
 
     def test_present_series_is_not_flagged(self):
         item = self._base_item()

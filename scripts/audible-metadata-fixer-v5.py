@@ -1654,7 +1654,7 @@ def should_skip_due_to_marker(
     return False, ""
 
 # Fields the fixer fills into file tags / metadata.json, in report order.
-FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin", "genre")
+FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asin", "genre", "subtitle")
 
 def marker_real_asin(marker: dict) -> str:
     """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
@@ -1673,12 +1673,16 @@ def metadata_from_marker(marker: dict) -> dict:
         "asin": marker_real_asin(marker),
         "title": a.get("chosen_title") or a.get("title") or "",
         "audible_title": a.get("title") or "",
+        "subtitle": a.get("subtitle") or "",
         "author": a.get("author") or "",
         "narrator": a.get("narrator") or "",
         "series": a.get("series") or "",
         "sequence": a.get("sequence") or "",
         "audible_sequence": a.get("sequence") or "",
         "year": a.get("year") or "",
+        "genre": a.get("genre") or "",
+        "summary": a.get("summary") or "",
+        "isbn": a.get("isbn") or "",
         "cover_url": a.get("cover_url") or "",
         "audible_duration_minutes": a.get("duration_minutes"),
         "audible_number_candidates": a.get("number_candidates") or [],
@@ -1741,12 +1745,15 @@ def write_marker(
             "asin": metadata.get("asin", ""),
             "title": metadata.get("audible_title", metadata.get("title", "")),
             "chosen_title": metadata.get("title", ""),
+            "subtitle": metadata.get("subtitle", ""),
             "author": metadata.get("author", ""),
             "narrator": metadata.get("narrator", ""),
             "series": metadata.get("series", ""),
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
             "genre": metadata.get("genre", ""),
+            "summary": metadata.get("summary", ""),
+            "isbn": metadata.get("isbn", ""),
             "cover_url": metadata.get("cover_url", ""),
             "duration_minutes": metadata.get("audible_duration_minutes"),
             "number_candidates": metadata.get("audible_number_candidates", []),
@@ -1755,10 +1762,16 @@ def write_marker(
             "raw_title": clues.get("raw_title", ""),
             "title": clues.get("title", ""),
             "author": clues.get("author", ""),
-            "series": clues.get("series", ""),
+            # tag_series (real embedded data), not "series" (a search clue
+            # that can be a path/folder-name guess) -- this snapshot backs
+            # the report's "local" column on later clean-skip runs, where no
+            # fresh probe happens, so it must not carry clue contamination.
+            "series": clues.get("tag_series", ""),
             "number": clues.get("book_number", ""),
             "number_source": clues.get("book_number_source", ""),
             "narrator": clues.get("narrator", ""),
+            "genre": clues.get("genre", ""),
+            "duration_minutes": clues.get("local_duration_minutes"),
         },
     }
     _write_libraforge(lf_path, payload)
@@ -2019,10 +2032,13 @@ def build_m4b_tool_metadata_payload(
             "raw_title": clues.get("raw_title", ""),
             "title": clues.get("title", ""),
             "author": clues.get("author", ""),
-            "series": clues.get("series", ""),
+            # tag_series, not "series" -- see write_marker's local_before for
+            # why: "series" is a search clue that can be a path/folder guess.
+            "series": clues.get("tag_series", ""),
             "number": clues.get("book_number", ""),
             "number_source": clues.get("book_number_source", ""),
             "narrator": clues.get("narrator", ""),
+            "genre": clues.get("genre", ""),
             "local_duration_minutes": clues.get("local_duration_minutes"),
         },
         "audio_summary": audio_summary,
@@ -2386,6 +2402,15 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         tags = read_file_tags(file_path)
     clues = parse_title_series_number_from_metadata(tags)
 
+    # clues["tag_series"] is already set by parse_title_series_number_from_metadata
+    # to the *real* embedded series data only (dedicated tag, or parsed out of
+    # the title tag) -- never the album fallback. "series" below stays clue
+    # data (used to drive search queries -- path-derived guesses are
+    # legitimately useful there, and apply_structured_path_override may
+    # replace it with a folder-name guess), but tag_series must survive
+    # untouched so a report/UI can show the book's actual local metadata
+    # instead of a path guess presented as if it were one.
+
     # If the folder/file path is clearly structured, trust it over stale embedded tags.
     # This is intentionally narrow and does not change the matching/scoring model.
     clues = apply_structured_path_override(clues, file_path)
@@ -2610,10 +2635,16 @@ def build_multi_file_search_context(
     validation = validate_multi_part_group_files(file_paths)
     extension_counts = Counter(file_path.suffix.lower().lstrip(".") for file_path in file_paths)
 
+    # Pooled across the group's per-file tag_series (real embedded tag data,
+    # not the path/folder-derived guess "series" above may have adopted) --
+    # what a report or UI should show as this group's actual local metadata.
+    tag_series = pick_most_common_value([clues.get("tag_series", "") for clues in clues_list])
+
     clues = {
         "raw_title": title or folder_name,
         "title": title,
         "series": series,
+        "tag_series": tag_series,
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": author,
@@ -3721,9 +3752,10 @@ def compare_tags_for_write(
             checks.append(("sequence", cur(["track", "mvin"]), metadata.get("sequence", "")))
     else:
         checks += [
-            ("series", cur(["grouping", "mvnm"]),                   metadata.get("series", "")),
-            ("genre",  cur(["genre"]),                              metadata.get("genre", "")),
-            ("asin",   cur(["asin"]).upper(),                       (metadata.get("asin") or "").upper()),
+            ("series",   cur(["grouping", "mvnm"]),                 metadata.get("series", "")),
+            ("subtitle", cur(["subtitle"]),                         metadata.get("subtitle", "")),
+            ("genre",    cur(["genre"]),                            metadata.get("genre", "")),
+            ("asin",     cur(["asin"]).upper(),                     (metadata.get("asin") or "").upper()),
         ]
         if edit_mode == "full":
             checks += [
@@ -3754,6 +3786,7 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
         "year":     ["date", "year"],
         "asin":     ["asin"],
         "genre":    ["genre"],
+        "subtitle": ["subtitle"],
     }
     merged = dict(metadata)
     filled: list[str] = []
@@ -3887,14 +3920,49 @@ def collect_audio_files(root: Path) -> list[Path]:
 
 def _build_report_item(result: "ItemResult") -> dict:
     clues = result.clues or {}
-    # For manually applied books use the stored marker data so the report
-    # reflects what was actually written, not a fresh (potentially different) match.
-    if result.was_manually_applied:
+    stored: dict | None = None
+    if result.was_manually_applied or not clues:
         stored = load_marker(result.file_path)
+    # For manually applied books, and for cleanly-skipped books (no fresh
+    # match ran this time), use the stored marker data so the report reflects
+    # what was actually written rather than showing a blank comparison card.
+    if result.was_manually_applied or not clues:
         meta = metadata_from_marker(stored) if stored else (result.metadata or {})
     else:
         meta = result.metadata or {}
     duration = meta.get("duration") or {}
+    if clues:
+        local = {
+            "title": clues.get("title") or clues.get("raw_title") or "",
+            "author": clues.get("author") or "",
+            # tag_series (not "series") -- "series" is search-clue data that
+            # can be a path/folder-name guess; a report/UI must show the
+            # book's actual embedded tag, not a guess presented as if it
+            # were one.
+            "series": clues.get("tag_series") or "",
+            "sequence": str(clues.get("book_number") or ""),
+            "narrator": clues.get("narrator") or "",
+            "genre": clues.get("genre") or "",
+            "duration_minutes": clues.get("local_duration_minutes"),
+        }
+    else:
+        # A cleanly-skipped file (already matched/marked good in a prior run)
+        # never gets a fresh probe this run -- probing every skip just to
+        # populate a report column would undo the whole point of skipping on
+        # large libraries. local_before is the clues snapshot captured the
+        # last time this file was actually read, which is what its tags
+        # still contain as long as marker_skip_is_clean held (nothing
+        # changed since).
+        local_before = (stored or {}).get("local_before", {}) or {}
+        local = {
+            "title": local_before.get("title") or local_before.get("raw_title") or "",
+            "author": local_before.get("author") or "",
+            "series": local_before.get("series") or "",
+            "sequence": str(local_before.get("number") or ""),
+            "narrator": local_before.get("narrator") or "",
+            "genre": local_before.get("genre") or "",
+            "duration_minutes": local_before.get("duration_minutes"),
+        }
     item: dict = {
         "path": str(result.file_path),
         "status": result.status,
@@ -3906,15 +3974,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "goodreads_rate_limited": result.goodreads_rate_limited,
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
-        "local": {
-            "title": clues.get("title") or clues.get("raw_title") or "",
-            "author": clues.get("author") or "",
-            "series": clues.get("series") or "",
-            "sequence": str(clues.get("book_number") or ""),
-            "narrator": clues.get("narrator") or "",
-            "genre": clues.get("genre") or "",
-            "duration_minutes": clues.get("local_duration_minutes"),
-        },
+        "local": local,
     }
     if meta:
         item["match"] = {

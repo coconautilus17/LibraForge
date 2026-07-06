@@ -2434,14 +2434,15 @@ def _read_sidecar_book(source_path: Path) -> dict | None:
             raw_asin = marker_audible.get("asin") or ""
             return {
                 "title": ma_title,
-                "subtitle": "",
+                "subtitle": marker_audible.get("subtitle", ""),
                 "author": marker_audible.get("author", ""),
                 "narrator": marker_audible.get("narrator", ""),
                 "series": marker_audible.get("series", ""),
                 "sequence": marker_audible.get("sequence", ""),
                 "year": str(marker_audible.get("year", "") or ""),
-                "summary": "",
+                "summary": marker_audible.get("summary", ""),
                 "genre": marker_audible.get("genre", ""),
+                "isbn": marker_audible.get("isbn", ""),
                 "asin": raw_asin if raw_asin != "NOREALASIN" else "",
             }
     except (json.JSONDecodeError, OSError):

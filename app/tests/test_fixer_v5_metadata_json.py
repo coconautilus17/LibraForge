@@ -235,5 +235,78 @@ class ReportItemTests(unittest.TestCase):
         self.assertEqual(item["match"]["isbn"], "9781234567890")
 
 
+class ReportItemCleanSkipFallbackTests(unittest.TestCase):
+    # A cleanly-skipped file (already matched/marked good by a prior run)
+    # gets no fresh probe this run, so result.clues/result.metadata are never
+    # populated -- previously this meant the report's "local" and "match"
+    # sections were both silently blank for every clean-skip, which is most
+    # of a large library on a routine re-run. _build_report_item must fall
+    # back to the marker's own local_before/audible snapshots in that case.
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+        self.media = self.folder / "Book.m4b"
+        self.media.write_bytes(b"")
+        (self.folder / "libraforge.json").write_text(json.dumps({
+            "marker": {
+                "audible": {
+                    "asin": "B0REAL1234",
+                    "chosen_title": "Metal Mage 15",
+                    "author": "Eric Vall",
+                    "series": "Metal Mage",
+                    "sequence": "15",
+                    "genre": "Fantasy",
+                    "subtitle": "A LitRPG Adventure",
+                },
+                "local_before": {
+                    "raw_title": "Metal Mage 15",
+                    "title": "Metal Mage 15",
+                    "author": "Eric Vall",
+                    "series": "Metal Mage",
+                    "number": "15",
+                    "narrator": "Jeff Hays",
+                    "genre": "Fantasy",
+                    "duration_minutes": 612,
+                },
+            },
+        }), encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_clean_skip_local_falls_back_to_marker_local_before(self):
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="skipped",
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["local"]["title"], "Metal Mage 15")
+        self.assertEqual(item["local"]["author"], "Eric Vall")
+        self.assertEqual(item["local"]["series"], "Metal Mage")
+        self.assertEqual(item["local"]["sequence"], "15")
+        self.assertEqual(item["local"]["narrator"], "Jeff Hays")
+        self.assertEqual(item["local"]["genre"], "Fantasy")
+        self.assertEqual(item["local"]["duration_minutes"], 612)
+
+    def test_clean_skip_match_falls_back_to_marker_audible(self):
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="skipped",
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["match"]["title"], "Metal Mage 15")
+        self.assertEqual(item["match"]["series"], "Metal Mage")
+        self.assertEqual(item["match"]["asin"], "B0REAL1234")
+
+    def test_fresh_clues_take_priority_over_marker_fallback(self):
+        result = FIXER.ItemResult(
+            index=1, file_path=self.media, display_path=self.media, status="matched",
+            metadata={"title": "Fresh Match", "author": "Eric Vall"},
+            clues={"title": "Fresh Local", "author": "Eric Vall", "tag_series": "Fresh Series"},
+        )
+        item = FIXER._build_report_item(result)
+        self.assertEqual(item["local"]["title"], "Fresh Local")
+        self.assertEqual(item["local"]["series"], "Fresh Series")
+        self.assertEqual(item["match"]["title"], "Fresh Match")
+
+
 if __name__ == "__main__":
     unittest.main()

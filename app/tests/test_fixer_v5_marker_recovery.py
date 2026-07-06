@@ -84,6 +84,26 @@ class MetadataFromMarkerTests(unittest.TestCase):
         self.assertEqual(md["asin"], "")
         self.assertEqual(md["title"], "X")
 
+    def test_genre_subtitle_summary_isbn_round_trip(self):
+        # These four were written into marker.audible but never read back out
+        # by metadata_from_marker, so a recovered/re-filled book silently lost
+        # them even though the marker had the data on disk all along.
+        marker = {
+            "audible": {
+                "asin": "B0X",
+                "chosen_title": "Book",
+                "genre": "Fantasy",
+                "subtitle": "A Subtitle",
+                "summary": "A summary.",
+                "isbn": "9781234567890",
+            },
+        }
+        md = FIXER.metadata_from_marker(marker)
+        self.assertEqual(md["genre"], "Fantasy")
+        self.assertEqual(md["subtitle"], "A Subtitle")
+        self.assertEqual(md["summary"], "A summary.")
+        self.assertEqual(md["isbn"], "9781234567890")
+
 
 class MarkerSkipIsCleanTests(unittest.TestCase):
     def setUp(self):
@@ -185,6 +205,43 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
             self.media, {"asin": "B0X", "edit_mode": "full", "genre": "Fantasy"}, {}, 1.0, "normal", False,
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "Fantasy")
+
+    def test_subtitle_summary_isbn_are_persisted_in_marker(self):
+        # Same gap as genre: marker.audible silently dropped subtitle, summary,
+        # and isbn even though the tag writers put them on the actual file.
+        FIXER.write_marker(
+            self.media,
+            {
+                "asin": "B0X", "edit_mode": "full",
+                "subtitle": "A Subtitle", "summary": "A summary.", "isbn": "9781234567890",
+            },
+            {}, 1.0, "normal", False,
+        )
+        audible = self._read_marker()["audible"]
+        self.assertEqual(audible["subtitle"], "A Subtitle")
+        self.assertEqual(audible["summary"], "A summary.")
+        self.assertEqual(audible["isbn"], "9781234567890")
+
+    def test_local_before_uses_real_tag_series_not_path_clue(self):
+        # local_before backs the report's "local" column on a later clean-skip
+        # run (no fresh probe happens then) -- it must never store a
+        # path/folder-derived "series" clue as if it were real tag data.
+        FIXER.write_marker(
+            self.media, {"asin": "B0X", "edit_mode": "full"},
+            {"series": "001 Eric Vall - Pocket Dungeon", "tag_series": "Pocket Dungeon", "genre": "Fantasy"},
+            1.0, "normal", False,
+        )
+        local_before = self._read_marker()["local_before"]
+        self.assertEqual(local_before["series"], "Pocket Dungeon")
+        self.assertEqual(local_before["genre"], "Fantasy")
+
+    def test_local_before_series_blank_when_no_real_tag_series(self):
+        FIXER.write_marker(
+            self.media, {"asin": "B0X", "edit_mode": "full"},
+            {"series": "Pocket Dungeon 4", "tag_series": ""},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["local_before"]["series"], "")
 
 
 class MetadataJsonFillMissingTests(unittest.TestCase):
