@@ -95,6 +95,7 @@ try:
         metadata_from_product,
         get_primary_series,
         clean_provider_genres,
+        split_genre_string,
         is_generic_series_number_title,
         compare_duration,
         get_audible_duration_minutes,
@@ -131,9 +132,12 @@ try:
         mp4_set_text,
         mp4_set_track,
         mp4_set_freeform,
+        mp4_set_genre_list,
         id3_set_text,
         id3_set_txxx,
         id3_set_track,
+        id3_set_genre_list,
+        should_write_field,
         build_metadata_args,
     )
     from app.fixer.search import (
@@ -221,6 +225,7 @@ except ModuleNotFoundError:
         metadata_from_product,
         get_primary_series,
         clean_provider_genres,
+        split_genre_string,
         is_generic_series_number_title,
         compare_duration,
         get_audible_duration_minutes,
@@ -257,9 +262,12 @@ except ModuleNotFoundError:
         mp4_set_text,
         mp4_set_track,
         mp4_set_freeform,
+        mp4_set_genre_list,
         id3_set_text,
         id3_set_txxx,
         id3_set_track,
+        id3_set_genre_list,
+        should_write_field,
         build_metadata_args,
     )
     from app.fixer.search import (
@@ -1301,8 +1309,16 @@ def mutagen_write_mp4_tags(
     backup: bool,
     cover_if_missing: bool = False,
     replace_cover: bool = False,
+    field_policy: str = "legacy",
 ) -> None:
-    """Write MP4/M4B tags in-place using mutagen."""
+    """Write MP4/M4B tags in-place using mutagen.
+
+    field_policy governs whether a blank field's tag gets touched at all --
+    see should_write_field(). "legacy" (the default, used by every existing
+    CLI caller) reproduces this function's historical mixed behavior
+    byte-for-byte. "fill"/"overwrite" are used only by Manual Review's Apply
+    Fill / Full Overwrite. See docs/design/manual-review-apply-rewrite-rules.md.
+    """
     if not mutagen_mp4_is_available():
         raise RuntimeError("mutagen MP4 support is not installed in this environment")
 
@@ -1330,41 +1346,58 @@ def mutagen_write_mp4_tags(
     subtitle = metadata.get("subtitle", "")
     genre = metadata.get("genre", "")
     isbn = metadata.get("isbn", "")
+    asin = metadata.get("asin", "")
+    publisher = metadata.get("publisher", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
     # Keep album equal to the book title, not the series.
-    mp4_set_text(tags, "\xa9nam", title)
-    mp4_set_text(tags, "\xa9alb", title)
+    if should_write_field(title, field_policy, legacy_conditional=False):
+        mp4_set_text(tags, "\xa9nam", title)
+        mp4_set_text(tags, "\xa9alb", title)
 
-    mp4_set_text(tags, "\xa9ART", author)
-    mp4_set_text(tags, "aART", author)
-    mp4_set_text(tags, "\xa9grp", series)
-    mp4_set_text(tags, "\xa9wrt", narrator)
-    mp4_set_text(tags, "\xa9day", year)
-    if genre:
-        mp4_set_text(tags, "\xa9gen", genre)
-    mp4_set_track(tags, sequence)
+    if should_write_field(author, field_policy, legacy_conditional=False):
+        mp4_set_text(tags, "\xa9ART", author)
+        mp4_set_text(tags, "aART", author)
 
-    if subtitle:
+    if should_write_field(series, field_policy, legacy_conditional=False):
+        mp4_set_text(tags, "\xa9grp", series)
+        # ffprobe exposes this freeform MP4 tag as mvnm.
+        mp4_set_freeform(tags, "mvnm", series)
+
+    if should_write_field(narrator, field_policy, legacy_conditional=False):
+        mp4_set_text(tags, "\xa9wrt", narrator)
+
+    if should_write_field(year, field_policy, legacy_conditional=False):
+        mp4_set_text(tags, "\xa9day", year)
+
+    if should_write_field(genre, field_policy, legacy_conditional=True):
+        mp4_set_genre_list(tags, split_genre_string(genre))
+
+    if should_write_field(sequence, field_policy, legacy_conditional=False):
+        mp4_set_track(tags, sequence)
+        # ffprobe exposes this freeform MP4 tag as mvin.
+        mp4_set_freeform(tags, "mvin", sequence)
+
+    if should_write_field(subtitle, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "subtitle", subtitle)
 
-    # ffprobe exposes these freeform MP4 tags as mvnm/mvin.
-    mp4_set_freeform(tags, "mvnm", series)
-    mp4_set_freeform(tags, "mvin", sequence)
-
-    asin = metadata.get("asin", "")
-    if asin:
+    if should_write_field(asin, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "asin", asin)
 
-    if isbn:
+    if should_write_field(isbn, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "isbn", isbn)
 
-    publisher = metadata.get("publisher", "")
-    if publisher:
+    if should_write_field(publisher, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "publisher", publisher)
 
+    # write_summary gates this field's involvement at all (a separate,
+    # pre-existing switch, orthogonal to field_policy). Once involved, its
+    # legacy blank-handling was unconditional (a blank summary explicitly
+    # cleared the comment tag), so legacy_conditional=False here.
     if metadata.get("write_summary"):
-        mp4_set_text(tags, "\xa9cmt", metadata.get("summary", ""))
+        summary = metadata.get("summary", "")
+        if should_write_field(summary, field_policy, legacy_conditional=False):
+            mp4_set_text(tags, "\xa9cmt", summary)
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
         has_cover = mp4_has_cover(tags)
@@ -1409,8 +1442,12 @@ def mutagen_write_mp3_tags(
     backup: bool,
     cover_if_missing: bool = False,
     replace_cover: bool = False,
+    field_policy: str = "legacy",
 ) -> None:
-    """Write MP3 ID3 tags in-place using mutagen."""
+    """Write MP3 ID3 tags in-place using mutagen.
+
+    See mutagen_write_mp4_tags's docstring -- field_policy works identically here.
+    """
     if not mutagen_mp3_is_available():
         raise RuntimeError(
             "mutagen MP3/ID3 support is not installed in this environment"
@@ -1439,44 +1476,60 @@ def mutagen_write_mp3_tags(
     subtitle = metadata.get("subtitle", "")
     genre = metadata.get("genre", "")
     isbn = metadata.get("isbn", "")
+    asin = metadata.get("asin", "")
+    publisher = metadata.get("publisher", "")
 
     # Audiobookshelf reads album/title as the displayed book title.
-    id3_set_text(tags, "TIT2", TIT2, title)
-    id3_set_text(tags, "TALB", TALB, title)
+    if should_write_field(title, field_policy, legacy_conditional=False):
+        id3_set_text(tags, "TIT2", TIT2, title)
+        id3_set_text(tags, "TALB", TALB, title)
 
-    id3_set_text(tags, "TPE1", TPE1, author)
-    id3_set_text(tags, "TPE2", TPE2, author)
-    id3_set_text(tags, "TCOM", TCOM, narrator)
-    id3_set_text(tags, "TDRC", TDRC, year)
-    if genre:
-        id3_set_text(tags, "TCON", TCON, genre)
-    id3_set_text(tags, "TIT1", TIT1, series)
-    if subtitle and TIT3 is not None:
+    if should_write_field(author, field_policy, legacy_conditional=False):
+        id3_set_text(tags, "TPE1", TPE1, author)
+        id3_set_text(tags, "TPE2", TPE2, author)
+
+    if should_write_field(narrator, field_policy, legacy_conditional=False):
+        id3_set_text(tags, "TCOM", TCOM, narrator)
+
+    if should_write_field(year, field_policy, legacy_conditional=False):
+        id3_set_text(tags, "TDRC", TDRC, year)
+
+    if should_write_field(genre, field_policy, legacy_conditional=True):
+        id3_set_genre_list(tags, TCON, split_genre_string(genre))
+
+    if should_write_field(series, field_policy, legacy_conditional=False):
+        id3_set_text(tags, "TIT1", TIT1, series)
+        # TXXX frames give ffprobe/other scanners multiple chances to expose series.
+        id3_set_txxx(tags, "mvnm", series)
+        id3_set_txxx(tags, "series", series)
+
+    if should_write_field(subtitle, field_policy, legacy_conditional=True) and TIT3 is not None:
         id3_set_text(tags, "TIT3", TIT3, subtitle)
-    id3_set_track(tags, sequence)
 
-    # TXXX frames give ffprobe/other scanners multiple chances to expose series.
-    id3_set_txxx(tags, "mvnm", series)
-    id3_set_txxx(tags, "mvin", sequence)
-    id3_set_txxx(tags, "series", series)
-    id3_set_txxx(tags, "series-part", sequence)
+    if should_write_field(sequence, field_policy, legacy_conditional=False):
+        id3_set_track(tags, sequence)
+        id3_set_txxx(tags, "mvin", sequence)
+        id3_set_txxx(tags, "series-part", sequence)
 
-    asin = metadata.get("asin", "")
-    if asin:
+    if should_write_field(asin, field_policy, legacy_conditional=True):
         id3_set_txxx(tags, "asin", asin)
 
-    if isbn:
+    if should_write_field(isbn, field_policy, legacy_conditional=True):
         id3_set_txxx(tags, "isbn", isbn)
 
-    publisher = metadata.get("publisher", "")
-    if publisher and TPUB is not None:
+    if should_write_field(publisher, field_policy, legacy_conditional=True) and TPUB is not None:
         id3_set_text(tags, "TPUB", TPUB, publisher)
 
+    # write_summary gates this field's involvement at all (a separate,
+    # pre-existing switch, orthogonal to field_policy). Once involved, its
+    # legacy blank-handling was unconditional (a blank summary explicitly
+    # cleared COMM), so legacy_conditional=False here.
     if metadata.get("write_summary") and COMM is not None:
         summary = sanitize_tag(metadata.get("summary", ""))
-        tags.delall("COMM")
-        if summary:
-            tags.add(COMM(encoding=3, lang="eng", desc="", text=[summary]))
+        if should_write_field(summary, field_policy, legacy_conditional=False):
+            tags.delall("COMM")
+            if summary:
+                tags.add(COMM(encoding=3, lang="eng", desc="", text=[summary]))
 
     if metadata.get("edit_mode") == "full" and (cover_if_missing or replace_cover):
         has_cover = mp3_has_cover(tags)
@@ -1714,6 +1767,25 @@ def marker_skip_is_clean(
         return False
     return True
 
+def _marker_survivor_value(
+    field_policy: str, metadata_value: str, current_value: str, legacy_conditional: bool
+) -> str:
+    """Resolve one marker.audible field's value, matching what the writer
+    actually left embedded for the same field_policy (see should_write_field
+    in app/fixer/tagging.py -- this is its marker-recording counterpart:
+    should_write_field decides whether to touch the tag; this decides what
+    to *say* was written, given the same decision).
+    """
+    if metadata_value:
+        return metadata_value
+    if field_policy == "fill":
+        return current_value or ""
+    if field_policy == "overwrite":
+        return ""
+    # "legacy": reproduce the marker's original exact per-field split.
+    return (current_value or "") if legacy_conditional else ""
+
+
 def write_marker(
     source: Path,
     metadata: dict,
@@ -1724,6 +1796,7 @@ def write_marker(
     output_kind: str = "tags",
     alone: bool = False,
     written_fields: list[str] | None = None,
+    field_policy: str = "legacy",
 ) -> None:
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
@@ -1736,16 +1809,20 @@ def write_marker(
     # read_current_book_metadata). Used below for two distinct reasons:
     #   1. local_before must never carry path/folder-derived clue
     #      contamination (it backs the report's clean-skip display).
-    #   2. mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch genre/
-    #      subtitle/isbn/asin/publisher `if <field>:` -- when the match
-    #      provides none, the file's pre-existing tag survives untouched, so
-    #      the *resulting* embedded value is the match's if we have one, else
-    #      whatever was already there. Recording plain metadata.get(field)
-    #      would claim these fields are blank when the file demonstrably
-    #      still has them (confirmed against 99 real books: 85/99 had a real
-    #      embedded genre silently misreported as "" before this fix).
-    # See docs/design/comparison-card-data-source.md.
+    #   2. The writer's should_write_field() decides, per field_policy,
+    #      whether a blank field's tag gets touched at all -- when it's left
+    #      untouched, the *resulting* embedded value is whatever was already
+    #      there, not blank. _marker_survivor_value() mirrors that same
+    #      decision here so the marker never misreports a field as blank
+    #      when the file demonstrably still has it (confirmed against 99
+    #      real books: 85/99 had a real embedded genre silently misreported
+    #      as "" before this fix).
+    # See docs/design/comparison-card-data-source.md and
+    # docs/design/manual-review-apply-rewrite-rules.md.
     current = clues.get("current") or {}
+    _sv = lambda field, legacy_conditional: _marker_survivor_value(
+        field_policy, metadata.get(field, "") or "", current.get(field, "") or "", legacy_conditional
+    )
     payload["marker"] = {
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "applied": True,
@@ -1759,16 +1836,21 @@ def write_marker(
         "written_fields": merged_written,
         "duration": metadata.get("duration", {}),
         "audible": {
-            "asin": metadata.get("asin") or current.get("asin", ""),
-            "title": metadata.get("audible_title", metadata.get("title", "")),
-            "chosen_title": metadata.get("title", ""),
-            "subtitle": metadata.get("subtitle") or current.get("subtitle", ""),
-            "author": metadata.get("author", ""),
-            "narrator": metadata.get("narrator", ""),
-            "series": metadata.get("series", ""),
-            "sequence": metadata.get("sequence", ""),
-            "year": metadata.get("year", ""),
-            "genre": metadata.get("genre") or current.get("genre", ""),
+            "asin": _sv("asin", True),
+            "title": _marker_survivor_value(
+                field_policy,
+                metadata.get("audible_title") or metadata.get("title", ""),
+                current.get("title", "") or "",
+                legacy_conditional=False,
+            ),
+            "chosen_title": _sv("title", False),
+            "subtitle": _sv("subtitle", True),
+            "author": _sv("author", False),
+            "narrator": _sv("narrator", False),
+            "series": _sv("series", False),
+            "sequence": _sv("sequence", False),
+            "year": _sv("year", False),
+            "genre": _sv("genre", True),
             # Not gated by write_summary/current fallback like the fields
             # above: this mirrors the decided match's description, the same
             # unconditional value write_audiobookshelf_metadata_json always
@@ -1776,8 +1858,8 @@ def write_marker(
             # set -- it is "what we decided this book's description is," not
             # "what the comment tag currently holds."
             "summary": metadata.get("summary", ""),
-            "isbn": metadata.get("isbn") or current.get("isbn", ""),
-            "publisher": metadata.get("publisher") or current.get("publisher", ""),
+            "isbn": _sv("isbn", True),
+            "publisher": _sv("publisher", True),
             "cover_url": metadata.get("cover_url", ""),
             "duration_minutes": metadata.get("audible_duration_minutes"),
             "number_candidates": metadata.get("audible_number_candidates", []),
@@ -2108,6 +2190,7 @@ def write_audiobookshelf_metadata_json(
     clues: dict | None = None,
     alone_in_folder: bool = False,
     fill_missing: bool = False,
+    skip_blank_fields: bool = False,
 ) -> Path:
     """Write an Audiobookshelf-compatible metadata.json for the book.
 
@@ -2118,7 +2201,15 @@ def write_audiobookshelf_metadata_json(
 
     When ``fill_missing`` is True and a metadata.json already exists, only empty
     fields in the existing file are populated; values already present are kept.
-    This mirrors the fill-missing tag policy so we never clobber good data.
+    This mirrors the fill-missing tag policy so we never clobber good data. This
+    is keyed off the *existing file's* blankness -- it preserves an old non-blank
+    value even if the new one differs.
+
+    ``skip_blank_fields`` is a different, unrelated concept (used only by Manual
+    Review's Apply Fill): keyed off the *new* value's blankness -- if the new
+    resolved value for a field is blank, keep whatever the existing file already
+    has for it (blank or not); a non-blank new value is always written. Do not
+    conflate the two flags -- see docs/design/manual-review-apply-rewrite-rules.md.
     """
     if source.is_dir():
         # Fallback for directory source — shouldn't happen in normal flow
@@ -2148,7 +2239,7 @@ def write_audiobookshelf_metadata_json(
         "authors": authors,
         "narrators": narrators,
         "series": series,
-        "genres": [g for g in [metadata.get("genre", "")] if g],
+        "genres": split_genre_string(metadata.get("genre", "")),
         "publishedYear": str(metadata.get("year", "") or ""),
         "publisher": metadata.get("publisher", "") or "",
         "description": metadata.get("summary", "") or "",
@@ -2191,6 +2282,19 @@ def write_audiobookshelf_metadata_json(
             for key, old_value in existing.items():
                 if key not in payload:
                     payload[key] = old_value
+
+    if skip_blank_fields and target.is_file():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+        if isinstance(existing, dict):
+            def _new_value_blank(v) -> bool:
+                return v in (None, "", [], {}) or (isinstance(v, str) and not v.strip())
+
+            for key, new_value in list(payload.items()):
+                if _new_value_blank(new_value) and key in existing:
+                    payload[key] = existing[key]
 
     content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     try:
@@ -3926,8 +4030,15 @@ def write_tags(
     writer: str = "auto",
     cover_if_missing: bool = False,
     replace_cover: bool = False,
+    field_policy: str = "legacy",
 ) -> str:
-    """Write metadata and return the writer used: mutagen or ffmpeg."""
+    """Write metadata and return the writer used: mutagen or ffmpeg.
+
+    field_policy: "legacy" (default, every CLI call site) reproduces today's
+    per-field write behavior unchanged. "fill"/"overwrite" are Manual
+    Review's Apply Fill / Full Overwrite -- see should_write_field() and
+    docs/design/manual-review-apply-rewrite-rules.md.
+    """
     if writer in {"auto", "mutagen"}:
         # NAS/CIFS files may arrive read-only; ensure write bit is set so mutagen
         # can modify the file in-place (we own the file, so chmod should succeed).
@@ -3945,6 +4056,7 @@ def write_tags(
                     backup=backup,
                     cover_if_missing=cover_if_missing,
                     replace_cover=replace_cover,
+                    field_policy=field_policy,
                 )
                 return "mutagen-mp4"
 
@@ -3955,6 +4067,7 @@ def write_tags(
                     backup=backup,
                     cover_if_missing=cover_if_missing,
                     replace_cover=replace_cover,
+                    field_policy=field_policy,
                 )
                 return "mutagen-mp3"
 

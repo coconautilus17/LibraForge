@@ -214,6 +214,104 @@ class MetadataJsonWriteTests(unittest.TestCase):
             payload = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(payload["genres"], [])
 
+    def test_multi_genre_string_splits_into_separate_array_entries(self):
+        # Previously ["Fantasy, LitRPG"] (one malformed combined entry) --
+        # confirmed live before this fix.
+        meta = {"title": "Multi Genre", "author": "Jane Doe", "genre": "Fantasy, LitRPG"}
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "book.m4b"
+            source.write_bytes(b"")
+            target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["genres"], ["Fantasy", "LitRPG"])
+
+    def test_multi_genre_split_still_applies_blocklist_and_dedup(self):
+        meta = {"title": "T", "author": "A", "genre": "Fantasy, Audiobook, fantasy"}
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "book.m4b"
+            source.write_bytes(b"")
+            target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["genres"], ["Fantasy"])
+
+
+class SkipBlankFieldsTests(unittest.TestCase):
+    """skip_blank_fields (Manual Review's Apply Fill) is keyed off the *new*
+    value's blankness -- distinct from fill_missing, which is keyed off the
+    *existing file's* blankness. They must not be conflated."""
+
+    def _existing(self, tmp: Path) -> Path:
+        target = tmp / "metadata.json"
+        target.write_text(json.dumps({
+            "title": "Existing Title",
+            "subtitle": "Existing Subtitle",
+            "authors": ["Existing Author"],
+            "publisher": "Existing Publisher",
+            "genres": ["Existing Genre"],
+        }), encoding="utf-8")
+        return target
+
+    def test_blank_new_value_preserves_existing_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            self._existing(tmp_path)
+            source = tmp_path / "book.m4b"
+            source.write_bytes(b"")
+            meta = {"title": "", "author": "", "publisher": ""}
+            target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, skip_blank_fields=True
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["title"], "Existing Title")
+            self.assertEqual(payload["authors"], ["Existing Author"])
+            self.assertEqual(payload["publisher"], "Existing Publisher")
+
+    def test_non_blank_new_value_always_overwrites_existing(self):
+        # Unlike fill_missing, skip_blank_fields does not preserve an
+        # existing non-blank value when the new value is also non-blank --
+        # the new value always wins as long as it's present.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            self._existing(tmp_path)
+            source = tmp_path / "book.m4b"
+            source.write_bytes(b"")
+            meta = {"title": "Brand New Title", "author": "New Author"}
+            target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, skip_blank_fields=True
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["title"], "Brand New Title")
+            self.assertEqual(payload["authors"], ["New Author"])
+
+    def test_differs_from_fill_missing_when_new_value_present_but_old_also_present(self):
+        # fill_missing would keep "Existing Title" here (old is non-blank);
+        # skip_blank_fields must not -- the new value is what the user chose.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            self._existing(tmp_path)
+            source = tmp_path / "book.m4b"
+            source.write_bytes(b"")
+            meta = {"title": "User Chosen Title", "author": "A"}
+
+            fill_missing_target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, fill_missing=True
+            )
+            self.assertEqual(
+                json.loads(fill_missing_target.read_text())["title"], "Existing Title"
+            )
+
+            self._existing(tmp_path)  # reset, since the call above overwrote it
+            skip_blank_target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, skip_blank_fields=True
+            )
+            self.assertEqual(
+                json.loads(skip_blank_target.read_text())["title"], "User Chosen Title"
+            )
+
 
 class ReportItemTests(unittest.TestCase):
     def test_report_item_surfaces_match_genre_and_isbn(self):

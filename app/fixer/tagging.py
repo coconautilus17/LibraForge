@@ -67,6 +67,37 @@ def is_mutagen_candidate(source: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Field write policy
+# ---------------------------------------------------------------------------
+
+def should_write_field(value: str, field_policy: str, legacy_conditional: bool) -> bool:
+    """Whether a tag setter should even be called for one field.
+
+    A present value is always written under any policy. A blank value's
+    handling depends on ``field_policy``:
+
+    - "overwrite": write it anyway (the setter itself clears the tag when
+      the value is blank) -- a blank field means "clear this tag."
+    - "fill": never write it -- leave whatever the file already has for
+      this field completely untouched.
+    - "legacy" (the default for every existing caller): reproduce the
+      mixed per-field behavior this codebase had before these two explicit
+      policies existed -- some fields (title/author/series/sequence/
+      narrator/year) were always written, others (genre/subtitle/isbn/
+      asin/publisher) were only written `if <field>:`. ``legacy_conditional``
+      marks which side of that historical split this field is on, so CLI
+      callers that never pass ``field_policy`` keep byte-identical behavior.
+    """
+    if value:
+        return True
+    if field_policy == "overwrite":
+        return True
+    if field_policy == "fill":
+        return False
+    return not legacy_conditional
+
+
+# ---------------------------------------------------------------------------
 # MP4 tag setters
 # ---------------------------------------------------------------------------
 
@@ -98,6 +129,21 @@ def mp4_set_freeform(tags, name: str, value: str) -> None:
         tags.pop(key, None)
 
 
+def mp4_set_genre_list(tags: dict, values: list[str]) -> None:
+    """Write genre as genuinely separate values, not one comma-joined string.
+
+    The MP4 \\xa9gen atom accepts a list of independent values -- writing
+    ["Fantasy", "LitRPG"] here creates two real genre entries a scanner can
+    show as two separate genres, unlike a single "Fantasy, LitRPG" string.
+    """
+    cleaned = [sanitize_tag(v) for v in values if sanitize_tag(v)]
+
+    if cleaned:
+        tags["\xa9gen"] = cleaned
+    else:
+        tags.pop("\xa9gen", None)
+
+
 # ---------------------------------------------------------------------------
 # ID3 tag setters
 # ---------------------------------------------------------------------------
@@ -108,6 +154,15 @@ def id3_set_text(tags, frame_id: str, frame_cls, value: str) -> None:
 
     if value:
         tags.add(frame_cls(encoding=3, text=[value]))
+
+
+def id3_set_genre_list(tags, frame_cls, values: list[str]) -> None:
+    """ID3 equivalent of mp4_set_genre_list -- see its docstring."""
+    tags.delall("TCON")
+    cleaned = [sanitize_tag(v) for v in values if sanitize_tag(v)]
+
+    if cleaned:
+        tags.add(frame_cls(encoding=3, text=cleaned))
 
 
 def id3_set_txxx(tags, name: str, value: str) -> None:

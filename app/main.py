@@ -1050,6 +1050,10 @@ class ManualReviewApplyRequest(BaseModel):
     replace_cover: bool = False
     writer: str = "auto"
     metadata_override: dict[str, Any] = Field(default_factory=dict)
+    # "fill": only write fields with a value; blank fields are left untouched.
+    # "overwrite": write every field exactly as shown, including blanks (a
+    # blank clears that tag). See docs/design/manual-review-apply-rewrite-rules.md.
+    write_policy: str = "fill"
 
 
 class M4BRunRequest(BaseModel):
@@ -2707,6 +2711,9 @@ def build_manual_metadata_from_result(
 
 
 def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
+    if req.write_policy not in ("fill", "overwrite"):
+        raise HTTPException(status_code=400, detail="write_policy must be 'fill' or 'overwrite'")
+
     context = inspect_manual_review_target(path=req.path, script_name=req.script_name)
     fixer_module = load_fixer_module(req.script_name)
     source_path = Path(context["source_path"])
@@ -2729,6 +2736,32 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
     clues = build_context_clues(fixer_module, context["metadata"])
     if context.get("is_grouped"):
         clues["group_search"] = context.get("group_search", {})
+    # Required for write_marker's per-field survivor-fallback to work on this
+    # path at all -- context["metadata"] is already exactly the right "current
+    # tag state" shape (inspect_manual_review_target prefers sidecar/marker
+    # over a live probe, same rule as the CLI path). Without this,
+    # clues.get("current") is always {} here, so marker.audible silently
+    # misreports any field the match didn't supply as blank even when the
+    # real tag survives on disk. See docs/design/manual-review-apply-rewrite-rules.md.
+    clues["current"] = dict(context["metadata"])
+
+    # Full Overwrite can't be honestly honored on a file that falls back to
+    # the ffmpeg writer (build_metadata_args never clears a tag -- see
+    # docs/design/manual-review-apply-rewrite-rules.md). Detect this ahead of
+    # time and apply anyway with fill-like behavior, surfacing why instead of
+    # silently doing something other than what was asked.
+    write_policy_warning = ""
+    if req.write_policy == "overwrite" and req.writer != "mutagen":
+        will_use_mutagen = (
+            fixer_module.is_mutagen_mp4_candidate(source_path)
+            or fixer_module.is_mutagen_mp3_candidate(source_path)
+        )
+        if not will_use_mutagen:
+            write_policy_warning = (
+                "Full Overwrite requested, but this file type only supports the "
+                "ffmpeg writer, which cannot force-clear a tag; blank fields were "
+                "left untouched instead of cleared."
+            )
 
     score = float(req.selected_result.get("score", 1.0) or 1.0)
     output_kind = "tags"
@@ -2765,11 +2798,13 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
             writer=req.writer,
             cover_if_missing=req.cover_if_missing,
             replace_cover=req.replace_cover,
+            field_policy=req.write_policy,
         )
 
     # Audiobookshelf metadata.json, placed by the same alone/group rules.
     metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
-        source_path, metadata, clues, alone
+        source_path, metadata, clues, alone,
+        skip_blank_fields=(req.write_policy == "fill"),
     )
 
     fixer_module.write_marker(
@@ -2781,9 +2816,10 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         aggressive=False,
         output_kind=output_kind,
         alone=alone,
+        field_policy=req.write_policy,
     )
 
-    return {
+    result = {
         "status": "applied",
         "target_path": context["display_path"],
         "source_path": context["source_path"],
@@ -2791,8 +2827,12 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         "output_path": output_path,
         "metadata_json_path": str(metadata_json_path),
         "edit_mode": req.edit_mode,
+        "write_policy": req.write_policy,
         "metadata_preview": metadata,
     }
+    if write_policy_warning:
+        result["warning"] = write_policy_warning
+    return result
 
 
 def default_output_path(source_path: Path, metadata: dict[str, Any]) -> str:

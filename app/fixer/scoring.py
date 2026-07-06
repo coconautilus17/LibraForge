@@ -211,6 +211,20 @@ def clean_provider_genres(genres: Any) -> list[str]:
     return cleaned
 
 
+def split_genre_string(value: str) -> list[str]:
+    """Split a comma-joined genre string into separate cleaned genre values.
+
+    The internal "genre" field is a single comma-joined display string
+    everywhere (clues, marker, report, UI) -- e.g. "Fantasy, LitRPG". Only
+    the final write targets (the embedded multi-value tag, metadata.json's
+    genres array) need real separate entries, so this is called at write
+    time only, not used to change the internal representation.
+    """
+    if not value:
+        return []
+    return clean_provider_genres(re.split(r"\s*,\s*", value))
+
+
 # ---------------------------------------------------------------------------
 # Number / sequence helpers
 # ---------------------------------------------------------------------------
