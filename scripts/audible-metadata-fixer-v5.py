@@ -3949,19 +3949,21 @@ def _build_report_item(result: "ItemResult") -> dict:
         # A cleanly-skipped file (already matched/marked good in a prior run)
         # never gets a fresh probe this run -- probing every skip just to
         # populate a report column would undo the whole point of skipping on
-        # large libraries. local_before is the clues snapshot captured the
-        # last time this file was actually read, which is what its tags
-        # still contain as long as marker_skip_is_clean held (nothing
-        # changed since).
-        local_before = (stored or {}).get("local_before", {}) or {}
+        # large libraries. marker.audible (== meta, computed above) is what
+        # marker_skip_is_clean guarantees is currently embedded in the file's
+        # tags, since that's the exact dict the last successful write applied.
+        # local_before is NOT that: it is the snapshot from *before* that
+        # write, superseded the moment the write completed, so using it here
+        # would show pre-fix data as if it were the book's current state. See
+        # docs/design/comparison-card-data-source.md.
         local = {
-            "title": local_before.get("title") or local_before.get("raw_title") or "",
-            "author": local_before.get("author") or "",
-            "series": local_before.get("series") or "",
-            "sequence": str(local_before.get("number") or ""),
-            "narrator": local_before.get("narrator") or "",
-            "genre": local_before.get("genre") or "",
-            "duration_minutes": local_before.get("duration_minutes"),
+            "title": meta.get("title") or "",
+            "author": meta.get("author") or "",
+            "series": meta.get("series") or "",
+            "sequence": str(meta.get("sequence") or ""),
+            "narrator": meta.get("narrator") or "",
+            "genre": meta.get("genre") or "",
+            "duration_minutes": duration.get("local_minutes"),
         }
     item: dict = {
         "path": str(result.file_path),
