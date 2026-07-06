@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
-  <script src="/static/ui-preferences.js?v=20260621-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260705-9" />
+  <script src="/static/ui-preferences.js?v=20260706-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260706-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -31,6 +31,7 @@
         <a id="settingsToggle" class="icon-button active" href="/settings" aria-current="page" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
         </a>
+        <a id="versionTag" class="version-tag" href="https://github.com/coconautilus17/LibraForge/releases" target="_blank" rel="noopener noreferrer" title="View changelog / release notes"></a>
       </div>
     </div>
   </header>
@@ -38,6 +39,7 @@
   <main class="shell" id="main-content">
    <div class="settings-layout">
     <aside class="settings-side-nav" aria-label="Settings sections">
+      <a href="#about">About</a>
       <a href="#appearance">Appearance</a>
       <a href="#title-noise">Title noise</a>
       <a href="#publishers">Publishers</a>
@@ -54,6 +56,13 @@
       <span class="eyebrow">Global preferences</span>
       <h1 style="margin:4px 0 0">Settings</h1>
     </div>
+
+    <!-- About -->
+    <section id="about" class="card settings-card">
+      <h2>About LibraForge</h2>
+      <p>LibraForge is a self-hosted companion tool for your Audiobookshelf library: it matches Audible metadata, converts and tags M4Bs, organizes folders into a consistent layout, and can download owned titles directly, all from one web UI with dry-run-first writes.</p>
+      <p><a href="https://github.com/coconautilus17/LibraForge" target="_blank" rel="noopener noreferrer">View the project on GitHub →</a></p>
+    </section>
 
     <!-- Appearance -->
     <section id="appearance" class="card settings-card">

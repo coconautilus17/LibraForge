@@ -95,6 +95,21 @@
     select.title = `${theme === "light" ? "Light" : "Dark"} surface palette`;
   }
 
+  function initializeVersionTag() {
+    const tag = document.getElementById("versionTag");
+    if (!tag) return;
+    fetch("/api/version")
+      .then((r) => r.json())
+      .then((data) => {
+        const version = data.version || "dev";
+        tag.textContent = `v${version}`;
+        if (/^\d+\.\d+\.\d+$/.test(version)) {
+          tag.href = `https://github.com/coconautilus17/LibraForge/releases/tag/v${version}`;
+        }
+      })
+      .catch(() => { tag.textContent = ""; });
+  }
+
   function initializeInfoTips() {
     const markers = [...document.querySelectorAll(".info-tip[data-tooltip]")];
     if (!markers.length) return;
@@ -589,6 +604,7 @@
   }
 
   window.addEventListener("DOMContentLoaded", () => {
+    initializeVersionTag();
     initializeInfoTips();
     initializeSettingsPanel();
     initializeExplanations();
