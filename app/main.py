@@ -3591,6 +3591,18 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "LibraForge"}
 
 
+VERSION_FILE = APP_ROOT / "VERSION"
+
+
+@app.get("/api/version")
+def get_version() -> dict[str, str]:
+    try:
+        version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        version = "dev"
+    return {"version": version or "dev"}
+
+
 @app.get("/api/config")
 def get_config() -> dict[str, Any]:
     return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
