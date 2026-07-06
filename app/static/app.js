@@ -893,7 +893,12 @@ function buildManualApplyDialogs() {
     <h3 class="manual-apply-title">Review before applying</h3>
     <p id="manualApplyEditContext" class="manual-apply-body"></p>
     <p id="manualApplyEditCoverNote" class="manual-apply-cover-note" hidden>The current cover will be replaced with the match cover.</p>
-    <p class="manual-apply-edit-hint">Blank fields are left as-is in the file.</p>
+    <p class="manual-apply-write-policy-note">
+      <strong>Apply Fill</strong> writes only the fields filled in below &mdash; a blank field is left completely
+      untouched in the file. <strong>Full Overwrite</strong> writes every field exactly as shown, including
+      blanks &mdash; a blank field here clears that tag. Separate multiple genres with a comma
+      (e.g. "Fantasy, LitRPG") &mdash; each is saved as its own genre tag, not one combined genre.
+    </p>
     <div class="manual-apply-edit-fields">
       <label>Title<input id="maeTitle" /></label>
       <label>Subtitle<input id="maeSubtitle" /></label>
@@ -904,12 +909,13 @@ function buildManualApplyDialogs() {
       <label>Year<input id="maeYear" /></label>
       <label>ASIN<input id="maeAsin" /></label>
       <label>Publisher<input id="maePublisher" /></label>
-      <label>Genre<input id="maeGenre" /></label>
+      <label>Genre<input id="maeGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
       <label class="mae-full-width">Comment / Summary<textarea id="maeSummary" rows="4"></textarea></label>
     </div>
     <div class="manual-apply-actions">
       <button id="maeCancelBtn" class="secondary">Cancel</button>
-      <button id="maeConfirmBtn">Confirm &amp; Apply</button>
+      <button id="maeFillBtn">Apply Fill</button>
+      <button id="maeOverwriteBtn">Full Overwrite</button>
     </div>`;
   document.body.appendChild(editDlg);
 
@@ -923,6 +929,7 @@ function buildManualApplyDialogs() {
     </div>
     <p id="manualApplyProgressDetail" class="manual-apply-output-detail"></p>
     <p id="manualApplyProgressResult" class="manual-apply-body" hidden></p>
+    <p id="manualApplyProgressPolicyWarning" class="manual-apply-warning" hidden></p>
     <p id="manualApplyProgressWarning" class="manual-apply-warning" hidden>
       Apply is still running in the background. You will be notified when it finishes.
     </p>
@@ -962,25 +969,33 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('maeGenre').value     = chosen.genre     || '';
   $('maeSummary').value   = chosen.summary   || '';
 
-  const editResult = await new Promise(resolve => {
+  // Resolves to null (cancelled) or the chosen write policy, 'fill' | 'overwrite'.
+  const writePolicy = await new Promise(resolve => {
     function cleanup(val) {
-      $('maeConfirmBtn').removeEventListener('click', onOk);
+      $('maeFillBtn').removeEventListener('click', onFill);
+      $('maeOverwriteBtn').removeEventListener('click', onOverwrite);
       $('maeCancelBtn').removeEventListener('click', onCancel);
       editDlg.removeEventListener('cancel', onCancel);
       editDlg.close();
       resolve(val);
     }
-    const onOk     = () => cleanup(true);
-    const onCancel = () => cleanup(false);
-    $('maeConfirmBtn').addEventListener('click', onOk);
+    const onFill      = () => cleanup('fill');
+    const onOverwrite = () => cleanup('overwrite');
+    const onCancel    = () => cleanup(null);
+    $('maeFillBtn').addEventListener('click', onFill);
+    $('maeOverwriteBtn').addEventListener('click', onOverwrite);
     $('maeCancelBtn').addEventListener('click', onCancel);
     editDlg.addEventListener('cancel', onCancel, { once: true });
     editDlg.showModal();
   });
 
-  if (!editResult) return;
+  if (!writePolicy) return;
 
-  // Collect any fields the user changed. Blank values are ignored (not sent as overrides).
+  // Collect every field that differs from the match's pre-filled value --
+  // including a field the user cleared back to blank, which is now sent as
+  // an explicit "" override (an intentional clear) rather than silently
+  // omitted (which would fall back to the match's own value, ignoring that
+  // the user cleared it). See docs/design/manual-review-apply-rewrite-rules.md.
   const metadataOverride = {};
   const fields = [
     ['title', 'maeTitle'], ['subtitle', 'maeSubtitle'], ['author', 'maeAuthor'],
@@ -990,7 +1005,8 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   ];
   for (const [key, id] of fields) {
     const val = $(id).value.trim();
-    if (val && val !== String(chosen[key] ?? '').trim()) metadataOverride[key] = val;
+    const original = String(chosen[key] ?? '').trim();
+    if (val !== original) metadataOverride[key] = val; // val may legitimately be ''
   }
 
   let completed = false;
@@ -1000,6 +1016,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('manualApplyProgressFill').className = 'manual-apply-progress-fill indeterminate';
   $('manualApplyProgressDetail').innerHTML = `Mode: <strong>${escapeHtml(editMode)}</strong>`;
   $('manualApplyProgressResult').hidden = true;
+  $('manualApplyProgressPolicyWarning').hidden = true;
   $('manualApplyProgressWarning').hidden = true;
   $('manualApplyDismissBtn').textContent = 'Dismiss';
 
@@ -1035,6 +1052,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
         replace_cover: replaceCover,
         writer: 'auto',
         metadata_override: metadataOverride,
+        write_policy: writePolicy,
       }),
     });
     const data = await res.json();
@@ -1087,6 +1105,10 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
       `Mode: <strong>${escapeHtml(data.edit_mode)}</strong> &nbsp;&middot;&nbsp; ` +
       `Output: <strong>${escapeHtml(outputLabel)}</strong>` +
       (desc ? `<span class="manual-apply-output-desc">${escapeHtml(desc)}</span>` : '');
+    if (data.warning) {
+      $('manualApplyProgressPolicyWarning').textContent = data.warning;
+      $('manualApplyProgressPolicyWarning').hidden = false;
+    }
     $('manualApplyProgressResult').textContent = `Target: ${data.target_path}`;
     $('manualApplyProgressResult').hidden = false;
     dismissBtn.textContent = 'Done';
