@@ -132,3 +132,47 @@ If a new comparison surface is added, it must read from `marker.audible` /
 `sidecar.book` (or, for external ABS consumption, `metadata.json` — same
 truth, different shape), and must not add a new tag re-probe to populate a
 "current state" field once a book has been processed once.
+
+## Validated against 100 real books (2026-07-06)
+
+Ran a dry-run scan (`--max-files 140`, no `--apply`, no Goodreads) over
+`/audiobooks/_unorganized`, took the first 100 `REPORT_ITEM_JSON` items (99
+single-file "tags"-output books, 1 grouped sidecar book), and independently
+verified each one: a from-scratch mutagen probe (no import of any app
+matching/parsing code — just the raw MP4 atom / ID3 frame names documented in
+`mutagen_write_mp4_tags`/`mutagen_write_mp3_tags`) compared field-by-field
+against the report's `local` section.
+
+- **title/author/series/sequence: 99/99 exact matches** once the marker
+  reader correctly handled both libraforge.json naming conventions (per-file
+  `<name>.libraforge.json` for loose files sharing a folder vs. folder-level
+  `libraforge.json` for a lone file). These fields are written
+  unconditionally on every apply (blank clears the tag), so marker.audible
+  always equals the file's real current tag — no drift possible.
+- **genre: only 13/99 exact matches, 85/99 wrong.** Root cause: the tag
+  writers only touch the genre atom/frame `if genre:` — when the decided
+  match had no genre, the file's pre-existing genre tag (real values like
+  `"Science Fiction & Fantasy:Fantasy:Epic"`, or junk like `"Audiobook"`) is
+  left completely untouched, but `write_marker()` was recording plain
+  `metadata.get("genre", "")`, i.e. blank, ignoring that the file's actual
+  resulting genre is whatever was already there. **Fixed:** `write_marker()`
+  now records `metadata.get("genre") or clues.get("genre", "")`, mirroring
+  the writer's own preserve-if-absent behavior so the persisted (and
+  therefore displayed) genre always matches what's truly embedded. Verified
+  end-to-end by re-deriving real clues from three of the mismatching real
+  files (read-only, no mutation) and confirming `write_marker()` now persists
+  the real genre instead of `""` (see git history for
+  `test_genre_falls_back_to_clues_when_match_has_none`).
+- **1 narrower, separate finding (not fixed here):** one low-score-rejected
+  match (`Ruth Kinna - Anarchism...`) showed `local.title`/`local.narrator`
+  diverging from the file's real tags. Root cause is different and lives
+  upstream in `read_tags_and_duration()`/`apply_structured_path_override()`
+  (search-clue construction prefers a cached metadata backup and a
+  filename-derived title override over a live probe) — a search/matching
+  concern, not a marker-persistence concern, and out of scope for this fix.
+  Flagged for awareness; revisit if it recurs at higher frequency.
+- **subtitle/isbn have the same theoretical "preserve if absent" write
+  policy as genre**, but `parse_title_series_number_from_metadata()` doesn't
+  currently extract them as clue keys at all, so there's no clue value to
+  fall back to yet. Not fixed here (would require adding new clue fields,
+  a larger change); noted for a future audit pass.

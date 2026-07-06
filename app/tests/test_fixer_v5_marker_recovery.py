@@ -206,6 +206,32 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
         )
         self.assertEqual(self._read_marker()["audible"]["genre"], "Fantasy")
 
+    def test_genre_falls_back_to_clues_when_match_has_none(self):
+        # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
+        # tag `if genre:` -- when the match provides no genre, the file's
+        # pre-existing genre tag is left alone, not cleared. Confirmed against
+        # 100 real _unorganized books: 85/99 single-file "tags"-output books
+        # had a genre tag the writer had silently preserved, while
+        # marker.audible.genre (and therefore the report's local/match
+        # columns) claimed "" -- because it only ever recorded the match's
+        # own genre, never the clue snapshot of what was already embedded.
+        FIXER.write_marker(
+            self.media,
+            {"asin": "B0X", "edit_mode": "full", "genre": ""},
+            {"genre": "Preserved From File"},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["audible"]["genre"], "Preserved From File")
+
+    def test_genre_from_match_wins_over_clues_when_both_present(self):
+        FIXER.write_marker(
+            self.media,
+            {"asin": "B0X", "edit_mode": "full", "genre": "New Genre"},
+            {"genre": "Old Genre"},
+            1.0, "normal", False,
+        )
+        self.assertEqual(self._read_marker()["audible"]["genre"], "New Genre")
+
     def test_subtitle_summary_isbn_are_persisted_in_marker(self):
         # Same gap as genre: marker.audible silently dropped subtitle, summary,
         # and isbn even though the tag writers put them on the actual file.

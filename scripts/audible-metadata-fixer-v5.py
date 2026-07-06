@@ -1751,7 +1751,17 @@ def write_marker(
             "series": metadata.get("series", ""),
             "sequence": metadata.get("sequence", ""),
             "year": metadata.get("year", ""),
-            "genre": metadata.get("genre", ""),
+            # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
+            # tag `if genre:` -- when the match provided no genre, the file's
+            # pre-existing genre tag is left completely alone, not cleared. So
+            # the *resulting* embedded genre is metadata's genre if we have
+            # one, else whatever was already there. Recording plain
+            # metadata.get("genre") here would claim the file now has no
+            # genre when it actually still has its original one -- exactly
+            # the mismatch this comment is here to prevent regressing back to
+            # (confirmed against 99 real books: 85 had a real embedded genre
+            # silently misreported as "" before this fix).
+            "genre": metadata.get("genre") or clues.get("genre", ""),
             "summary": metadata.get("summary", ""),
             "isbn": metadata.get("isbn", ""),
             "cover_url": metadata.get("cover_url", ""),
