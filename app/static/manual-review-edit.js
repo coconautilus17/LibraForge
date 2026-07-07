@@ -1,0 +1,165 @@
+// Standalone "Edit Book" dialog for Manual Review: directly edit a book's
+// fields (pre-filled from current tags/sidecar) without going through the
+// search/match flow. A dedicated dialog, not a reuse of the match-apply
+// dialog (manualApplyEditDialog in app.js) -- see
+// docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
+//
+// Relies on globals already defined by app.js, loaded before this file:
+// manualContext, $, escapeHtml, manualCurrentCoverUrl.
+
+let mrePendingCoverUrl = '';
+
+function mreBuildDialog() {
+  if ($('mreDialog')) return;
+
+  const dlg = document.createElement('dialog');
+  dlg.id = 'mreDialog';
+  dlg.className = 'manual-apply-dialog';
+  dlg.innerHTML = `
+    <h3 class="manual-apply-title">Edit Book</h3>
+    <p id="mreContext" class="manual-apply-body"></p>
+    <div class="mre-tabs">
+      <button type="button" id="mreTabFieldsBtn" class="mre-tab-btn active">Fields</button>
+      <button type="button" id="mreTabCoverBtn" class="mre-tab-btn">Cover</button>
+    </div>
+    <div id="mreFieldsPanel" class="mre-tab-panel active">
+      <p class="manual-apply-write-policy-note">
+        A blank field is saved as blank and clears that tag. Separate multiple
+        genres with a comma (e.g. "Fantasy, LitRPG") &mdash; each is saved as
+        its own genre tag, not one combined genre.
+      </p>
+      <div class="manual-apply-edit-fields">
+        <label>Title<input id="mreTitle" /></label>
+        <label>Subtitle<input id="mreSubtitle" /></label>
+        <label>Author<input id="mreAuthor" /></label>
+        <label>Narrator<input id="mreNarrator" /></label>
+        <label>Series<input id="mreSeries" /></label>
+        <label>Sequence<input id="mreSequence" /></label>
+        <label>Year<input id="mreYear" /></label>
+        <label>ASIN<input id="mreAsin" /></label>
+        <label>ISBN<input id="mreIsbn" /></label>
+        <label>Publisher<input id="mrePublisher" /></label>
+        <label>Genre<input id="mreGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
+        <label class="mae-full-width">Comment / Summary<textarea id="mreSummary" rows="4"></textarea></label>
+      </div>
+    </div>
+    <div id="mreCoverPanel" class="mre-tab-panel"></div>
+    <p id="mreResult" class="manual-apply-body" hidden></p>
+    <p id="mreWarning" class="manual-apply-warning" hidden></p>
+    <div class="manual-apply-actions">
+      <button id="mreCancelBtn" class="secondary">Cancel</button>
+      <button id="mreSaveBtn">Save</button>
+    </div>`;
+  document.body.appendChild(dlg);
+
+  $('mreTabFieldsBtn').addEventListener('click', () => mreSwitchTab('fields'));
+  $('mreTabCoverBtn').addEventListener('click', () => mreSwitchTab('cover'));
+}
+
+function mreSwitchTab(name) {
+  const fieldsActive = name === 'fields';
+  $('mreTabFieldsBtn').classList.toggle('active', fieldsActive);
+  $('mreTabCoverBtn').classList.toggle('active', !fieldsActive);
+  $('mreFieldsPanel').classList.toggle('active', fieldsActive);
+  $('mreCoverPanel').classList.toggle('active', !fieldsActive);
+}
+
+function mreFillFieldsFromCurrent() {
+  const m = (manualContext && manualContext.metadata) || {};
+  $('mreTitle').value = m.title || '';
+  $('mreSubtitle').value = m.subtitle || '';
+  $('mreAuthor').value = m.author || '';
+  $('mreNarrator').value = m.narrator || '';
+  $('mreSeries').value = m.series || '';
+  $('mreSequence').value = m.sequence || '';
+  $('mreYear').value = m.year || '';
+  $('mreAsin').value = m.asin || '';
+  $('mreIsbn').value = m.isbn || '';
+  $('mrePublisher').value = m.publisher || '';
+  $('mreGenre').value = m.genre || '';
+  $('mreSummary').value = m.summary || '';
+}
+
+async function mreSave() {
+  const saveBtn = $('mreSaveBtn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+  $('mreResult').hidden = true;
+  $('mreWarning').hidden = true;
+
+  try {
+    const res = await fetch('/api/manual-review/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: manualContext.path,
+        script_name: $('script').value,
+        title: $('mreTitle').value.trim(),
+        subtitle: $('mreSubtitle').value.trim(),
+        author: $('mreAuthor').value.trim(),
+        narrator: $('mreNarrator').value.trim(),
+        series: $('mreSeries').value.trim(),
+        sequence: $('mreSequence').value.trim(),
+        year: $('mreYear').value.trim(),
+        asin: $('mreAsin').value.trim(),
+        isbn: $('mreIsbn').value.trim(),
+        publisher: $('mrePublisher').value.trim(),
+        genre: $('mreGenre').value.trim(),
+        summary: $('mreSummary').value.trim(),
+        cover_url: mrePendingCoverUrl,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      $('mreResult').hidden = false;
+      $('mreResult').textContent = data.detail || 'Save failed';
+      return;
+    }
+    $('mreResult').hidden = false;
+    $('mreResult').textContent = `Saved (${data.output_kind === 'json_sidecar' ? 'multi-file sidecar' : 'embedded tags'}).`;
+    if (data.warning) {
+      $('mreWarning').hidden = false;
+      $('mreWarning').textContent = data.warning;
+    }
+    mrePendingCoverUrl = '';
+    await loadManualTarget(manualContext.path);
+  } catch (e) {
+    $('mreResult').hidden = false;
+    $('mreResult').textContent = 'Error: ' + e.message;
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  }
+}
+
+function mreOpen() {
+  if (!manualContext?.path) {
+    alert('Load a manual review target first.');
+    return;
+  }
+  mreBuildDialog();
+  mrePendingCoverUrl = '';
+  mreSwitchTab('fields');
+  $('mreContext').textContent = `Editing: ${manualContext.display_path || manualContext.path}`;
+  $('mreResult').hidden = true;
+  $('mreWarning').hidden = true;
+  mreFillFieldsFromCurrent();
+
+  const dlg = $('mreDialog');
+
+  function onCancel() { dlg.close(); }
+  function onSave() { mreSave(); }
+
+  $('mreCancelBtn').addEventListener('click', onCancel, { once: true });
+  $('mreSaveBtn').replaceWith($('mreSaveBtn').cloneNode(true));
+  $('mreSaveBtn').addEventListener('click', onSave);
+  dlg.addEventListener('cancel', onCancel, { once: true });
+  dlg.showModal();
+}
+
+window.ManualReviewEdit = { open: mreOpen };
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('manualEditBtn');
+  if (btn) btn.addEventListener('click', mreOpen);
+});

@@ -2818,6 +2818,35 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
+.mre-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mre-tab-btn {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.mre-tab-btn.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.mre-tab-panel {
+  display: none;
+}
+
+.mre-tab-panel.active {
+  display: block;
+}
+
 /* ── Cleanup button group (right-aligned in .actions row) ────────────── */
 
 .cleanup-btn-group {
