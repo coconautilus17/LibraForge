@@ -4191,6 +4191,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
         "local": local,
+        "is_grouped": bool((clues.get("group_search") or {}).get("applied")),
     }
     if meta:
         item["match"] = {
