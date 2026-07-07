@@ -25,7 +25,7 @@ function mreBuildDialog() {
     <div id="mreFieldsPanel" class="mre-tab-panel active">
       <p class="manual-apply-write-policy-note">
         A blank field is saved as blank and clears that tag. Separate multiple
-        genres with a comma (e.g. "Fantasy, LitRPG") &mdash; each is saved as
+        genres with a comma (e.g. "Fantasy, LitRPG") - each is saved as
         its own genre tag, not one combined genre.
       </p>
       <div class="manual-apply-edit-fields">
