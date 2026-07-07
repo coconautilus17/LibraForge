@@ -86,6 +86,11 @@ function mreBuildDialog() {
   $('mreTabFieldsBtn').addEventListener('click', () => mreSwitchTab('fields'));
   $('mreTabCoverBtn').addEventListener('click', () => mreSwitchTab('cover'));
   $('mreCoverSearchBtn').addEventListener('click', mreSearchCovers);
+  $('mreCoverUrlUseBtn').addEventListener('click', mreUseCoverUrl);
+  $('mreCoverFileInput').addEventListener('change', () => {
+    const file = $('mreCoverFileInput').files[0];
+    if (file) mreUploadCoverFile(file);
+  });
 }
 
 function mreSwitchTab(name) {
@@ -164,6 +169,32 @@ function mreSetPendingCover(url) {
   $('mrePendingCoverImg').src = url;
   $('mrePendingCoverImg').hidden = false;
   $('mrePendingCoverNote').hidden = true;
+}
+
+function mreUseCoverUrl() {
+  const url = $('mreCoverUrlInput').value.trim();
+  if (!url) {
+    alert('Enter a cover image URL first.');
+    return;
+  }
+  mreSetPendingCover(url);
+}
+
+async function mreUploadCoverFile(file) {
+  const previewUrl = URL.createObjectURL(file);
+  $('mrePendingCoverImg').src = previewUrl;
+  $('mrePendingCoverImg').hidden = false;
+  $('mrePendingCoverNote').hidden = true;
+
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch('/api/manual-review/cover-upload', { method: 'POST', body: formData });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.detail || 'Cover upload failed');
+    return;
+  }
+  mrePendingCoverUrl = data.cover_url;
 }
 
 function mreFillFieldsFromCurrent() {
@@ -257,6 +288,10 @@ function mreOpen() {
   $('mrePendingCoverImg').hidden = true;
   $('mrePendingCoverImg').src = '';
   $('mrePendingCoverNote').hidden = false;
+  $('mreCoverQuery').value = '';
+  $('mreCoverResults').innerHTML = '';
+  $('mreCoverUrlInput').value = '';
+  $('mreCoverFileInput').value = '';
 
   const dlg = $('mreDialog');
 
