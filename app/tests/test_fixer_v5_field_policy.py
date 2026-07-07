@@ -243,5 +243,47 @@ class Mp3FieldPolicyTests(unittest.TestCase):
         self.assertEqual(values["genre"], ["Fantasy", "LitRPG"])
 
 
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build test fixtures")
+class M4bToolSidecarAsinFieldPolicyTests(unittest.TestCase):
+    """build_m4b_tool_metadata_payload's sidecar.audible.asin is the ONLY place
+    a grouped/multi-file book's ASIN is recorded -- Manual Review never writes
+    embedded tags for those books (should_write_json_sidecar routes them to
+    this JSON sidecar instead). Before field_policy threading, this field had
+    an unconditional survivor fallback (`metadata.get("asin") or current`),
+    so clearing ASIN via Manual Review's Full Overwrite on a grouped book
+    silently did nothing -- the old value always survived. See
+    docs/design/manual-review-apply-rewrite-rules.md.
+    """
+
+    def _payload(self, asin: str, current_asin: str, field_policy: str) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book.mp3"
+            _make_silent_mp3(path)
+            metadata = {**FULL_METADATA, "asin": asin}
+            clues = {"current": {"asin": current_asin}, "group_search": {}}
+            return FIXER.build_m4b_tool_metadata_payload(
+                path, metadata, clues, 0.9, field_policy=field_policy
+            )
+
+    def test_overwrite_clears_asin_even_when_current_has_one(self):
+        payload = self._payload("", "B0OLDASIN01", "overwrite")
+        self.assertEqual(payload["audible"]["asin"], "")
+
+    def test_fill_preserves_current_asin_when_blank(self):
+        payload = self._payload("", "B0OLDASIN01", "fill")
+        self.assertEqual(payload["audible"]["asin"], "B0OLDASIN01")
+
+    def test_legacy_preserves_current_asin_when_blank(self):
+        # Default for every CLI call site -- must stay byte-identical to the
+        # pre-field_policy unconditional fallback behavior.
+        payload = self._payload("", "B0OLDASIN01", "legacy")
+        self.assertEqual(payload["audible"]["asin"], "B0OLDASIN01")
+
+    def test_non_blank_asin_always_wins_regardless_of_policy(self):
+        for policy in ("legacy", "fill", "overwrite"):
+            payload = self._payload("B0NEWASIN1", "B0OLDASIN01", policy)
+            self.assertEqual(payload["audible"]["asin"], "B0NEWASIN1")
+
+
 if __name__ == "__main__":
     unittest.main()

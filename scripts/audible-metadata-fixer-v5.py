@@ -2081,7 +2081,7 @@ def summarize_audio_stream_properties(file_paths: list[Path]) -> dict:
     }
 
 def build_m4b_tool_metadata_payload(
-    source: Path, metadata: dict, clues: dict, score: float
+    source: Path, metadata: dict, clues: dict, score: float, field_policy: str = "legacy"
 ) -> dict:
     current = clues.get("current") or {}
     sidecar_path = get_m4b_tool_metadata_path(source, clues)
@@ -2129,7 +2129,16 @@ def build_m4b_tool_metadata_payload(
             # has no ASIN) -- the tag writer then leaves whatever ASIN the
             # file already had untouched, so the *resulting* ASIN is
             # current's, not blank. See write_marker's parallel comment.
-            "asin": metadata.get("asin") or current.get("asin", ""),
+            # Uses the same field_policy-aware resolution as write_marker's
+            # _sv() so Manual Review's Full Overwrite can genuinely clear a
+            # previously-recorded ASIN here too -- an unconditional fallback
+            # to current's value (the old behavior) meant clearing the ASIN
+            # field in the Manual Review dialog for a grouped/multi-file book
+            # never actually took effect, since this sidecar (not embedded
+            # tags) is the only place a grouped book's ASIN is recorded.
+            "asin": _marker_survivor_value(
+                field_policy, metadata.get("asin") or "", current.get("asin", ""), legacy_conditional=True
+            ),
             "title": metadata.get("audible_title", ""),
             "sequence": metadata.get("audible_sequence", ""),
             "year": metadata.get("audible_year", ""),
@@ -2170,9 +2179,9 @@ def build_m4b_tool_metadata_payload(
     }
 
 def write_m4b_tool_metadata_sidecar(
-    source: Path, metadata: dict, clues: dict, score: float
+    source: Path, metadata: dict, clues: dict, score: float, field_policy: str = "legacy"
 ) -> Path:
-    sidecar_data = build_m4b_tool_metadata_payload(source, metadata, clues, score)
+    sidecar_data = build_m4b_tool_metadata_payload(source, metadata, clues, score, field_policy=field_policy)
     lf_path, lf_payload = _load_libraforge_raw(source, clues)
     lf_payload.setdefault("schema_version", 2)
     lf_payload.setdefault("tool", "audible-metadata-fixer")

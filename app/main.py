@@ -2410,19 +2410,24 @@ def refresh_cached_multipart_audio_profiles(
     }
 
 
-def _read_sidecar_book(source_path: Path) -> dict | None:
+def _read_sidecar_book(source_path: Path, fixer_module) -> dict | None:
     """Return the applied book metadata from libraforge.json, if present.
 
     Checks sidecar.book first (multifile grouped books), then falls back to
     marker.audible (single-file books whose metadata is written to ID3 tags).
     Merges sidecar.audible.asin because the fixer stores ASIN there, not in
     sidecar.book.
+
+    Resolution uses fixer_module._load_libraforge_raw() -- the same
+    folder-level-vs-per-file logic the fixer itself uses to decide where to
+    write. A single hardcoded `parent / "libraforge.json"` lookup misses
+    per-file sidecars (`<name>.libraforge.json`), which is what every book
+    in a shared "dumping ground" folder like _unorganized actually uses.
     """
-    lf_path = source_path.parent / "libraforge.json"
-    if not lf_path.is_file():
-        return None
     try:
-        lf = json.loads(lf_path.read_text(encoding="utf-8"))
+        lf_path, lf = fixer_module._load_libraforge_raw(source_path)
+        if not lf_path.is_file():
+            return None
         sidecar = lf.get("sidecar") or {}
         book = sidecar.get("book")
         if book and isinstance(book, dict) and book.get("title"):
@@ -2584,7 +2589,7 @@ def inspect_manual_review_target(
     # over the search-context clues. build_search_clues_from_file applies path-based
     # overrides (folder name -> title, hierarchy -> series) that are useful for finding
     # the right match but corrupt the "Current" column when showing post-apply state.
-    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path)
+    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path, fixer_module)
     if sidecar_book:
         # Take all fields stored in the sidecar (no preset list) so genre and any
         # future fields come through without code changes here.
@@ -2784,7 +2789,9 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
 
     if fixer_module.should_write_json_sidecar(source_path, clues):
         output_kind = "json_sidecar"
-        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(source_path, metadata, clues, score)
+        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(
+            source_path, metadata, clues, score, field_policy=req.write_policy
+        )
         output_path = str(sidecar_path)
     else:
         # Back up explicitly so the backup lands in the same (alone-aware)
@@ -2807,6 +2814,18 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         skip_blank_fields=(req.write_policy == "fill"),
     )
 
+    # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
+    # around WRITE_ACTION_JSON emission): a field counts as "written" only when
+    # tags were actually written (not a json-sidecar-only apply) and the resolved
+    # value is non-blank. Without this, marker_skip_is_clean() sees an empty
+    # written_fields list, believes the real ASIN was never recorded as written,
+    # and routes the book into the recovery path on the next scan -- surfacing a
+    # "would write" badge in the report for a book that was already applied.
+    wrote_tags = output_kind == "tags"
+    written_fields = (
+        [f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()]
+        if wrote_tags else None
+    )
     fixer_module.write_marker(
         source=source_path,
         metadata=metadata,
@@ -2816,6 +2835,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         aggressive=False,
         output_kind=output_kind,
         alone=alone,
+        written_fields=written_fields,
         field_policy=req.write_policy,
     )
 
@@ -5562,23 +5582,53 @@ def _embed_asin_tag(m4b_path: Path, asin: str) -> None:
         pass
 
 
+# Matches audible-cli's own default concurrency (`audible download --jobs 3`).
+# See docs/design/download-voucher-first-decryption.md for why this is safe
+# with respect to the CloudFront activation-bytes block and the license-grant
+# threshold: both are still detected and cached exactly once per run, guarded
+# by run_download_worker's bookkeeping_lock, regardless of how many workers
+# are in flight.
+LIBRARY_DOWNLOAD_CONCURRENCY = 3
+
+
 def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
     state = runs[run_id]
     state.status = "running"
     state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
     log_lines: list[str] = []
+    # Reentrant: log() is called from within other bookkeeping_lock-held
+    # blocks below, and a plain Lock would deadlock a thread against itself.
+    bookkeeping_lock = threading.RLock()
 
     def log(msg: str) -> None:
-        log_lines.append(msg)
-        state.lines_tail = log_lines[-40:]
-        try:
-            state.log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")  # type: ignore[union-attr]
-        except Exception:
-            pass
+        with bookkeeping_lock:
+            log_lines.append(msg)
+            state.lines_tail = log_lines[-40:]
+            try:
+                state.log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")  # type: ignore[union-attr]
+            except Exception:
+                pass
 
     target = Path(req.target_path)
     completed: list[Path] = []
     failures: list[dict[str, str]] = []
+    # Keyed by idx (not appended in completion order) so the final report can
+    # list every item in its original selection order even though workers
+    # finish out of order under concurrency.
+    results_by_idx: dict[int, dict[str, Any]] = {}
+    done_count = 0
+    active_titles: dict[int, str] = {}
+
+    def _update_progress_locked() -> None:
+        detail = ", ".join(active_titles[k] for k in sorted(active_titles))
+        state.current = done_count
+        state.current_file = detail
+        state.percent = round(done_count / total * 100, 1) if total else 0.0
+        label = f"{done_count} of {total} done"
+        if detail:
+            label += f" -- downloading: {detail}"
+        set_run_phase(state, "downloading", "Downloading", label)
+
     try:
         target.mkdir(parents=True, exist_ok=True)
         auth = audible.Authenticator.from_file(req.auth_file)
@@ -5602,31 +5652,45 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         total = len(req.items)
         state.total = total
         set_run_phase(state, "downloading", "Downloading", f"0 of {total}")
-        for idx, item in enumerate(req.items, 1):
-            state.current = idx
-            state.current_file = item.title or item.asin
-            state.percent = round((idx - 1) / total * 100, 1) if total else 0.0
-            set_run_phase(state, "downloading", "Downloading", f"{idx} of {total}: {state.current_file}")
-            log(f"[{idx}/{total}] {item.title or item.asin} ({item.asin})")
-            try:
-                if license_threshold_error is not None:
-                    log("  skipping: Audible license-grant threshold was hit earlier this run")
-                    raise license_threshold_error
 
-                folder_name = _safe_component(
-                    f"{item.author} - {item.title}".strip(" -") or item.title or item.asin
-                )
-                folder_name = f"{folder_name} [{item.asin}]"
-                book_dir = target / folder_name
-                if book_dir.exists():
-                    if item.dup_action == "keep_both":
-                        n = 2
-                        while (target / f"{folder_name} ({n})").exists():
-                            n += 1
-                        book_dir = target / f"{folder_name} ({n})"
-                    elif item.dup_action == "replace":
-                        shutil.rmtree(book_dir, ignore_errors=True)
-                book_dir.mkdir(parents=True, exist_ok=True)
+        def process_item(idx: int, item: LibraryDownloadItem) -> None:
+            nonlocal activation_bytes_cache, activation_bytes_error, license_threshold_error, done_count
+            display_title = item.title or item.asin
+            # Set as soon as it's known so both the success and failure
+            # branches below can report it in the final per-item report,
+            # even if the failure happens after the method was chosen (e.g.
+            # ffmpeg decrypt itself fails partway through).
+            method_used: str | None = None
+            with bookkeeping_lock:
+                active_titles[idx] = display_title
+                _update_progress_locked()
+            log(f"[{idx}/{total}] {display_title} ({item.asin})")
+            try:
+                with bookkeeping_lock:
+                    threshold_hit = license_threshold_error
+                if threshold_hit is not None:
+                    log(f"  [{idx}/{total}] skipping: Audible license-grant threshold was hit earlier this run")
+                    raise threshold_hit
+
+                with bookkeeping_lock:
+                    # Folder collision resolution touches the shared target
+                    # directory, so concurrent workers must serialize it --
+                    # otherwise two items racing on the same computed name
+                    # (e.g. duplicate titles) could pick the same "(2)" suffix.
+                    folder_name = _safe_component(
+                        f"{item.author} - {item.title}".strip(" -") or item.title or item.asin
+                    )
+                    folder_name = f"{folder_name} [{item.asin}]"
+                    book_dir = target / folder_name
+                    if book_dir.exists():
+                        if item.dup_action == "keep_both":
+                            n = 2
+                            while (target / f"{folder_name} ({n})").exists():
+                                n += 1
+                            book_dir = target / f"{folder_name} ({n})"
+                        elif item.dup_action == "replace":
+                            shutil.rmtree(book_dir, ignore_errors=True)
+                    book_dir.mkdir(parents=True, exist_ok=True)
 
                 try:
                     lr = client.post(
@@ -5640,7 +5704,8 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     )
                 except Exception as lr_exc:  # noqa: BLE001
                     if "threshold" in str(lr_exc).lower():
-                        license_threshold_error = lr_exc
+                        with bookkeeping_lock:
+                            license_threshold_error = lr_exc
                         log("  Audible license-grant threshold hit -- stopping further license requests this run")
                     raise
                 content_license = lr.get("content_license", {})
@@ -5685,34 +5750,44 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     voucher = decrypt_voucher_from_licenserequest(auth, lr)
                     decrypt_kwargs = {"key": voucher["key"], "iv": voucher["iv"]}
                     enc_path = book_dir / f"{base}.aaxc"
+                    method_used = "voucher"
                     log("  using per-book voucher (no account activation bytes needed)")
                 except Exception as v_exc:  # noqa: BLE001
                     voucher_error = v_exc
                     log(f"  no per-book voucher available ({v_exc}); falling back to account activation bytes")
 
                 if voucher_error is not None:
-                    if activation_bytes_cache is None and activation_bytes_error is None:
-                        log("  fetching account activation bytes (first title needing it this run)...")
-                        try:
-                            activation_bytes_cache = auth.get_activation_bytes()
-                            log("  activation bytes obtained")
+                    # Locked for the whole check-fetch-cache sequence (not just
+                    # the flag check) so two workers that both discover they
+                    # need activation_bytes at the same time don't both fire a
+                    # live fetch -- the second one blocks on the lock and then
+                    # sees the first one's cached result or error, exactly as
+                    # the single-threaded version fetched it once per run.
+                    with bookkeeping_lock:
+                        if activation_bytes_cache is None and activation_bytes_error is None:
+                            log("  fetching account activation bytes (first title needing it this run)...")
                             try:
-                                auth.to_file()
-                            except Exception:
-                                pass
-                        except Exception as ab_exc:  # noqa: BLE001
-                            activation_bytes_error = ab_exc
-                    elif activation_bytes_error is not None:
-                        log("  activation bytes already failed earlier this run; skipping live retry")
-                    else:
-                        log("  reusing activation bytes fetched earlier this run")
-                    if activation_bytes_error is not None:
-                        raise activation_bytes_error
-                    decrypt_kwargs = {"activation_bytes": activation_bytes_cache}
+                                activation_bytes_cache = auth.get_activation_bytes()
+                                log("  activation bytes obtained")
+                                try:
+                                    auth.to_file()
+                                except Exception:
+                                    pass
+                            except Exception as ab_exc:  # noqa: BLE001
+                                activation_bytes_error = ab_exc
+                        elif activation_bytes_error is not None:
+                            log("  activation bytes already failed earlier this run; skipping live retry")
+                        else:
+                            log("  reusing activation bytes fetched earlier this run")
+                        resolved_ab_value = activation_bytes_cache
+                        resolved_ab_error = activation_bytes_error
+                    if resolved_ab_error is not None:
+                        raise resolved_ab_error
+                    decrypt_kwargs = {"activation_bytes": resolved_ab_value}
                     enc_path = book_dir / f"{base}.aax"
+                    method_used = "activation_bytes"
 
-                decrypt_method = "activation_bytes" if voucher_error is not None else "voucher"
-                log(f"  downloading encrypted stream (declared drm_type={drm_type or 'unknown'}, decrypting via {decrypt_method})...")
+                log(f"  downloading encrypted stream (declared drm_type={drm_type or 'unknown'}, decrypting via {method_used})...")
                 with client.raw_request(  # type: ignore[union-attr]
                     "GET",
                     content_url,
@@ -5729,16 +5804,58 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                 _embed_asin_tag(out_m4b, item.asin)
                 # No sidecar cover.jpg: Audible embeds full-quality cover art in the M4B.
 
-                completed.append(book_dir)
+                with bookkeeping_lock:
+                    completed.append(book_dir)
+                    results_by_idx[idx] = {
+                        "asin": item.asin,
+                        "title": display_title,
+                        "status": "success",
+                        "method": method_used,
+                        "path": str(out_m4b),
+                    }
                 log(f"  done -> {out_m4b}")
             except Exception as exc:  # noqa: BLE001
-                failures.append({"asin": item.asin, "title": item.title, "error": str(exc)})
+                with bookkeeping_lock:
+                    failures.append({"asin": item.asin, "title": item.title, "error": str(exc)})
+                    results_by_idx[idx] = {
+                        "asin": item.asin,
+                        "title": display_title,
+                        "status": "failed",
+                        "method": method_used,
+                        "error": str(exc),
+                    }
                 log(f"  FAILED: {exc}")
-            state.percent = round(idx / total * 100, 1) if total else 100.0
+            finally:
+                with bookkeeping_lock:
+                    done_count += 1
+                    active_titles.pop(idx, None)
+                    _update_progress_locked()
+
+        workers = min(LIBRARY_DOWNLOAD_CONCURRENCY, total) or 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(process_item, idx, item) for idx, item in enumerate(req.items, 1)]
+            for fut in as_completed(futures):
+                fut.result()  # process_item catches its own item-level errors; this only re-raises bugs
 
         state.stats["downloaded"] = len(completed)
         state.stats["failed"] = len(failures)
         state.stats["failures"] = failures
+        # Ordered by original selection order (not completion order, which is
+        # nondeterministic under concurrency) so the end-of-run report reads
+        # the same way the user picked the items. Unbounded, unlike
+        # state.lines_tail's 40-line cap, so a 100-item run's full report
+        # doesn't get truncated the way the raw log tail would be.
+        results = [results_by_idx[i] for i in sorted(results_by_idx)]
+        state.stats["results"] = results
+
+        log("")
+        log(f"=== Summary: {len(completed)} downloaded, {len(failures)} failed ===")
+        for r in results:
+            if r["status"] == "success":
+                log(f"  OK    {r['title']} ({r['asin']}) -- via {r['method']}")
+            else:
+                via = f" [attempted via {r['method']}]" if r.get("method") else ""
+                log(f"  FAIL  {r['title']} ({r['asin']}) -- {r['error']}{via}")
 
         if req.organize and completed:
             set_run_phase(state, "organizing", "Organizing", "Dry-run preview")
