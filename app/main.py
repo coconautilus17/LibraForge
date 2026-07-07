@@ -2410,19 +2410,24 @@ def refresh_cached_multipart_audio_profiles(
     }
 
 
-def _read_sidecar_book(source_path: Path) -> dict | None:
+def _read_sidecar_book(source_path: Path, fixer_module) -> dict | None:
     """Return the applied book metadata from libraforge.json, if present.
 
     Checks sidecar.book first (multifile grouped books), then falls back to
     marker.audible (single-file books whose metadata is written to ID3 tags).
     Merges sidecar.audible.asin because the fixer stores ASIN there, not in
     sidecar.book.
+
+    Resolution uses fixer_module._load_libraforge_raw() -- the same
+    folder-level-vs-per-file logic the fixer itself uses to decide where to
+    write. A single hardcoded `parent / "libraforge.json"` lookup misses
+    per-file sidecars (`<name>.libraforge.json`), which is what every book
+    in a shared "dumping ground" folder like _unorganized actually uses.
     """
-    lf_path = source_path.parent / "libraforge.json"
-    if not lf_path.is_file():
-        return None
     try:
-        lf = json.loads(lf_path.read_text(encoding="utf-8"))
+        lf_path, lf = fixer_module._load_libraforge_raw(source_path)
+        if not lf_path.is_file():
+            return None
         sidecar = lf.get("sidecar") or {}
         book = sidecar.get("book")
         if book and isinstance(book, dict) and book.get("title"):
@@ -2584,7 +2589,7 @@ def inspect_manual_review_target(
     # over the search-context clues. build_search_clues_from_file applies path-based
     # overrides (folder name -> title, hierarchy -> series) that are useful for finding
     # the right match but corrupt the "Current" column when showing post-apply state.
-    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path)
+    sidecar_book = None if use_backup_tags else _read_sidecar_book(source_path, fixer_module)
     if sidecar_book:
         # Take all fields stored in the sidecar (no preset list) so genre and any
         # future fields come through without code changes here.
@@ -2784,7 +2789,9 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
 
     if fixer_module.should_write_json_sidecar(source_path, clues):
         output_kind = "json_sidecar"
-        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(source_path, metadata, clues, score)
+        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(
+            source_path, metadata, clues, score, field_policy=req.write_policy
+        )
         output_path = str(sidecar_path)
     else:
         # Back up explicitly so the backup lands in the same (alone-aware)
@@ -2807,6 +2814,18 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         skip_blank_fields=(req.write_policy == "fill"),
     )
 
+    # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
+    # around WRITE_ACTION_JSON emission): a field counts as "written" only when
+    # tags were actually written (not a json-sidecar-only apply) and the resolved
+    # value is non-blank. Without this, marker_skip_is_clean() sees an empty
+    # written_fields list, believes the real ASIN was never recorded as written,
+    # and routes the book into the recovery path on the next scan -- surfacing a
+    # "would write" badge in the report for a book that was already applied.
+    wrote_tags = output_kind == "tags"
+    written_fields = (
+        [f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()]
+        if wrote_tags else None
+    )
     fixer_module.write_marker(
         source=source_path,
         metadata=metadata,
@@ -2816,6 +2835,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         aggressive=False,
         output_kind=output_kind,
         alone=alone,
+        written_fields=written_fields,
         field_policy=req.write_policy,
     )
 
