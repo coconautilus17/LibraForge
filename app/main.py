@@ -1057,6 +1057,30 @@ class ManualReviewApplyRequest(BaseModel):
     write_policy: str = "fill"
 
 
+class ManualReviewEditRequest(BaseModel):
+    """Direct field editing, no match/search involved -- see
+    docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
+    Always writes with field_policy="overwrite" (a blank field here always
+    clears that tag) and score=1.0 (no match to carry a confidence score
+    from).
+    """
+    path: str
+    script_name: str = Field(default_factory=default_fixer_script)
+    title: str
+    subtitle: str = ""
+    author: str
+    narrator: str = ""
+    series: str = ""
+    sequence: str = ""
+    year: str = ""
+    asin: str = ""
+    isbn: str = ""
+    publisher: str = ""
+    genre: str = ""
+    summary: str = ""
+    cover_url: str = ""
+
+
 class M4BRunRequest(BaseModel):
     input_path: str
     output_path: str
@@ -2896,6 +2920,65 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         "metadata_json_path": write_result["metadata_json_path"],
         "edit_mode": req.edit_mode,
         "write_policy": req.write_policy,
+        "metadata_preview": metadata,
+    }
+    if write_result["warning"]:
+        result["warning"] = write_result["warning"]
+    return result
+
+
+def edit_manual_review_book(req: ManualReviewEditRequest) -> dict[str, Any]:
+    if not req.title or not req.author:
+        raise HTTPException(status_code=400, detail="Title and author are required")
+
+    context = inspect_manual_review_target(path=req.path, script_name=req.script_name)
+    fixer_module = load_fixer_module(req.script_name)
+    source_path = Path(context["source_path"])
+
+    metadata = {
+        "title": req.title,
+        "subtitle": req.subtitle,
+        "author": req.author,
+        "narrator": req.narrator,
+        "series": req.series,
+        "sequence": req.sequence,
+        "year": req.year,
+        "asin": req.asin,
+        "isbn": req.isbn,
+        "publisher": req.publisher,
+        "genre": req.genre,
+        "summary": req.summary,
+        "write_summary": True,
+        "edit_mode": "full",
+        "cover_url": req.cover_url,
+    }
+
+    clues = build_context_clues(fixer_module, context["metadata"])
+    if context.get("is_grouped"):
+        clues["group_search"] = context.get("group_search", {})
+    clues["current"] = dict(context["metadata"])
+
+    write_result = _write_book_metadata(
+        source_path=source_path,
+        metadata=metadata,
+        clues=clues,
+        score=1.0,
+        fixer_module=fixer_module,
+        write_policy="overwrite",
+        marker_mode="manual_edit",
+        writer="auto",
+        cover_if_missing=False,
+        replace_cover=bool(req.cover_url),
+        backup=False,
+    )
+
+    result = {
+        "status": "applied",
+        "target_path": context["display_path"],
+        "source_path": context["source_path"],
+        "output_kind": write_result["output_kind"],
+        "output_path": write_result["output_path"],
+        "metadata_json_path": write_result["metadata_json_path"],
         "metadata_preview": metadata,
     }
     if write_result["warning"]:
@@ -6242,6 +6325,11 @@ def current_manual_review_cover(
 @app.post("/api/manual-review/apply")
 def apply_manual_review(req: ManualReviewApplyRequest) -> dict[str, Any]:
     return apply_manual_review_result(req)
+
+
+@app.post("/api/manual-review/edit")
+def edit_manual_review(req: ManualReviewEditRequest) -> dict[str, Any]:
+    return edit_manual_review_book(req)
 
 
 @app.post("/api/m4b/runs")
