@@ -434,6 +434,7 @@ FOUND_RE = re.compile(r"^Found\s+(\d+)\s+supported files\.")
 SEARCH_WORKERS_RE = re.compile(r"^Search workers:\s+(\d+)\s*$")
 GOODREADS_CIRCUIT_TRIPPED_SENTINEL = "GOODREADS_CIRCUIT_TRIPPED"
 MODE_RE = re.compile(r"^\s+Mode:\s+([A-Za-z_]+)\s*$")
+GROUPED_RE = re.compile(r"^\s+Grouped:\s+(\d+)\s+files?\s*$")
 DURATION_STATUS_RE = re.compile(r"^\s+Status:\s+([A-Za-z_]+)\s*$")
 DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
 SUMMARY_RE = re.compile(r"^\s*(Matched|Skipped|Failed|Smart-skipped):\s+(\d+)\s*$")
@@ -1464,6 +1465,11 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             state.stats["mode_breakdown"].setdefault(mode, 0)
             state.stats["mode_breakdown"][mode] += 1
             add_category(state, "mode", mode, state.current_file)
+        return
+
+    m = GROUPED_RE.match(line)
+    if m and state.current_file:
+        add_category(state, "group", "multi-file", state.current_file)
         return
 
     m = DURATION_STATUS_RE.match(line)

@@ -3153,6 +3153,10 @@ def search_item(
         result.queries = queries
         result.clues = clues
 
+        group_search = clues.get("group_search", {}) or {}
+        if group_search.get("applied"):
+            log.append(f"  Grouped: {group_search.get('file_count', 0)} files")
+
         if recovering_from_marker:
             rec_md = metadata_from_marker(existing_marker)
             try:
