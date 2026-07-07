@@ -2721,6 +2721,121 @@ def build_manual_metadata_from_result(
     return chosen
 
 
+def _write_book_metadata(
+    *,
+    source_path: Path,
+    metadata: dict[str, Any],
+    clues: dict[str, Any],
+    score: float,
+    fixer_module,
+    write_policy: str,
+    marker_mode: str,
+    writer: str = "auto",
+    cover_if_missing: bool = False,
+    replace_cover: bool = False,
+    backup: bool = False,
+) -> dict[str, Any]:
+    """Resolves alone/grouped placement and writes tags-or-JSON-sidecar,
+    metadata.json, and the marker. Shared by apply_manual_review_result and
+    edit_manual_review_book so the two flows can never diverge -- see
+    docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
+    """
+    # Full Overwrite can't be honestly honored on a file that falls back to
+    # the ffmpeg writer (build_metadata_args never clears a tag -- see
+    # docs/design/manual-review-apply-rewrite-rules.md). Detect this ahead of
+    # time and apply anyway with fill-like behavior, surfacing why instead of
+    # silently doing something other than what was asked.
+    write_policy_warning = ""
+    if write_policy == "overwrite" and writer != "mutagen":
+        will_use_mutagen = (
+            fixer_module.is_mutagen_mp4_candidate(source_path)
+            or fixer_module.is_mutagen_mp3_candidate(source_path)
+        )
+        if not will_use_mutagen:
+            write_policy_warning = (
+                "Full Overwrite requested, but this file type only supports the "
+                "ffmpeg writer, which cannot force-clear a tag; blank fields were "
+                "left untouched instead of cleared."
+            )
+
+    output_kind = "tags"
+    output_path = str(source_path)
+
+    # Follow the same sidecar placement as the rest of the script: a single file
+    # alone in its folder (or a grouped multi-file book) gets a folder-level
+    # libraforge.json + metadata.json; a loose file sharing its folder gets per-file
+    # companions. Grouped books are already routed folder-level via the group_search
+    # clue; for a single file we detect "alone" by counting sibling audio files.
+    grouped = bool((clues.get("group_search") or {}).get("applied"))
+    if grouped:
+        alone = False
+    else:
+        folder = source_path.parent
+        try:
+            alone = sum(1 for x in folder.iterdir() if x.is_file() and is_audio_file(x)) <= 1
+        except OSError:
+            alone = True
+
+    if fixer_module.should_write_json_sidecar(source_path, clues):
+        output_kind = "json_sidecar"
+        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(
+            source_path, metadata, clues, score, field_policy=write_policy
+        )
+        output_path = str(sidecar_path)
+    else:
+        # Back up explicitly so the backup lands in the same (alone-aware)
+        # libraforge.json the marker will use, instead of a split per-file copy.
+        if backup:
+            fixer_module.write_original_metadata_backup(source_path, alone=alone)
+        fixer_module.write_tags(
+            source_path,
+            metadata,
+            backup=False,
+            writer=writer,
+            cover_if_missing=cover_if_missing,
+            replace_cover=replace_cover,
+            field_policy=write_policy,
+        )
+
+    # Audiobookshelf metadata.json, placed by the same alone/group rules.
+    metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
+        source_path, metadata, clues, alone,
+        skip_blank_fields=(write_policy == "fill"),
+    )
+
+    # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
+    # around WRITE_ACTION_JSON emission): a field counts as "written" only when
+    # tags were actually written (not a json-sidecar-only apply) and the resolved
+    # value is non-blank. Without this, marker_skip_is_clean() sees an empty
+    # written_fields list, believes the real ASIN was never recorded as written,
+    # and routes the book into the recovery path on the next scan -- surfacing a
+    # "would write" badge in the report for a book that was already applied.
+    wrote_tags = output_kind == "tags"
+    written_fields = (
+        [f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()]
+        if wrote_tags else None
+    )
+    fixer_module.write_marker(
+        source=source_path,
+        metadata=metadata,
+        clues=clues,
+        score=score,
+        mode=marker_mode,
+        aggressive=False,
+        output_kind=output_kind,
+        alone=alone,
+        written_fields=written_fields,
+        field_policy=write_policy,
+    )
+
+    return {
+        "output_kind": output_kind,
+        "output_path": output_path,
+        "metadata_json_path": str(metadata_json_path),
+        "warning": write_policy_warning,
+    }
+
+
 def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
     if req.write_policy not in ("fill", "overwrite"):
         raise HTTPException(status_code=400, detail="write_policy must be 'fill' or 'overwrite'")
@@ -2756,108 +2871,35 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
     # real tag survives on disk. See docs/design/manual-review-apply-rewrite-rules.md.
     clues["current"] = dict(context["metadata"])
 
-    # Full Overwrite can't be honestly honored on a file that falls back to
-    # the ffmpeg writer (build_metadata_args never clears a tag -- see
-    # docs/design/manual-review-apply-rewrite-rules.md). Detect this ahead of
-    # time and apply anyway with fill-like behavior, surfacing why instead of
-    # silently doing something other than what was asked.
-    write_policy_warning = ""
-    if req.write_policy == "overwrite" and req.writer != "mutagen":
-        will_use_mutagen = (
-            fixer_module.is_mutagen_mp4_candidate(source_path)
-            or fixer_module.is_mutagen_mp3_candidate(source_path)
-        )
-        if not will_use_mutagen:
-            write_policy_warning = (
-                "Full Overwrite requested, but this file type only supports the "
-                "ffmpeg writer, which cannot force-clear a tag; blank fields were "
-                "left untouched instead of cleared."
-            )
-
     score = float(req.selected_result.get("score", 1.0) or 1.0)
-    output_kind = "tags"
-    output_path = str(source_path)
 
-    # Follow the same sidecar placement as the rest of the script: a single file
-    # alone in its folder (or a grouped multi-file book) gets a folder-level
-    # libraforge.json + metadata.json; a loose file sharing its folder gets per-file
-    # companions. Grouped books are already routed folder-level via the group_search
-    # clue; for a single file we detect "alone" by counting sibling audio files.
-    grouped = bool((clues.get("group_search") or {}).get("applied"))
-    if grouped:
-        alone = False
-    else:
-        folder = source_path.parent
-        try:
-            alone = sum(1 for x in folder.iterdir() if x.is_file() and is_audio_file(x)) <= 1
-        except OSError:
-            alone = True
-
-    if fixer_module.should_write_json_sidecar(source_path, clues):
-        output_kind = "json_sidecar"
-        sidecar_path = fixer_module.write_m4b_tool_metadata_sidecar(
-            source_path, metadata, clues, score, field_policy=req.write_policy
-        )
-        output_path = str(sidecar_path)
-    else:
-        # Back up explicitly so the backup lands in the same (alone-aware)
-        # libraforge.json the marker will use, instead of a split per-file copy.
-        if req.backup:
-            fixer_module.write_original_metadata_backup(source_path, alone=alone)
-        fixer_module.write_tags(
-            source_path,
-            metadata,
-            backup=False,
-            writer=req.writer,
-            cover_if_missing=req.cover_if_missing,
-            replace_cover=req.replace_cover,
-            field_policy=req.write_policy,
-        )
-
-    # Audiobookshelf metadata.json, placed by the same alone/group rules.
-    metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
-        source_path, metadata, clues, alone,
-        skip_blank_fields=(req.write_policy == "fill"),
-    )
-
-    # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
-    # around WRITE_ACTION_JSON emission): a field counts as "written" only when
-    # tags were actually written (not a json-sidecar-only apply) and the resolved
-    # value is non-blank. Without this, marker_skip_is_clean() sees an empty
-    # written_fields list, believes the real ASIN was never recorded as written,
-    # and routes the book into the recovery path on the next scan -- surfacing a
-    # "would write" badge in the report for a book that was already applied.
-    wrote_tags = output_kind == "tags"
-    written_fields = (
-        [f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()]
-        if wrote_tags else None
-    )
-    fixer_module.write_marker(
-        source=source_path,
+    write_result = _write_book_metadata(
+        source_path=source_path,
         metadata=metadata,
         clues=clues,
         score=score,
-        mode=f"manual_{req.edit_mode}",
-        aggressive=False,
-        output_kind=output_kind,
-        alone=alone,
-        written_fields=written_fields,
-        field_policy=req.write_policy,
+        fixer_module=fixer_module,
+        write_policy=req.write_policy,
+        marker_mode=f"manual_{req.edit_mode}",
+        writer=req.writer,
+        cover_if_missing=req.cover_if_missing,
+        replace_cover=req.replace_cover,
+        backup=req.backup,
     )
 
     result = {
         "status": "applied",
         "target_path": context["display_path"],
         "source_path": context["source_path"],
-        "output_kind": output_kind,
-        "output_path": output_path,
-        "metadata_json_path": str(metadata_json_path),
+        "output_kind": write_result["output_kind"],
+        "output_path": write_result["output_path"],
+        "metadata_json_path": write_result["metadata_json_path"],
         "edit_mode": req.edit_mode,
         "write_policy": req.write_policy,
         "metadata_preview": metadata,
     }
-    if write_policy_warning:
-        result["warning"] = write_policy_warning
+    if write_result["warning"]:
+        result["warning"] = write_result["warning"]
     return result
 
 
