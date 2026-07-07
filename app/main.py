@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import audible
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
@@ -6320,6 +6320,25 @@ def current_manual_review_cover(
         media_type=media_type,
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+COVER_UPLOAD_DIR = Path(tempfile.gettempdir()) / "libraforge-cover-uploads"
+
+
+@app.post("/api/manual-review/cover-upload")
+async def upload_manual_review_cover(file: UploadFile = File(...)) -> dict[str, str]:
+    data = await file.read()
+    if data.startswith(b"\xff\xd8\xff"):
+        suffix = ".jpg"
+    elif data.startswith(b"\x89PNG\r\n\x1a\n"):
+        suffix = ".png"
+    else:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a JPEG or PNG image")
+
+    COVER_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = COVER_UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
+    dest.write_bytes(data)
+    return {"cover_url": dest.as_uri()}
 
 
 @app.post("/api/manual-review/apply")
