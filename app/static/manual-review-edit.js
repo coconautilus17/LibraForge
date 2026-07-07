@@ -43,7 +43,38 @@ function mreBuildDialog() {
         <label class="mae-full-width">Comment / Summary<textarea id="mreSummary" rows="4"></textarea></label>
       </div>
     </div>
-    <div id="mreCoverPanel" class="mre-tab-panel"></div>
+    <div id="mreCoverPanel" class="mre-tab-panel">
+      <div class="cover-comparison">
+        <div>
+          <strong>Current</strong>
+          <img id="mreCurrentCoverImg" class="cover-thumb" alt="Current book cover" />
+          <p id="mreCurrentCoverNote" class="note" hidden>No current cover</p>
+        </div>
+        <div>
+          <strong>Pending</strong>
+          <img id="mrePendingCoverImg" class="cover-thumb" alt="Pending cover" hidden />
+          <p id="mrePendingCoverNote" class="note">No new cover selected -- current cover is kept.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <input id="mreCoverQuery" placeholder="Title Author" />
+        <select id="mreCoverProvider">
+          <option value="audible">Audible</option>
+          <option value="goodreads">Goodreads</option>
+          <option value="kindle">Kindle</option>
+        </select>
+        <button id="mreCoverSearchBtn" class="secondary" type="button">Search Covers</button>
+      </div>
+      <div id="mreCoverResults" class="results-grid"></div>
+      <hr />
+      <div class="actions">
+        <input id="mreCoverUrlInput" placeholder="https://... or paste an image URL" />
+        <button id="mreCoverUrlUseBtn" class="secondary" type="button">Use URL</button>
+      </div>
+      <div class="actions">
+        <input id="mreCoverFileInput" type="file" accept="image/jpeg,image/png" />
+      </div>
+    </div>
     <p id="mreResult" class="manual-apply-body" hidden></p>
     <p id="mreWarning" class="manual-apply-warning" hidden></p>
     <div class="manual-apply-actions">
@@ -54,6 +85,7 @@ function mreBuildDialog() {
 
   $('mreTabFieldsBtn').addEventListener('click', () => mreSwitchTab('fields'));
   $('mreTabCoverBtn').addEventListener('click', () => mreSwitchTab('cover'));
+  $('mreCoverSearchBtn').addEventListener('click', mreSearchCovers);
 }
 
 function mreSwitchTab(name) {
@@ -62,6 +94,76 @@ function mreSwitchTab(name) {
   $('mreTabCoverBtn').classList.toggle('active', !fieldsActive);
   $('mreFieldsPanel').classList.toggle('active', fieldsActive);
   $('mreCoverPanel').classList.toggle('active', !fieldsActive);
+}
+
+async function mreSearchCovers() {
+  const query = $('mreCoverQuery').value.trim();
+  if (!query) {
+    alert('Enter a search query first.');
+    return;
+  }
+  const provider = $('mreCoverProvider').value;
+  const btn = $('mreCoverSearchBtn');
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  try {
+    let res;
+    if (provider === 'audible') {
+      res = await fetch('/api/m4b/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          auth_file: $('authFile').value.trim(),
+          metadata: {},
+          limit: 10,
+          script_name: $('script').value,
+        }),
+      });
+    } else {
+      res = await fetch('/api/abs-tract/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, provider, limit: 10 }),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || 'Cover search failed');
+      return;
+    }
+    mreRenderCoverResults(data.results || []);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Search Covers';
+  }
+}
+
+function mreRenderCoverResults(results) {
+  const withCovers = results.filter((r) => r.cover_url);
+  $('mreCoverResults').innerHTML = withCovers.length
+    ? withCovers.map((r, i) => `
+        <article class="result-card">
+          <img class="cover-thumb" src="${escapeHtml(r.cover_url)}" alt="${escapeHtml(r.title || 'Cover option')}" />
+          <p>${escapeHtml(r.title || '')}</p>
+          <button type="button" class="secondary" data-mre-cover-pick="${i}">Use this cover</button>
+        </article>
+      `).join('')
+    : '<p class="note">No covers found for this query.</p>';
+
+  for (const button of $('mreCoverResults').querySelectorAll('button[data-mre-cover-pick]')) {
+    button.addEventListener('click', () => {
+      const index = Number(button.getAttribute('data-mre-cover-pick'));
+      mreSetPendingCover(withCovers[index].cover_url);
+    });
+  }
+}
+
+function mreSetPendingCover(url) {
+  mrePendingCoverUrl = url;
+  $('mrePendingCoverImg').src = url;
+  $('mrePendingCoverImg').hidden = false;
+  $('mrePendingCoverNote').hidden = true;
 }
 
 function mreFillFieldsFromCurrent() {
@@ -144,6 +246,17 @@ function mreOpen() {
   $('mreResult').hidden = true;
   $('mreWarning').hidden = true;
   mreFillFieldsFromCurrent();
+  if (manualCurrentCoverUrl) {
+    $('mreCurrentCoverImg').src = manualCurrentCoverUrl;
+    $('mreCurrentCoverImg').hidden = false;
+    $('mreCurrentCoverNote').hidden = true;
+  } else {
+    $('mreCurrentCoverImg').hidden = true;
+    $('mreCurrentCoverNote').hidden = false;
+  }
+  $('mrePendingCoverImg').hidden = true;
+  $('mrePendingCoverImg').src = '';
+  $('mrePendingCoverNote').hidden = false;
 
   const dlg = $('mreDialog');
 

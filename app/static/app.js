@@ -808,19 +808,7 @@ function renderManualSearchResults(results = []) {
   }
 }
 
-async function searchManualTarget() {
-  if (!manualContext?.path) {
-    alert('Load a manual review target first.');
-    return;
-  }
-
-  // When "search from original backup" is active, reload the displayed metadata
-  // from pre-apply backup tags before running the search so the form reflects
-  // what the file contained before the fixer ever touched it.
-  if ($('force').checked && $('forceOriginal').checked) {
-    await loadManualTarget(manualContext.path, true);
-  }
-
+async function runManualProviderSearch() {
   const provider = $('manualProvider').value;
   let res;
 
@@ -875,6 +863,23 @@ async function searchManualTarget() {
     });
   }
 
+  return res;
+}
+
+async function searchManualTarget() {
+  if (!manualContext?.path) {
+    alert('Load a manual review target first.');
+    return;
+  }
+
+  // When "search from original backup" is active, reload the displayed metadata
+  // from pre-apply backup tags before running the search so the form reflects
+  // what the file contained before the fixer ever touched it.
+  if ($('force').checked && $('forceOriginal').checked) {
+    await loadManualTarget(manualContext.path, true);
+  }
+
+  const res = await runManualProviderSearch();
   const data = await res.json();
   if (!res.ok) {
     alert(data.detail || 'Search failed');
