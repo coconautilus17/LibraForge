@@ -27,6 +27,20 @@
     .lib-dup { display:flex; gap:6px; margin-top:6px; font-size:0.76em; align-items:center; }
     .lib-empty { padding:24px; color:var(--muted); text-align:center; }
     .prog-line { font-family:var(--font-mono); font-size:0.8em; white-space:pre-wrap; max-height:240px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:10px; }
+    .prog-report { margin-top:14px; }
+    .prog-report table { width:100%; border-collapse:collapse; font-size:0.84em; }
+    .prog-report th { text-align:left; padding:6px 8px; color:var(--text-soft); border-bottom:1px solid var(--border); font-weight:600; }
+    .prog-report td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+    .prog-report tr.failed td { color:var(--text-soft); }
+    .status-pill { display:inline-block; font-size:0.78em; font-weight:600; padding:2px 9px; border-radius:99px; }
+    .status-pill.success { background:var(--success-soft); color:var(--success); }
+    .status-pill.failed { background:var(--danger-soft); color:var(--danger); }
+    .method-pill { display:inline-block; font-size:0.76em; padding:1px 7px; border-radius:99px; background:var(--border); color:var(--text-soft); }
+    .prog-report-detail { color:var(--danger); font-size:0.92em; }
+    .prog-report-path { color:var(--muted); font-size:0.9em; font-family:var(--font-mono); word-break:break-all; }
+    .prog-report-summary { margin:0 0 8px; font-size:0.9em; color:var(--text-soft); }
+    .prog-raw-log { margin-top:12px; }
+    .prog-raw-log summary { cursor:pointer; font-size:0.86em; color:var(--muted); }
   </style>
 </head>
 <body data-page="library">
@@ -146,7 +160,11 @@
       <div class="progress-bar" style="height:8px;background:var(--border);border-radius:99px;overflow:hidden;margin:8px 0">
         <div id="progFill" style="height:100%;width:0;background:var(--accent);transition:width .3s"></div>
       </div>
-      <div id="progLog" class="prog-line"></div>
+      <div id="progReport" class="prog-report" hidden></div>
+      <details id="progRawLogWrap" class="prog-raw-log" open>
+        <summary>Raw log</summary>
+        <div id="progLog" class="prog-line"></div>
+      </details>
     </div>
 
     <div class="dryrun-notice" style="margin-top:18px">
@@ -401,12 +419,41 @@
         });
     }
 
+    function renderDownloadReport(results, stats) {
+      const reportEl = document.getElementById("progReport");
+      if (!results || !results.length) { reportEl.hidden = true; return; }
+      const summary = `<p class="prog-report-summary">${stats.downloaded || 0} downloaded, ${stats.failed || 0} failed</p>`;
+      const rows = results.map(r => {
+        const ok = r.status === "success";
+        const methodLabel = r.method === "voucher" ? "voucher"
+          : r.method === "activation_bytes" ? "activation bytes"
+          : "—";
+        const detail = ok
+          ? `<span class="prog-report-path">${esc(r.path || "")}</span>`
+          : `<span class="prog-report-detail">${esc(r.error || "")}</span>${r.method ? ` <span class="method-pill">attempted via ${esc(methodLabel)}</span>` : ""}`;
+        return `
+          <tr class="${ok ? "success" : "failed"}">
+            <td><span class="status-pill ${ok ? "success" : "failed"}">${ok ? "Downloaded" : "Failed"}</span></td>
+            <td>${esc(r.title || r.asin || "")}</td>
+            <td>${esc(r.asin || "")}</td>
+            <td>${ok ? `<span class="method-pill">${esc(methodLabel)}</span>` : ""}</td>
+            <td>${detail}</td>
+          </tr>`;
+      }).join("");
+      reportEl.innerHTML = `${summary}<table>
+        <thead><tr><th>Status</th><th>Title</th><th>ASIN</th><th>Method</th><th>Details</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+      reportEl.hidden = false;
+    }
+
     function pollRun(runId) {
       document.getElementById("progSection").hidden = false;
       document.getElementById("progSection").scrollIntoView({ behavior: "smooth", block: "nearest" });
       const fill = document.getElementById("progFill");
       const meta = document.getElementById("progMeta");
       const logEl = document.getElementById("progLog");
+      const rawLogWrap = document.getElementById("progRawLogWrap");
       const tick = () => {
         fetch(`/api/runs/${runId}`).then(r => r.json()).then(s => {
           fill.style.width = `${s.percent || 0}%`;
@@ -420,6 +467,8 @@
           if (st.failed) summary += `, ${st.failed} failed`;
           if (s.status === "error") summary = `Error: ${s.error || "unknown"}`;
           meta.textContent = summary;
+          renderDownloadReport(st.results, st);
+          if (st.results && st.results.length) { rawLogWrap.open = false; }
           downloadBtn.disabled = false;
           // Refresh owned set so completed books flip to "Owned".
           fetch(`/api/library/owned-asins?root=${encodeURIComponent(libraryRoot)}`)

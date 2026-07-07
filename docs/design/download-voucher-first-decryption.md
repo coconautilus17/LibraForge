@@ -79,3 +79,18 @@ Introducing concurrency meant every per-run shared value the serial version reli
 The actual network I/O and `ffmpeg` decrypt subprocess for each item run **outside** the lock — only the bookkeeping around them is serialized, so the concurrency gain is real, not illusory.
 
 Regression tests (`app/tests/test_library_download_activation_bytes.py::ConcurrentDownloadTests`) use real `time.sleep` inside mocked I/O to widen the race window rather than relying on fast mocks that could pass by accident: one proves peak in-flight items is >1 and <=3 (concurrency is real and capped), the other proves `activation_bytes` is still fetched exactly once across 6 items racing for it.
+
+## End-of-run report: per-item outcome, not just counts
+
+A large run (10-100 items) used to end with only an aggregate `"N downloaded, M failed"` line plus a raw scrolling log — finding out *which* title failed, *why*, and which decrypt method a given title actually used meant reading the whole log by hand. `state.stats["results"]` now carries one entry per item:
+
+```python
+{"asin": ..., "title": ..., "status": "success", "method": "voucher" | "activation_bytes", "path": "..."}
+{"asin": ..., "title": ..., "status": "failed", "method": "voucher" | "activation_bytes" | None, "error": "..."}
+```
+
+`method` is `None` on a failure only when the item failed before a decrypt method was even chosen (e.g. the `licenserequest` itself was rejected for an ownership reason) — if the method was already decided and a later step (e.g. `ffmpeg` decrypt) failed, the report still shows which method was attempted.
+
+Built from `results_by_idx` (keyed by original list index, not append/completion order) so the list stays in the same order the user selected the items in, even though the 3 concurrent workers finish items out of order. `write_final_report()` already persists the whole `stats` dict verbatim, so this is in the downloadable report JSON for free with no separate plumbing.
+
+The downloader page (`app/static/downloader.html`) renders this as a table (status pill, title, ASIN, method, path or error) once the run reaches a terminal state, and collapses the old raw log into a `<details>` so the table is the primary view for a large run instead of a wall of interleaved per-item log lines.

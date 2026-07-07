@@ -5592,6 +5592,10 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
     target = Path(req.target_path)
     completed: list[Path] = []
     failures: list[dict[str, str]] = []
+    # Keyed by idx (not appended in completion order) so the final report can
+    # list every item in its original selection order even though workers
+    # finish out of order under concurrency.
+    results_by_idx: dict[int, dict[str, Any]] = {}
     done_count = 0
     active_titles: dict[int, str] = {}
 
@@ -5632,6 +5636,11 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         def process_item(idx: int, item: LibraryDownloadItem) -> None:
             nonlocal activation_bytes_cache, activation_bytes_error, license_threshold_error, done_count
             display_title = item.title or item.asin
+            # Set as soon as it's known so both the success and failure
+            # branches below can report it in the final per-item report,
+            # even if the failure happens after the method was chosen (e.g.
+            # ffmpeg decrypt itself fails partway through).
+            method_used: str | None = None
             with bookkeeping_lock:
                 active_titles[idx] = display_title
                 _update_progress_locked()
@@ -5721,6 +5730,7 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                     voucher = decrypt_voucher_from_licenserequest(auth, lr)
                     decrypt_kwargs = {"key": voucher["key"], "iv": voucher["iv"]}
                     enc_path = book_dir / f"{base}.aaxc"
+                    method_used = "voucher"
                     log("  using per-book voucher (no account activation bytes needed)")
                 except Exception as v_exc:  # noqa: BLE001
                     voucher_error = v_exc
@@ -5755,9 +5765,9 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
                         raise resolved_ab_error
                     decrypt_kwargs = {"activation_bytes": resolved_ab_value}
                     enc_path = book_dir / f"{base}.aax"
+                    method_used = "activation_bytes"
 
-                decrypt_method = "activation_bytes" if voucher_error is not None else "voucher"
-                log(f"  downloading encrypted stream (declared drm_type={drm_type or 'unknown'}, decrypting via {decrypt_method})...")
+                log(f"  downloading encrypted stream (declared drm_type={drm_type or 'unknown'}, decrypting via {method_used})...")
                 with client.raw_request(  # type: ignore[union-attr]
                     "GET",
                     content_url,
@@ -5776,10 +5786,24 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
 
                 with bookkeeping_lock:
                     completed.append(book_dir)
+                    results_by_idx[idx] = {
+                        "asin": item.asin,
+                        "title": display_title,
+                        "status": "success",
+                        "method": method_used,
+                        "path": str(out_m4b),
+                    }
                 log(f"  done -> {out_m4b}")
             except Exception as exc:  # noqa: BLE001
                 with bookkeeping_lock:
                     failures.append({"asin": item.asin, "title": item.title, "error": str(exc)})
+                    results_by_idx[idx] = {
+                        "asin": item.asin,
+                        "title": display_title,
+                        "status": "failed",
+                        "method": method_used,
+                        "error": str(exc),
+                    }
                 log(f"  FAILED: {exc}")
             finally:
                 with bookkeeping_lock:
@@ -5796,6 +5820,22 @@ def run_download_worker(run_id: str, req: LibraryDownloadRequest) -> None:
         state.stats["downloaded"] = len(completed)
         state.stats["failed"] = len(failures)
         state.stats["failures"] = failures
+        # Ordered by original selection order (not completion order, which is
+        # nondeterministic under concurrency) so the end-of-run report reads
+        # the same way the user picked the items. Unbounded, unlike
+        # state.lines_tail's 40-line cap, so a 100-item run's full report
+        # doesn't get truncated the way the raw log tail would be.
+        results = [results_by_idx[i] for i in sorted(results_by_idx)]
+        state.stats["results"] = results
+
+        log("")
+        log(f"=== Summary: {len(completed)} downloaded, {len(failures)} failed ===")
+        for r in results:
+            if r["status"] == "success":
+                log(f"  OK    {r['title']} ({r['asin']}) -- via {r['method']}")
+            else:
+                via = f" [attempted via {r['method']}]" if r.get("method") else ""
+                log(f"  FAIL  {r['title']} ({r['asin']}) -- {r['error']}{via}")
 
         if req.organize and completed:
             set_run_phase(state, "organizing", "Organizing", "Dry-run preview")
