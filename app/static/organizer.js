@@ -43,6 +43,10 @@ async function resumeActiveRun() {
   if (!id) return;
   const res = await fetch(`/api/runs/${id}`).catch(() => null);
   if (!res || !res.ok) { clearActiveRun(RUN_KEY); return; }
+  // A fresh run may have been started (via the Start button) while this
+  // fetch was in flight -- don't clobber currentRun/polling with the stale
+  // resumed id, which would silently show the wrong run's progress and log.
+  if (currentRun) return;
   attachToRun(id);
 }
 
