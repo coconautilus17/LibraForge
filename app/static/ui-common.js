@@ -499,9 +499,60 @@
     `;
     listEl.appendChild(header);
 
-    for (const item of suspects) {
-      listEl.appendChild(buildSuspectCard(item));
+    const reasonCodes = [...new Set(
+      suspects.flatMap((item) => (item.reasons || []).map((r) => r.code))
+    )].sort();
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'move-toolbar';
+    toolbar.innerHTML = `
+      <label>Search suspects
+        <input type="search" class="suspect-search" placeholder="Title, path, or flag" />
+      </label>
+      <label>Filter by flag
+        <select class="suspect-reason-filter">
+          <option value="">All flags</option>
+          ${reasonCodes.map((code) => `<option value="${escapeHtml(code)}">${escapeHtml(code.replace(/_/g, ' '))}</option>`).join('')}
+        </select>
+      </label>
+      <strong class="suspect-count"></strong>
+    `;
+    listEl.appendChild(toolbar);
+
+    const entries = suspects.map((item) => {
+      const reasons = item.reasons || [];
+      const haystack = [
+        item.path,
+        item.local?.title,
+        item.severity,
+        ...(item.related_paths || []),
+        ...reasons.map((r) => `${r.code} ${r.message}`),
+      ].filter(Boolean).join(' ').toLowerCase();
+      return { item, reasons, haystack, el: buildSuspectCard(item) };
+    });
+    for (const entry of entries) listEl.appendChild(entry.el);
+
+    const searchInput = toolbar.querySelector('.suspect-search');
+    const reasonSelect = toolbar.querySelector('.suspect-reason-filter');
+    const countEl = toolbar.querySelector('.suspect-count');
+
+    function applyFilter() {
+      const query = searchInput.value.trim().toLowerCase();
+      const reasonCode = reasonSelect.value;
+      let shown = 0;
+      for (const entry of entries) {
+        const matchesQuery = !query || entry.haystack.includes(query);
+        const matchesReason = !reasonCode || entry.reasons.some((r) => r.code === reasonCode);
+        const visible = matchesQuery && matchesReason;
+        entry.el.hidden = !visible;
+        if (visible) shown++;
+      }
+      countEl.textContent = `Showing ${shown} of ${entries.length}`;
     }
+
+    searchInput.addEventListener('input', applyFilter);
+    reasonSelect.addEventListener('change', applyFilter);
+    applyFilter();
   }
 
   window.UiCommon = {
