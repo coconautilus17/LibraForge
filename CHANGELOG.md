@@ -6,6 +6,74 @@ onward is tracked here going forward.
 
 ---
 
+## v0.2.3 (2026-07-09)
+
+### 2026-07-05 to 07-09 (PR #158-185)
+- Fixer/Manual Review: comparison-card "Current" data is now consistent everywhere
+  it's shown (Suspicion Report, Match Report, Manual Review) - this was fixed
+  incrementally over several days as each remaining gap surfaced:
+  - "Current" was partly built from matcher-only clues (title/series/author/book_number
+    after path- and folder-name overrides meant only to help find the right catalog
+    match), so a rejected or stale match could show a guessed identity instead of the
+    file's real tags. Replaced with a pure tag-only reader used everywhere "current
+    state" is displayed or persisted to the marker.
+  - Genre, subtitle, summary, isbn, asin, and publisher were silently dropped or
+    misreported blank in the marker (genre alone was wrong on 85 of 99 real books
+    tested) because the writer's own "leave tag alone if match has nothing" behavior
+    wasn't mirrored when recording what got written; fill-missing mode also
+    overwrote genre/subtitle instead of respecting existing values.
+  - A cleanly-skipped file (already correctly matched by a prior run) showed stale
+    pre-fix data as if it were current, and grouped multi-file books' representative
+    file could be a bonus non-content track (e.g. "Opening Credits"), leaking its own
+    chapter title and track number as if they were the book's title and series
+    sequence.
+  - Root cause of the last remaining inconsistency: the report and Manual Review read
+    through two independently-written lookups that happened to mostly agree. The
+    report now delegates to the exact same sidecar/marker lookup Manual Review uses,
+    so they can't diverge again.
+  - Separately, the Match Report card had hardcoded blank "Local" values for
+    Year/ASIN/ISBN specifically since the card was first built - unrelated bug, same
+    visible symptom, now wired to the real data like every other field.
+- Suspicion Report: added missing-title/author/series flags (high severity) for a
+  technically-correct match that's just missing that field; duplicate-identity
+  (cross-item) cards now show real identifying titles/paths instead of an empty
+  "(cross-item)" card; added a search box + flag-type filter, shared by the fixer and
+  organizer reports; fixed a structural no-op that meant the "latest report" lookup
+  could never actually exclude organizer reports from the fixer's own view, and a
+  false error logged on every report load before its first Suspicion Report existed
+- Manual Review: Edit dialog widened to 75% of viewport and given a settings-style
+  side nav on the Metadata Forge page for jumping between sections; Edit dialog cover
+  search simplified to a clickable cover + title (no more separate "use this cover"
+  button), packed 4-7 covers per row instead of 2, and added Language/Explicit tag
+  fields (written to metadata.json only, no existing tag convention covers them);
+  fixed clearing a dialog field being silently ignored on apply (wrote the old
+  matched value back into every field instead of respecting the clear); added a
+  uniform Fill/Overwrite field policy across all dialog fields; fixed multi-genre
+  input collapsing into one malformed combined tag instead of separate values;
+  fixed grouped-book ASIN recovery reading only the folder-level sidecar, missing
+  the per-file one a shared "dumping ground" folder actually uses
+- Organizer: ported the fixer's part-sequence/leading-ordinal grouping so a folder
+  holding both a chapter sequence and a leftover merged edition groups correctly
+  instead of exploding every chapter into its own move; added a per-item "Exclude
+  from organizer run" button on the moves report; fixed the real cause of run
+  settings (e.g. "Progress every N items") being silently ignored - the Start button
+  passed its own click event as the request body instead of the form's collected
+  values; fixed a page-reload race that could silently swap in a stale prior run's
+  progress/log after a fresh run was already started
+- Library Downloader: fixed CloudFront-blocking downloads by preferring a per-book
+  decryption voucher over account activation bytes (the account's activation bytes
+  are blocked at the source; the voucher path never touches that endpoint), added a
+  status indicator for whether activation bytes are cached with a one-click-copy
+  recovery command when they're not, downloads now run 3-at-a-time like audible-cli
+  instead of one at a time, and the end-of-run report shows each item's actual
+  decrypt method and outcome instead of just aggregate counts
+- UI: sticky header, a release version tag linking to its GitHub notes, and a
+  Settings About section; fixed the sticky side-nav (Settings and Metadata Forge)
+  rendering partly hidden behind the sticky header at every scroll position
+- Docs: expanded README, added an issue-reporting guide
+
+---
+
 ## v0.2.2 (2026-07-05)
 
 ### 2026-07-04 to 07-05 (PR #150-154)
