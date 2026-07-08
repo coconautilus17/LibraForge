@@ -2254,8 +2254,8 @@ def write_audiobookshelf_metadata_json(
         "description": metadata.get("summary", "") or "",
         "isbn": metadata.get("isbn") or None,
         "asin": metadata.get("asin", "") or None,
-        "language": None,
-        "explicit": False,
+        "language": metadata.get("language") or None,
+        "explicit": bool(metadata.get("explicit", False)),
     }
 
     if fill_missing and target.is_file():
