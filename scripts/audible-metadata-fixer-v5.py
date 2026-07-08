@@ -2842,7 +2842,7 @@ def build_multi_file_search_context(
     representative_tags, representative_duration, representative_is_live = per_file[0]
     if not representative_is_live:
         representative_tags = read_file_tags(file_paths[0])
-    current = read_current_book_metadata(representative_tags)
+    current = read_current_book_metadata(representative_tags, is_grouped=True)
     current["duration_minutes"] = local_duration_minutes
     clues["current"] = current
 

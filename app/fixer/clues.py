@@ -30,6 +30,7 @@ from app.fixer.parsing import (
     sanitize_book_title,
     first_existing_tag,
     parse_title_series_number_from_metadata,
+    is_generic_chapter_title,
 )
 
 
@@ -130,7 +131,7 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
 
 
 @trace(ALTER, capture=[])
-def read_current_book_metadata(tags: dict) -> dict:
+def read_current_book_metadata(tags: dict, is_grouped: bool = False) -> dict:
     """Pure snapshot of what this file's own tags actually say, right now.
 
     This is deliberately NOT a search clue and must never be touched by any
@@ -147,19 +148,40 @@ def read_current_book_metadata(tags: dict) -> dict:
     `tags` must come from a genuine, current disk probe (not a cached
     backup/sidecar snapshot) -- callers are responsible for that guarantee.
     Every field below is exactly what the tag says, or "" if the tag is
-    absent. No inference, no fallback guessing.
+    absent. No inference, no fallback guessing -- with two narrow exceptions,
+    both scoped to `is_grouped` (this file is one of several making up a
+    multi-file book, so its own per-track tags describe the chapter, not the
+    book):
+
+    - If the tag's own "title" is a generic per-track label (e.g. "Opening
+      Credits", "Chapter 1" -- every track in a multi-file rip carries its
+      own chapter title), fall back to this same file's own "album" tag when
+      it isn't equally generic. Still this file's own tags, not a
+      path/folder/matcher guess -- fixes grouped reports showing a bonus
+      intro track's chapter label as the book's "current" title.
+    - If the only source for "sequence" was this file's own track-number tag
+      (no book number was found in the title text itself), drop it. A
+      multi-file group's representative file's track number is its chapter
+      position (e.g. "1"), not the book's position in its series -- keeping
+      it produces a plausible-looking but meaningless number.
     """
     parsed = parse_title_series_number_from_metadata(tags)
     publisher_scratch: dict = {}
     capture_publisher_clue(publisher_scratch, tags)
+    title = parsed["title"]
+    if is_generic_chapter_title(title) and parsed["album"] and not is_generic_chapter_title(parsed["album"]):
+        title = parsed["album"]
+    book_number = parsed["book_number"]
+    if is_grouped and parsed["book_number_source"] == "track":
+        book_number = ""
     return {
         "raw_title": parsed["raw_title"],
-        "title": parsed["title"],
+        "title": title,
         "subtitle": first_existing_tag(tags, ["subtitle", "tit3"]),
         "author": parsed["author"],
         "narrator": parsed["narrator"],
         "series": parsed["tag_series"],
-        "sequence": parsed["book_number"],
+        "sequence": book_number,
         "genre": parsed["genre"],
         "year": first_existing_tag(tags, ["date", "year"]),
         "isbn": first_existing_tag(tags, ["isbn"]),
