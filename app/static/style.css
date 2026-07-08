@@ -2565,6 +2565,24 @@ summary:focus-visible {
   color: var(--success);
 }
 
+.cmd-snippet-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.cmd-snippet {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  user-select: all;
+}
+
 .manual-nav-heading {
   margin: 0 0 14px;
   font-size: 13px;
