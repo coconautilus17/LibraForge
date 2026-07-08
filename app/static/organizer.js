@@ -5,9 +5,17 @@ let latestStats = {};
 let currentOrgReportId = null;
 let lastRequest = null;
 let noSidecarsHandledForRun = null;
-// Sources excluded via the per-item button this session, so the "Excluded"
-// state survives a re-render (search/filter) until the user runs again.
-const excludedMoveSources = new Set();
+
+// Mirrors the backend's matches_skip_patterns: a plain case-insensitive
+// substring check of the pattern against the source path. Derived live from
+// the current Skip patterns textarea (not tracked separately) so removing a
+// line -- or a fresh run whose patterns no longer include it -- immediately
+// stops showing the item as excluded.
+function isExcludedByPattern(item) {
+  const source = String(item.source || "").toLowerCase();
+  const patterns = $("skipPatterns").value.split("\n").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return patterns.some((p) => source.includes(p));
+}
 
 // Strip the trailing filename from a path so only the directory is shown.
 // Paths ending in a known audio extension are treated as files; others as dirs.
@@ -390,7 +398,7 @@ function renderMoves(items) {
   $("moveCount").textContent = `Showing ${filtered.length} of ${items.length} planned moves`;
   $("moveItems").innerHTML = filtered.length
     ? filtered.map((item) => {
-      const excluded = excludedMoveSources.has(item.source);
+      const excluded = isExcludedByPattern(item);
       return `
       <article class="result-card ${isReviewMove(item) ? "review-card" : ""} ${excluded ? "excluded-card" : ""}">
         <div class="result-head">
@@ -430,7 +438,6 @@ function renderMoves(items) {
   for (const button of $("moveItems").querySelectorAll("button[data-exclude-source]")) {
     button.addEventListener("click", () => {
       const source = button.getAttribute("data-exclude-source");
-      excludedMoveSources.add(source);
       const textarea = $("skipPatterns");
       const lines = textarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
       if (!lines.includes(source)) {
@@ -445,6 +452,7 @@ function renderMoves(items) {
 $("moveSearch").addEventListener("input", () => renderMoves(latestMoveItems));
 $("reviewOnly").addEventListener("change", () => renderMoves(latestMoveItems));
 $("reviewReasonFilter").addEventListener("change", () => renderMoves(latestMoveItems));
+$("skipPatterns").addEventListener("input", () => renderMoves(latestMoveItems));
 
 const { renderSuspectReport: _renderSuspectReport } = window.UiCommon;
 
@@ -547,7 +555,7 @@ function renderCleanupReport(data) {
   report.hidden = false;
 }
 
-$('startBtn').addEventListener('click', startRun);
+$('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
 $('cleanupBtn').addEventListener('click', runCleanup);
 loadScripts();
