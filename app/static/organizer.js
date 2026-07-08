@@ -6,6 +6,17 @@ let currentOrgReportId = null;
 let lastRequest = null;
 let noSidecarsHandledForRun = null;
 
+// Mirrors the backend's matches_skip_patterns: a plain case-insensitive
+// substring check of the pattern against the source path. Derived live from
+// the current Skip patterns textarea (not tracked separately) so removing a
+// line -- or a fresh run whose patterns no longer include it -- immediately
+// stops showing the item as excluded.
+function isExcludedByPattern(item) {
+  const source = String(item.source || "").toLowerCase();
+  const patterns = $("skipPatterns").value.split("\n").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return patterns.some((p) => source.includes(p));
+}
+
 // Strip the trailing filename from a path so only the directory is shown.
 // Paths ending in a known audio extension are treated as files; others as dirs.
 function pathDir(p) {
@@ -40,6 +51,10 @@ async function resumeActiveRun() {
   if (!id) return;
   const res = await fetch(`/api/runs/${id}`).catch(() => null);
   if (!res || !res.ok) { clearActiveRun(RUN_KEY); return; }
+  // A fresh run may have been started (via the Start button) while this
+  // fetch was in flight -- don't clobber currentRun/polling with the stale
+  // resumed id, which would silently show the wrong run's progress and log.
+  if (currentRun) return;
   attachToRun(id);
 }
 
@@ -382,8 +397,10 @@ function renderMoves(items) {
 
   $("moveCount").textContent = `Showing ${filtered.length} of ${items.length} planned moves`;
   $("moveItems").innerHTML = filtered.length
-    ? filtered.map((item) => `
-      <article class="result-card ${isReviewMove(item) ? "review-card" : ""}">
+    ? filtered.map((item) => {
+      const excluded = isExcludedByPattern(item);
+      return `
+      <article class="result-card ${isReviewMove(item) ? "review-card" : ""} ${excluded ? "excluded-card" : ""}">
         <div class="result-head">
           <div>
             <h3>${escapeHtml(item.title || "Unknown Title")}</h3>
@@ -391,6 +408,11 @@ function renderMoves(items) {
           </div>
           <div class="score-badge">${escapeHtml(String(item.files || 1))} file${Number(item.files || 1) === 1 ? "" : "s"}</div>
           <span>Structure: ${escapeHtml(item.structure || "new")}</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="secondary" data-exclude-source="${escapeHtml(item.source)}" ${excluded ? "disabled" : ""}>
+            ${excluded ? "Excluded (run again to apply)" : "Exclude from organizer run"}
+          </button>
         </div>
         <div class="result-meta">
           <span>Kind: ${escapeHtml(item.kind || "-")}</span>
@@ -409,13 +431,28 @@ function renderMoves(items) {
           </div>
         </details>
       </article>
-    `).join("")
+    `;
+    }).join("")
     : `<p class="note">${items.length ? "No moves match the current filters." : "No planned moves were parsed from this run."}</p>`;
+
+  for (const button of $("moveItems").querySelectorAll("button[data-exclude-source]")) {
+    button.addEventListener("click", () => {
+      const source = button.getAttribute("data-exclude-source");
+      const textarea = $("skipPatterns");
+      const lines = textarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
+      if (!lines.includes(source)) {
+        lines.push(source);
+        textarea.value = lines.join("\n");
+      }
+      renderMoves(latestMoveItems);
+    });
+  }
 }
 
 $("moveSearch").addEventListener("input", () => renderMoves(latestMoveItems));
 $("reviewOnly").addEventListener("change", () => renderMoves(latestMoveItems));
 $("reviewReasonFilter").addEventListener("change", () => renderMoves(latestMoveItems));
+$("skipPatterns").addEventListener("input", () => renderMoves(latestMoveItems));
 
 const { renderSuspectReport: _renderSuspectReport } = window.UiCommon;
 
@@ -518,7 +555,7 @@ function renderCleanupReport(data) {
   report.hidden = false;
 }
 
-$('startBtn').addEventListener('click', startRun);
+$('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
 $('cleanupBtn').addEventListener('click', runCleanup);
 loadScripts();

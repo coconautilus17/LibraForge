@@ -1774,6 +1774,10 @@ summary:focus-visible {
   border-color: rgb(255 126 139 / 45%);
 }
 
+.excluded-card {
+  opacity: 0.55;
+}
+
 .move-details {
   margin-top: 13px;
   padding-top: 12px;
