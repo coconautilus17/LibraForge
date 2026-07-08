@@ -1385,9 +1385,9 @@ function buildMatchCard(item) {
         ${mrepRow('Series', local.series, m.series)}
         ${mrepRow('Sequence', local.sequence, m.sequence)}
         ${mrepRow('Genre', local.genre, m.genre)}
-        ${mrepRow('Year', '', m.year)}
-        ${mrepRow('ASIN', '', m.asin)}
-        ${mrepRow('ISBN', '', m.isbn)}
+        ${mrepRow('Year', local.year, m.year)}
+        ${mrepRow('ASIN', local.asin, m.asin)}
+        ${mrepRow('ISBN', local.isbn, m.isbn)}
         ${mrepRow('Duration', localDur, matchDur)}
         ${durationDiff ? mrepRow('Dur. diff', '', durationDiff) : ''}
       </tbody>
