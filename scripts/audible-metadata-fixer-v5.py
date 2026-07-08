@@ -4134,13 +4134,22 @@ def _build_report_item(result: "ItemResult") -> dict:
     else:
         meta = result.metadata or {}
     duration = meta.get("duration") or {}
-    if clues:
+    if clues and not result.was_manually_applied:
         # "current" is a pure, matcher-untouched snapshot of the file's own
         # tags (see read_current_book_metadata) -- comparison-card display
         # must never be built from other `clues` fields, which pass through
         # path/folder overrides meant only to help the matcher find a match,
         # not to describe what is actually embedded in the file. See
         # docs/design/comparison-card-data-source.md.
+        #
+        # Excluded here when was_manually_applied: Manual Review already
+        # wrote this book's tags to match its stored marker exactly, so that
+        # marker (== meta, computed above) is the reliable source -- a fresh
+        # raw-tag reread is redundant at best and, for a grouped multi-file
+        # book, actively wrong (the representative file's own tags describe
+        # one chapter/track, not the book; see read_current_book_metadata's
+        # is_grouped handling). Matches the same was_manually_applied check
+        # already used above to prefer marker data for `meta`.
         current = clues.get("current") or {}
         local = {
             "title": current.get("title") or "",
