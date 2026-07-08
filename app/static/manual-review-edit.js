@@ -69,7 +69,7 @@ function mreBuildDialog() {
         <button id="mreCoverSearchBtn" class="secondary" type="button">Search Covers</button>
         <span class="info-tip" data-tooltip="Click a cover below to select it as the new cover."></span>
       </div>
-      <div id="mreCoverResults" class="results-grid"></div>
+      <div id="mreCoverResults" class="results-grid mre-cover-grid"></div>
       <hr />
       <div class="actions">
         <input id="mreCoverUrlInput" placeholder="https://... or paste an image URL" />

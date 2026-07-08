@@ -2784,11 +2784,18 @@ summary:focus-visible {
   width: min(75vw, calc(100vw - 32px));
 }
 
+.mre-cover-grid {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
 .mre-cover-card {
+  padding: 8px;
   text-align: center;
 }
 
 .mre-cover-card .cover-thumb {
+  max-width: 100%;
   margin-left: auto;
   margin-right: auto;
   cursor: pointer;
