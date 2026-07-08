@@ -5058,13 +5058,23 @@ def _remove_account_files(user_id: str) -> None:
 def auth_status() -> dict[str, Any]:
     exists = DEFAULT_AUTH_FILE.exists() and DEFAULT_AUTH_FILE.stat().st_size > 10
     name = ""
+    activation_bytes_set = False
     if exists:
         with _ACCOUNTS_LOCK:
             _sync_accounts()
             uid = _active_user_id()
             if uid:
                 name = _read_account_meta(uid).get("flavor_name") or ""
-    return {"auth_ok": exists, "auth_file": str(DEFAULT_AUTH_FILE), "active_name": name}
+        try:
+            activation_bytes_set = bool(json.loads(DEFAULT_AUTH_FILE.read_text()).get("activation_bytes"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {
+        "auth_ok": exists,
+        "auth_file": str(DEFAULT_AUTH_FILE),
+        "active_name": name,
+        "activation_bytes_set": activation_bytes_set,
+    }
 
 
 @app.get("/api/auth/accounts")

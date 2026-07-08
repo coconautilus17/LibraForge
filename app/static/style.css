@@ -2557,6 +2557,49 @@ summary:focus-visible {
   color: var(--danger);
 }
 
+.dryrun-notice.success {
+  border-left-color: var(--success);
+}
+
+.dryrun-notice.success strong {
+  color: var(--success);
+}
+
+.cmd-snippet-wrap {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+#activationBytesTip {
+  align-self: center;
+}
+
+.cmd-snippet {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  user-select: all;
+}
+
+.cmd-snippet-wrap .icon-button {
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+}
+
+.cmd-snippet-wrap .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
 .manual-nav-heading {
   margin: 0 0 14px;
   font-size: 13px;
