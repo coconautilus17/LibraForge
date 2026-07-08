@@ -40,13 +40,14 @@ function mreBuildDialog() {
         <label>ISBN<input id="mreIsbn" /></label>
         <label>Publisher<input id="mrePublisher" /></label>
         <label>Genre<input id="mreGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
-        <label><span class="field-label">Language <span class="info-tip" data-tooltip="Only written to metadata.json (picked up by Audiobookshelf) - not embedded in the audio file's own tags."></span></span><input id="mreLanguage" placeholder="e.g. english" /></label>
+        <label>Language<input id="mreLanguage" placeholder="e.g. english" /></label>
         <label>Explicit<input type="checkbox" id="mreExplicit" /></label>
+        <p class="note mae-full-width">Language and Explicit are only written to metadata.json (picked up by Audiobookshelf) - not embedded in the audio file's own tags.</p>
         <label class="mae-full-width">Comment / Summary<textarea id="mreSummary" rows="4"></textarea></label>
       </div>
     </div>
     <div id="mreCoverPanel" class="mre-tab-panel">
-      <p class="note"><span class="field-label">Cover preview <span class="info-tip" data-tooltip="For simplicity, covers are shown here cropped to a square. The full cover image you pick is used as-is, with no cropping, once saved."></span></span></p>
+      <p class="note">For simplicity, covers are shown here cropped to a square. The full cover image you pick is used as-is, with no cropping, once saved.</p>
       <div class="cover-comparison">
         <div>
           <strong>Current</strong>
@@ -67,8 +68,8 @@ function mreBuildDialog() {
           <option value="kindle">Kindle</option>
         </select>
         <button id="mreCoverSearchBtn" class="secondary" type="button">Search Covers</button>
-        <span class="info-tip" data-tooltip="Click a cover below to select it as the new cover."></span>
       </div>
+      <p class="note">Click a cover below to select it as the new cover.</p>
       <div id="mreCoverResults" class="results-grid mre-cover-grid"></div>
       <hr />
       <div class="actions">
@@ -95,7 +96,6 @@ function mreBuildDialog() {
     const file = $('mreCoverFileInput').files[0];
     if (file) mreUploadCoverFile(file);
   });
-  window.LibraForgePrefs?.initializeInfoTips();
 }
 
 function mreSwitchTab(name) {
