@@ -3371,8 +3371,9 @@ button.danger:hover:not(:disabled) {
   margin-top: 10px;
 }
 
-/* Full-width rows: summary header and empty state */
+/* Full-width rows: summary header, filter toolbar, and empty state */
 #suspectReportList > .suspect-summary,
+#suspectReportList > .move-toolbar,
 #suspectReportList > p {
   grid-column: 1 / -1;
 }
