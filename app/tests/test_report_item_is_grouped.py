@@ -4,7 +4,9 @@ discover_manual_review_targets and inspect_manual_review_target
 (app/main.py), just missing from the report item dict. See
 docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
 """
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -60,6 +62,56 @@ class ReportItemIsGroupedTests(unittest.TestCase):
         result = self._result(False)
         result.clues = {}
         item = FIXER._build_report_item(result)
+        self.assertFalse(item["is_grouped"])
+
+
+class ReportItemIsGroupedCleanSkipTests(unittest.TestCase):
+    """marker_skip_is_clean's fast path returns before build_search_context
+    ever runs, so result.clues stays None -- _build_report_item must fall
+    back to the marker's own output_kind ("json_sidecar" == grouped, the
+    same signal should_write_json_sidecar uses) to recover is_grouped for
+    these steady-state, cleanly-skipped books.
+    """
+
+    def _write_marker(self, folder: Path, output_kind: str) -> Path:
+        audio = folder / "Book.m4b"
+        audio.write_bytes(b"")
+        marker_path = folder / "libraforge.json"
+        marker_path.write_text(json.dumps({
+            "marker": {
+                "output_kind": output_kind,
+                "audible": {
+                    "chosen_title": "Book",
+                    "author": "Jane Doe",
+                },
+            },
+        }), encoding="utf-8")
+        return audio
+
+    def _clean_skip_result(self, audio: Path) -> "FIXER.ItemResult":
+        result = FIXER.ItemResult(
+            index=1,
+            file_path=audio,
+            display_path=audio.parent,
+            log_lines=[],
+        )
+        result.status = "skipped"
+        result.skip_reason = "clean"
+        result.clues = None
+        return result
+
+    def test_clean_skip_of_grouped_book_reports_is_grouped_true(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = self._write_marker(Path(temp_dir), "json_sidecar")
+            item = FIXER._build_report_item(self._clean_skip_result(audio))
+
+        self.assertTrue(item["is_grouped"])
+
+    def test_clean_skip_of_single_file_book_reports_is_grouped_false(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = self._write_marker(Path(temp_dir), "tags")
+            item = FIXER._build_report_item(self._clean_skip_result(audio))
+
         self.assertFalse(item["is_grouped"])
 
 
