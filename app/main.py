@@ -2445,50 +2445,13 @@ def refresh_cached_multipart_audio_profiles(
 def _read_sidecar_book(source_path: Path, fixer_module) -> dict | None:
     """Return the applied book metadata from libraforge.json, if present.
 
-    Checks sidecar.book first (multifile grouped books), then falls back to
-    marker.audible (single-file books whose metadata is written to ID3 tags).
-    Merges sidecar.audible.asin because the fixer stores ASIN there, not in
-    sidecar.book.
-
-    Resolution uses fixer_module._load_libraforge_raw() -- the same
-    folder-level-vs-per-file logic the fixer itself uses to decide where to
-    write. A single hardcoded `parent / "libraforge.json"` lookup misses
-    per-file sidecars (`<name>.libraforge.json`), which is what every book
-    in a shared "dumping ground" folder like _unorganized actually uses.
+    Thin delegate to fixer_module.read_book_sidecar -- the fixer script's
+    own report-building (_build_report_item) reads through the exact same
+    function, so Manual Review and the report can never diverge on what
+    counts as this book's current applied metadata. See that function's
+    docstring for the sidecar.book / marker.audible precedence.
     """
-    try:
-        lf_path, lf = fixer_module._load_libraforge_raw(source_path)
-        if not lf_path.is_file():
-            return None
-        sidecar = lf.get("sidecar") or {}
-        book = sidecar.get("book")
-        if book and isinstance(book, dict) and book.get("title"):
-            result = dict(book)
-            audible_asin = (sidecar.get("audible") or {}).get("asin") or ""
-            if audible_asin and not result.get("asin"):
-                result["asin"] = audible_asin
-            return result
-        # Fallback: single-file books write marker.audible (no sidecar.book)
-        marker_audible = (lf.get("marker") or {}).get("audible") or {}
-        ma_title = marker_audible.get("chosen_title") or marker_audible.get("title") or ""
-        if ma_title:
-            raw_asin = marker_audible.get("asin") or ""
-            return {
-                "title": ma_title,
-                "subtitle": marker_audible.get("subtitle", ""),
-                "author": marker_audible.get("author", ""),
-                "narrator": marker_audible.get("narrator", ""),
-                "series": marker_audible.get("series", ""),
-                "sequence": marker_audible.get("sequence", ""),
-                "year": str(marker_audible.get("year", "") or ""),
-                "summary": marker_audible.get("summary", ""),
-                "genre": marker_audible.get("genre", ""),
-                "isbn": marker_audible.get("isbn", ""),
-                "asin": raw_asin if raw_asin != "NOREALASIN" else "",
-            }
-    except (json.JSONDecodeError, OSError):
-        pass
-    return None
+    return fixer_module.read_book_sidecar(source_path)
 
 
 def _sum_group_duration(folder: Path, group_files: list[Path]) -> float | None:

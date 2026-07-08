@@ -409,20 +409,50 @@ class ReportItemCleanSkipFallbackTests(unittest.TestCase):
         self.assertEqual(item["match"]["series"], "Metal Mage")
         self.assertEqual(item["match"]["asin"], "B0REAL1234")
 
-    def test_fresh_clues_take_priority_over_marker_fallback(self):
-        # "local" must come from clues["current"] (the pure, matcher-untouched
-        # tag snapshot), not from top-level clue fields like "title"/"series",
-        # which pass through path/folder overrides meant only for the matcher.
+    def test_marker_data_still_wins_for_local_even_with_a_fresh_probe_this_run(self):
+        # Superseded assumption, corrected: "local" used to prefer a fresh
+        # clues["current"] probe over an existing applied record. But Manual
+        # Review's _read_sidecar_book has no "is this fresher" concept at
+        # all -- it unconditionally trusts sidecar.book/marker.audible
+        # whenever present. Report and Manual Review must never diverge on
+        # what counts as this book's current applied metadata, so an applied
+        # record (this file already has one, from setUp) wins for "local"
+        # regardless of whether a fresh search also ran this session. "match"
+        # (the freshly found candidate) is unaffected.
         result = FIXER.ItemResult(
             index=1, file_path=self.media, display_path=self.media, status="matched",
             metadata={"title": "Fresh Match", "author": "Eric Vall"},
             clues={
-                "title": "Path-Derived Title",  # matcher-only, must not leak into "local"
+                "title": "Path-Derived Title",
                 "author": "Eric Vall",
                 "current": {"title": "Fresh Local", "author": "Eric Vall", "series": "Fresh Series"},
             },
         )
         item = FIXER._build_report_item(result)
+        self.assertEqual(item["local"]["title"], "Metal Mage 15")
+        self.assertEqual(item["local"]["series"], "Metal Mage")
+        self.assertEqual(item["match"]["title"], "Fresh Match")
+
+    def test_fresh_clues_used_when_no_applied_record_exists_yet(self):
+        # A book with no sidecar.book/marker.audible yet (never successfully
+        # applied) has nothing for Manual Review to show either -- "local"
+        # falls back to clues["current"] (the pure, matcher-untouched tag
+        # snapshot), never top-level clue fields like "title"/"series",
+        # which pass through path/folder overrides meant only for the
+        # matcher.
+        with tempfile.TemporaryDirectory() as never_applied_dir:
+            media = Path(never_applied_dir) / "Book.m4b"
+            media.write_bytes(b"")
+            result = FIXER.ItemResult(
+                index=1, file_path=media, display_path=media, status="matched",
+                metadata={"title": "Fresh Match", "author": "Eric Vall"},
+                clues={
+                    "title": "Path-Derived Title",
+                    "author": "Eric Vall",
+                    "current": {"title": "Fresh Local", "author": "Eric Vall", "series": "Fresh Series"},
+                },
+            )
+            item = FIXER._build_report_item(result)
         self.assertEqual(item["local"]["title"], "Fresh Local")
         self.assertEqual(item["local"]["series"], "Fresh Series")
         self.assertEqual(item["match"]["title"], "Fresh Match")

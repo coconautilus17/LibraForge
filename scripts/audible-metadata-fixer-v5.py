@@ -445,6 +445,55 @@ def load_marker(source: Path) -> dict:
     _, payload = _load_libraforge_raw(source)
     return payload.get("marker", {})
 
+def read_book_sidecar(source: Path) -> dict | None:
+    """Return the applied book metadata from libraforge.json, if present.
+
+    Checks sidecar.book first (multifile grouped books), then falls back to
+    marker.audible (single-file books whose metadata is written to ID3 tags).
+    Merges sidecar.audible.asin because the fixer stores ASIN there, not in
+    sidecar.book.
+
+    This is the single source of truth for "what does this book's applied
+    metadata actually say" -- Manual Review (app/main.py's _read_sidecar_book,
+    which delegates here) and the report's comparison-card display
+    (_build_report_item) must both read through this function so they can
+    never diverge. A raw per-file tag reread is only appropriate when this
+    returns None (the book has no applied record yet at all).
+    """
+    try:
+        lf_path, lf = _load_libraforge_raw(source)
+        if not lf_path.is_file():
+            return None
+        sidecar = lf.get("sidecar") or {}
+        book = sidecar.get("book")
+        if book and isinstance(book, dict) and book.get("title"):
+            result = dict(book)
+            audible_asin = (sidecar.get("audible") or {}).get("asin") or ""
+            if audible_asin and not result.get("asin"):
+                result["asin"] = audible_asin
+            return result
+        # Fallback: single-file books write marker.audible (no sidecar.book)
+        marker_audible = (lf.get("marker") or {}).get("audible") or {}
+        ma_title = marker_audible.get("chosen_title") or marker_audible.get("title") or ""
+        if ma_title:
+            raw_asin = marker_audible.get("asin") or ""
+            return {
+                "title": ma_title,
+                "subtitle": marker_audible.get("subtitle", ""),
+                "author": marker_audible.get("author", ""),
+                "narrator": marker_audible.get("narrator", ""),
+                "series": marker_audible.get("series", ""),
+                "sequence": marker_audible.get("sequence", ""),
+                "year": str(marker_audible.get("year", "") or ""),
+                "summary": marker_audible.get("summary", ""),
+                "genre": marker_audible.get("genre", ""),
+                "isbn": marker_audible.get("isbn", ""),
+                "asin": raw_asin if raw_asin != "NOREALASIN" else "",
+            }
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
 def get_metadata_backup_path(source: Path) -> Path:
     return source.with_name(f"{source.name}{METADATA_BACKUP_SUFFIX}")
 
@@ -4134,22 +4183,41 @@ def _build_report_item(result: "ItemResult") -> dict:
     else:
         meta = result.metadata or {}
     duration = meta.get("duration") or {}
-    if clues and not result.was_manually_applied:
-        # "current" is a pure, matcher-untouched snapshot of the file's own
-        # tags (see read_current_book_metadata) -- comparison-card display
-        # must never be built from other `clues` fields, which pass through
+
+    # "local" (the comparison-card's "Current" column) must read through
+    # exactly the same lookup Manual Review uses -- read_book_sidecar checks
+    # sidecar.book (grouped books) then marker.audible (single-file books),
+    # regardless of was_manually_applied: an automated apply writes the same
+    # sidecar.book a manual one does, and Manual Review doesn't distinguish
+    # the two either. Report and Manual Review must never diverge on what
+    # counts as this book's current applied metadata. See docs/design/
+    # comparison-card-data-source.md and read_book_sidecar's docstring.
+    sidecar_book = read_book_sidecar(result.file_path)
+    if sidecar_book:
+        local = {
+            "title": sidecar_book.get("title") or "",
+            "subtitle": sidecar_book.get("subtitle") or "",
+            "author": sidecar_book.get("author") or "",
+            "narrator": sidecar_book.get("narrator") or "",
+            "series": sidecar_book.get("series") or "",
+            "sequence": str(sidecar_book.get("sequence") or ""),
+            "year": sidecar_book.get("year") or "",
+            "genre": sidecar_book.get("genre") or "",
+            "isbn": sidecar_book.get("isbn") or "",
+            "asin": sidecar_book.get("asin") or "",
+            "publisher": sidecar_book.get("publisher") or "",
+            "summary": sidecar_book.get("summary") or "",
+            "duration_minutes": (clues.get("current") or {}).get("duration_minutes")
+            or duration.get("local_minutes"),
+        }
+    elif clues:
+        # No applied record exists yet for this book -- it has never been
+        # successfully written, so Manual Review has nothing to show either;
+        # fall back to a pure, matcher-untouched snapshot of the file's own
+        # tags (see read_current_book_metadata). Comparison-card display must
+        # never be built from other `clues` fields, which pass through
         # path/folder overrides meant only to help the matcher find a match,
-        # not to describe what is actually embedded in the file. See
-        # docs/design/comparison-card-data-source.md.
-        #
-        # Excluded here when was_manually_applied: Manual Review already
-        # wrote this book's tags to match its stored marker exactly, so that
-        # marker (== meta, computed above) is the reliable source -- a fresh
-        # raw-tag reread is redundant at best and, for a grouped multi-file
-        # book, actively wrong (the representative file's own tags describe
-        # one chapter/track, not the book; see read_current_book_metadata's
-        # is_grouped handling). Matches the same was_manually_applied check
-        # already used above to prefer marker data for `meta`.
+        # not to describe what is actually embedded in the file.
         current = clues.get("current") or {}
         local = {
             "title": current.get("title") or "",
@@ -4167,29 +4235,14 @@ def _build_report_item(result: "ItemResult") -> dict:
             "duration_minutes": current.get("duration_minutes"),
         }
     else:
-        # A cleanly-skipped file (already matched/marked good in a prior run)
-        # never gets a fresh probe this run -- probing every skip just to
-        # populate a report column would undo the whole point of skipping on
-        # large libraries. marker.audible (== meta, computed above) is what
-        # marker_skip_is_clean guarantees is currently embedded in the file's
-        # tags, since that's the exact dict the last successful write applied.
-        # local_before is NOT that: it is the snapshot from *before* that
-        # write, superseded the moment the write completed, so using it here
-        # would show pre-fix data as if it were the book's current state. See
-        # docs/design/comparison-card-data-source.md.
+        # No applied record and no fresh probe this run (cleanly skipped
+        # before any record existed -- shouldn't normally happen, since a
+        # clean skip implies a prior successful write, but keep a blank
+        # fallback rather than crash).
         local = {
-            "title": meta.get("title") or "",
-            "subtitle": meta.get("subtitle") or "",
-            "author": meta.get("author") or "",
-            "narrator": meta.get("narrator") or "",
-            "series": meta.get("series") or "",
-            "sequence": str(meta.get("sequence") or ""),
-            "year": meta.get("year") or "",
-            "genre": meta.get("genre") or "",
-            "isbn": meta.get("isbn") or "",
-            "asin": meta.get("asin") or "",
-            "publisher": meta.get("publisher") or "",
-            "summary": meta.get("summary") or "",
+            "title": "", "subtitle": "", "author": "", "narrator": "",
+            "series": "", "sequence": "", "year": "", "genre": "", "isbn": "",
+            "asin": "", "publisher": "", "summary": "",
             "duration_minutes": duration.get("local_minutes"),
         }
     item: dict = {
