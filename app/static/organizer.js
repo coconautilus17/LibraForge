@@ -5,6 +5,9 @@ let latestStats = {};
 let currentOrgReportId = null;
 let lastRequest = null;
 let noSidecarsHandledForRun = null;
+// Sources excluded via the per-item button this session, so the "Excluded"
+// state survives a re-render (search/filter) until the user runs again.
+const excludedMoveSources = new Set();
 
 // Strip the trailing filename from a path so only the directory is shown.
 // Paths ending in a known audio extension are treated as files; others as dirs.
@@ -382,8 +385,10 @@ function renderMoves(items) {
 
   $("moveCount").textContent = `Showing ${filtered.length} of ${items.length} planned moves`;
   $("moveItems").innerHTML = filtered.length
-    ? filtered.map((item) => `
-      <article class="result-card ${isReviewMove(item) ? "review-card" : ""}">
+    ? filtered.map((item) => {
+      const excluded = excludedMoveSources.has(item.source);
+      return `
+      <article class="result-card ${isReviewMove(item) ? "review-card" : ""} ${excluded ? "excluded-card" : ""}">
         <div class="result-head">
           <div>
             <h3>${escapeHtml(item.title || "Unknown Title")}</h3>
@@ -391,6 +396,11 @@ function renderMoves(items) {
           </div>
           <div class="score-badge">${escapeHtml(String(item.files || 1))} file${Number(item.files || 1) === 1 ? "" : "s"}</div>
           <span>Structure: ${escapeHtml(item.structure || "new")}</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="secondary" data-exclude-source="${escapeHtml(item.source)}" ${excluded ? "disabled" : ""}>
+            ${excluded ? "Excluded (run again to apply)" : "Exclude from organizer run"}
+          </button>
         </div>
         <div class="result-meta">
           <span>Kind: ${escapeHtml(item.kind || "-")}</span>
@@ -409,8 +419,23 @@ function renderMoves(items) {
           </div>
         </details>
       </article>
-    `).join("")
+    `;
+    }).join("")
     : `<p class="note">${items.length ? "No moves match the current filters." : "No planned moves were parsed from this run."}</p>`;
+
+  for (const button of $("moveItems").querySelectorAll("button[data-exclude-source]")) {
+    button.addEventListener("click", () => {
+      const source = button.getAttribute("data-exclude-source");
+      excludedMoveSources.add(source);
+      const textarea = $("skipPatterns");
+      const lines = textarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
+      if (!lines.includes(source)) {
+        lines.push(source);
+        textarea.value = lines.join("\n");
+      }
+      renderMoves(latestMoveItems);
+    });
+  }
 }
 
 $("moveSearch").addEventListener("input", () => renderMoves(latestMoveItems));
