@@ -1642,6 +1642,10 @@ summary:focus-visible {
   font-size: 10.5px;
 }
 
+#manualGroupedBadge {
+  grid-column: 1 / -1;
+}
+
 .reason-badge.danger {
   border-color: rgb(255 126 139 / 25%);
   color: var(--danger);
