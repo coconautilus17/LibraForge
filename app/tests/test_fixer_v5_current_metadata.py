@@ -104,6 +104,44 @@ class ReadCurrentBookMetadataTests(unittest.TestCase):
         self.assertEqual(read_current_book_metadata({"year": "2020"})["year"], "2020")
         self.assertEqual(read_current_book_metadata({"date": "2021"})["year"], "2021")
 
+    def test_grouped_generic_title_falls_back_to_album(self):
+        # Real-world case: a multi-file rip's first (by natural sort) file is
+        # a bonus "Opening Credits" track. Its own "title" tag names the
+        # track, not the book -- "album" is the book's actual name.
+        tags = {"title": "Opening Credits", "album": "Pocket Dungeon 3", "track": "1"}
+        current = read_current_book_metadata(tags, is_grouped=True)
+        self.assertEqual(current["title"], "Pocket Dungeon 3")
+
+    def test_ungrouped_generic_title_still_falls_back_to_album(self):
+        # The album fallback isn't grouping-specific -- it's just picking the
+        # more useful of two tags on the same file, regardless of is_grouped.
+        tags = {"title": "Chapter 1", "album": "Solo Book"}
+        current = read_current_book_metadata(tags)
+        self.assertEqual(current["title"], "Solo Book")
+
+    def test_grouped_track_number_never_becomes_sequence(self):
+        # The representative file's track number is its chapter position
+        # (e.g. "1" for the first track), not the book's series sequence --
+        # keeping it produces a plausible-looking but meaningless number.
+        tags = {"title": "Opening Credits", "album": "Pocket Dungeon 3", "track": "1"}
+        current = read_current_book_metadata(tags, is_grouped=True)
+        self.assertEqual(current["sequence"], "")
+
+    def test_ungrouped_track_number_still_becomes_sequence(self):
+        # Single-file behavior (is_grouped defaults to False) is unchanged --
+        # confirmed against the existing MP4-style-tags test above.
+        tags = {"title": "Soul Harvest", "track": "2"}
+        current = read_current_book_metadata(tags)
+        self.assertEqual(current["sequence"], "2")
+
+    def test_grouped_title_in_text_still_yields_sequence(self):
+        # A genuine "Book N" pattern found in the title text itself (not the
+        # track-number fallback) is real book-level data even on a per-track
+        # tag -- only the track-number fallback is discarded for groups.
+        tags = {"title": "Pocket Dungeon - Book 3 - Chapter 1", "track": "1"}
+        current = read_current_book_metadata(tags, is_grouped=True)
+        self.assertEqual(current["sequence"], "3")
+
 
 class BuildSearchContextCurrentIsolationTests(unittest.TestCase):
     """clues["current"] must stay true to the raw tags even when the matcher
