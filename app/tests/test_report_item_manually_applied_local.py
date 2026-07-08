@@ -90,6 +90,69 @@ class ManuallyAppliedLocalTests(unittest.TestCase):
         self.assertEqual(item["local"]["title"], "Pocket Dungeon 3")
         self.assertEqual(item["local"]["sequence"], "3")
 
+    def _write_single_file_marker(self, folder: Path) -> Path:
+        # Single, non-grouped book: no bonus track involved at all -- proves
+        # the was_manually_applied fix is not a grouped-book-only patch. A
+        # stale tag reread here would be a plain "edited outside LibraForge
+        # since" case, not a chapter/book conflation like the grouped one.
+        audio = folder / "Solo Book.m4b"
+        audio.write_bytes(b"")
+        marker_path = folder / "libraforge.json"
+        marker_path.write_text(json.dumps({
+            "marker": {
+                "output_kind": "tags",
+                "manually_applied": True,
+                "audible": {
+                    "chosen_title": "Solo Book",
+                    "author": "Jane Doe",
+                    "sequence": "",
+                },
+            },
+        }), encoding="utf-8")
+        return audio
+
+    def test_manually_applied_single_file_book_local_uses_marker_not_raw_tags(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = self._write_single_file_marker(Path(temp_dir))
+            result = FIXER.ItemResult(
+                index=1,
+                file_path=audio,
+                display_path=str(audio.parent),
+                log_lines=[],
+            )
+            result.status = "matched"
+            result.was_manually_applied = True
+            # No group_search here -- an ungrouped single file's own probe.
+            result.clues = {
+                "current": {
+                    "title": "Stale Title From Before The Edit",
+                    "author": "Jane Doe",
+                    "sequence": "1",
+                },
+            }
+            result.metadata = {"title": "Stale Title From Before The Edit", "author": "Jane Doe"}
+            item = FIXER._build_report_item(result)
+
+        self.assertEqual(item["local"]["title"], "Solo Book")
+        self.assertFalse(item["is_grouped"])
+
+    def test_non_manually_applied_book_still_uses_fresh_current_regardless_of_grouping(self):
+        # The normal automated-match path (was_manually_applied stays False)
+        # must keep showing the fresh raw-tag probe -- confirms the fix only
+        # changes behavior for the manually-applied case, for either type.
+        result = FIXER.ItemResult(
+            index=1,
+            file_path=Path("/lib/Solo Book/book.m4b"),
+            display_path="/lib/Solo Book",
+            log_lines=[],
+        )
+        result.status = "matched"
+        result.clues = {"current": {"title": "Fresh Probe Title", "sequence": "1"}}
+        result.metadata = {"title": "Fresh Probe Title", "sequence": "1"}
+        item = FIXER._build_report_item(result)
+
+        self.assertEqual(item["local"]["title"], "Fresh Probe Title")
+
 
 if __name__ == "__main__":
     unittest.main()
