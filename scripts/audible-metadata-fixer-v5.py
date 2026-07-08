@@ -3153,6 +3153,10 @@ def search_item(
         result.queries = queries
         result.clues = clues
 
+        group_search = clues.get("group_search", {}) or {}
+        if group_search.get("applied"):
+            log.append(f"  Grouped: {group_search.get('file_count', 0)} files")
+
         if recovering_from_marker:
             rec_md = metadata_from_marker(existing_marker)
             try:
@@ -4191,6 +4195,8 @@ def _build_report_item(result: "ItemResult") -> dict:
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
         "local": local,
+        "is_grouped": bool((clues.get("group_search") or {}).get("applied"))
+        or (bool(stored) and stored.get("output_kind") == "json_sidecar"),
     }
     if meta:
         item["match"] = {

@@ -60,6 +60,22 @@ class ReportParserCategoryTests(unittest.TestCase):
         self.assertEqual(state.stats["provider_breakdown"].get("graphicaudio"), 1)
         self.assertNotIn("review:special-publisher", state.files_by_category)
 
+    def test_grouped_book_category(self):
+        lines = [
+            "[1/2] Processing: /lib/Grouped Book/book.m4b",
+            "AUDIBLE MATCH:",
+            "  Mode:     full",
+            "  Grouped: 12 files",
+            "[2/2] Processing: /lib/Single Book/book.m4b",
+            "AUDIBLE MATCH:",
+            "  Mode:     full",
+        ]
+        state = run_lines(lines)
+        self.assertEqual(
+            self._paths(state, "group:multi-file"),
+            ["/lib/Grouped Book/book.m4b"],
+        )
+
     def test_goodreads_header_counts_as_matched_with_provider(self):
         lines = [
             "[1/1] Processing: /lib/Unmatched/book.m4b",

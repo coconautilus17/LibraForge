@@ -292,6 +292,7 @@
             <option value="would_write">Would write</option>
             <option value="written">Written</option>
             <option value="manually_applied">Manually Applied (skipped)</option>
+            <option value="multi_file">Multi-file books</option>
             <option value="skipped">Skipped</option>
             <option value="error">Error</option>
             <option value="unmatched">Not Matched</option>
@@ -330,6 +331,7 @@
         <label>Selected target
           <input id="manualTargetPath" readonly />
         </label>
+        <span id="manualGroupedBadge" class="reason-badge" hidden>Multi-file book</span>
         <label>Representative source
           <input id="manualSourcePath" readonly />
         </label>
@@ -359,6 +361,7 @@
       <div class="actions">
         <button id="manualSearchBtn" class="secondary">Search For Selected Target</button>
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>
+        <button id="manualEditBtn" class="secondary">Edit Book</button>
       </div>
       <p id="manualTitleQueryNote" class="provider-query-note" hidden>&#9432; For this provider, construct the search with the book title in <strong>Title clue</strong> and the author in <strong>Author clue</strong>. Do not repeat the author in the title query.</p>
       <p id="manualBackupNote" class="provider-query-note" hidden>&#9432; <strong>Search from original backup</strong> is active: the metadata clues and the compare table's "Current" column show the pre-fixer values stored in the backup, not the live file tags. This also affects manual apply -- the comparison will reflect the original, not the post-apply, state. Uncheck <em>Search from original backup</em> (or <em>Force reprocess</em>) to return to live values.</p>
@@ -374,5 +377,6 @@
   </main>
   <script src="/static/ui-common.js?v=20260705-2"></script>
   <script src="/static/app.js?v=20260705-3"></script>
+  <script src="/static/manual-review-edit.js?v=20260707-1"></script>
 </body>
 </html>

@@ -574,6 +574,7 @@ async function loadManualTarget(path, useBackupTags = false) {
   }
 
   manualContext = data;
+  $('manualGroupedBadge').hidden = !data.is_grouped;
   await loadManualCurrentCover();
   $('manualTargetPath').value = data.display_path || data.path || '';
   $('manualSourcePath').value = data.source_path || '';
@@ -807,19 +808,7 @@ function renderManualSearchResults(results = []) {
   }
 }
 
-async function searchManualTarget() {
-  if (!manualContext?.path) {
-    alert('Load a manual review target first.');
-    return;
-  }
-
-  // When "search from original backup" is active, reload the displayed metadata
-  // from pre-apply backup tags before running the search so the form reflects
-  // what the file contained before the fixer ever touched it.
-  if ($('force').checked && $('forceOriginal').checked) {
-    await loadManualTarget(manualContext.path, true);
-  }
-
+async function runManualProviderSearch() {
   const provider = $('manualProvider').value;
   let res;
 
@@ -874,6 +863,23 @@ async function searchManualTarget() {
     });
   }
 
+  return res;
+}
+
+async function searchManualTarget() {
+  if (!manualContext?.path) {
+    alert('Load a manual review target first.');
+    return;
+  }
+
+  // When "search from original backup" is active, reload the displayed metadata
+  // from pre-apply backup tags before running the search so the form reflects
+  // what the file contained before the fixer ever touched it.
+  if ($('force').checked && $('forceOriginal').checked) {
+    await loadManualTarget(manualContext.path, true);
+  }
+
+  const res = await runManualProviderSearch();
   const data = await res.json();
   if (!res.ok) {
     alert(data.detail || 'Search failed');
@@ -1261,6 +1267,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'skipped' && s !== 'skipped') continue;
       if (statusFilter === 'error' && s !== 'error') continue;
       if (statusFilter === 'manually_applied' && !item.was_manually_applied) continue;
+      if (statusFilter === 'multi_file' && !item.is_grouped) continue;
     }
     if (query) {
       const local = item.local || {};
@@ -1337,6 +1344,7 @@ function buildMatchCard(item) {
       ${scorePct != null ? `<span class="match-score-badge">${scorePct}%</span>` : ''}
       ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
+      ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
     </div>

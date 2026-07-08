@@ -1642,6 +1642,10 @@ summary:focus-visible {
   font-size: 10.5px;
 }
 
+#manualGroupedBadge {
+  grid-column: 1 / -1;
+}
+
 .reason-badge.danger {
   border-color: rgb(255 126 139 / 25%);
   color: var(--danger);
@@ -2818,6 +2822,35 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
+.mre-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mre-tab-btn {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.mre-tab-btn.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.mre-tab-panel {
+  display: none;
+}
+
+.mre-tab-panel.active {
+  display: block;
+}
+
 /* ── Cleanup button group (right-aligned in .actions row) ────────────── */
 
 .cleanup-btn-group {
@@ -2992,7 +3025,8 @@ button.danger:hover:not(:disabled) {
 .match-provider-badge,
 .match-manual-badge,
 .match-write-badge,
-.match-gr-limited-badge {
+.match-gr-limited-badge,
+.match-grouped-badge {
   display: inline-block;
   padding: 2px 7px;
   border-radius: 99px;
@@ -3007,6 +3041,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge     { background: rgb(0 160 100 / 15%);         color: #00c878;        }
 .match-write-badge      { background: var(--accent-soft);           color: var(--accent);  }
 .match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
+.match-grouped-badge    { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 
 /* Card list: 2-column grid */
 .mrep-controls {
