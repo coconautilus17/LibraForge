@@ -32,6 +32,7 @@
   --control-height: 42px;
   --space-card: 22px;
   --shell-width: 1320px;
+  --topbar-height: 83px;
 }
 
 :root[data-theme="dark"][data-surface="warm"] {
@@ -745,6 +746,70 @@ body.settings-open {
   box-shadow: var(--shadow-sm);
 }
 
+/* Sticky left nav + content column -- shared by any page with several
+   scrollable sections (Settings, Metadata Forge). */
+.side-nav-layout {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+}
+
+.side-nav {
+  position: sticky;
+  top: calc(var(--topbar-height) + 16px);
+  max-height: calc(100vh - var(--topbar-height) - 32px);
+  overflow-y: auto;
+  flex: 0 0 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side-nav a {
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: var(--text-soft);
+  text-decoration: none;
+  font-size: 0.9em;
+  border-left: 2px solid transparent;
+}
+
+.side-nav a:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.side-nav a.danger {
+  color: var(--danger);
+}
+
+.side-nav a.danger:hover {
+  background: rgb(var(--danger-rgb, 239 68 68) / 12%);
+}
+
+.side-nav-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.side-nav-card {
+  margin: 0 0 18px;
+  scroll-margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .side-nav-layout {
+    flex-direction: column;
+  }
+
+  .side-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    flex-basis: auto;
+  }
+}
+
 .card::before {
   position: absolute;
   top: 0;
@@ -754,6 +819,18 @@ body.settings-open {
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 12%), transparent);
   content: "";
   pointer-events: none;
+}
+
+/* Visually sets a card apart as its own distinct section (e.g. Manual Review
+   on the Metadata Forge page) rather than just another item in the stack. */
+.card-emphasis {
+  border-color: rgb(var(--accent-rgb) / 35%);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+}
+
+.card-emphasis::before {
+  background: linear-gradient(90deg, transparent, rgb(var(--accent-rgb) / 55%), transparent);
 }
 
 :root[data-theme="light"] .card::before {

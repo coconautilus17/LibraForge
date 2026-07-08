@@ -37,8 +37,8 @@
   </header>
 
   <main class="shell" id="main-content">
-   <div class="settings-layout">
-    <aside class="settings-side-nav" aria-label="Settings sections">
+   <div class="side-nav-layout settings-layout">
+    <aside class="side-nav" aria-label="Settings sections">
       <a href="#about">About</a>
       <a href="#appearance">Appearance</a>
       <a href="#title-noise">Title noise</a>
@@ -51,21 +51,21 @@
       <a href="#developer">Developer</a>
       <a href="#cleanup" class="danger">Danger zone</a>
     </aside>
-    <div class="settings-content">
+    <div class="side-nav-content">
     <div class="page-head">
       <span class="eyebrow">Global preferences</span>
       <h1 style="margin:4px 0 0">Settings</h1>
     </div>
 
     <!-- About -->
-    <section id="about" class="card settings-card">
+    <section id="about" class="card side-nav-card">
       <h2>About LibraForge</h2>
       <p>LibraForge is a self-hosted companion tool for your Audiobookshelf library: it matches Audible metadata, converts and tags M4Bs, organizes folders into a consistent layout, and can download owned titles directly, all from one web UI with dry-run-first writes.</p>
       <p><a href="https://github.com/coconautilus17/LibraForge" target="_blank" rel="noopener noreferrer">View the project on GitHub →</a></p>
     </section>
 
     <!-- Appearance -->
-    <section id="appearance" class="card settings-card">
+    <section id="appearance" class="card side-nav-card">
       <h2>Appearance</h2>
       <div class="settings-grid">
         <label class="preference-field">Appearance
@@ -84,7 +84,7 @@
     </section>
 
     <!-- Title noise -->
-    <section id="title-noise" class="card settings-card">
+    <section id="title-noise" class="card side-nav-card">
       <h2>Title noise patterns</h2>
       <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
       <div id="titleNoiseDefaults" class="pattern-list"></div>
@@ -105,7 +105,7 @@
     </section>
 
     <!-- Publishers -->
-    <section id="publishers" class="card settings-card">
+    <section id="publishers" class="card side-nav-card">
       <h2>Publishers</h2>
       <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
       <div id="publisherDefaults" class="pattern-list"></div>
@@ -130,7 +130,7 @@
     </section>
 
     <!-- Library -->
-    <section id="library" class="card settings-card">
+    <section id="library" class="card side-nav-card">
       <h2>Library</h2>
       <label class="preference-field">Default root path
         <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
@@ -150,7 +150,7 @@
     </section>
 
     <!-- Report retention -->
-    <section id="reports" class="card settings-card">
+    <section id="reports" class="card side-nav-card">
       <h2>Report retention</h2>
       <p>LibraForge saves a <code>.report.json</code> and <code>.log.txt</code> file for every run. Enable either or both limits below; they are applied automatically after each completed run and when you click <strong>Save</strong>.</p>
       <div class="retention-rules">
@@ -183,7 +183,7 @@
     </section>
 
     <!-- Audible accounts -->
-    <section class="card settings-card" id="accounts">
+    <section class="card side-nav-card" id="accounts">
       <h2>Audible accounts</h2>
       <p>LibraForge uses Audible to look up book metadata and (optionally) download your purchases. Connect one or more accounts and switch between them whenever you like.</p>
 
@@ -262,7 +262,7 @@
     </section>
 
     <!-- ABS API key section -->
-    <section class="card settings-card" id="absSection">
+    <section class="card side-nav-card" id="absSection">
       <h2>Audiobookshelf connection <span id="absStatusBadge" style="font-size:0.75rem;font-weight:500;padding:2px 8px;border-radius:12px;margin-left:8px;vertical-align:middle"></span></h2>
       <p>LibraForge can use your Audiobookshelf instance as a metadata provider — no Audible account required. It supports Audible (via ABS's own connection), Google Books, iTunes, Open Library, and more.</p>
 
@@ -290,7 +290,7 @@
     </section>
 
     <!-- abs-tract (Goodreads/Kindle) -->
-    <section id="abs-tract" class="card settings-card">
+    <section id="abs-tract" class="card side-nav-card">
       <h2>Goodreads / Kindle</h2>
       <p>Optional. LibraForge can search Goodreads and Kindle via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Manual searches use this URL directly. Batch Goodreads fallback also requires enabling the fallback checkbox on the run screen; use only 5 search workers when enabling it because Goodreads rate-limits aggressively. Kindle is used only for high-quality cover art and its ebook ASIN is never written.</p>
       <div class="grid" style="--grid-cols:1;margin-top:14px">
@@ -310,7 +310,7 @@
     </section>
 
     <!-- Developer -->
-    <section id="developer" class="card settings-card">
+    <section id="developer" class="card side-nav-card">
       <h2>Developer</h2>
 
       <label class="preference-field"><input type="checkbox" id="debugMode" /> Show developer links</label>
@@ -343,7 +343,7 @@
     </section>
 
     <!-- Danger zone -->
-    <section id="cleanup" class="card settings-card danger-zone">
+    <section id="cleanup" class="card side-nav-card danger-zone">
       <span class="danger-eyebrow">Danger zone</span>
       <h2>Clean up sidecars</h2>
       <p>Permanently delete the JSON files LibraForge writes next to your audio (orphaned sidecars left when a folder's layout changes). <strong>Audio files are never touched.</strong></p>
@@ -371,19 +371,8 @@
   </main>
 
   <style>
-    /* Settings layout: sticky left nav + content column */
-    .settings-layout { max-width: 1040px; margin: 0 auto; display: flex; gap: 28px; align-items: flex-start; }
-    .settings-side-nav { position: sticky; top: 16px; flex: 0 0 176px; display: flex; flex-direction: column; gap: 2px; }
-    .settings-side-nav a { padding: 7px 12px; border-radius: 8px; color: var(--text-soft); text-decoration: none; font-size: 0.9em; border-left: 2px solid transparent; }
-    .settings-side-nav a:hover { background: var(--surface-hover); color: var(--text); }
-    .settings-side-nav a.danger { color: var(--danger); }
-    .settings-side-nav a.danger:hover { background: rgb(var(--danger-rgb, 239 68 68) / 12%); }
-    .settings-content { flex: 1 1 auto; min-width: 0; }
-    .settings-card { margin: 0 0 18px; scroll-margin-top: 16px; }
-    @media (max-width: 760px) {
-      .settings-layout { flex-direction: column; }
-      .settings-side-nav { position: static; flex-direction: row; flex-wrap: wrap; flex-basis: auto; }
-    }
+    /* Settings-specific narrowing of the shared .side-nav-layout (see style.css) */
+    .settings-layout { max-width: 1040px; margin: 0 auto; }
     /* Danger zone + compact cleanup selector */
     .danger-zone { border-color: rgb(var(--danger-rgb, 239 68 68) / 40%); }
     .danger-eyebrow { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); margin-bottom: 4px; }

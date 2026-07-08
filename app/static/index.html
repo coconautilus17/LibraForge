@@ -39,6 +39,16 @@
   </header>
 
   <main class="shell" id="main-content">
+   <div class="side-nav-layout">
+    <aside class="side-nav" aria-label="Metadata Forge sections">
+      <a href="#run-settings">Run settings</a>
+      <a href="#statistics">Statistics</a>
+      <a href="#category-lists">Category file lists</a>
+      <a href="#matchReportCard">Match Report</a>
+      <a href="#manual-review">Manual Review</a>
+      <a href="#live-output">Live output</a>
+    </aside>
+    <div class="side-nav-content">
 
     <div class="page-descriptor">
       <div class="page-descriptor-icon">
@@ -51,7 +61,7 @@
       </div>
     </div>
 
-    <section class="card">
+    <section id="run-settings" class="card side-nav-card">
       <h2>Run settings</h2>
       <div class="grid">
         <label><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
@@ -258,21 +268,21 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="statistics" class="card side-nav-card">
       <h2>Statistics</h2>
       <p class="note">Matched means the script selected a usable Audible candidate. Skipped means no safe/applicable edit was selected or the file matched a skip/marker rule. Failed means the script hit an error. Mode describes how much metadata will be written. Duration status compares local runtime with Audible runtime.</p>
       <div id="stats" class="stats-grid"></div>
       <div id="largeDuration"></div>
     </section>
 
-    <section class="card">
+    <section id="category-lists" class="card side-nav-card">
       <h2>Category file lists</h2>
       <p class="note">Choose a category to view the file names that contributed to it.</p>
       <select id="categorySelect"></select>
       <div id="categoryFiles" class="file-list"></div>
     </section>
 
-    <section class="card" id="matchReportCard">
+    <section class="card side-nav-card" id="matchReportCard">
       <div class="report-header" id="matchReportToggle" style="cursor:pointer;display:flex;align-items:center;gap:10px;">
         <h2 style="margin:0">Match Report</h2>
         <span id="matchReportCount" class="badge" style="display:none"></span>
@@ -305,7 +315,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="manual-review" class="card side-nav-card card-emphasis">
       <h2>Manual Review</h2>
       <p class="note">Review skipped, `mode:none`, `series_only`, and large-duration items here. Each candidate shows the recommended mode, but you choose Full metadata or Series only before applying. For accepted grouped multi-file books, the folder path is used as the review target.</p>
       <div class="manual-loader">
@@ -370,10 +380,12 @@
       <div id="manualSearchResults" class="results-grid"></div>
     </section>
 
-    <section class="card">
+    <section id="live-output" class="card side-nav-card">
       <h2>Live output</h2>
       <pre id="tail"></pre>
     </section>
+    </div>
+   </div>
   </main>
   <script src="/static/ui-common.js?v=20260705-2"></script>
   <script src="/static/app.js?v=20260705-3"></script>
