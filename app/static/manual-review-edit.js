@@ -14,12 +14,12 @@ function mreBuildDialog() {
 
   const dlg = document.createElement('dialog');
   dlg.id = 'mreDialog';
-  dlg.className = 'manual-apply-dialog';
+  dlg.className = 'manual-apply-dialog mre-edit-dialog';
   dlg.innerHTML = `
     <h3 class="manual-apply-title">Edit Book</h3>
     <p id="mreContext" class="manual-apply-body"></p>
     <div class="mre-tabs">
-      <button type="button" id="mreTabFieldsBtn" class="mre-tab-btn active">Fields</button>
+      <button type="button" id="mreTabFieldsBtn" class="mre-tab-btn active">Tags</button>
       <button type="button" id="mreTabCoverBtn" class="mre-tab-btn">Cover</button>
     </div>
     <div id="mreFieldsPanel" class="mre-tab-panel active">
@@ -40,10 +40,13 @@ function mreBuildDialog() {
         <label>ISBN<input id="mreIsbn" /></label>
         <label>Publisher<input id="mrePublisher" /></label>
         <label>Genre<input id="mreGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
+        <label><span class="field-label">Language <span class="info-tip" data-tooltip="Only written to metadata.json (picked up by Audiobookshelf) - not embedded in the audio file's own tags."></span></span><input id="mreLanguage" placeholder="e.g. english" /></label>
+        <label>Explicit<input type="checkbox" id="mreExplicit" /></label>
         <label class="mae-full-width">Comment / Summary<textarea id="mreSummary" rows="4"></textarea></label>
       </div>
     </div>
     <div id="mreCoverPanel" class="mre-tab-panel">
+      <p class="note"><span class="field-label">Cover preview <span class="info-tip" data-tooltip="For simplicity, covers are shown here cropped to a square. The full cover image you pick is used as-is, with no cropping, once saved."></span></span></p>
       <div class="cover-comparison">
         <div>
           <strong>Current</strong>
@@ -64,6 +67,7 @@ function mreBuildDialog() {
           <option value="kindle">Kindle</option>
         </select>
         <button id="mreCoverSearchBtn" class="secondary" type="button">Search Covers</button>
+        <span class="info-tip" data-tooltip="Click a cover below to select it as the new cover."></span>
       </div>
       <div id="mreCoverResults" class="results-grid"></div>
       <hr />
@@ -91,6 +95,7 @@ function mreBuildDialog() {
     const file = $('mreCoverFileInput').files[0];
     if (file) mreUploadCoverFile(file);
   });
+  window.LibraForgePrefs?.initializeInfoTips();
 }
 
 function mreSwitchTab(name) {
@@ -137,29 +142,41 @@ async function mreSearchCovers() {
       alert(data.detail || 'Cover search failed');
       return;
     }
-    mreRenderCoverResults(data.results || []);
+    mreRenderCoverResults(data.results || [], provider);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Search Covers';
   }
 }
 
-function mreRenderCoverResults(results) {
+function mreRenderCoverResults(results, provider) {
   const withCovers = results.filter((r) => r.cover_url);
-  $('mreCoverResults').innerHTML = withCovers.length
-    ? withCovers.map((r, i) => `
-        <article class="result-card">
-          <img class="cover-thumb" src="${escapeHtml(r.cover_url)}" alt="${escapeHtml(r.title || 'Cover option')}" />
-          <p>${escapeHtml(r.title || '')}</p>
-          <button type="button" class="secondary" data-mre-cover-pick="${i}">Use this cover</button>
-        </article>
-      `).join('')
-    : '<p class="note">No covers found for this query.</p>';
+  if (!withCovers.length) {
+    const blockHint = (provider === 'goodreads' || provider === 'kindle')
+      ? ' Goodreads/Kindle may be temporarily blocking automated requests -- this is not necessarily a bad query.'
+      : '';
+    $('mreCoverResults').innerHTML = `<p class="note">No covers found for this query.${blockHint}</p>`;
+    return;
+  }
 
-  for (const button of $('mreCoverResults').querySelectorAll('button[data-mre-cover-pick]')) {
-    button.addEventListener('click', () => {
-      const index = Number(button.getAttribute('data-mre-cover-pick'));
+  $('mreCoverResults').innerHTML = withCovers.map((r, i) => `
+    <article class="result-card mre-cover-card">
+      <img class="cover-thumb" src="${escapeHtml(r.cover_url)}" alt="${escapeHtml(r.title || 'Cover option')}" role="button" tabindex="0" data-mre-cover-pick="${i}" />
+      <p>${escapeHtml(r.title || '')}</p>
+    </article>
+  `).join('');
+
+  for (const img of $('mreCoverResults').querySelectorAll('img[data-mre-cover-pick]')) {
+    const pick = () => {
+      const index = Number(img.getAttribute('data-mre-cover-pick'));
       mreSetPendingCover(withCovers[index].cover_url);
+    };
+    img.addEventListener('click', pick);
+    img.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        pick();
+      }
     });
   }
 }
@@ -210,6 +227,8 @@ function mreFillFieldsFromCurrent() {
   $('mreIsbn').value = m.isbn || '';
   $('mrePublisher').value = m.publisher || '';
   $('mreGenre').value = m.genre || '';
+  $('mreLanguage').value = m.language || '';
+  $('mreExplicit').checked = !!m.explicit;
   $('mreSummary').value = m.summary || '';
 }
 
@@ -238,6 +257,8 @@ async function mreSave() {
         isbn: $('mreIsbn').value.trim(),
         publisher: $('mrePublisher').value.trim(),
         genre: $('mreGenre').value.trim(),
+        language: $('mreLanguage').value.trim(),
+        explicit: $('mreExplicit').checked,
         summary: $('mreSummary').value.trim(),
         cover_url: mrePendingCoverUrl,
       }),

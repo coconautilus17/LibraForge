@@ -111,7 +111,12 @@
   }
 
   function initializeInfoTips() {
-    const markers = [...document.querySelectorAll(".info-tip[data-tooltip]")];
+    // Called again for markers added after the initial DOMContentLoaded pass
+    // (e.g. a dialog built lazily on first open) -- skip markers already
+    // wired so a repeat call doesn't double-bind their listeners.
+    const markers = [...document.querySelectorAll(".info-tip[data-tooltip]")].filter(
+      (marker) => !marker.dataset.infoTipBound,
+    );
     if (!markers.length) return;
 
     const tooltip = document.createElement("div");
@@ -152,6 +157,7 @@
     };
 
     for (const marker of markers) {
+      marker.dataset.infoTipBound = "true";
       marker.textContent = "";
       marker.setAttribute("tabindex", "0");
       marker.setAttribute("role", "button");
@@ -588,7 +594,7 @@
   applyPreferences(preferences);
 
   // Expose read-only access for page scripts that need preference values.
-  window.LibraForgePrefs = { get: () => preferences };
+  window.LibraForgePrefs = { get: () => preferences, initializeInfoTips };
 
   const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
   const handleSystemThemeChange = () => {

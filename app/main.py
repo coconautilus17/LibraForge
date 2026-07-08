@@ -1077,6 +1077,8 @@ class ManualReviewEditRequest(BaseModel):
     isbn: str = ""
     publisher: str = ""
     genre: str = ""
+    language: str = ""
+    explicit: bool = False
     summary: str = ""
     cover_url: str = ""
 
@@ -2947,6 +2949,8 @@ def edit_manual_review_book(req: ManualReviewEditRequest) -> dict[str, Any]:
         "isbn": req.isbn,
         "publisher": req.publisher,
         "genre": req.genre,
+        "language": req.language,
+        "explicit": req.explicit,
         "summary": req.summary,
         "write_summary": True,
         "edit_mode": "full",
