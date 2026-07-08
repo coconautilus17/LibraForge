@@ -2557,6 +2557,14 @@ summary:focus-visible {
   color: var(--danger);
 }
 
+.dryrun-notice.success {
+  border-left-color: var(--success);
+}
+
+.dryrun-notice.success strong {
+  color: var(--success);
+}
+
 .manual-nav-heading {
   margin: 0 0 14px;
   font-size: 13px;

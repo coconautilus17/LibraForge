@@ -88,6 +88,16 @@
       <strong>Heads up - KNOWN ISSUE:</strong> downloads can currently fail due to a known, temporary issue with Amazon's activation API. This is on Amazon's side and typically resolves on its own after a while. If a download fails, wait a bit and try again.
     </div>
 
+    <div id="activationBytesStatus" class="dryrun-notice" hidden>
+      <strong>Activation bytes (main account):</strong>
+      <span id="activationBytesStatusText"></span>
+      <span id="activationBytesTip" class="info-tip" data-tooltip="" hidden></span>
+    </div>
+
+    <div class="dryrun-notice">
+      <strong>Note:</strong> books downloaded directly from Audible are very likely to be missing metadata, and should be run through the metadata fixer before organizing. Streamlining download + metadata fix + organize into one flow is planned but not yet implemented.
+    </div>
+
     <!-- Target folder -->
     <div class="pick-row">
       <input id="folderPath" type="text" list="folderSuggestions"
@@ -217,7 +227,27 @@
     });
 
     fetch("/api/auth/status").then(r => r.json())
-      .then(d => { if (!d.auth_ok) document.getElementById("authBanner").hidden = false; })
+      .then(d => {
+        if (!d.auth_ok) document.getElementById("authBanner").hidden = false;
+        const box = document.getElementById("activationBytesStatus");
+        const text = document.getElementById("activationBytesStatusText");
+        const tip = document.getElementById("activationBytesTip");
+        if (!d.auth_ok) return;
+        box.hidden = false;
+        if (d.activation_bytes_set) {
+          box.classList.remove("danger");
+          box.classList.add("success");
+          text.textContent = "Set (cached -- no live Amazon fetch needed for the activation-bytes fallback).";
+          tip.hidden = true;
+        } else {
+          box.classList.remove("success");
+          box.classList.add("danger");
+          text.textContent = "Not set.";
+          tip.hidden = false;
+          tip.dataset.tooltip = "Fetching this from inside the container is often blocked by Amazon's CloudFront. Run this on your host machine instead, wherever audible-cli is set up (outside the container): audible activation-bytes -r -- it fetches and saves the value straight to your auth file, and LibraForge will pick it up automatically on the next download.";
+          tip.setAttribute("aria-label", tip.dataset.tooltip);
+        }
+      })
       .catch(() => {});
 
     // ── Organize toggle hint ───────────────────────────────────────────────
