@@ -322,5 +322,52 @@ class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
         self.assertEqual(paths, {"/lib/A2.m4b", "/lib/A3.m4b"})
 
 
+class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
+    def _item(self, path, title, author, series, **overrides):
+        item = {
+            "path": path,
+            "status": "matched",
+            "local": {"title": title, "author": author, "series": series},
+            "match": {"title": title, "author": author, "series": series},
+        }
+        item.update(overrides)
+        return item
+
+    def test_groups_by_normalized_series_despite_raw_variants(self):
+        items = [
+            self._item("/lib/B1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core "),
+            self._item("/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", "Dungeon Core, Book 2"),
+            self._item("/lib/B3.m4b", "Dungeon Core 3", "Eric Vall", "Dungeon Core"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["pass"], 2)
+        self.assertEqual(group["suggested_series"], "Dungeon Core")
+        self.assertIn("Dungeon Core ", group["context_note"])
+        self.assertIn("Dungeon Core, Book 2", group["context_note"])
+
+    def test_skips_paths_already_claimed_by_pass_one(self):
+        items = [
+            self._item("/lib/B1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core"),
+            self._item("/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", "Dungeon Core"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths={"/lib/B2.m4b"})
+        self.assertEqual(groups, [])  # only one un-claimed member left -- not a group
+
+    def test_single_book_is_not_a_group(self):
+        items = [self._item("/lib/B1.m4b", "Solo", "Someone", "Solo Series")]
+        self.assertEqual(REVIEW.group_existing_series_by_normalized_tag(items, set()), [])
+
+    def test_works_for_non_numbered_series_names(self):
+        items = [
+            self._item("/lib/C1.m4b", "The Silent Deep", "A. Author", "Chronicles of the Deep"),
+            self._item("/lib/C2.m4b", "The Rising Tide", "A. Author", "Chronicles of the Deep, Book 2"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, set())
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["suggested_series"], "Chronicles of the Deep")
+
+
 if __name__ == "__main__":
     unittest.main()

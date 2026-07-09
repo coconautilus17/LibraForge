@@ -719,6 +719,81 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
     return groups
 
 
+def group_existing_series_by_normalized_tag(
+    report_items: list[dict[str, Any]], claimed_paths: set[str]
+) -> list[dict[str, Any]]:
+    """Pass 2: group books that already have a series tag, by comparing tags
+    through normalize_series() so raw variants (trailing space, a stray
+    ", Book N" suffix) still collapse to the same group. Skips any path
+    Pass 1 already claimed.
+    """
+    by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    raw_values_by_key: dict[str, set[str]] = defaultdict(set)
+
+    for item in report_items:
+        path = item.get("path") or item.get("source") or ""
+        if path in claimed_paths:
+            continue
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        raw_series_original = (match.get("series")) or (local.get("series")) or ""
+        raw_series = clean_text(raw_series_original)
+        if not raw_series:
+            continue
+        key = normalize_series(raw_series)
+        if not key:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        base, number = split_title_base_and_number(title)
+        by_key[key].append({
+            "path": path, "title": title, "author": author,
+            "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
+            "raw_series": raw_series_original,
+        })
+        raw_values_by_key[key].add(raw_series_original)
+
+    groups: list[dict[str, Any]] = []
+    for key, members in sorted(by_key.items()):
+        if len(members) <= 1:
+            continue
+        majority_author, author_note = _majority_author_and_note(members)
+
+        # Prefer the most common exact raw value as the suggested canonical
+        # spelling; fall back to the first one seen.
+        raw_counts = Counter(m["raw_series"] for m in members)
+        suggested_series = clean_text(raw_counts.most_common(1)[0][0])
+
+        member_rows = []
+        for m in members:
+            flag = None
+            if majority_author and m["author"] and m["author"] != majority_author:
+                flag = "author_differs"
+            member_rows.append({
+                "path": m["path"], "title": m["title"], "author": m["author"],
+                "sequence": m["sequence"], "flag": flag,
+            })
+
+        raw_variants = sorted(raw_values_by_key[key])
+        context_note = (
+            f"{len(members)} books share normalized series {suggested_series!r} -- "
+            f"raw tags vary: {', '.join(repr(v) for v in raw_variants)}."
+        )
+
+        groups.append({
+            "pass": 2,
+            "group_key": key,
+            "base_title": suggested_series,
+            "context_note": context_note,
+            "suggested_series": suggested_series,
+            "suggested_author": majority_author,
+            "author_note": author_note,
+            "members": member_rows,
+        })
+
+    return groups
+
+
 def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
 
