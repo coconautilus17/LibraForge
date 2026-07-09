@@ -42,6 +42,41 @@ class TrustedTitleParentheticalSeriesTests(unittest.TestCase):
         )
         self.assertEqual(result, "End of Trials")
 
+    def test_doubled_nested_parenthetical_collapses_to_series(self):
+        # "The Duelist 12 (The Duelist (Completed Series))" -- the trailing
+        # annotation itself contains a nested parenthetical, which the old
+        # single-level bracket regex could not recognize as one unit, so it
+        # only stripped the leading "The Duelist 12" prefix and left the
+        # untouched "(The Duelist (Completed Series))" fragment as the title.
+        result = ORGANIZER.clean_book_title(
+            "The Duelist 12 (The Duelist (Completed Series))",
+            "The Duelist",
+            ORGANIZER.normalize_book_number("12"),
+            trusted=True,
+        )
+        self.assertEqual(result, "The Duelist")
+
+    def test_bracketed_series_comma_number_collapses_to_series(self):
+        # "Dragon Emperor 22 [Dragon Emperor, 22]" -- a doubled
+        # series+number annotation using square brackets instead of parens.
+        result = ORGANIZER.clean_book_title(
+            "Dragon Emperor 22 [Dragon Emperor, 22]",
+            "Dragon Emperor",
+            ORGANIZER.normalize_book_number("22"),
+            trusted=True,
+        )
+        self.assertEqual(result, "Dragon Emperor")
+
+    def test_multiple_distinct_trailing_parentheticals_only_strip_last(self):
+        # Guard against the nested-bracket regex over-matching across
+        # separate, unrelated trailing bracket groups.
+        result = ORGANIZER.strip_series_sequence_parenthetical(
+            "Real Title (Something) (Series #2)",
+            "Series",
+            ORGANIZER.normalize_book_number("2"),
+        )
+        self.assertEqual(result, "Real Title (Something)")
+
 
 class RebirthReportRegressionTests(unittest.TestCase):
     """End-to-end reproduction of the organizer report bug for
@@ -80,6 +115,43 @@ class RebirthReportRegressionTests(unittest.TestCase):
             self.assertEqual(
                 ORGANIZER.build_book_folder_name(metadata), "Book 4 - Rebirth"
             )
+
+
+class DuelistReportRegressionTests(unittest.TestCase):
+    """End-to-end reproduction of the organizer report bug for Eric Vall's
+    "The Duelist" series: book 12's target folder came out as
+    "Book 12 - (The Duelist (Completed Series))" instead of "Book 12".
+    """
+
+    def test_book_folder_name_drops_doubled_nested_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            book_dir = root / "The Duelist 12"
+            book_dir.mkdir(parents=True, exist_ok=True)
+            audio = book_dir / "Eric Vall - [The Duelist-12] - The Duelist 12.m4b"
+            audio.touch()
+            marker = book_dir / "libraforge.json"
+            marker.write_text(
+                json.dumps(
+                    {
+                        "marker": {
+                            "audible": {
+                                "title": "The Duelist 12 (The Duelist (Completed Series))",
+                                "chosen_title": "The Duelist 12 (The Duelist (Completed Series))",
+                                "author": "Eric Vall",
+                                "narrator": "",
+                                "series": "The Duelist",
+                                "sequence": "12",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
+            metadata = ORGANIZER.infer_metadata(item, root)
+            self.assertEqual(metadata["title"], "The Duelist")
+            self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 12")
 
 
 if __name__ == "__main__":

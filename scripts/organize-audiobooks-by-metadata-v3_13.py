@@ -1180,7 +1180,13 @@ def strip_series_sequence_parenthetical(title: str, series: str, book_number: st
     if not title or not series:
         return title
 
-    match = re.search(r"\s*[\[(]([^\])]+)[\])]\s*$", title)
+    # Allow one level of nested "(...)"/"[...]" inside the trailing group so
+    # doubled annotations like "Title 12 (Series (Completed Series))" are
+    # recognized as a single trailing unit instead of leaking the inner
+    # parenthetical into the cleaned title.
+    match = re.search(
+        r"\s*[\[(]((?:[^()\[\]]|\([^()]*\)|\[[^\[\]]*\])*)[\])]\s*$", title
+    )
     if not match:
         return title
 
