@@ -1308,6 +1308,13 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         if without_suffix and without_suffix != cleaned:
             cleaned = without_suffix.strip(" -_.,")
         series_clean = clean_series_name(series)
+        # Strip a trailing "(Series Book N)" annotation the same way the
+        # untrusted cleanup path does (e.g. "Rebirth (Dread Knight Book 4)"
+        # -> "Rebirth"). Trusted Audible/fixer titles occasionally bake this
+        # redundant annotation directly into the chosen title.
+        paren_stripped = strip_series_sequence_parenthetical(cleaned, series_clean, book_number)
+        if paren_stripped and paren_stripped != cleaned and not title_is_bad_after_cleanup(paren_stripped):
+            cleaned = paren_stripped
         stripped = strip_series_prefix(cleaned, series_clean)
         _has_sep = bool(re.search(r"[-:,]|\d", cleaned))
         if stripped != cleaned and not title_is_bad_after_cleanup(stripped) and (_has_sep or " " in stripped):
