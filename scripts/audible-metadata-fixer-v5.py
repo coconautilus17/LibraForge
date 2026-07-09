@@ -3124,6 +3124,26 @@ def get_search_context_cache_key(
     return f"file::{file_path}"
 
 
+def resolve_recovery_meta_target(
+    file_path: Path, alone: bool, multi_part_group_map: dict[Path, list[Path]]
+) -> Path:
+    """Resolve the metadata.json path used by search_item()'s fast marker-skip check.
+
+    This runs before the full `clues` dict (with group_search) is built, but
+    still needs to know grouped-ness to find the right path -- a grouped
+    book's metadata.json lives at the folder level, not a per-file suffixed
+    path. Without this, a grouped book's meta_target always resolved to a
+    per-file path that can never exist, so marker_skip_is_clean() always saw
+    "metadata.json missing" and forced the recovery path forever, regardless
+    of whether the book was actually complete.
+    """
+    group_clues = (
+        {"group_search": {"applied": True}}
+        if file_path.parent in multi_part_group_map
+        else None
+    )
+    return get_audiobookshelf_metadata_path(file_path, group_clues, alone)
+
 def evaluate_goodreads_breaker_state(log: list[str]) -> bool:
     """Check the abs-tract circuit breaker before attempting a Goodreads lookup.
 
@@ -3188,7 +3208,7 @@ def search_item(
         recovering_from_marker = False
         if skip_due_to_marker:
             _rec_alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-            _rec_meta_target = get_audiobookshelf_metadata_path(file_path, None, _rec_alone)
+            _rec_meta_target = resolve_recovery_meta_target(file_path, _rec_alone, multi_part_group_map)
             if marker_skip_is_clean(file_path, existing_marker, _rec_alone, _rec_meta_target):
                 log.append(f"  SKIP: {marker_reason}")
                 log.append("")
