@@ -762,6 +762,10 @@ def mark_metadata_restored(source: Path) -> None:
         return
     try:
         payload["marker"]["applied"] = False
+        # A restore-to-original undoes any prior apply, manual or automated;
+        # manually_applied must not survive alongside applied=False (see
+        # write_skip_marker for the same invariant).
+        payload["marker"]["manually_applied"] = False
         payload["marker"]["restored_at"] = datetime.now(timezone.utc).isoformat()
         _write_libraforge(lf_path, payload)
     except (OSError, KeyError):
@@ -1730,10 +1734,22 @@ def should_skip_due_to_marker(
     force: bool,
     minimum_score: float = AGGRESSIVE_SCORE_THRESHOLD,
 ) -> tuple[bool, str]:
+    marker = load_marker(source)
+
+    # A human explicitly reviewed and applied this book's metadata. That
+    # decision must never be silently overridden by a batch run -- not by
+    # --force, not by --aggressive, and not even if `applied` itself was
+    # somehow left False (a book can only reach that state through a bug,
+    # since a real manual apply always sets both fields together; treating
+    # manually_applied as authoritative here also makes such a state
+    # harmless instead of causing endless reprocessing). Redoing a
+    # manually-applied book is a deliberate action taken through Manual
+    # Review or the restore/undo path, not a side effect of a batch flag.
+    if marker and marker.get("manually_applied"):
+        return True, "already manually applied"
+
     if force:
         return False, ""
-
-    marker = load_marker(source)
 
     if not marker:
         return False, ""
@@ -1744,8 +1760,6 @@ def should_skip_due_to_marker(
         return False, ""
 
     if marker.get("applied") is True:
-        if marker.get("manually_applied"):
-            return True, "already manually applied"
         try:
             marker_score = float(marker.get("score"))
         except (TypeError, ValueError):
@@ -1966,6 +1980,11 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     payload["marker"] = {
         **payload.get("marker", {}),
         "applied": False,
+        # manually_applied must never survive alongside applied=False --
+        # that combination is meaningless and previously left a manually
+        # applied book stuck looking unprocessed to should_skip_due_to_marker
+        # while still displaying was_manually_applied everywhere else.
+        "manually_applied": False,
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "source_file": source.name,
         "audible": {
