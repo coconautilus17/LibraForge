@@ -663,7 +663,7 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
     # trailing number at all, so their own base_key rarely matches directly)
     # to an existing group whose base is a prefix of the omnibus title.
     numbered_groups = {key: members for key, members in by_base_key.items() if len(members) > 1}
-    leftover = [c for c in candidates if len(by_base_key.get(c["base_key"], [])) <= 1]
+    leftover = [c for c in candidates if "base_key" in c and len(by_base_key[c["base_key"]]) <= 1]
     for candidate in leftover:
         local = candidate["item"].get("local") or {}
         match = candidate["item"].get("match") or {}

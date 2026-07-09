@@ -305,6 +305,22 @@ class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
         omni = next(m for m in group["members"] if m["path"] == "/lib/AOmni.m4b")
         self.assertEqual(omni["flag"], "omnibus")
 
+    def test_title_that_normalizes_to_empty_does_not_crash_grouping(self):
+        # A title like "A" normalizes to an empty string (normalize() strips
+        # stopwords and non-alphanumeric characters) -- this must not crash
+        # the whole grouping pass for the entire report.
+        items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            self._item("/lib/Weird.m4b", "A", "Someone"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        # The real group must still be found; the garbage-titled book must
+        # not appear in it (it has nothing to group with).
+        self.assertEqual(len(groups), 1)
+        paths = {m["path"] for m in groups[0]["members"]}
+        self.assertEqual(paths, {"/lib/A2.m4b", "/lib/A3.m4b"})
+
 
 if __name__ == "__main__":
     unittest.main()
