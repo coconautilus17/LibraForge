@@ -2793,17 +2793,19 @@ def _write_book_metadata(
     )
 
     # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
-    # around WRITE_ACTION_JSON emission): a field counts as "written" only when
-    # tags were actually written (not a json-sidecar-only apply) and the resolved
-    # value is non-blank. Without this, marker_skip_is_clean() sees an empty
-    # written_fields list, believes the real ASIN was never recorded as written,
-    # and routes the book into the recovery path on the next scan -- surfacing a
-    # "would write" badge in the report for a book that was already applied.
-    wrote_tags = output_kind == "tags"
-    written_fields = (
-        [f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()]
-        if wrote_tags else None
-    )
+    # around WRITE_ACTION_JSON emission): a field counts as "written" whenever
+    # this apply actually persisted it somewhere -- tags for a single file, or
+    # the json sidecar for a grouped/multi-file book -- and the resolved value
+    # is non-blank. Both output kinds are real writes here (this function only
+    # runs on an actual apply, never a preview), so there is no "wrote tags
+    # vs. sidecar-only" distinction to make. Gating this on output_kind=="tags"
+    # used to leave written_fields empty for every grouped book, which made
+    # marker_skip_is_clean() believe the real ASIN was never recorded and
+    # routed the book into the recovery path on every future scan -- surfacing
+    # a permanent "would write" badge for a book that was already applied.
+    written_fields = [
+        f for f in fixer_module.FILL_FIELDS if str((metadata or {}).get(f) or "").strip()
+    ]
     fixer_module.write_marker(
         source=source_path,
         metadata=metadata,

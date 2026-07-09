@@ -177,6 +177,10 @@ class ManualReviewApplyTests(unittest.TestCase):
             write_original_metadata_backup=lambda *a, **k: Path("/library/Book/libraforge.json"),
             write_tags=lambda *args, **kwargs: self.fail("grouped apply wrote tags"),
             write_marker=write_marker,
+            FILL_FIELDS=(
+                "title", "author", "series", "sequence", "narrator",
+                "year", "asin", "genre", "subtitle",
+            ),
         )
         selected_result = {
             "score": 1.0,
@@ -377,9 +381,15 @@ class WritePolicyTests(unittest.TestCase):
         self.assertNotIn("genre", written_fields)
         self.assertNotIn("year", written_fields)
 
-    def test_written_fields_is_none_when_only_json_sidecar_was_written(self):
-        # A json-sidecar-only apply never touches embedded tags, so nothing
-        # should be claimed as "written" for marker_skip_is_clean purposes.
+    def test_written_fields_recorded_when_only_json_sidecar_was_written(self):
+        # Bug: written_fields was gated on output_kind == "tags", so a
+        # grouped/multi-file book's json-sidecar apply always produced
+        # written_fields=[] even though the ASIN (and everything else) was
+        # genuinely persisted into the sidecar -- the sidecar *is* the
+        # writing mechanism for these books, just like tags are for a single
+        # file. That empty list made marker_skip_is_clean() treat every such
+        # book as permanently "not clean," surfacing a "would write" badge
+        # forever (observed live: Eric Vall's "Pocket Dungeon" books 4 and 5).
         written = {}
         req = self._request("fill", {})
         fixer = self._fixer(written)
@@ -393,7 +403,9 @@ class WritePolicyTests(unittest.TestCase):
         ):
             main.apply_manual_review_result(req)
 
-        self.assertIsNone(written["marker_kwargs"]["written_fields"])
+        written_fields = set(written["marker_kwargs"]["written_fields"])
+        self.assertIn("asin", written_fields)
+        self.assertIn("title", written_fields)
 
     def test_clues_current_is_populated_from_context_metadata(self):
         # Previously always {} on the manual-apply path -- silently broke
