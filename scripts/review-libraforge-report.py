@@ -96,6 +96,22 @@ def normalize_series(value: Any) -> str:
     return s
 
 
+_SERIES_DISPLAY_SUFFIX_RE = re.compile(
+    r",?\s*\bbook\s+\d+\s*$|,?\s*\bvol(?:ume)?\s*\d+\s*$|\bseries\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_series_display_suffix(raw: str) -> str:
+    """Strip a trailing book/volume/series qualifier for display purposes.
+
+    Mirrors normalize_series()'s suffix patterns but preserves the original
+    casing and spacing, since normalize_series()'s own output is lowercased
+    and stopword-stripped and unsuitable for showing to a user.
+    """
+    return _SERIES_DISPLAY_SUFFIX_RE.sub("", raw).strip()
+
+
 _TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.*\S)\s+(?P<number>\d+(?:\.\d+)?)$")
 
 
@@ -745,7 +761,7 @@ def group_existing_series_by_normalized_tag(
             continue
         title = clean_text(local.get("title")) or clean_text(match.get("title"))
         author = clean_text(local.get("author")) or clean_text(match.get("author"))
-        base, number = split_title_base_and_number(title)
+        _, number = split_title_base_and_number(title)
         by_key[key].append({
             "path": path, "title": title, "author": author,
             "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
@@ -760,8 +776,9 @@ def group_existing_series_by_normalized_tag(
         majority_author, author_note = _majority_author_and_note(members)
 
         # Prefer the most common exact raw value as the suggested canonical
-        # spelling; fall back to the first one seen.
-        raw_counts = Counter(m["raw_series"] for m in members)
+        # spelling; fall back to the first one seen. Strip suffixes before
+        # counting so they can't leak into the suggestion.
+        raw_counts = Counter(_strip_series_display_suffix(m["raw_series"]) for m in members)
         suggested_series = clean_text(raw_counts.most_common(1)[0][0])
 
         member_rows = []
