@@ -185,5 +185,126 @@ class ReviewOrganizerItemMissingSeriesTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class SplitTitleBaseAndNumberTests(unittest.TestCase):
+    def test_splits_trailing_number(self):
+        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core 2"), ("Dungeon Core", "2"))
+
+    def test_no_trailing_number_returns_whole_title(self):
+        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core"), ("Dungeon Core", ""))
+
+    def test_number_must_be_a_separate_token(self):
+        # "1% Lifesteal" must not be split -- the leading "1" isn't a
+        # trailing sequence number and isn't even at the end of the string.
+        self.assertEqual(REVIEW.split_title_base_and_number("1% Lifesteal"), ("1% Lifesteal", ""))
+
+    def test_decimal_sequence_number(self):
+        self.assertEqual(REVIEW.split_title_base_and_number("Side Quest 2.5"), ("Side Quest", "2.5"))
+
+
+class MajorityAuthorAndNoteTests(unittest.TestCase):
+    def test_all_same_author_has_no_note(self):
+        members = [{"author": "Eric Vall"}, {"author": "Eric Vall"}]
+        author, note = REVIEW._majority_author_and_note(members)
+        self.assertEqual(author, "Eric Vall")
+        self.assertIsNone(note)
+
+    def test_differing_author_produces_a_note(self):
+        members = [{"author": "Eric Vall"}, {"author": "Eric Vall"}, {"author": "Logan Jacobs"}]
+        author, note = REVIEW._majority_author_and_note(members)
+        self.assertEqual(author, "Eric Vall")
+        self.assertIn("2 of 3 share author", note)
+        self.assertIn("Logan Jacobs", note)
+
+    def test_no_authors_at_all(self):
+        author, note = REVIEW._majority_author_and_note([{"author": ""}, {"author": ""}])
+        self.assertEqual(author, "")
+        self.assertIsNone(note)
+
+
+class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
+    def _item(self, path, title, author, series="", **overrides):
+        item = {
+            "path": path,
+            "status": "matched",
+            "local": {"title": title, "author": author, "series": series},
+            "match": {"title": title, "author": author, "series": series},
+        }
+        item.update(overrides)
+        return item
+
+    def test_groups_numbered_siblings_with_no_series(self):
+        items = [
+            self._item("/lib/Dungeon Core 2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/Dungeon Core 3.m4b", "Dungeon Core 3", "Eric Vall"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["base_title"], "Dungeon Core")
+        self.assertEqual(group["suggested_series"], "Dungeon Core")
+        self.assertEqual(group["suggested_author"], "Eric Vall")
+        paths = {m["path"] for m in group["members"]}
+        self.assertEqual(paths, {"/lib/Dungeon Core 2.m4b", "/lib/Dungeon Core 3.m4b"})
+
+    def test_single_book_is_not_a_group(self):
+        items = [self._item("/lib/Standalone.m4b", "Standalone Book", "Someone")]
+        self.assertEqual(REVIEW.group_missing_series_by_title_pattern(items), [])
+
+    def test_books_with_a_series_already_are_excluded(self):
+        items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall", series="Dungeon Core"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(groups, [])
+
+    def test_opener_with_no_number_joins_and_is_flagged(self):
+        items = [
+            self._item("/lib/A1.m4b", "Dungeon Core", "Eric Vall"),
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(len(groups), 1)
+        opener = next(m for m in groups[0]["members"] if m["path"] == "/lib/A1.m4b")
+        self.assertEqual(opener["flag"], "missing_number")
+        self.assertEqual(opener["sequence"], "")
+
+    def test_differing_author_is_flagged_but_still_grouped(self):
+        items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            self._item("/lib/A4.m4b", "Dungeon Core 4", "Logan Jacobs"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        group = groups[0]
+        self.assertEqual(len(group["members"]), 3)
+        odd_one = next(m for m in group["members"] if m["path"] == "/lib/A4.m4b")
+        self.assertEqual(odd_one["flag"], "author_differs")
+        self.assertIn("Eric Vall", group["author_note"])
+        self.assertIn("Logan Jacobs", group["author_note"])
+
+    def test_all_same_author_has_no_author_note(self):
+        items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+        ]
+        self.assertIsNone(REVIEW.group_missing_series_by_title_pattern(items)[0]["author_note"])
+
+    def test_omnibus_joins_group_and_is_flagged_instead_of_author_differs(self):
+        # Reuses is_multi_book() -- keyword in the title is enough on its own.
+        items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            self._item(
+                "/lib/AOmni.m4b", "Dungeon Core: The Complete Series", "Someone Else",
+            ),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        group = groups[0]
+        omni = next(m for m in group["members"] if m["path"] == "/lib/AOmni.m4b")
+        self.assertEqual(omni["flag"], "omnibus")
+
+
 if __name__ == "__main__":
     unittest.main()

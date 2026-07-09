@@ -96,6 +96,23 @@ def normalize_series(value: Any) -> str:
     return s
 
 
+_TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.*\S)\s+(?P<number>\d+(?:\.\d+)?)$")
+
+
+def split_title_base_and_number(title: str) -> tuple[str, str]:
+    """Split a clean title into its base and a trailing sequence number.
+
+    "Dungeon Core 2" -> ("Dungeon Core", "2"). The number must be a
+    separate trailing token (preceded by whitespace) -- "1% Lifesteal" is
+    not split, since the digit isn't a standalone trailing token.
+    """
+    title = clean_text(title)
+    match = _TRAILING_NUMBER_RE.match(title)
+    if not match:
+        return title, ""
+    return match.group("base").strip(), match.group("number")
+
+
 def similarity(left: Any, right: Any) -> float:
     left_n = normalize(left)
     right_n = normalize(right)
@@ -584,6 +601,122 @@ def add_metadata_cross_item_suspects(
                                       "titles": titles, "paths": paths}}],
             "related_paths": paths,
         })
+
+
+def _majority_author_and_note(members: list[dict[str, Any]]) -> tuple[str, str | None]:
+    """Return (majority author, author_note) for a group's members.
+
+    author_note is None when every member with an author shares the same
+    one; otherwise a human-readable "N of M share author X. K differ --
+    Y (listed below)." string. Shared by both grouping passes and by
+    add_series_group_suspects() (Task 3) so this logic exists exactly once.
+    """
+    author_counts = Counter(m["author"] for m in members if m["author"])
+    majority_author = author_counts.most_common(1)[0][0] if author_counts else ""
+    differing_authors = sorted({
+        m["author"] for m in members if m["author"] and m["author"] != majority_author
+    })
+    if not differing_authors:
+        return majority_author, None
+    n_share = len(members) - len(differing_authors)
+    note = (
+        f"{n_share} of {len(members)} share author {majority_author!r}. "
+        f"{len(differing_authors)} differ -- {', '.join(differing_authors)} (listed below)."
+    )
+    return majority_author, note
+
+
+def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pass 1: group books with no series tag by a shared base-title pattern.
+
+    Deliberately NOT gated on author matching -- see the redacted EPIC 4d
+    write-up in libraforge-roadmap-backlog.md for why exact-author-matching
+    is the wrong approach (e.g. Pocket Dungeon books 1-5 credit "Eric Vall",
+    book 6 credits "Logan Jacobs", same series).
+    """
+    candidates: list[dict[str, Any]] = []
+    for item in report_items:
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        series = clean_text(match.get("series")) or clean_text(local.get("series"))
+        if series:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        if not title:
+            continue
+        author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        path = item.get("path") or item.get("source") or ""
+        candidates.append({"path": path, "title": title, "author": author, "item": item})
+
+    by_base_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        base, number = split_title_base_and_number(candidate["title"])
+        base_key = normalize(base)
+        if not base_key:
+            continue
+        candidate["base"] = base
+        candidate["base_key"] = base_key
+        candidate["sequence"] = number
+        by_base_key[base_key].append(candidate)
+
+    # Second sweep: attach omnibus-flagged candidates (which usually have no
+    # trailing number at all, so their own base_key rarely matches directly)
+    # to an existing group whose base is a prefix of the omnibus title.
+    numbered_groups = {key: members for key, members in by_base_key.items() if len(members) > 1}
+    leftover = [c for c in candidates if len(by_base_key.get(c["base_key"], [])) <= 1]
+    for candidate in leftover:
+        local = candidate["item"].get("local") or {}
+        match = candidate["item"].get("match") or {}
+        if not is_multi_book(local, match, candidate["path"]):
+            continue
+        title_key = normalize(candidate["title"])
+        for base_key in numbered_groups:
+            if base_key and title_key.startswith(base_key):
+                numbered_groups[base_key].append(candidate)
+                candidate["is_omnibus"] = True
+                break
+
+    groups: list[dict[str, Any]] = []
+    for base_key, members in sorted(numbered_groups.items()):
+        if len(members) <= 1:
+            continue
+        majority_author, author_note = _majority_author_and_note(members)
+
+        member_rows = []
+        for m in members:
+            if m.get("is_omnibus"):
+                flag = "omnibus"
+            elif not m["sequence"]:
+                flag = "missing_number"
+            elif majority_author and m["author"] and m["author"] != majority_author:
+                flag = "author_differs"
+            else:
+                flag = None
+            member_rows.append({
+                "path": m["path"], "title": m["title"], "author": m["author"],
+                "sequence": m["sequence"], "flag": flag,
+            })
+
+        base_display = members[0]["base"]
+        numbers = sorted({m["sequence"] for m in members if m["sequence"]}, key=lambda n: float(n))
+        number_range = f"{numbers[0]}-{numbers[-1]}" if len(numbers) > 1 else (numbers[0] if numbers else "")
+        context_note = (
+            f'Grouped by title pattern "{base_display} #" -- same base title, '
+            f"sequence numbers {number_range or 'none'} detected."
+        )
+
+        groups.append({
+            "pass": 1,
+            "group_key": base_key,
+            "base_title": base_display,
+            "context_note": context_note,
+            "suggested_series": base_display,
+            "suggested_author": majority_author,
+            "author_note": author_note,
+            "members": member_rows,
+        })
+
+    return groups
 
 
 def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
