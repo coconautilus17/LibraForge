@@ -177,6 +177,39 @@ class MarkerSkipIsCleanTests(unittest.TestCase):
         )
 
 
+class ResolveRecoveryMetaTargetTests(unittest.TestCase):
+    """search_item()'s fast marker-skip check resolves meta_target before the
+    full `clues` dict (with group_search) exists, so it must independently
+    detect grouped-ness from multi_part_group_map instead. Passing clues=None
+    unconditionally (the previous behavior) always resolved a grouped book's
+    metadata.json to a per-file suffixed path that can never exist, so
+    marker_skip_is_clean() always saw it as missing and routed every grouped
+    manually-applied book into the recovery path forever, even when it was
+    already fully written and correct (observed live: Eric Vall's "Pocket
+    Dungeon" books 4 and 5 kept showing "would write" after being fixed).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name)
+        self.representative = self.folder / "001 Chapter.mp3"
+        self.representative.write_bytes(b"")
+
+    def test_grouped_file_resolves_to_folder_level_metadata_json(self):
+        group_map = {self.folder: [self.representative, self.folder / "002 Chapter.mp3"]}
+        target = FIXER.resolve_recovery_meta_target(self.representative, False, group_map)
+        self.assertEqual(target, self.folder / "metadata.json")
+
+    def test_ungrouped_file_resolves_to_per_file_metadata_json(self):
+        target = FIXER.resolve_recovery_meta_target(self.representative, False, {})
+        self.assertEqual(target, self.representative.with_name(self.representative.name + ".metadata.json"))
+
+    def test_alone_ungrouped_file_still_resolves_to_folder_level(self):
+        target = FIXER.resolve_recovery_meta_target(self.representative, True, {})
+        self.assertEqual(target, self.folder / "metadata.json")
+
+
 class WriteMarkerWrittenFieldsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
