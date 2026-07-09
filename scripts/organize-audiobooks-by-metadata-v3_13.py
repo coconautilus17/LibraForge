@@ -1158,13 +1158,24 @@ def strip_redundant_series_sequence_title(title: str, series: str, book_number: 
 
 
 def strip_trailing_sequence_from_title(title: str, book_number: str) -> str:
-    """Remove trailing Book/Vol/v sequence suffix from a title when it matches."""
+    """Remove trailing Book/Vol/v sequence suffix from a title when it matches.
+
+    Handles both bare suffixes ("Title - Book 2") and bracket/paren-wrapped
+    ones ("Title (Book 2)"), since Audible/fixer titles use either form
+    interchangeably to append a redundant sequence annotation that doesn't
+    repeat the series name (so strip_series_sequence_parenthetical(), which
+    requires the series name to appear inside the brackets, won't catch it).
+    """
     title = sanitize_path_name(cleanup_title_artifacts(title), "")
     num_pat = number_match_pattern(book_number)
     if not title or not num_pat:
         return title
     label_re = r"(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)"
-    candidate = re.sub(rf"\s*(?:[-_:,]\s*|\s+){label_re}\s*{num_pat}\s*$", "", title, flags=re.IGNORECASE).strip(" -_:,.")
+    pattern = (
+        rf"\s*(?:[-_:,]\s*|\s+){label_re}\s*{num_pat}\s*$"
+        rf"|\s*[\[(]\s*{label_re}\s*{num_pat}\s*[\])]\s*$"
+    )
+    candidate = re.sub(pattern, "", title, flags=re.IGNORECASE).strip(" -_:,.")
     if candidate and not title_is_bad_after_cleanup(candidate):
         return sanitize_path_name(candidate, title)
     return title
@@ -1321,6 +1332,13 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         paren_stripped = strip_series_sequence_parenthetical(cleaned, series_clean, book_number)
         if paren_stripped and paren_stripped != cleaned and not title_is_bad_after_cleanup(paren_stripped):
             cleaned = paren_stripped
+        # Strip a bare trailing "(Book N)"/"(Vol. N)" annotation even when it
+        # doesn't repeat the series name, e.g. "The Subtle Knife (Book 2)"
+        # -> "The Subtle Knife". strip_series_sequence_parenthetical() only
+        # fires when the series name itself appears inside the brackets.
+        sequence_stripped = strip_trailing_sequence_from_title(cleaned, book_number)
+        if sequence_stripped and sequence_stripped != cleaned and not title_is_bad_after_cleanup(sequence_stripped):
+            cleaned = sequence_stripped
         stripped = strip_series_prefix(cleaned, series_clean)
         _has_sep = bool(re.search(r"[-:,]|\d", cleaned))
         if stripped != cleaned and not title_is_bad_after_cleanup(stripped) and (_has_sep or " " in stripped):
@@ -1336,6 +1354,17 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
             redundant = strip_redundant_series_sequence_title(cleaned, series_clean, book_number)
             if redundant and not title_is_bad_after_cleanup(redundant):
                 cleaned = redundant
+        # A trailing series name can be exposed only after the sequence
+        # annotation above was removed, e.g. "Morningwood - Everybody Loves
+        # Large Chests (Vol.1)" -> "Morningwood - Everybody Loves Large
+        # Chests" -> "Morningwood".
+        trailing_series_stripped = strip_trailing_series_from_title(cleaned, series_clean)
+        if (
+            trailing_series_stripped
+            and trailing_series_stripped != cleaned
+            and not title_is_bad_after_cleanup(trailing_series_stripped)
+        ):
+            cleaned = trailing_series_stripped
         return cleaned or fallback
     cleaned_seed = cleanup_title_artifacts(title)
     if not cleaned_seed and series:
@@ -1401,6 +1430,13 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
     trailing_stripped = strip_trailing_sequence_from_title(cleaned, book_number)
     if trailing_stripped and not title_is_bad_after_cleanup(trailing_stripped):
         cleaned = trailing_stripped
+
+    # A trailing series name can be exposed only after the sequence
+    # annotation above was removed (e.g. a bracket-wrapped "(Vol. N)" with
+    # no series name inside it), so re-check for one now.
+    trailing_series_stripped_again = strip_trailing_series_from_title(cleaned, series)
+    if trailing_series_stripped_again and not title_is_bad_after_cleanup(trailing_series_stripped_again):
+        cleaned = trailing_series_stripped_again
 
     final_redundant = strip_redundant_series_sequence_title(cleaned, series, book_number)
     if final_redundant and not title_is_bad_after_cleanup(final_redundant):

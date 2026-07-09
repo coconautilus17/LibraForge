@@ -78,6 +78,39 @@ class TrustedTitleParentheticalSeriesTests(unittest.TestCase):
         self.assertEqual(result, "Real Title (Something)")
 
 
+class BareSequenceAnnotationTests(unittest.TestCase):
+    """Trailing "(Book N)"/"(Vol. N)" annotations that do NOT repeat the
+    series name inside the brackets. strip_series_sequence_parenthetical()
+    only fires when the series name appears inside the group, so these fell
+    through untouched even after the earlier nested-bracket fix.
+    """
+
+    def test_bare_book_parenthetical_without_series_name_is_stripped(self):
+        # "His Dark Materials: The Subtle Knife (Book 2)" -- once the leading
+        # series prefix is removed, "(Book 2)" has no series name in it at
+        # all, so it needs its own bracket-aware trailing-sequence stripper.
+        result = ORGANIZER.clean_book_title(
+            "His Dark Materials: The Subtle Knife (Book 2)",
+            "His Dark Materials",
+            ORGANIZER.normalize_book_number("2"),
+            trusted=True,
+        )
+        self.assertEqual(result, "The Subtle Knife")
+
+    def test_bare_vol_parenthetical_exposes_trailing_series_name(self):
+        # "Morningwood: Everybody Loves Large Chests (Vol.1)" -- stripping
+        # "(Vol.1)" alone leaves "Morningwood - Everybody Loves Large
+        # Chests"; the now-trailing series name must also be stripped to
+        # reach the real unique title "Morningwood".
+        result = ORGANIZER.clean_book_title(
+            "Morningwood: Everybody Loves Large Chests (Vol.1)",
+            "Everybody Loves Large Chests",
+            ORGANIZER.normalize_book_number("1"),
+            trusted=True,
+        )
+        self.assertEqual(result, "Morningwood")
+
+
 class RebirthReportRegressionTests(unittest.TestCase):
     """End-to-end reproduction of the organizer report bug for
     Sarah Hawke's "Dread Knight" series: book 4's target folder came out as
@@ -152,6 +185,86 @@ class DuelistReportRegressionTests(unittest.TestCase):
             metadata = ORGANIZER.infer_metadata(item, root)
             self.assertEqual(metadata["title"], "The Duelist")
             self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 12")
+
+
+class SubtleKnifeReportRegressionTests(unittest.TestCase):
+    """End-to-end reproduction of the organizer report bug for Philip
+    Pullman's "His Dark Materials" series: book 2's target folder came out
+    as "Book 2 - The Subtle Knife (Book 2)" instead of "Book 2 - The Subtle
+    Knife".
+    """
+
+    def test_book_folder_name_drops_bare_book_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            book_dir = root / "His Dark Materials The Subtle Knife (Book 2)"
+            book_dir.mkdir(parents=True, exist_ok=True)
+            audio = book_dir / "His Dark Materials The Subtle Knife (Book 2).m4b"
+            audio.touch()
+            marker = book_dir / "libraforge.json"
+            marker.write_text(
+                json.dumps(
+                    {
+                        "marker": {
+                            "audible": {
+                                "title": "His Dark Materials: The Subtle Knife (Book 2)",
+                                "chosen_title": "His Dark Materials: The Subtle Knife (Book 2)",
+                                "author": "Philip Pullman",
+                                "narrator": "",
+                                "series": "His Dark Materials",
+                                "sequence": "2",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
+            metadata = ORGANIZER.infer_metadata(item, root)
+            self.assertEqual(metadata["title"], "The Subtle Knife")
+            self.assertEqual(
+                ORGANIZER.build_book_folder_name(metadata), "Book 2 - The Subtle Knife"
+            )
+
+
+class MorningwoodReportRegressionTests(unittest.TestCase):
+    """End-to-end reproduction of the organizer report bug for Neven Iliev's
+    "Everybody Loves Large Chests" series: volume 1's target folder came out
+    as "Vol. 1 - Morningwood - Everybody Loves Large Chests (Vol.1)" instead
+    of "Vol. 1 - Morningwood".
+    """
+
+    def test_book_folder_name_drops_bare_vol_annotation_and_series_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            book_dir = root / "Morningwood Everybody Loves Large Chests (Vol.1)"
+            book_dir.mkdir(parents=True, exist_ok=True)
+            audio = book_dir / "Morningwood Everybody Loves Large Chests (Vol.1).m4b"
+            audio.touch()
+            marker = book_dir / "libraforge.json"
+            marker.write_text(
+                json.dumps(
+                    {
+                        "marker": {
+                            "audible": {
+                                "title": "Morningwood: Everybody Loves Large Chests (Vol.1)",
+                                "chosen_title": "Morningwood: Everybody Loves Large Chests (Vol.1)",
+                                "author": "Neven Iliev",
+                                "narrator": "",
+                                "series": "Everybody Loves Large Chests",
+                                "sequence": "1",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
+            metadata = ORGANIZER.infer_metadata(item, root)
+            self.assertEqual(metadata["title"], "Morningwood")
+            self.assertEqual(
+                ORGANIZER.build_book_folder_name(metadata), "Vol. 1 - Morningwood"
+            )
 
 
 if __name__ == "__main__":
