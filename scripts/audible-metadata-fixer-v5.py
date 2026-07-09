@@ -1821,8 +1821,20 @@ def marker_skip_is_clean(
     tags / metadata.json / sidecars get repaired. Legacy markers (no
     ``written_fields``) are never clean, so they are repaired once and then
     stamped, after which they short-circuit here.
+
+    The written_fields check only applies to output_kind="tags": grouped/
+    multi-file books use output_kind="json_sidecar", where the ASIN lives in
+    the sidecar's audible.asin and is never written to per-file tags, so
+    written_fields is legitimately always empty for them (see app/main.py's
+    written_fields computation). Applying the tags-only check there made
+    every such book perpetually "not clean" and stuck in the recovery path
+    forever, regardless of whether it was actually complete.
     """
-    if marker_real_asin(marker) and "asin" not in set(marker.get("written_fields") or []):
+    if (
+        marker.get("output_kind") != "json_sidecar"
+        and marker_real_asin(marker)
+        and "asin" not in set(marker.get("written_fields") or [])
+    ):
         return False
     if not meta_target.exists():
         return False

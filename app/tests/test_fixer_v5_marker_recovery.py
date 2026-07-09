@@ -153,6 +153,21 @@ class MarkerSkipIsCleanTests(unittest.TestCase):
         m = {"audible": {"asin": "NOREALASIN"}, "written_fields": []}
         self.assertTrue(FIXER.marker_skip_is_clean(self.media, m, True, self.meta_target))
 
+    def test_clean_for_json_sidecar_output_despite_empty_written_fields(self):
+        # Grouped/multi-file books write output_kind="json_sidecar": the
+        # ASIN lives in the sidecar's audible.asin, never in per-file tags,
+        # so written_fields is legitimately always empty for this output
+        # kind (see app/main.py's written_fields computation comment). The
+        # written-fields staleness check only means something for tag
+        # writes; applying it here made every grouped manually-applied book
+        # perpetually "not clean" and stuck showing "would write" forever
+        # (observed live: Pocket Dungeon books 4 and 5).
+        self.meta_target.write_text("{}", encoding="utf-8")
+        m = self._marker(written_fields=[], output_kind="json_sidecar")
+        self.assertTrue(
+            FIXER.marker_skip_is_clean(self.media, m, True, self.meta_target)
+        )
+
 
 class WriteMarkerWrittenFieldsTests(unittest.TestCase):
     def setUp(self):
