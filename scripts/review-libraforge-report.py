@@ -96,10 +96,9 @@ def normalize_series(value: Any) -> str:
     return s
 
 
-_SERIES_DISPLAY_SUFFIX_RE = re.compile(
-    r",?\s*\bbook\s+\d+\s*$|,?\s*\bvol(?:ume)?\s*\d+\s*$|\bseries\s*$",
-    re.IGNORECASE,
-)
+_SERIES_DISPLAY_SUFFIX_BOOK_RE = re.compile(r",?\s*\bbook\s+\d+\s*$", re.IGNORECASE)
+_SERIES_DISPLAY_SUFFIX_VOL_RE = re.compile(r",?\s*\bvol(?:ume)?\s*\d+\s*$", re.IGNORECASE)
+_SERIES_DISPLAY_SUFFIX_SERIES_RE = re.compile(r"\bseries\s*$", re.IGNORECASE)
 
 
 def _strip_series_display_suffix(raw: str) -> str:
@@ -107,9 +106,15 @@ def _strip_series_display_suffix(raw: str) -> str:
 
     Mirrors normalize_series()'s suffix patterns but preserves the original
     casing and spacing, since normalize_series()'s own output is lowercased
-    and stopword-stripped and unsuitable for showing to a user.
+    and stopword-stripped and unsuitable for showing to a user. Applies the
+    three patterns sequentially (like normalize_series() does) so a stacked
+    suffix such as "X Series, Book 2" fully collapses to "X" instead of only
+    the last-matched qualifier being removed.
     """
-    return _SERIES_DISPLAY_SUFFIX_RE.sub("", raw).strip()
+    s = _SERIES_DISPLAY_SUFFIX_BOOK_RE.sub("", raw).strip()
+    s = _SERIES_DISPLAY_SUFFIX_VOL_RE.sub("", s).strip()
+    s = _SERIES_DISPLAY_SUFFIX_SERIES_RE.sub("", s).strip()
+    return s
 
 
 _TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.*\S)\s+(?P<number>\d+(?:\.\d+)?)$")

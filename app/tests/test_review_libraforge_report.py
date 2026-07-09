@@ -381,6 +381,19 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["suggested_series"], "Dungeon Core")
 
+    def test_suggested_series_strips_stacked_suffixes(self):
+        # A raw tag can carry BOTH a "Series" word and a ", Book N" suffix
+        # stacked together -- both must be stripped so this variant still
+        # collapses into the same canonical bucket as a plain "Dungeon Core".
+        items = [
+            self._item("/lib/E1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core Series, Book 2"),
+            self._item("/lib/E2.m4b", "Dungeon Core 2", "Eric Vall", "Dungeon Core"),
+            self._item("/lib/E3.m4b", "Dungeon Core 3", "Eric Vall", "Dungeon Core"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["suggested_series"], "Dungeon Core")
+
 
 if __name__ == "__main__":
     unittest.main()
