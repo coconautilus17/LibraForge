@@ -1637,7 +1637,13 @@ def parse_standalone_book_folder_name(name: str) -> dict[str, str]:
 
     parts = [part.strip() for part in re.split(r"\s+[-–—]\s+", cleaned) if part.strip()]
     if len(parts) >= 3:
-        return {"title": parts[0], "author": parts[1], "narrator": ", ".join(parts[2:])}
+        # A bracket/paren-wrapped middle segment (e.g. "[Series-2]") is a
+        # release/series-sequence tag, never a real author credit. Trusting
+        # it here misassigns the real title text (the last segment) to
+        # "narrator", which later gets stripped out of the title as noise.
+        candidate_author = parts[1]
+        if not re.fullmatch(r"[\[(].*[\])]", candidate_author):
+            return {"title": parts[0], "author": candidate_author, "narrator": ", ".join(parts[2:])}
 
     if len(parts) == 2:
         left, right = parts
