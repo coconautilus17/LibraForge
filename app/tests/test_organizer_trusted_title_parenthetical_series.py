@@ -267,5 +267,85 @@ class MorningwoodReportRegressionTests(unittest.TestCase):
             )
 
 
+class DanglingConnectorRegressionTests(unittest.TestCase):
+    """Guards a regression introduced while fixing the bugs above: adding a
+    trailing strip_trailing_series_from_title() pass to the trusted branch
+    made "Carter & Lovecraft" (series "Lovecraft") match the trailing-series
+    stripper, since the title really does end with the word "Lovecraft".
+    The leftover "Carter &" wasn't recognized as an incomplete fragment
+    because the word tokenizer in title_fragment_is_incomplete() silently
+    drops "&", so "Carter &" looked like it ended on the harmless word
+    "carter" rather than a dangling connector.
+    """
+
+    def test_real_title_ending_in_series_word_is_not_truncated(self):
+        result = ORGANIZER.clean_book_title(
+            "Carter & Lovecraft",
+            "Lovecraft",
+            ORGANIZER.normalize_book_number("1"),
+            trusted=True,
+        )
+        self.assertEqual(result, "Carter & Lovecraft")
+
+    def test_dangling_ampersand_fragment_is_incomplete(self):
+        self.assertTrue(ORGANIZER.title_fragment_is_incomplete("Carter &"))
+
+
+class GenericEditionDescriptorParentheticalTests(unittest.TestCase):
+    """Trailing "(X Edition)"/"(Series Completion)"-style tags carry no
+    distinct title content but also don't repeat the series name inside the
+    brackets, so strip_series_sequence_parenthetical()'s series-name check
+    let them survive as the entire "title".
+    """
+
+    def test_series_completion_tag_collapses_to_series(self):
+        result = ORGANIZER.clean_book_title(
+            "Building Harem Town 9 (Series Completion)",
+            "Building Harem Town",
+            ORGANIZER.normalize_book_number("9"),
+            trusted=True,
+        )
+        self.assertEqual(result, "Building Harem Town")
+
+    def test_themed_edition_tag_collapses_to_series(self):
+        result = ORGANIZER.clean_book_title(
+            "Succubus Lord 14 (Swimsuit Edition)",
+            "Succubus Lord",
+            ORGANIZER.normalize_book_number("14"),
+            trusted=True,
+        )
+        self.assertEqual(result, "Succubus Lord")
+
+    def test_book_folder_name_drops_series_completion_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            book_dir = root / "Building Harem Town 9"
+            book_dir.mkdir(parents=True, exist_ok=True)
+            audio = book_dir / "Eric Vall - [Building Harem Town-9] - Building Harem Town 9.m4b"
+            audio.touch()
+            marker = book_dir / "libraforge.json"
+            marker.write_text(
+                json.dumps(
+                    {
+                        "marker": {
+                            "audible": {
+                                "title": "Building Harem Town 9 (Series Completion)",
+                                "chosen_title": "Building Harem Town 9 (Series Completion)",
+                                "author": "Eric Vall",
+                                "narrator": "",
+                                "series": "Building Harem Town",
+                                "sequence": "9",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
+            metadata = ORGANIZER.infer_metadata(item, root)
+            self.assertEqual(metadata["title"], "Building Harem Town")
+            self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 9")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -460,6 +460,17 @@ GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Trailing "special edition"-style tags with no real title content of their
+# own, e.g. "(Swimsuit Edition)", "(Series Completion)", "(Director's Cut)".
+# These convey a real fact about the release but aren't a distinct book
+# title, so a bracketed group matching this should collapse the same way a
+# repeated series name does.
+GENERIC_EDITION_DESCRIPTOR_RE = re.compile(
+    r"^\s*(?:the\s+)?(?:[a-z0-9']+[\s-]+){0,4}?"
+    r"(?:edition|completion|cut|remaster(?:ed)?|version)\s*$",
+    re.IGNORECASE,
+)
+
 # Matches the omnibus/collection label word(s) at the start of a title.
 # Used to detect when a range-numbered book’s title is purely a collection
 # descriptor (possibly followed by a redundant book-range suffix).
@@ -1204,7 +1215,7 @@ def strip_series_sequence_parenthetical(title: str, series: str, book_number: st
     inner = clean_text(match.group(1))
     inner_key = normalize_for_compare(inner)
     series_key = normalize_for_compare(series)
-    if not series_key or series_key not in inner_key:
+    if (not series_key or series_key not in inner_key) and not GENERIC_EDITION_DESCRIPTOR_RE.match(inner):
         return title
 
     inner_number = detect_number_from_text(inner)
@@ -1229,6 +1240,11 @@ def title_fragment_is_incomplete(value: str) -> bool:
     """
     value = clean_text(value).strip(" -_:,.")
     if not value:
+        return True
+    # A dangling connector symbol ("Carter &") is incomplete even though the
+    # word tokenizer below ignores "&" entirely and would otherwise see a
+    # single, unremarkable trailing word.
+    if re.search(r"[&/+]\s*$", value):
         return True
     tokens = re.findall(r"[A-Za-z0-9']+", value.lower())
     if not tokens:
