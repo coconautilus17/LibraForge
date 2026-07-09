@@ -153,18 +153,26 @@ class MarkerSkipIsCleanTests(unittest.TestCase):
         m = {"audible": {"asin": "NOREALASIN"}, "written_fields": []}
         self.assertTrue(FIXER.marker_skip_is_clean(self.media, m, True, self.meta_target))
 
-    def test_clean_for_json_sidecar_output_despite_empty_written_fields(self):
-        # Grouped/multi-file books write output_kind="json_sidecar": the
-        # ASIN lives in the sidecar's audible.asin, never in per-file tags,
-        # so written_fields is legitimately always empty for this output
-        # kind (see app/main.py's written_fields computation comment). The
-        # written-fields staleness check only means something for tag
-        # writes; applying it here made every grouped manually-applied book
-        # perpetually "not clean" and stuck showing "would write" forever
-        # (observed live: Pocket Dungeon books 4 and 5).
+    def test_clean_for_json_sidecar_output_when_asin_is_in_written_fields(self):
+        # Grouped/multi-file books use output_kind="json_sidecar": the ASIN
+        # is recorded there, not in per-file tags, but that write is still a
+        # real write and belongs in written_fields like any other (see the
+        # written_fields computation fix in app/main.py and the CLI write
+        # worker -- both used to gate written_fields on "wrote tags", which
+        # always excluded sidecar-only grouped books).
+        self.meta_target.write_text("{}", encoding="utf-8")
+        m = self._marker(output_kind="json_sidecar")
+        self.assertTrue(
+            FIXER.marker_skip_is_clean(self.media, m, True, self.meta_target)
+        )
+
+    def test_not_clean_for_json_sidecar_output_when_asin_missing_from_written_fields(self):
+        # If a sidecar write genuinely never recorded the ASIN (e.g. an old
+        # marker from before written_fields tracked sidecar writes), this
+        # must still route to recovery rather than being trusted as clean.
         self.meta_target.write_text("{}", encoding="utf-8")
         m = self._marker(written_fields=[], output_kind="json_sidecar")
-        self.assertTrue(
+        self.assertFalse(
             FIXER.marker_skip_is_clean(self.media, m, True, self.meta_target)
         )
 
