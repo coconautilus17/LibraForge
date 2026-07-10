@@ -364,6 +364,14 @@ class WriteMetadataJsonPartialTests(unittest.TestCase):
         self.assertEqual(result["title"], "Scholomance")
         self.assertEqual(result["genres"], ["Fantasy", "LitRPG"])
 
+    def test_corrupt_existing_file_raises_and_is_left_untouched(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        original_content = "{not valid json"
+        path.write_text(original_content)
+        with self.assertRaises(ValueError):
+            enrichment.write_metadata_json_partial(path, genre=["Fantasy"], narrator="", explicit_checked=False)
+        self.assertEqual(path.read_text(), original_content)
+
 
 if __name__ == "__main__":
     unittest.main()

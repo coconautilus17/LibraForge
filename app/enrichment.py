@@ -391,13 +391,21 @@ def write_metadata_json_partial(
 ) -> dict[str, Any]:
     """Read the existing metadata.json (or {} if absent), apply the partial
     merge, and write it back. Returns the merged dict that was written.
+
+    A corrupt/unreadable existing file is never silently discarded: this
+    is an enrichment feature layered on top of whatever the fixer or ABS
+    already wrote, so a parse failure raises instead of falling back to
+    {} and clobbering every other pre-existing field (title, isbn,
+    summary, authors, etc.) with just the newly merged ones. Callers
+    should catch this and skip/report that one book without touching the
+    file.
     """
     existing: dict[str, Any] = {}
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            existing = {}
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"Cannot read existing metadata.json at {path}: {exc}") from exc
     merged = merge_metadata_json(existing, genre, narrator, explicit_checked)
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
