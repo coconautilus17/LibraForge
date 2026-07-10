@@ -691,7 +691,10 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
     for item in report_items:
         local = item.get("local") or {}
         match = item.get("match") or {}
-        series = clean_text(match.get("series")) or clean_text(local.get("series"))
+        # "already has a series" must be judged from the local tag only -- an
+        # unconfirmed/low-score provider match candidate having a series guess
+        # says nothing about whether the file itself is tagged.
+        series = clean_text(local.get("series"))
         if series:
             continue
         title = clean_text(local.get("title")) or clean_text(match.get("title"))
@@ -796,7 +799,8 @@ def group_existing_series_by_normalized_tag(
             continue
         local = item.get("local") or {}
         match = item.get("match") or {}
-        raw_series_original = (match.get("series")) or (local.get("series")) or ""
+        # Same local-only rule as pass 1: a provider match guess isn't a local tag.
+        raw_series_original = local.get("series") or ""
         raw_series = clean_text(raw_series_original)
         if not raw_series:
             continue
@@ -895,13 +899,19 @@ def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> 
     for item in report_items:
         local = item.get("local") or {}
         match = item.get("match") or {}
-        series = clean_text(match.get("series")) or clean_text(local.get("series"))
+        # Local-only, same reasoning as the two group-detection passes above:
+        # a provider match guess is not a local tag.
+        series = clean_text(local.get("series"))
         if not series:
             continue
         title = clean_text(local.get("title")) or clean_text(match.get("title"))
         base, number = split_title_base_and_number(title)
         if normalize(base) != base_key:
             continue
+        # Flag a sibling whose own tag doesn't plausibly match the base title
+        # it was grouped under (e.g. tagged "Summoner" but grouped for
+        # "Summoner School") so it doesn't blend in as a clean match.
+        flag = None if _normalized_names_plausibly_related(normalize_series(series), base_key) else "series_mismatch"
         siblings.append({
             "path": item.get("path") or item.get("source") or "",
             "title": title,
@@ -909,6 +919,7 @@ def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> 
             "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
             "genre": clean_text(local.get("genre")) or clean_text(match.get("genre")),
             "narrator": clean_text(local.get("narrator")) or clean_text(match.get("narrator")),
+            "flag": flag,
         })
     return siblings
 

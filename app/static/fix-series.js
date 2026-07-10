@@ -91,12 +91,31 @@ function fsAddTaggedSiblings() {
     fsBookState.push({
       path: sib.path,
       title: sib.title,
-      flag: `Already tagged: series "${sib.series}"`,
+      flag: sib.flag === 'series_mismatch'
+        ? `Series mismatch: tagged "${sib.series}"`
+        : `Already tagged: series "${sib.series}"`,
       sequence: sib.sequence || '',
       included: true,
     });
   }
+  fsSortBookState();
   fsRenderBookList();
+}
+
+// Numeric-first sort (matching the backend's own member ordering) so newly
+// added siblings/search results don't land out of order at the end of the
+// list -- unsequenced books fall back to alphabetical and sort last.
+function fsSortBookState() {
+  fsBookState.sort((a, b) => {
+    const an = parseFloat(a.sequence);
+    const bn = parseFloat(b.sequence);
+    const aValid = a.sequence !== '' && !Number.isNaN(an);
+    const bValid = b.sequence !== '' && !Number.isNaN(bn);
+    if (aValid && bValid) return an - bn;
+    if (aValid) return -1;
+    if (bValid) return 1;
+    return (a.title || '').localeCompare(b.title || '');
+  });
 }
 
 function fsRunSearch() {
@@ -135,6 +154,7 @@ function fsRunSearch() {
         });
         $('fsSearchInput').value = '';
         dropdown.hidden = true;
+        fsSortBookState();
         fsRenderBookList();
       });
     }
@@ -179,6 +199,15 @@ async function fsApply() {
       ? `Applied to ${data.results.length - failed.length} of ${data.results.length} books. Failed: ${failed.map((f) => f.path).join(', ')}`
       : `Applied to ${data.results.length} books.`;
     if (!failed.length) {
+      // The suspicion/match-report group cards are sourced from a cached
+      // suspect-review.json that loadLastReport()/ensureSeriesGroupsForMatchReport()
+      // only regenerate when the file doesn't exist at all yet -- so a stale
+      // cache from before this apply would otherwise keep showing pre-fix
+      // group data (wrong flags, "not written" looking series) forever.
+      // Force a fresh regeneration before the reload picks it back up.
+      if (typeof currentReportId !== 'undefined' && currentReportId) {
+        await fetch(`/api/reports/${encodeURIComponent(currentReportId)}/suspect-review`, { method: 'POST' }).catch(() => {});
+      }
       await loadLastReport();
     }
   } catch (e) {
@@ -198,6 +227,7 @@ function fsOpen(group) {
     flag: m.flag ? m.flag.replace(/_/g, ' ') : null,
     sequence: m.sequence || '', included: true,
   }));
+  fsSortBookState();
 
   $('fsContextNote').textContent = group.contextNote;
   $('fsAuthorNote').hidden = !group.authorNote;

@@ -360,6 +360,24 @@ class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
         paths = {m["path"] for m in groups[0]["members"]}
         self.assertEqual(paths, {"/lib/A2.m4b", "/lib/A3.m4b"})
 
+    def test_unconfirmed_match_series_does_not_exclude_an_untagged_book(self):
+        # Regression: a book with no local series tag at all must still be
+        # treated as untagged even when an unconfirmed/low-score provider
+        # match candidate happens to carry a (possibly wrong) series guess.
+        # "already has a series" has to be judged from the local tag only --
+        # a match candidate is not a confirmed local tag.
+        items = [
+            self._item("/lib/S7.m4b", "Summoner School 7", "Eric Vall"),
+            self._item(
+                "/lib/S6.m4b", "Summoner School 6", "Eric Vall",
+                match={"title": "Summoner School 6", "author": "Eric Vall", "series": "Summoner"},
+            ),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(len(groups), 1)
+        paths = {m["path"] for m in groups[0]["members"]}
+        self.assertEqual(paths, {"/lib/S7.m4b", "/lib/S6.m4b"})
+
 
 class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
     def _item(self, path, title, author, series, **overrides):
@@ -549,6 +567,43 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         }
         suspects, _ = REVIEW.extract_suspects(report, make_args())
         self.assertTrue(any(s["status"] == "series_group" for s in suspects))
+
+    def test_tagged_sibling_with_divergent_series_gets_mismatch_flag(self):
+        # A sibling whose own series tag doesn't plausibly match the group's
+        # base title (tagged "Summoner" but grouped under "Summoner School")
+        # must be flagged rather than blending in as a clean tagged match.
+        report_items = [
+            self._item("/lib/S7.m4b", "Summoner School 7", "Eric Vall"),
+            self._item("/lib/S8.m4b", "Summoner School 8", "Eric Vall"),
+            self._item("/lib/S1.m4b", "Summoner School 1", "Eric Vall", series="Summoner School"),
+            self._item("/lib/S6.m4b", "Summoner School 6", "Eric Vall", series="Summoner"),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        pass_one = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_missing")
+        siblings_by_path = {s["path"]: s for s in pass_one["reasons"][0]["evidence"]["tagged_siblings"]}
+        self.assertIsNone(siblings_by_path["/lib/S1.m4b"]["flag"])
+        self.assertEqual(siblings_by_path["/lib/S6.m4b"]["flag"], "series_mismatch")
+
+    def test_unconfirmed_match_series_does_not_make_a_book_a_tagged_sibling(self):
+        # Same root cause as the grouping-pass regression above: a book with
+        # no local series tag must not be pulled in as a "tagged sibling"
+        # just because an unconfirmed match candidate has a series guess --
+        # it belongs in the group's own untagged members instead.
+        report_items = [
+            self._item("/lib/S7.m4b", "Summoner School 7", "Eric Vall"),
+            self._item(
+                "/lib/S6.m4b", "Summoner School 6", "Eric Vall",
+                match={"title": "Summoner School 6", "author": "Eric Vall", "series": "Summoner"},
+            ),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        pass_one = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_missing")
+        evidence = pass_one["reasons"][0]["evidence"]
+        self.assertEqual(evidence["tagged_siblings"], [])
+        member_paths = {m["path"] for m in evidence["members"]}
+        self.assertIn("/lib/S6.m4b", member_paths)
 
     def test_genre_dedup_is_case_insensitive_across_siblings(self):
         # Regression test: genre/narrator aggregation across multiple tagged
