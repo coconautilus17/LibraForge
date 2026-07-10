@@ -72,6 +72,22 @@ async function loadScripts() {
   }
 }
 
+function isAdvancedRunSettingsOpen() {
+  return $('advancedRunToggle')?.getAttribute('aria-expanded') === 'true';
+}
+
+function syncAdvancedRunSettings() {
+  const open = isAdvancedRunSettingsOpen();
+  const toggle = $('advancedRunToggle');
+  if (toggle) {
+    toggle.textContent = open ? 'Hide advanced' : 'Advanced';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  document.querySelectorAll('.organizer-advanced-setting').forEach((el) => {
+    el.hidden = !open;
+  });
+}
+
 function collectRequest() {
   const prefs = window.LibraForgePrefs?.get() || {};
   const skipPatterns = $('skipPatterns').value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -95,7 +111,7 @@ function collectRequest() {
     consolidate_structures: $("consolidateStructures").checked,
     remove_empty_dirs: $('removeEmptyDirs').checked,
     max_items: parseInt($('maxItems').value || '0', 10),
-    progress_every: parseInt($('progressEvery').value || '25', 10),
+    progress_every: parseInt($('progressEvery').value || '1', 10),
     skip_patterns: skipPatterns,
   };
 }
@@ -558,5 +574,11 @@ function renderCleanupReport(data) {
 $('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
 $('cleanupBtn').addEventListener('click', runCleanup);
+$('advancedRunToggle')?.addEventListener('click', () => {
+  const open = !isAdvancedRunSettingsOpen();
+  $('advancedRunToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  syncAdvancedRunSettings();
+});
+syncAdvancedRunSettings();
 loadScripts();
 resumeActiveRun();

@@ -76,6 +76,33 @@ async function loadScripts() {
   }
 }
 
+function isAdvancedRunSettingsOpen() {
+  return $('advancedRunToggle')?.getAttribute('aria-expanded') === 'true';
+}
+
+function setCollapsibleSection(bodyId, toggleId, open) {
+  const body = $(bodyId);
+  const toggle = $(toggleId);
+  if (!body || !toggle) return;
+  body.hidden = !open;
+  toggle.textContent = open ? 'Hide' : 'Show';
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function syncAdvancedRunSettings() {
+  const open = isAdvancedRunSettingsOpen();
+  const toggle = $('advancedRunToggle');
+  if (toggle) {
+    toggle.textContent = open ? 'Hide advanced' : 'Advanced';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  document.querySelectorAll('.m4b-advanced-setting').forEach((el) => {
+    el.hidden = !open;
+  });
+  setCollapsibleSection('discoverySectionBody', 'discoverySectionToggle', open);
+  setCollapsibleSection('metadataSectionBody', 'metadataSectionToggle', open);
+}
+
 function collectMetadata() {
   return {
     title: $('title').value.trim(),
@@ -587,7 +614,19 @@ $('cancelBtn').addEventListener('click', cancelRun);
 $('force').addEventListener('change', updateCommandPreview);
 $('noConversion').addEventListener('change', updateCommandPreview);
 $('useFilenamesAsChapters').addEventListener('change', updateCommandPreview);
+$('advancedRunToggle')?.addEventListener('click', () => {
+  const open = !isAdvancedRunSettingsOpen();
+  $('advancedRunToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  syncAdvancedRunSettings();
+});
+$('discoverySectionToggle')?.addEventListener('click', () => {
+  setCollapsibleSection('discoverySectionBody', 'discoverySectionToggle', $('discoverySectionBody').hidden);
+});
+$('metadataSectionToggle')?.addEventListener('click', () => {
+  setCollapsibleSection('metadataSectionBody', 'metadataSectionToggle', $('metadataSectionBody').hidden);
+});
 
+syncAdvancedRunSettings();
 loadScripts();
 initProviderSelector();
 updateCommandPreview();
