@@ -2,17 +2,17 @@
   color-scheme: dark;
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --bg: #0d0e10;
-  --bg-elevated: #121315;
-  --surface: #17181b;
-  --surface-raised: #1d1f23;
-  --surface-soft: #111214;
-  --surface-hover: #24262b;
-  --border: #303238;
-  --border-strong: #464950;
-  --text: #f1f1f2;
-  --text-soft: #d0d1d4;
-  --muted: #999ca3;
+  --bg: #17140f;
+  --bg-elevated: #1a1711;
+  --surface: #211c15;
+  --surface-raised: #2a2419;
+  --surface-soft: #1a1711;
+  --surface-hover: #322b20;
+  --border: #3a3226;
+  --border-strong: #564a38;
+  --text: #ede6d9;
+  --text-soft: #cfc2ab;
+  --muted: #8f8570;
   --accent: #61b8ff;
   --accent-rgb: 97 184 255;
   --accent-ink: #06121d;
@@ -25,14 +25,28 @@
   --danger-soft: rgb(255 126 139 / 12%);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 22%);
   --shadow-lg: 0 20px 48px rgb(0 0 0 / 24%);
-  --radius-sm: 9px;
-  --radius-md: 13px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
-  --control-height: 42px;
-  --space-card: 22px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 10px;
+  --control-height: 37px;
+  --space-card: 19px;
   --shell-width: 1320px;
   --topbar-height: 83px;
+  /* Type scale -- matches the approved "crisper" mockups (Fix Series v2,
+     Enrichment Forge v2). Migrate hardcoded font-size px values onto these
+     as each selector is swept. */
+  --font-2xs: 0.72rem;
+  --font-xs: 0.78rem;
+  --font-sm: 0.86rem;
+  --font-md: 1rem;
+  --font-lg: 1.4rem;
+  /* Spacing scale -- converges the dozens of near-duplicate hardcoded
+     padding/gap values (7px, 8px, 9px, 10px, 11px...) onto one shared scale. */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 18px;
 }
 
 :root[data-theme="dark"][data-surface="warm"] {
@@ -107,17 +121,17 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f2ee;
+  --bg: #f6f2ea;
   --bg-elevated: #ffffff;
   --surface: #ffffff;
-  --surface-raised: #faf8f4;
-  --surface-soft: #f3f0eb;
-  --surface-hover: #ebe7e0;
-  --border: #ddd8cf;
-  --border-strong: #c2baae;
-  --text: #272521;
-  --text-soft: #49453e;
-  --muted: #756f66;
+  --surface-raised: #f9f7f3;
+  --surface-soft: #efe8da;
+  --surface-hover: #e6dbc7;
+  --border: #d9cfba;
+  --border-strong: #beac89;
+  --text: #241f16;
+  --text-soft: #4f4636;
+  --muted: #6b6252;
   --accent-ink: #ffffff;
   --shadow-sm: 0 1px 3px rgb(52 43 31 / 9%);
   --shadow-lg: 0 18px 45px rgb(52 43 31 / 10%);
@@ -218,20 +232,20 @@
 }
 
 :root[data-accent="amber"] {
-  --accent: #f3b85c;
-  --accent-rgb: 243 184 92;
-  --accent-ink: #201300;
+  --accent: #d97b3f;
+  --accent-rgb: 217 123 63;
+  --accent-ink: #1a1208;
 }
 
 :root[data-theme="light"][data-accent="amber"] {
-  --accent: #b66a0d;
-  --accent-rgb: 182 106 13;
+  --accent: #b85c26;
+  --accent-rgb: 184 92 38;
   --accent-ink: #ffffff;
 }
 
 :root[data-density="compact"] {
-  --control-height: 36px;
-  --space-card: 17px;
+  --control-height: 32px;
+  --space-card: 15px;
 }
 
 * {
@@ -404,7 +418,7 @@ a:hover {
   place-items: center;
   overflow: hidden;
   border: 1px solid rgb(var(--accent-rgb) / 34%);
-  border-radius: 17px;
+  border-radius: var(--radius-lg);
   background:
     linear-gradient(135deg, rgb(var(--accent-rgb) / 15%), transparent),
     var(--surface-soft);
@@ -447,7 +461,7 @@ a:hover {
   height: 54px;
   flex: 0 0 auto;
   object-fit: contain;
-  border-radius: 15px;
+  border-radius: var(--radius-lg);
   background: var(--surface-soft);
 }
 
@@ -525,7 +539,7 @@ p {
   min-height: 38px;
   padding: 0 13px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   color: var(--text-soft);
   background: var(--surface-soft);
   box-shadow: none;
@@ -653,7 +667,7 @@ body.settings-open {
   min-width: 0;
   height: 40px;
   padding: 0 30px 0 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   font-weight: 700;
 }
@@ -699,7 +713,7 @@ body.settings-open {
   height: 58px;
   overflow: hidden;
   border: 1px solid rgb(var(--accent-rgb) / 34%);
-  border-radius: 17px;
+  border-radius: var(--radius-lg);
   background:
     linear-gradient(135deg, rgb(var(--accent-rgb) / 15%), transparent),
     var(--surface-soft);
@@ -767,7 +781,7 @@ body.settings-open {
 
 .side-nav a {
   padding: 7px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text-soft);
   text-decoration: none;
   font-size: 0.9em;
@@ -1652,7 +1666,7 @@ summary:focus-visible {
   margin: 12px 0;
   object-fit: cover;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
@@ -1929,7 +1943,7 @@ summary:focus-visible {
   .forge-nav-icon {
     width: 44px;
     height: 44px;
-    border-radius: 13px;
+    border-radius: var(--radius-lg);
   }
 }
 
@@ -2038,7 +2052,7 @@ summary:focus-visible {
   }
 
   .card {
-    border-radius: 15px;
+    border-radius: var(--radius-lg);
   }
 
   .progress-wrap {
@@ -2190,7 +2204,7 @@ summary:focus-visible {
 .book-cover-thumb {
   width: 56px;
   height: 56px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
   flex-shrink: 0;
   background: var(--surface-raised);
@@ -2200,7 +2214,7 @@ summary:focus-visible {
 .book-cover-placeholder {
   width: 56px;
   height: 56px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   background: var(--surface-raised);
   border: 1px solid var(--border);
@@ -2239,7 +2253,7 @@ summary:focus-visible {
   width: 28px;
   height: 28px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font-size: 11px;
@@ -2270,7 +2284,7 @@ summary:focus-visible {
   transform: translateY(-50%);
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 3px 8px;
   font-size: 11px;
   color: var(--text-soft);
@@ -2718,7 +2732,7 @@ summary:focus-visible {
 .compare-panel {
   margin: 10px 0 4px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 
@@ -2892,7 +2906,7 @@ summary:focus-visible {
 .provider-query-note {
   margin: 10px 0 0;
   padding: 7px 11px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgb(242 189 97 / 35%);
   background: var(--warning-soft);
   color: var(--warning);
@@ -2943,7 +2957,7 @@ summary:focus-visible {
 .manual-apply-write-policy-note {
   margin: 10px 0 0;
   padding: 7px 11px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid rgb(242 189 97 / 35%);
   background: var(--warning-soft);
   color: var(--warning);
