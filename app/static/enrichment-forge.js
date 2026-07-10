@@ -58,7 +58,6 @@ function addGenreChip(value) {
 }
 
 function renderBookList(books) {
-  const showAbs = currentSourceStatus.abs?.state === "searched" || books.some((book) => (book.abs_genres || []).length);
   $("bookList").innerHTML = books.map((book) => `
     <div class="book-row" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
@@ -66,7 +65,6 @@ function renderBookList(books) {
         <div class="book-src-line">
           <span class="audible">Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
-          ${showAbs ? `<span class="abs">ABS: ${escapeHtml((book.abs_genres || []).join(", ") || "none")}</span>&nbsp;&middot;&nbsp;` : ""}
           <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
           <span class="local">Local: ${escapeHtml((book.existing_genres || []).join(", ") || "none")}</span>
@@ -104,7 +102,7 @@ function sourceChipHtml(key, status, total) {
 }
 
 function renderSourceStrip(sourceStatus, totalCount, elapsedSeconds) {
-  const chips = ["audible", "abs", "goodreads"]
+  const chips = ["audible", "goodreads"]
     .map((key) => sourceChipHtml(key, sourceStatus[key], totalCount))
     .filter(Boolean);
   $("sourceStrip").innerHTML = `

@@ -4895,7 +4895,6 @@ class EnrichmentBookRow(BaseModel):
     is_file: bool
     title: str
     audible_genres: list[str]
-    abs_genres: list[str] = Field(default_factory=list)
     goodreads_genres: list[str]
     flagged_explicit: bool
     existing_genres: list[str]
@@ -4955,38 +4954,20 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
                 "state": "searched",
                 "searched": len(books),
             }
-            source_status["abs"] = {
-                "label": "ABS",
-                "state": "skipped",
-                "detail": "Direct Audible auth was available.",
-                "searched": 0,
-            }
         except Exception as exc:
             abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
             source_status["audible"] = {
                 "label": "Audible",
-                "state": "skipped",
-                "detail": f"Auth failed; used ABS instead: {exc}",
-                "searched": 0,
-            }
-            source_status["abs"] = {
-                "label": "ABS",
                 "state": "searched",
-                "detail": "Used as the Audible fallback.",
+                "detail": f"Used ABS's Audible provider because direct auth failed: {exc}",
                 "searched": len(books),
             }
     else:
         abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
         source_status["audible"] = {
             "label": "Audible",
-            "state": "skipped",
-            "detail": "No Audible auth file; used ABS instead.",
-            "searched": 0,
-        }
-        source_status["abs"] = {
-            "label": "ABS",
             "state": "searched",
-            "detail": "Used as the Audible fallback.",
+            "detail": "Used ABS's Audible provider because no direct Audible auth file is configured.",
             "searched": len(books),
         }
 

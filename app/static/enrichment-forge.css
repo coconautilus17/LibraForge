@@ -137,10 +137,6 @@
   background: var(--success);
 }
 
-.source-chip.abs .dot {
-  background: var(--accent);
-}
-
 .source-chip.skipped {
   color: var(--muted);
 }
@@ -355,12 +351,8 @@
   color: var(--success);
 }
 
-.book-src-line .abs {
-  color: var(--accent);
-}
-
 .book-src-line .local {
-  color: var(--danger);
+  color: var(--accent);
 }
 
 .evidence-pill {

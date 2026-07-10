@@ -407,18 +407,20 @@ def compile_series_enrichment(
         gr_products = goodreads_results.get(book["id"]) or []
         gr_product = gr_products[0] if gr_products else None
 
-        audible_genres = clean_provider_genres_fn(audible_category_ladder_genres(product))
-        abs_genres = clean_provider_genres_fn(_split_abs_genre((abs_product or {}).get("genre", "")))
+        audible_genres = clean_provider_genres_fn(
+            audible_category_ladder_genres(product)
+            or _split_abs_genre((abs_product or {}).get("genre", ""))
+        )
         goodreads_genres = clean_provider_genres_fn((gr_product or {}).get("_abs_genres") or [])
         flagged = is_flagged_explicit(product)
         if flagged:
             flagged_count += 1
 
         narrators = [n.get("name", "") for n in ((product or {}).get("narrators") or []) if n.get("name")]
-        narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
+        if not narrators:
+            narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
         all_genres.extend(audible_genres)
-        all_genres.extend(abs_genres)
         all_genres.extend(goodreads_genres)
         all_narrators.extend(narrators)
 
@@ -428,7 +430,6 @@ def compile_series_enrichment(
             "is_file": book.get("is_file", False),
             "title": book.get("title", ""),
             "audible_genres": audible_genres,
-            "abs_genres": abs_genres,
             "goodreads_genres": goodreads_genres,
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),

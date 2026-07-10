@@ -384,7 +384,6 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["genre"], [])
         self.assertEqual(compiled["narrator"], "")
         self.assertEqual(compiled["explicit_flagged_count"], 0)
-        self.assertEqual(compiled["books"][0]["abs_genres"], [])
 
     def test_abs_results_feed_genres_and_narrators_when_audible_missing(self):
         books = [{"id": "1", "title": "T", "existing_genres": ["Local Fantasy"], "existing_narrator": "", "existing_explicit": False}]
@@ -394,7 +393,7 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         )
         self.assertEqual(compiled["genre"], ["Fantasy", "Adventure"])
         self.assertEqual(compiled["narrator"], "ABS Narrator")
-        self.assertEqual(compiled["books"][0]["abs_genres"], ["Fantasy", "Adventure"])
+        self.assertEqual(compiled["books"][0]["audible_genres"], ["Fantasy", "Adventure"])
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Local Fantasy"])
 
     def test_sequence_range_spans_min_to_max(self):
