@@ -404,6 +404,58 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertIn("Dungeon Core ", group["context_note"])
         self.assertIn("Dungeon Core, Book 2", group["context_note"])
 
+    def test_context_note_does_not_claim_variance_when_raw_tags_are_identical(self):
+        # Regression: the message used to always say "raw tags vary" even
+        # when every member carried the exact same raw series string --
+        # nothing to normalize in that case, so it shouldn't claim there was.
+        items = [
+            self._item("/lib/F1.m4b", "Heartstrikers 1", "Rachel Aaron", "Heartstrikers"),
+            self._item("/lib/F2.m4b", "Heartstrikers 2", "Rachel Aaron", "Heartstrikers"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        note = groups[0]["context_note"]
+        self.assertNotIn("vary", note)
+        self.assertIn("share series", note)
+        self.assertIn("Heartstrikers", note)
+
+    def test_context_note_still_reports_variance_when_raw_tags_differ(self):
+        items = [
+            self._item("/lib/G1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core "),
+            self._item("/lib/G2.m4b", "Dungeon Core 2", "Eric Vall", "Dungeon Core, Book 2"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        note = groups[0]["context_note"]
+        self.assertIn("raw tags vary", note)
+
+    def test_chronological_and_publication_order_variants_collapse_to_one_group(self):
+        # Audible frequently publishes two series entries for the same books
+        # -- one per reading order -- with or without parens. Same series;
+        # each book's own raw tag (with the qualifier) must still show on
+        # its own row, but the suggested/canonical series collapses to the
+        # bare name with the qualifier removed.
+        items = [
+            self._item(
+                "/lib/H1.m4b", "Ascend Online", "Luke Chmilenko",
+                "Ascend Online (Chronological Order)",
+            ),
+            self._item(
+                "/lib/H2.m4b", "Ascend Online 2", "Luke Chmilenko",
+                "Ascend Online (Publication Order)",
+            ),
+            self._item(
+                "/lib/H3.m4b", "Ascend Online 3", "Luke Chmilenko",
+                "Ascend Online Publication Order",
+            ),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["suggested_series"], "Ascend Online")
+        by_path = {m["path"]: m for m in group["members"]}
+        self.assertEqual(by_path["/lib/H1.m4b"]["series"], "Ascend Online (Chronological Order)")
+        self.assertEqual(by_path["/lib/H2.m4b"]["series"], "Ascend Online (Publication Order)")
+        self.assertEqual(by_path["/lib/H3.m4b"]["series"], "Ascend Online Publication Order")
+
     def test_skips_paths_already_claimed_by_pass_one(self):
         items = [
             self._item("/lib/B1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core"),
@@ -607,6 +659,29 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         evidence = normalize_suspect["reasons"][0]["evidence"]
         self.assertEqual(evidence["suggested_genre"], "LitRPG, Fantasy")
         self.assertEqual(evidence["suggested_narrator"], "JD Tanner")
+
+    def test_audiobook_is_excluded_from_the_genre_suggestion_but_kept_per_book(self):
+        # "Audiobook" is a media-type tag, not a real genre -- it shouldn't
+        # get pre-filled into the bulk Genre field, but a book that actually
+        # has it must still show it on its own per-book line.
+        report_items = [
+            self._item(
+                "/lib/B1.m4b", "Dungeon Core 1", "Eric Vall", series="Dungeon Core",
+                genre="Audiobook",
+            ),
+            self._item(
+                "/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", series="Dungeon Core",
+                genre="Fantasy, Audiobook",
+            ),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_normalize")
+        evidence = normalize_suspect["reasons"][0]["evidence"]
+        self.assertEqual(evidence["suggested_genre"], "Fantasy")
+        by_path = {m["path"]: m for m in evidence["members"]}
+        self.assertEqual(by_path["/lib/B1.m4b"]["genre"], "Audiobook")
+        self.assertEqual(by_path["/lib/B2.m4b"]["genre"], "Fantasy, Audiobook")
 
     def test_tagged_sibling_with_divergent_series_gets_mismatch_flag(self):
         # A sibling whose own series tag doesn't plausibly match the group's

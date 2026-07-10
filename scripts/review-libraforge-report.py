@@ -88,10 +88,13 @@ def normalize_series(value: Any) -> str:
     Handles patterns like:
       "Speedrunning the Multiverse, Book 02" -> "speedrunning multiverse"
       "Speedrunning the Multiverse Series"   -> "speedrunning multiverse"
+      "Ascend Online (Chronological Order)"  -> "ascend online"
+      "Ascend Online Publication Order"      -> "ascend online"
     """
     s = normalize(value)
     s = re.sub(r",?\s*\bbook\s+\d+\s*$", "", s).strip()
     s = re.sub(r",?\s*\bvol(?:ume)?\s*\d+\s*$", "", s).strip()
+    s = re.sub(r",?\s*\b(?:chronological|publication)\s+order\s*$", "", s).strip()
     s = re.sub(r"\bseries\s*$", "", s).strip()
     return s
 
@@ -99,20 +102,27 @@ def normalize_series(value: Any) -> str:
 _SERIES_DISPLAY_SUFFIX_BOOK_RE = re.compile(r",?\s*\bbook\s+\d+\s*$", re.IGNORECASE)
 _SERIES_DISPLAY_SUFFIX_VOL_RE = re.compile(r",?\s*\bvol(?:ume)?\s*\d+\s*$", re.IGNORECASE)
 _SERIES_DISPLAY_SUFFIX_SERIES_RE = re.compile(r"\bseries\s*$", re.IGNORECASE)
+# Audible frequently publishes two "series" entries for the same books, one
+# per reading order -- "X (Chronological Order)" and "X (Publication Order)"
+# -- with or without the parens. Same series; only the qualifier differs.
+_SERIES_DISPLAY_SUFFIX_ORDER_RE = re.compile(
+    r",?\s*\(?\s*(?:chronological|publication)\s+order\s*\)?\s*$", re.IGNORECASE
+)
 
 
 def _strip_series_display_suffix(raw: str) -> str:
-    """Strip a trailing book/volume/series qualifier for display purposes.
+    """Strip a trailing book/volume/series/reading-order qualifier for display.
 
     Mirrors normalize_series()'s suffix patterns but preserves the original
     casing and spacing, since normalize_series()'s own output is lowercased
     and stopword-stripped and unsuitable for showing to a user. Applies the
-    three patterns sequentially (like normalize_series() does) so a stacked
+    patterns sequentially (like normalize_series() does) so a stacked
     suffix such as "X Series, Book 2" fully collapses to "X" instead of only
     the last-matched qualifier being removed.
     """
     s = _SERIES_DISPLAY_SUFFIX_BOOK_RE.sub("", raw).strip()
     s = _SERIES_DISPLAY_SUFFIX_VOL_RE.sub("", s).strip()
+    s = _SERIES_DISPLAY_SUFFIX_ORDER_RE.sub("", s).strip()
     s = _SERIES_DISPLAY_SUFFIX_SERIES_RE.sub("", s).strip()
     return s
 
@@ -862,10 +872,15 @@ def group_existing_series_by_normalized_tag(
             })
 
         raw_variants = sorted(raw_values_by_key[key])
-        context_note = (
-            f"{len(members)} books share normalized series {suggested_series!r} -- "
-            f"raw tags vary: {', '.join(repr(v) for v in raw_variants)}."
-        )
+        if len(raw_variants) > 1:
+            context_note = (
+                f"{len(members)} books share normalized series {suggested_series!r} -- "
+                f"raw tags vary: {', '.join(repr(v) for v in raw_variants)}."
+            )
+        else:
+            # Every member already carries the identical raw tag -- there's
+            # nothing to "normalize", so don't claim tags vary when they don't.
+            context_note = f"{len(members)} books share series {suggested_series!r}."
 
         groups.append({
             "pass": 2,
@@ -901,6 +916,16 @@ def _split_and_dedupe(value: str) -> list[str]:
     """Split comma/semicolon-separated value and dedupe case-insensitively."""
     parts = [p.strip() for p in re.split(r",|;", value) if p.strip()]
     return _dedupe_casefold(parts)
+
+
+# Not a real genre -- a generic media-type tag Audible/local tagging
+# sometimes attaches. Still shown on a per-book line if a book actually has
+# it, just never worth pre-filling into the bulk Genre field.
+_JUNK_GENRES = {"audiobook"}
+
+
+def _suggested_genre_string(genres: list[str]) -> str:
+    return ", ".join(g for g in _dedupe_casefold(genres) if g.casefold() not in _JUNK_GENRES)
 
 
 def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -967,7 +992,7 @@ def add_series_group_suspects(
                 "evidence": {
                     "suggested_series": group["suggested_series"],
                     "suggested_author": group["suggested_author"],
-                    "suggested_genre": ", ".join(_dedupe_casefold(genres)),
+                    "suggested_genre": _suggested_genre_string(genres),
                     "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
                     "author_note": group["author_note"],
                     "members": group["members"],
@@ -996,7 +1021,7 @@ def add_series_group_suspects(
                 "evidence": {
                     "suggested_series": group["suggested_series"],
                     "suggested_author": group["suggested_author"],
-                    "suggested_genre": ", ".join(_dedupe_casefold(genres)),
+                    "suggested_genre": _suggested_genre_string(genres),
                     "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
                     "author_note": group["author_note"],
                     "members": group["members"],
