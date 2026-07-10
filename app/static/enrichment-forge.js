@@ -25,8 +25,8 @@ function renderSeriesResults(rows) {
   `).join("");
   container.querySelectorAll(".series-result-row").forEach((el) => {
     el.addEventListener("click", () => {
-      container.querySelectorAll(".series-result-row.picked").forEach((picked) => picked.classList.remove("picked"));
-      el.classList.add("picked");
+      $("seriesSearch").value = el.dataset.name;
+      container.innerHTML = "";
       compileSeries(el.dataset.name);
     });
   });
@@ -177,6 +177,10 @@ let searchDebounce = null;
 $("seriesSearch").addEventListener("input", (e) => {
   clearTimeout(searchDebounce);
   const query = e.target.value.trim();
+  if (!query) {
+    renderSeriesResults([]);
+    return;
+  }
   searchDebounce = setTimeout(async () => {
     renderSeriesResults(await searchSeries(query));
   }, 250);

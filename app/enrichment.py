@@ -155,7 +155,22 @@ def get_series_books(
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),
         })
+    books.sort(key=_book_sequence_sort_key)
     return books
+
+
+def _book_sequence_sort_key(book: dict[str, Any]) -> float:
+    """Sort books by their series sequence number ascending; books with no
+    parseable sequence sort after every numbered one (float('inf')), in
+    their original relative order among themselves (stable sort).
+    """
+    sequence = book.get("sequence")
+    if not sequence:
+        return float("inf")
+    try:
+        return float(sequence)
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 ENRICHMENT_SEARCH_WORKERS = 5
