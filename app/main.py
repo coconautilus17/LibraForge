@@ -1083,6 +1083,31 @@ class ManualReviewEditRequest(BaseModel):
     cover_url: str = ""
 
 
+class SeriesGroupBookEntry(BaseModel):
+    path: str
+    sequence: str = ""
+
+
+class SeriesGroupApplyRequest(BaseModel):
+    """Bulk field edit across several books at once (Fix Series). A blank
+    shared field is left untouched on every book; a filled one overwrites
+    it on every included book, even one that already had a value -- see
+    docs/design/2026-07-09-fix-series-cross-book-editor-design.md.
+    """
+    script_name: str = Field(default_factory=default_fixer_script)
+    series: str = ""
+    author: str = ""
+    genre: str = ""
+    narrator: str = ""
+    language: str = ""
+    explicit: bool = False
+    # Whether the Explicit checkbox was touched at all -- a bare `explicit:
+    # bool` can't distinguish "leave untouched" from "set to False", since
+    # both are the JSON value `false`.
+    explicit_set: bool = False
+    books: list[SeriesGroupBookEntry]
+
+
 class M4BRunRequest(BaseModel):
     input_path: str
     output_path: str
@@ -2953,6 +2978,60 @@ def edit_manual_review_book(req: ManualReviewEditRequest) -> dict[str, Any]:
     if write_result["warning"]:
         result["warning"] = write_result["warning"]
     return result
+
+
+def apply_series_group(req: SeriesGroupApplyRequest) -> dict[str, Any]:
+    fixer_module = load_fixer_module(req.script_name)
+    results: list[dict[str, Any]] = []
+
+    for book in req.books:
+        try:
+            context = inspect_manual_review_target(path=book.path, script_name=req.script_name)
+            source_path = Path(context["source_path"])
+
+            metadata: dict[str, Any] = {"edit_mode": "full", "write_summary": False}
+            if req.series:
+                metadata["series"] = req.series
+            if req.author:
+                metadata["author"] = req.author
+            if req.genre:
+                metadata["genre"] = req.genre
+            if req.narrator:
+                metadata["narrator"] = req.narrator
+            if req.language:
+                metadata["language"] = req.language
+            if req.explicit_set:
+                metadata["explicit"] = req.explicit
+            if book.sequence:
+                metadata["sequence"] = book.sequence
+
+            clues = build_context_clues(fixer_module, context["metadata"])
+            if context.get("is_grouped"):
+                clues["group_search"] = context.get("group_search", {})
+            clues["current"] = dict(context["metadata"])
+
+            write_result = _write_book_metadata(
+                source_path=source_path,
+                metadata=metadata,
+                clues=clues,
+                score=1.0,
+                fixer_module=fixer_module,
+                write_policy="fill",
+                marker_mode="manual_edit",
+                writer="auto",
+                cover_if_missing=False,
+                replace_cover=False,
+                backup=False,
+            )
+            results.append({
+                "path": book.path,
+                "status": "applied",
+                "output_kind": write_result["output_kind"],
+            })
+        except Exception as exc:
+            results.append({"path": book.path, "status": "failed", "error": str(exc)})
+
+    return {"results": results}
 
 
 def default_output_path(source_path: Path, metadata: dict[str, Any]) -> str:
@@ -6328,6 +6407,11 @@ def apply_manual_review(req: ManualReviewApplyRequest) -> dict[str, Any]:
 @app.post("/api/manual-review/edit")
 def edit_manual_review(req: ManualReviewEditRequest) -> dict[str, Any]:
     return edit_manual_review_book(req)
+
+
+@app.post("/api/manual-review/apply-series-group")
+def apply_series_group_endpoint(req: SeriesGroupApplyRequest) -> dict[str, Any]:
+    return apply_series_group(req)
 
 
 @app.post("/api/m4b/runs")

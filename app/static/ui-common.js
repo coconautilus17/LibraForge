@@ -351,8 +351,59 @@
     return article;
   }
 
+  function buildSeriesGroupCard(item) {
+    const evidence = (item.reasons[0] && item.reasons[0].evidence) || {};
+    const members = evidence.members || [];
+    const isPassOne = item.reasons[0].code === 'series_group_missing';
+
+    const article = document.createElement('article');
+    article.className = 'mrep-card suspect-mrep-card sev-low series-group-card';
+    article.dataset.seriesGroup = JSON.stringify({
+      contextNote: item.reasons[0].message,
+      authorNote: evidence.author_note || '',
+      suggestedSeries: evidence.suggested_series || '',
+      suggestedAuthor: evidence.suggested_author || '',
+      suggestedGenre: evidence.suggested_genre || '',
+      suggestedNarrator: evidence.suggested_narrator || '',
+      members,
+      taggedSiblings: evidence.tagged_siblings || [],
+    });
+
+    const details = document.createElement('details');
+    details.className = 'mrep-details';
+    const summary = document.createElement('summary');
+    summary.className = 'mrep-head';
+    summary.innerHTML = `
+      <span class="suspect-sev-badge sev-low">${isPassOne ? 'no series' : 'series drift'}</span>
+      <span class="mrep-title">${escapeHtml(evidence.suggested_series || '(series group)')}</span>
+      <div class="mrep-badges">
+        <span class="suspect-trigger-badge">${members.length} books</span>
+      </div>
+    `;
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'mrep-body';
+    const memberRows = members.map((m) => `<li>${escapeHtml(m.title)}${m.flag ? ` <em>(${escapeHtml(m.flag.replace(/_/g, ' '))})</em>` : ''}</li>`).join('');
+    body.innerHTML = `
+      <p class="note">${escapeHtml(item.reasons[0].message)}</p>
+      ${evidence.author_note ? `<p class="note fs-author-note">${escapeHtml(evidence.author_note)}</p>` : ''}
+      <ul class="series-group-members">${memberRows}</ul>
+      <div class="actions"><button type="button" class="secondary fs-open-btn">Fix Series</button></div>
+    `;
+    details.appendChild(body);
+    article.appendChild(details);
+
+    body.querySelector('.fs-open-btn').addEventListener('click', () => {
+      if (window.FixSeries) window.FixSeries.open(JSON.parse(article.dataset.seriesGroup));
+    });
+
+    return article;
+  }
+
   function buildSuspectCard(item) {
     if (item.status === 'cross_item') return buildCrossItemSuspectCard(item);
+    if (item.status === 'series_group') return buildSeriesGroupCard(item);
 
     const sev = item.severity || 'info';
     const sevCls = `sev-${sev}`;
@@ -572,6 +623,7 @@
     searchAbsAgg,
     scoreBadge,
     initFolderBrowser,
+    buildSeriesGroupCard,
     buildSuspectCard,
     renderSuspectReport,
     SUSPECT_REASON_FIELDS,

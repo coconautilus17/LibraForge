@@ -88,12 +88,60 @@ def normalize_series(value: Any) -> str:
     Handles patterns like:
       "Speedrunning the Multiverse, Book 02" -> "speedrunning multiverse"
       "Speedrunning the Multiverse Series"   -> "speedrunning multiverse"
+      "Ascend Online (Chronological Order)"  -> "ascend online"
+      "Ascend Online Publication Order"      -> "ascend online"
     """
     s = normalize(value)
     s = re.sub(r",?\s*\bbook\s+\d+\s*$", "", s).strip()
     s = re.sub(r",?\s*\bvol(?:ume)?\s*\d+\s*$", "", s).strip()
+    s = re.sub(r",?\s*\b(?:chronological|publication)\s+order\s*$", "", s).strip()
     s = re.sub(r"\bseries\s*$", "", s).strip()
     return s
+
+
+_SERIES_DISPLAY_SUFFIX_BOOK_RE = re.compile(r",?\s*\bbook\s+\d+\s*$", re.IGNORECASE)
+_SERIES_DISPLAY_SUFFIX_VOL_RE = re.compile(r",?\s*\bvol(?:ume)?\s*\d+\s*$", re.IGNORECASE)
+_SERIES_DISPLAY_SUFFIX_SERIES_RE = re.compile(r"\bseries\s*$", re.IGNORECASE)
+# Audible frequently publishes two "series" entries for the same books, one
+# per reading order -- "X (Chronological Order)" and "X (Publication Order)"
+# -- with or without the parens. Same series; only the qualifier differs.
+_SERIES_DISPLAY_SUFFIX_ORDER_RE = re.compile(
+    r",?\s*\(?\s*(?:chronological|publication)\s+order\s*\)?\s*$", re.IGNORECASE
+)
+
+
+def _strip_series_display_suffix(raw: str) -> str:
+    """Strip a trailing book/volume/series/reading-order qualifier for display.
+
+    Mirrors normalize_series()'s suffix patterns but preserves the original
+    casing and spacing, since normalize_series()'s own output is lowercased
+    and stopword-stripped and unsuitable for showing to a user. Applies the
+    patterns sequentially (like normalize_series() does) so a stacked
+    suffix such as "X Series, Book 2" fully collapses to "X" instead of only
+    the last-matched qualifier being removed.
+    """
+    s = _SERIES_DISPLAY_SUFFIX_BOOK_RE.sub("", raw).strip()
+    s = _SERIES_DISPLAY_SUFFIX_VOL_RE.sub("", s).strip()
+    s = _SERIES_DISPLAY_SUFFIX_ORDER_RE.sub("", s).strip()
+    s = _SERIES_DISPLAY_SUFFIX_SERIES_RE.sub("", s).strip()
+    return s
+
+
+_TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.*\S)\s+(?P<number>\d+(?:\.\d+)?)$")
+
+
+def split_title_base_and_number(title: str) -> tuple[str, str]:
+    """Split a clean title into its base and a trailing sequence number.
+
+    "Dungeon Core 2" -> ("Dungeon Core", "2"). The number must be a
+    separate trailing token (preceded by whitespace) -- "1% Lifesteal" is
+    not split, since the digit isn't a standalone trailing token.
+    """
+    title = clean_text(title)
+    match = _TRAILING_NUMBER_RE.match(title)
+    if not match:
+        return title, ""
+    return match.group("base").strip(), match.group("number")
 
 
 def similarity(left: Any, right: Any) -> float:
@@ -261,6 +309,38 @@ def is_multi_book(local: dict, match: dict, path: str = "") -> bool:
             if _MULTI_BOOK_KW.search(part):
                 return True
     return False
+
+
+_OMNIBUS_REMAINDER_RE = re.compile(
+    r"^(?:complete\s+)?(?:series|collection|trilogy|duology|saga|omnibus|box\s?set|edition)?"
+    r"\s*(?:\d+(?:\.\d+)?)?\s*$"
+)
+
+
+def _normalized_names_plausibly_related(a_norm: str, b_norm: str, threshold: float = 0.80) -> bool:
+    """True when two already-normalized strings plausibly refer to the same
+    series/work.
+
+    Deliberately does NOT reuse series_similarity()/similarity()'s substring
+    containment shortcut ("if a in b: return 0.92") -- that has no concept of
+    word boundaries, so it scores "summoner" against "summoner school" the
+    same 0.92 as "war god for hire" against "war god for hire complete
+    series", even though the first pair are two unrelated series that merely
+    share a leading word. Here, a shared prefix only counts as related if
+    everything after it is omnibus/collection vocabulary (e.g. "complete
+    series", "trilogy") -- a real distinguishing word like "school" is
+    rejected. Falls back to a real SequenceMatcher ratio when neither string
+    is a prefix of the other.
+    """
+    if not a_norm or not b_norm:
+        return False
+    if a_norm == b_norm:
+        return True
+    shorter, longer = (a_norm, b_norm) if len(a_norm) <= len(b_norm) else (b_norm, a_norm)
+    if longer.startswith(shorter):
+        remainder = longer[len(shorter):].strip()
+        return bool(_OMNIBUS_REMAINDER_RE.match(remainder))
+    return SequenceMatcher(None, a_norm, b_norm).ratio() >= threshold
 
 
 def is_folder_like_series(series: str) -> bool:
@@ -586,6 +666,372 @@ def add_metadata_cross_item_suspects(
         })
 
 
+def _majority_author_and_note(members: list[dict[str, Any]]) -> tuple[str, str | None]:
+    """Return (majority author, author_note) for a group's members.
+
+    author_note is None when every member with an author shares the same
+    one; otherwise a human-readable "N of M share author X. K differ --
+    Y (listed below)." string. Shared by both grouping passes and by
+    add_series_group_suspects() (Task 3) so this logic exists exactly once.
+    """
+    author_counts = Counter(m["author"] for m in members if m["author"])
+    majority_author = author_counts.most_common(1)[0][0] if author_counts else ""
+    differing_authors = sorted({
+        m["author"] for m in members if m["author"] and m["author"] != majority_author
+    })
+    if not differing_authors:
+        return majority_author, None
+    n_share = len(members) - len(differing_authors)
+    note = (
+        f"{n_share} of {len(members)} share author {majority_author!r}. "
+        f"{len(differing_authors)} differ -- {', '.join(differing_authors)} (listed below)."
+    )
+    return majority_author, note
+
+
+def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pass 1: group books with no series tag by a shared base-title pattern.
+
+    Deliberately NOT gated on author matching -- see the redacted EPIC 4d
+    write-up in libraforge-roadmap-backlog.md for why exact-author-matching
+    is the wrong approach (e.g. Pocket Dungeon books 1-5 credit "Eric Vall",
+    book 6 credits "Logan Jacobs", same series).
+    """
+    candidates: list[dict[str, Any]] = []
+    for item in report_items:
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        # "already has a series" must be judged from the local tag only -- an
+        # unconfirmed/low-score provider match candidate having a series guess
+        # says nothing about whether the file itself is tagged.
+        series = clean_text(local.get("series"))
+        if series:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        if not title:
+            continue
+        author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        genre = clean_text(local.get("genre")) or clean_text(match.get("genre"))
+        narrator = clean_text(local.get("narrator")) or clean_text(match.get("narrator"))
+        path = item.get("path") or item.get("source") or ""
+        candidates.append({
+            "path": path, "title": title, "author": author,
+            "genre": genre, "narrator": narrator, "item": item,
+        })
+
+    by_base_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        base, number = split_title_base_and_number(candidate["title"])
+        base_key = normalize(base)
+        if not base_key:
+            continue
+        candidate["base"] = base
+        candidate["base_key"] = base_key
+        candidate["sequence"] = number
+        by_base_key[base_key].append(candidate)
+
+    # Second sweep: attach omnibus-flagged candidates (which usually have no
+    # trailing number at all, so their own base_key rarely matches directly)
+    # to an existing group whose base is a prefix of the omnibus title.
+    numbered_groups = {key: members for key, members in by_base_key.items() if len(members) > 1}
+    leftover = [c for c in candidates if "base_key" in c and len(by_base_key[c["base_key"]]) <= 1]
+    for candidate in leftover:
+        local = candidate["item"].get("local") or {}
+        match = candidate["item"].get("match") or {}
+        if not is_multi_book(local, match, candidate["path"]):
+            continue
+        title_key = normalize(candidate["title"])
+        for base_key in numbered_groups:
+            if base_key and _normalized_names_plausibly_related(base_key, title_key):
+                numbered_groups[base_key].append(candidate)
+                candidate["is_omnibus"] = True
+                break
+
+    def _member_sort_key(m: dict[str, Any]) -> tuple:
+        seq = m.get("sequence") or ""
+        try:
+            return (0, float(seq))
+        except ValueError:
+            return (1, m.get("title") or "")
+
+    groups: list[dict[str, Any]] = []
+    for base_key, members in sorted(numbered_groups.items()):
+        if len(members) <= 1:
+            continue
+        majority_author, author_note = _majority_author_and_note(members)
+
+        member_rows = []
+        for m in sorted(members, key=_member_sort_key):
+            if m.get("is_omnibus"):
+                flag = "omnibus"
+            elif not m["sequence"]:
+                flag = "missing_number"
+            elif majority_author and m["author"] and m["author"] != majority_author:
+                flag = "author_differs"
+            else:
+                flag = None
+            member_rows.append({
+                "path": m["path"], "title": m["title"], "author": m["author"],
+                "sequence": m["sequence"], "series": "", "flag": flag,
+                "genre": m.get("genre", ""), "narrator": m.get("narrator", ""),
+            })
+
+        base_display = members[0]["base"]
+        numbers = sorted({m["sequence"] for m in members if m["sequence"]}, key=lambda n: float(n))
+        number_range = f"{numbers[0]}-{numbers[-1]}" if len(numbers) > 1 else (numbers[0] if numbers else "")
+        context_note = (
+            f'Grouped by title pattern "{base_display} #" -- same base title, '
+            f"sequence numbers {number_range or 'none'} detected."
+        )
+
+        groups.append({
+            "pass": 1,
+            "group_key": base_key,
+            "base_title": base_display,
+            "context_note": context_note,
+            "suggested_series": base_display,
+            "suggested_author": majority_author,
+            "author_note": author_note,
+            "members": member_rows,
+        })
+
+    return groups
+
+
+def group_existing_series_by_normalized_tag(
+    report_items: list[dict[str, Any]], claimed_paths: set[str]
+) -> list[dict[str, Any]]:
+    """Pass 2: group books that already have a series tag, by comparing tags
+    through normalize_series() so raw variants (trailing space, a stray
+    ", Book N" suffix) still collapse to the same group. Skips any path
+    Pass 1 already claimed.
+    """
+    by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    raw_values_by_key: dict[str, set[str]] = defaultdict(set)
+
+    for item in report_items:
+        path = item.get("path") or item.get("source") or ""
+        if path in claimed_paths:
+            continue
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        # Same local-only rule as pass 1: a provider match guess isn't a local tag.
+        raw_series_original = local.get("series") or ""
+        raw_series = clean_text(raw_series_original)
+        if not raw_series:
+            continue
+        key = normalize_series(raw_series)
+        if not key:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        genre = clean_text(local.get("genre")) or clean_text(match.get("genre"))
+        narrator = clean_text(local.get("narrator")) or clean_text(match.get("narrator"))
+        _, number = split_title_base_and_number(title)
+        by_key[key].append({
+            "path": path, "title": title, "author": author,
+            "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
+            "raw_series": raw_series_original,
+            "genre": genre, "narrator": narrator,
+        })
+        raw_values_by_key[key].add(raw_series_original)
+
+    groups: list[dict[str, Any]] = []
+    for key, members in sorted(by_key.items()):
+        if len(members) <= 1:
+            continue
+        majority_author, author_note = _majority_author_and_note(members)
+
+        # Prefer the most common exact raw value as the suggested canonical
+        # spelling; fall back to the first one seen. Strip suffixes before
+        # counting so they can't leak into the suggestion.
+        raw_counts = Counter(_strip_series_display_suffix(m["raw_series"]) for m in members)
+        suggested_series = clean_text(raw_counts.most_common(1)[0][0])
+
+        def _member_sort_key(m: dict[str, Any]) -> tuple:
+            seq = m.get("sequence") or ""
+            try:
+                return (0, float(seq))
+            except ValueError:
+                return (1, m.get("title") or "")
+
+        member_rows = []
+        for m in sorted(members, key=_member_sort_key):
+            # Deliberately no title-vs-series-name relation check here (unlike
+            # the pass-1 omnibus sweep, where it's legitimate): most real book
+            # titles are creative and don't textually contain their own
+            # series name at all (e.g. "Nice Dragons Finish Last" is really
+            # book 1 of Heartstrikers) -- that produced false "mismatch"
+            # flags on ~19% of already-correctly-tagged members across whole,
+            # legitimate series. Author is still a real, reliable signal.
+            flag = "author_differs" if (majority_author and m["author"] and m["author"] != majority_author) else None
+            member_rows.append({
+                "path": m["path"], "title": m["title"], "author": m["author"],
+                "sequence": m["sequence"], "series": m["raw_series"], "flag": flag,
+                "genre": m.get("genre", ""), "narrator": m.get("narrator", ""),
+            })
+
+        raw_variants = sorted(raw_values_by_key[key])
+        if len(raw_variants) > 1:
+            context_note = (
+                f"{len(members)} books share normalized series {suggested_series!r} -- "
+                f"raw tags vary: {', '.join(repr(v) for v in raw_variants)}."
+            )
+        else:
+            # Every member already carries the identical raw tag -- there's
+            # nothing to "normalize", so don't claim tags vary when they don't.
+            context_note = f"{len(members)} books share series {suggested_series!r}."
+
+        groups.append({
+            "pass": 2,
+            "group_key": key,
+            "base_title": suggested_series,
+            "context_note": context_note,
+            "suggested_series": suggested_series,
+            "suggested_author": majority_author,
+            "author_note": author_note,
+            "members": member_rows,
+        })
+
+    return groups
+
+
+def _dedupe_casefold(items: list[str]) -> list[str]:
+    """Dedupe a list case-insensitively, keeping first-seen casing.
+
+    Used for both deduping within comma-separated values and across sibling
+    values, so genre/narrator dedup is case-insensitive at all levels.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def _split_and_dedupe(value: str) -> list[str]:
+    """Split comma/semicolon-separated value and dedupe case-insensitively."""
+    parts = [p.strip() for p in re.split(r",|;", value) if p.strip()]
+    return _dedupe_casefold(parts)
+
+
+# Not a real genre -- a generic media-type tag Audible/local tagging
+# sometimes attaches. Still shown on a per-book line if a book actually has
+# it, just never worth pre-filling into the bulk Genre field.
+_JUNK_GENRES = {"audiobook"}
+
+
+def _suggested_genre_string(genres: list[str]) -> str:
+    return ", ".join(g for g in _dedupe_casefold(genres) if g.casefold() not in _JUNK_GENRES)
+
+
+def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Local books that already have a series tag and share the given
+    Pass-1 base-title key -- used both to source the Series/Genre/Narrator
+    suggestions and as the "+ Add tagged siblings" candidate list.
+    """
+    siblings = []
+    for item in report_items:
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        # Local-only, same reasoning as the two group-detection passes above:
+        # a provider match guess is not a local tag.
+        series = clean_text(local.get("series"))
+        if not series:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        base, number = split_title_base_and_number(title)
+        if normalize(base) != base_key:
+            continue
+        # Flag a sibling whose own tag doesn't plausibly match the base title
+        # it was grouped under (e.g. tagged "Summoner" but grouped for
+        # "Summoner School") so it doesn't blend in as a clean match.
+        flag = None if _normalized_names_plausibly_related(normalize_series(series), base_key) else "series_mismatch"
+        siblings.append({
+            "path": item.get("path") or item.get("source") or "",
+            "title": title,
+            "series": series,
+            "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
+            "genre": clean_text(local.get("genre")) or clean_text(match.get("genre")),
+            "narrator": clean_text(local.get("narrator")) or clean_text(match.get("narrator")),
+            "flag": flag,
+        })
+    return siblings
+
+
+def add_series_group_suspects(
+    suspects: list[dict[str, Any]], report_items: list[dict[str, Any]], args: argparse.Namespace
+) -> None:
+    pass_one_groups = group_missing_series_by_title_pattern(report_items)
+    claimed_paths = {m["path"] for g in pass_one_groups for m in g["members"]}
+    pass_two_groups = group_existing_series_by_normalized_tag(report_items, claimed_paths)
+
+    for group in pass_one_groups:
+        tagged_siblings = _find_tagged_siblings(group["group_key"], report_items)
+        # Pull genre/narrator from every book already carrying one -- the
+        # group's own (untagged-series) members can still have a genre/
+        # narrator tag independently of series, not just tagged siblings.
+        genres: list[str] = []
+        narrators: list[str] = []
+        for m in group["members"]:
+            genres.extend(_split_and_dedupe(m.get("genre", "")))
+            narrators.extend(_split_and_dedupe(m.get("narrator", "")))
+        for sib in tagged_siblings:
+            genres.extend(_split_and_dedupe(sib["genre"]))
+            narrators.extend(_split_and_dedupe(sib["narrator"]))
+
+        suspects.append({
+            "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
+            "severity": "low", "recommendation": "fix_series_group",
+            "reasons": [{
+                "code": "series_group_missing", "severity": "low",
+                "message": group["context_note"],
+                "evidence": {
+                    "suggested_series": group["suggested_series"],
+                    "suggested_author": group["suggested_author"],
+                    "suggested_genre": _suggested_genre_string(genres),
+                    "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
+                    "author_note": group["author_note"],
+                    "members": group["members"],
+                    "tagged_siblings": tagged_siblings,
+                },
+            }],
+            "related_paths": [m["path"] for m in group["members"]],
+        })
+
+    for group in pass_two_groups:
+        # Pass 2's own members are already-tagged books -- unlike pass 1
+        # there's no separate "tagged siblings" list, so genre/narrator must
+        # be aggregated from the members themselves or it's never populated.
+        genres = []
+        narrators = []
+        for m in group["members"]:
+            genres.extend(_split_and_dedupe(m.get("genre", "")))
+            narrators.extend(_split_and_dedupe(m.get("narrator", "")))
+
+        suspects.append({
+            "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
+            "severity": "low", "recommendation": "fix_series_group",
+            "reasons": [{
+                "code": "series_group_normalize", "severity": "low",
+                "message": group["context_note"],
+                "evidence": {
+                    "suggested_series": group["suggested_series"],
+                    "suggested_author": group["suggested_author"],
+                    "suggested_genre": _suggested_genre_string(genres),
+                    "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
+                    "author_note": group["author_note"],
+                    "members": group["members"],
+                    "tagged_siblings": [],
+                },
+            }],
+            "related_paths": [m["path"] for m in group["members"]],
+        })
+
+
 def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
 
@@ -716,6 +1162,7 @@ def extract_suspects(report: dict[str, Any], args: argparse.Namespace) -> tuple[
                 ) or item.get("was_manually_applied"):
                     suppressed += 1
             add_metadata_cross_item_suspects(suspects, report_items, args)
+            add_series_group_suspects(suspects, report_items, args)
         else:
             for item in report.get("items") or []:
                 categories = set(item.get("categories") or [])

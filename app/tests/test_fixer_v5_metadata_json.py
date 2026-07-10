@@ -312,6 +312,55 @@ class SkipBlankFieldsTests(unittest.TestCase):
                 json.loads(skip_blank_target.read_text())["title"], "User Chosen Title"
             )
 
+    def test_explicit_field_omitted_from_metadata_dict_preserves_existing_value(self):
+        # When a caller explicitly omits the "explicit" key from the metadata dict
+        # (e.g., Task 4's bulk-apply when user didn't touch the explicit checkbox),
+        # and skip_blank_fields=True, the existing explicit value must be preserved.
+        # This is the regression test for the bug where bool(metadata.get("explicit", False))
+        # would always produce a concrete True/False, preventing the None-sentinel
+        # pattern from being recognized as "blank" by the skip_blank_fields branch.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "metadata.json"
+            target.write_text(json.dumps({
+                "title": "Test Book",
+                "explicit": True,
+            }), encoding="utf-8")
+            source = tmp_path / "book.m4b"
+            source.write_bytes(b"")
+            # metadata dict does NOT include "explicit" key at all
+            meta = {"title": "Test Book", "author": "Some Author"}
+            result_target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, skip_blank_fields=True
+            )
+            payload = json.loads(result_target.read_text(encoding="utf-8"))
+            # The explicit value should be preserved from the existing file, not
+            # clobbered to False just because the key was absent from the input dict.
+            self.assertEqual(payload["explicit"], True)
+
+    def test_explicit_field_explicitly_false_in_metadata_dict_overwrites_existing_true(self):
+        # When skip_blank_fields=True and the metadata dict explicitly contains
+        # "explicit": False, this is a deliberate unset/disable request and must
+        # overwrite the existing True value.  This ensures the fix only changes
+        # behavior for the "key absent" case, not the "key present with False" case.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            target = tmp_path / "metadata.json"
+            target.write_text(json.dumps({
+                "title": "Test Book",
+                "explicit": True,
+            }), encoding="utf-8")
+            source = tmp_path / "book.m4b"
+            source.write_bytes(b"")
+            # metadata dict explicitly includes "explicit": False
+            meta = {"title": "Test Book", "author": "Some Author", "explicit": False}
+            result_target = FIXER.write_audiobookshelf_metadata_json(
+                source, meta, {}, alone_in_folder=True, skip_blank_fields=True
+            )
+            payload = json.loads(result_target.read_text(encoding="utf-8"))
+            # When explicitly set to False, it should overwrite the existing True value.
+            self.assertEqual(payload["explicit"], False)
+
 
 class ReportItemTests(unittest.TestCase):
     def test_report_item_surfaces_match_genre_and_isbn(self):

@@ -160,7 +160,7 @@ async function poll() {
   if (!res.ok) return;
   const state = await res.json();
   latestState = state;
-  render(state);
+  await render(state);
   if (['completed', 'failed', 'cancelled'].includes(state.status)) {
     if (state.workers_draining) {
       // Workers are still finishing writes -- keep polling, block start.
@@ -260,7 +260,7 @@ function showWorkerDrainBanner(visible) {
   }
 }
 
-function render(state) {
+async function render(state) {
   const pct = Number(state.percent || 0).toFixed(1);
   $('ring').style.setProperty('--pct', pct);
   $('percent').textContent = `${pct}%`;
@@ -278,7 +278,7 @@ function render(state) {
   renderCategories(state.files_by_category || {});
   renderManualReview(state.manual_review_items || []);
   currentReportId = state.id || null;
-  renderMatchReport(state.report_items || []);
+  await renderMatchReport(state.report_items || []);
   renderStats(state.stats || {}, state.started_at, state.finished_at);
 }
 
@@ -1166,7 +1166,7 @@ async function loadLastReport() {
     renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
-    renderMatchReport(report.report_items || []);
+    await renderMatchReport(report.report_items || []);
     $('runStatus').textContent = `Last report loaded (${report.status || 'unknown'})`;
     $('currentFile').textContent = report.id || '';
   } finally {
@@ -1179,8 +1179,9 @@ async function loadLastReport() {
 
 let matchReportItems = [];
 let currentReportId = null;
+let seriesGroupsRenderToken = 0;
 
-function renderMatchReport(items) {
+async function renderMatchReport(items) {
   matchReportItems = items || [];
   const count = $('matchReportCount');
   const card = $('matchReportCard');
@@ -1195,7 +1196,18 @@ function renderMatchReport(items) {
   count.textContent = `${matchReportItems.length} book${matchReportItems.length !== 1 ? 's' : ''}`;
   count.style.display = '';
   buildMatchReportCards();
-  if (currentReportId) probeSuspectReport(currentReportId);
+  if (currentReportId) {
+    probeSuspectReport(currentReportId);
+    const myToken = ++seriesGroupsRenderToken;
+    const groups = await ensureSeriesGroupsForMatchReport(currentReportId);
+    if (myToken !== seriesGroupsRenderToken) return; // a newer render call superseded this one
+    if (groups.length) {
+      const container = $('matchReportList');
+      for (const group of groups.reverse()) {
+        container.insertBefore(window.UiCommon.buildSeriesGroupCard(group), container.firstChild);
+      }
+    }
+  }
 }
 
 async function probeSuspectReport(reportId) {
@@ -1214,6 +1226,22 @@ async function probeSuspectReport(reportId) {
     btn.textContent = 'Generate Suspicion Report';
     btn.disabled = false;
   }
+}
+
+async function ensureSeriesGroupsForMatchReport(reportId) {
+  if (!reportId) return [];
+  let data;
+  try {
+    const probe = await fetch(`/api/reports/${reportId}/suspect-review`);
+    data = await probe.json();
+    if (data.exists === false) {
+      const gen = await fetch(`/api/reports/${reportId}/suspect-review`, { method: 'POST' });
+      data = await gen.json();
+    }
+  } catch (e) {
+    return [];
+  }
+  return (data.suspects || []).filter((s) => s.status === 'series_group');
 }
 
 async function generateSuspectReport() {
