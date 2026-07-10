@@ -99,10 +99,8 @@ function syncAdvancedRunSettings() {
   document.querySelectorAll('.m4b-advanced-setting').forEach((el) => {
     el.hidden = !open;
   });
-  if (open) {
-    setCollapsibleSection('discoverySectionBody', 'discoverySectionToggle', true);
-    setCollapsibleSection('metadataSectionBody', 'metadataSectionToggle', true);
-  }
+  setCollapsibleSection('discoverySectionBody', 'discoverySectionToggle', open);
+  setCollapsibleSection('metadataSectionBody', 'metadataSectionToggle', open);
 }
 
 function collectMetadata() {
