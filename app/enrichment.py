@@ -8,6 +8,7 @@ module has no import-time dependency on app.main and no circular-import risk
 """
 from __future__ import annotations
 
+import concurrent.futures
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -142,3 +143,73 @@ def get_series_books(
             "existing_explicit": bool(metadata.get("explicit", False)),
         })
     return books
+
+
+ENRICHMENT_SEARCH_WORKERS = 5
+
+
+def search_series_audible(
+    books: list[dict[str, Any]],
+    audible_search_fn: Callable[[Any, str, int], list[dict]],
+    audible_lookup_by_asin_fn: Callable[[Any, str], dict | None],
+    client: Any,
+    workers: int = ENRICHMENT_SEARCH_WORKERS,
+) -> dict[str, dict | None]:
+    """Search Audible for every book in a series, up to `workers` concurrently.
+
+    Books with a known ASIN use the direct lookup; otherwise falls back to a
+    text search on title + author and takes the first result (these books
+    are already organized/identified, so no scoring is needed here, unlike
+    the fixer's raw-scan matching problem). Returns a dict keyed by book id
+    -> Audible product dict, or None if nothing was found or the call failed.
+    """
+    def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        try:
+            if book.get("asin"):
+                return book["id"], audible_lookup_by_asin_fn(client, book["asin"])
+            query = f"{book.get('title', '')} {book.get('author', '')}".strip()
+            if not query:
+                return book["id"], None
+            results = audible_search_fn(client, query, 3)
+            return book["id"], (results[0] if results else None)
+        except Exception:
+            return book["id"], None
+
+    results: dict[str, dict | None] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for book_id, product in pool.map(_search_one, books):
+            results[book_id] = product
+    return results
+
+
+def search_series_goodreads(
+    books: list[dict[str, Any]],
+    abs_tract_search_fn: Callable[..., list[dict]],
+    abs_tract_url: str,
+    workers: int = ENRICHMENT_SEARCH_WORKERS,
+) -> dict[str, list[dict]]:
+    """Search Goodreads (via abs-tract) for every book in a series, up to
+    `workers` concurrently. Always called for every book, unlike the fixer's
+    silent-fallback pattern used during batch runs. This phase only starts
+    after search_series_audible() has fully completed for the whole series
+    (enforced by the caller, see app/main.py), so Audible and Goodreads
+    calls never interleave (abs-tract's upstream rate limit only trips under
+    mixed Goodreads+Amazon load, not pure Goodreads).
+    """
+    def _search_one(book: dict[str, Any]) -> tuple[str, list[dict]]:
+        try:
+            return book["id"], abs_tract_search_fn(
+                title=book.get("title", ""),
+                author=book.get("author", ""),
+                provider="goodreads",
+                abs_tract_url=abs_tract_url,
+                limit=3,
+            )
+        except Exception:
+            return book["id"], []
+
+    results: dict[str, list[dict]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for book_id, products in pool.map(_search_one, books):
+            results[book_id] = products
+    return results

@@ -132,5 +132,78 @@ class GetSeriesBooksTests(unittest.TestCase):
         self.assertEqual(books, [])
 
 
+class SearchSeriesAudibleTests(unittest.TestCase):
+    def test_uses_lookup_when_asin_present(self):
+        books = [{"id": "1", "asin": "B0AAA", "title": "T", "author": "A"}]
+
+        def lookup(client, asin):
+            self.assertEqual(asin, "B0AAA")
+            return {"asin": asin}
+
+        def search(client, query, limit):
+            raise AssertionError("should not be called when ASIN is known")
+
+        result = enrichment.search_series_audible(books, search, lookup, client=None)
+        self.assertEqual(result, {"1": {"asin": "B0AAA"}})
+
+    def test_falls_back_to_text_search_without_asin(self):
+        books = [{"id": "1", "asin": "", "title": "Scholomance", "author": "Logan Jacobs"}]
+
+        def lookup(client, asin):
+            raise AssertionError("should not be called without an ASIN")
+
+        def search(client, query, limit):
+            self.assertEqual(query, "Scholomance Logan Jacobs")
+            return [{"asin": "B0BBB"}, {"asin": "B0CCC"}]
+
+        result = enrichment.search_series_audible(books, search, lookup, client=None)
+        self.assertEqual(result, {"1": {"asin": "B0BBB"}})
+
+    def test_no_title_or_author_yields_none(self):
+        books = [{"id": "1", "asin": "", "title": "", "author": ""}]
+        result = enrichment.search_series_audible(
+            books, lambda *a: [], lambda *a: None, client=None
+        )
+        self.assertEqual(result, {"1": None})
+
+    def test_one_book_failure_does_not_affect_others(self):
+        books = [
+            {"id": "1", "asin": "B0AAA", "title": "", "author": ""},
+            {"id": "2", "asin": "B0BBB", "title": "", "author": ""},
+        ]
+
+        def lookup(client, asin):
+            if asin == "B0AAA":
+                raise RuntimeError("network blip")
+            return {"asin": asin}
+
+        result = enrichment.search_series_audible(books, lambda *a: [], lookup, client=None)
+        self.assertEqual(result, {"1": None, "2": {"asin": "B0BBB"}})
+
+
+class SearchSeriesGoodreadsTests(unittest.TestCase):
+    def test_calls_for_every_book_unconditionally(self):
+        books = [{"id": "1", "title": "T1", "author": "A1"}, {"id": "2", "title": "T2", "author": "A2"}]
+        calls = []
+
+        def abs_tract(**kwargs):
+            calls.append(kwargs["title"])
+            return [{"title": kwargs["title"]}]
+
+        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
+        self.assertEqual(sorted(calls), ["T1", "T2"])
+        self.assertEqual(result["1"], [{"title": "T1"}])
+        self.assertEqual(result["2"], [{"title": "T2"}])
+
+    def test_book_failure_yields_empty_list_not_exception(self):
+        books = [{"id": "1", "title": "T", "author": "A"}]
+
+        def abs_tract(**kwargs):
+            raise RuntimeError("upstream blocked")
+
+        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
+        self.assertEqual(result, {"1": []})
+
+
 if __name__ == "__main__":
     unittest.main()
