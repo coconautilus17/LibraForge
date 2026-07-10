@@ -6,6 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260706-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260706-1" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260711-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -52,58 +53,58 @@
 
     <section class="card">
       <h2>1. Choose a series</h2>
-      <p style="color:var(--muted);font-size:13px;margin:0 0 12px">Searches series already indexed by Audiobookshelf, not a provider search.</p>
-      <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" style="max-width:420px" />
-      <div id="seriesResults" style="margin-top:8px"></div>
+      <p class="section-note">Searches series already indexed by Audiobookshelf, not a provider search.</p>
+      <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" />
+      <div id="seriesResults"></div>
     </section>
 
     <section class="card" id="compileCard" hidden>
       <h2 id="compileTitle">2. Compiled from Audible + Goodreads</h2>
-      <p id="compileSub" style="color:var(--muted);font-size:13px;margin:0 0 16px"></p>
+      <p id="compileSub"></p>
 
-      <div id="sourceStrip" class="badge" style="display:block;margin-bottom:16px"></div>
+      <div id="sourceStrip" class="badge"></div>
 
       <div class="grid">
-        <div class="field field-wide" style="grid-column:1 / -1;display:flex;flex-direction:column;gap:7px">
+        <div class="field field-wide">
           <span class="field-label">Genre</span>
-          <span class="field-hint" style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">deduped union across the series, both sources</span>
-          <div id="genreChips" class="chip-field" style="display:flex;flex-wrap:wrap;gap:6px;min-height:42px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;background:var(--surface-soft)"></div>
-          <div class="chip-field-add-row" style="display:flex;gap:6px">
-            <input id="genreAddInput" type="text" placeholder="Add a genre..." style="flex:1" />
+          <span class="field-hint">deduped union across the series, both sources</span>
+          <div id="genreChips" class="chip-field"></div>
+          <div class="chip-field-add-row">
+            <input id="genreAddInput" type="text" placeholder="Add a genre..." />
             <button id="genreAddBtn" type="button" class="secondary chip-add">Add</button>
           </div>
         </div>
-        <div class="field" style="display:flex;flex-direction:column;gap:7px">
+        <div class="field">
           <label for="narratorInput"><span class="field-label">Narrator</span>
-            <span class="field-hint" style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">union, edit if narrators changed mid-series</span>
+            <span class="field-hint">union, edit if narrators changed mid-series</span>
           </label>
           <input id="narratorInput" />
         </div>
-        <div class="field" style="display:flex;flex-direction:column;gap:7px">
+        <div class="field">
           <label for="sequenceRangeInput"><span class="field-label">Sequence range</span></label>
           <input id="sequenceRangeInput" readonly />
         </div>
 
-        <div class="field explicit-field" style="grid-column:1 / -1">
-          <div class="checks explicit-toggle-row" style="margin:0 0 8px">
+        <div class="field explicit-field field-wide">
+          <div class="checks explicit-toggle-row">
             <label><input id="explicitCheckbox" type="checkbox" /> Explicit</label>
           </div>
-          <div id="explicitEvidence" class="context-note" style="color:var(--warning);font-size:12.5px"></div>
-          <p class="explicit-footnote" style="color:var(--muted);font-size:12px;margin:6px 0 0">Leave unchecked to skip. Checking writes <code>explicit: true</code> to metadata.json for every included book below.</p>
+          <div id="explicitEvidence" class="context-note"></div>
+          <p class="explicit-footnote">Leave unchecked to skip. Checking writes <code>explicit: true</code> to metadata.json for every included book below.</p>
         </div>
       </div>
 
-      <hr style="border:none;border-top:1px solid var(--border);margin:18px 0" />
+      <hr class="divider" />
 
-      <h3 style="font-size:15px;margin:0 0 10px">Books in this series</h3>
-      <div id="bookList" style="display:flex;flex-direction:column;gap:8px"></div>
+      <h3 class="section-label">Books in this series</h3>
+      <div id="bookList"></div>
 
-      <div class="dryrun-notice" style="margin-top:18px">
+      <div class="dryrun-notice">
         <strong>Heads up:</strong> Apply only writes metadata.json, it never edits the audio files' own tags. If this library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you apply here.
       </div>
 
       <div class="actions">
-        <span id="includedCount" style="color:var(--muted);font-size:13px;margin-right:auto"></span>
+        <span id="includedCount"></span>
         <button id="cancelBtn" class="secondary" type="button">Cancel</button>
         <button id="applyBtn" type="button">Apply</button>
       </div>

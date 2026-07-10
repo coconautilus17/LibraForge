@@ -1,0 +1,246 @@
+/* Enrichment Forge page-specific styling.
+   Scoped entirely to this page (loaded only by enrichment-forge.html) so it
+   cannot collide with the separate, app-wide crispness pass on style.css.
+   Matches the approved mockup's layout/structure/component shapes using the
+   live app's existing color tokens, not the mockup's own distinct palette;
+   the color-token swap is the app-wide pass's job, this is everything else. */
+
+.section-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#seriesSearch {
+  max-width: 420px;
+}
+
+#seriesResults {
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+#seriesResults:not(:empty) {
+  border: 1px solid var(--border);
+}
+
+.series-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface-soft);
+  transition: background 120ms ease;
+}
+
+.series-result-row:last-child {
+  border-bottom: none;
+}
+
+.series-result-row:hover {
+  background: var(--surface-hover);
+}
+
+.series-result-name {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.series-result-count {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+#compileSub {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#sourceStrip {
+  display: block;
+  margin-bottom: 16px;
+}
+
+#compileCard .field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.field-hint {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.chip-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 42px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 5px 3px 10px;
+}
+
+.chip-remove {
+  all: unset;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  line-height: 15px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.chip-remove:hover {
+  background: rgb(0 0 0 / 15%);
+  opacity: 1;
+}
+
+.chip-field-add-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chip-field-add-row input {
+  flex: 1;
+}
+
+/* Explicit evidence note: a filled callout box, distinct from the page's
+   existing left-border-only .dryrun-notice (which the "Heads up" strip
+   below already reuses correctly). */
+.context-note {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.explicit-footnote {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.explicit-footnote code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font-size: 0.92em;
+}
+
+#compileCard .divider {
+  margin: 18px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+#compileCard .section-label {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+#bookList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.book-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+
+.book-row:hover {
+  border-color: var(--border-strong);
+}
+
+.book-row.excluded {
+  opacity: 0.55;
+}
+
+.book-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.book-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.book-src-line {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.book-src-line .audible {
+  color: var(--warning);
+}
+
+.book-src-line .goodreads {
+  color: var(--success);
+}
+
+.evidence-pill {
+  flex: none;
+  white-space: nowrap;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.include-toggle {
+  flex: none;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.include-toggle.in {
+  border-color: rgb(var(--accent-rgb) / 55%);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+#compileCard .dryrun-notice {
+  margin-top: 18px;
+}
+
+#includedCount {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
