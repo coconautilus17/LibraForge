@@ -3905,21 +3905,41 @@ def ffmpeg_write_tags(source: Path, metadata: dict, backup: bool) -> None:
     tmp_path.replace(source)
 
 def download_cover_bytes(url: str) -> tuple[bytes, str]:
+    import tempfile
+    from pathlib import Path
+    from urllib.parse import unquote, urlparse
     from urllib.request import Request, urlopen
 
     if not url:
         raise RuntimeError("No cover URL available from Audible result")
 
-    request = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-        },
-    )
+    max_bytes = 10 * 1024 * 1024
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    content_type = ""
 
-    with urlopen(request, timeout=30) as response:
-        data = response.read()
-        content_type = response.headers.get("Content-Type", "").lower()
+    if scheme == "file":
+        upload_root = (Path(tempfile.gettempdir()) / "libraforge-cover-uploads").resolve()
+        path = Path(unquote(parsed.path)).resolve()
+        if path != upload_root and upload_root not in path.parents:
+            raise RuntimeError("Local cover file must come from a LibraForge upload")
+        data = path.read_bytes()
+    elif scheme in {"http", "https"}:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+
+        with urlopen(request, timeout=30) as response:
+            data = response.read(max_bytes + 1)
+            content_type = response.headers.get("Content-Type", "").lower()
+    else:
+        raise RuntimeError("Cover URL must use http, https, or a LibraForge upload")
+
+    if len(data) > max_bytes:
+        raise RuntimeError("Cover image is too large")
 
     if data.startswith(b"\xff\xd8\xff"):
         return data, "jpeg"

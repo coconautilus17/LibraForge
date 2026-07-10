@@ -86,6 +86,8 @@ DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 # <user_id>.meta.json sidecar holding the user-given flavor name. The active
 # account is whichever one currently mirrors DEFAULT_AUTH_FILE.
 ACCOUNTS_DIR = Path("/auth/accounts")
+COVER_UPLOAD_DIR = Path(tempfile.gettempdir()) / "libraforge-cover-uploads"
+MAX_COVER_DOWNLOAD_BYTES = 10 * 1024 * 1024
 ABS_AGG_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-agg.json"
 RETENTION_CONFIG_FILE = APP_ROOT.parent / "config" / "retention.json"
 
@@ -3040,6 +3042,31 @@ def default_output_path(source_path: Path, metadata: dict[str, Any]) -> str:
     return str((folder / f"{title}.m4b").resolve())
 
 
+def read_cover_url_bytes(url: str) -> bytes:
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme == "file":
+        upload_root = COVER_UPLOAD_DIR.resolve()
+        path = Path(urllib.parse.unquote(parsed.path)).resolve()
+        if path != upload_root and upload_root not in path.parents:
+            raise HTTPException(status_code=400, detail="Local cover file must come from a LibraForge upload")
+        data = path.read_bytes()
+    elif scheme in {"http", "https"}:
+        req = urllib.request.Request(url, headers={"User-Agent": "LibraForge/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = response.read(MAX_COVER_DOWNLOAD_BYTES + 1)
+    else:
+        raise HTTPException(status_code=400, detail="Cover URL must use http, https, or a LibraForge upload")
+
+    if len(data) > MAX_COVER_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Cover image is too large")
+    if not (data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")):
+        raise HTTPException(status_code=400, detail="Cover URL did not return a JPEG or PNG image")
+    return data
+
+
 def build_m4b_command(
     req: M4BRunRequest,
     temp_dir: Path | None = None,
@@ -3112,8 +3139,7 @@ def build_m4b_command(
         if ".png" in lower:
             suffix = ".png"
         cover_file = Path(tempfile.mkstemp(prefix="m4b-cover-", suffix=suffix)[1])
-        with urllib.request.urlopen(metadata.cover_url, timeout=30) as response:
-            cover_file.write_bytes(response.read())
+        cover_file.write_bytes(read_cover_url_bytes(metadata.cover_url))
         temp_files.append(cover_file)
         cmd.append(f"--cover={cover_file}")
 
@@ -4529,7 +4555,7 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
 
 @app.get("/api/book/cover")
 def book_cover(path: str) -> Response:
-    p = Path(path)
+    p = validate_audiobook_path(path)
     if p.is_file():
         # Loose audio file: extract embedded cover from the specific file
         try:
@@ -4647,6 +4673,20 @@ def cleanup_sidecars(req: SidecarCleanupRequest) -> dict[str, Any]:
 # abs-agg metadata provider
 # ---------------------------------------------------------------------------
 
+def require_http_base_url(url: str, *, field_name: str = "URL", allow_blank: bool = False) -> str:
+    import urllib.parse
+
+    value = (url or "").strip().rstrip("/")
+    if not value:
+        if allow_blank:
+            return ""
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an http or https URL")
+    return value
+
+
 class AbsAggSettingsRequest(BaseModel):
     url: str
 
@@ -4662,7 +4702,10 @@ class AbsAggSearchRequest(BaseModel):
 
 @app.get("/api/abs-agg/providers")
 def abs_agg_providers() -> dict[str, Any]:
-    base_url = _load_abs_agg_config().get("url", "http://abs-agg:3000")
+    base_url = require_http_base_url(
+        _load_abs_agg_config().get("url", "http://abs-agg:3000"),
+        field_name="abs-agg URL",
+    )
     providers: dict[str, str] = {}
     reachable = False
     try:
@@ -4696,7 +4739,7 @@ def get_abs_agg_settings() -> dict[str, Any]:
 
 @app.put("/api/abs-agg/settings")
 def save_abs_agg_settings(req: AbsAggSettingsRequest) -> dict[str, Any]:
-    config = {"url": req.url}
+    config = {"url": require_http_base_url(req.url, field_name="abs-agg URL")}
     _save_abs_agg_config(config)
     return config
 
@@ -4713,7 +4756,10 @@ def get_abs_tract_settings() -> dict[str, Any]:
 
 @app.put("/api/abs-tract/settings")
 def save_abs_tract_settings(req: AbsTractSettingsRequest) -> dict[str, Any]:
-    config = {"url": req.url.strip(), "kindle_region": (req.kindle_region or "us").strip()}
+    config = {
+        "url": require_http_base_url(req.url, field_name="abs-tract URL", allow_blank=True),
+        "kindle_region": (req.kindle_region or "us").strip(),
+    }
     _save_abs_tract_config(config)
     return config
 
@@ -4726,6 +4772,7 @@ def abs_agg_search(req: AbsAggSearchRequest) -> dict[str, Any]:
             status_code=400,
             detail="abs-agg URL not configured. Enter it in the search panel.",
         )
+    base_url = require_http_base_url(base_url, field_name="abs-agg URL")
     return search_abs_agg_candidates(
         query=req.query,
         author=req.author,
@@ -4752,6 +4799,7 @@ def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
             status_code=400,
             detail="abs-tract URL not configured. Set it in Settings → Goodreads/Kindle fallback.",
         )
+    base_url = require_http_base_url(base_url, field_name="abs-tract URL")
     provider = req.provider if req.provider in {"goodreads", "kindle"} else "goodreads"
     return search_abs_tract_candidates(
         query=req.query,
@@ -4792,7 +4840,10 @@ def _save_abs_config(config: dict[str, Any]) -> None:
 
 
 def _get_abs_url() -> str:
-    return (_load_abs_config().get("url") or _ABS_URL_DEFAULT).rstrip("/")
+    return require_http_base_url(
+        _load_abs_config().get("url") or _ABS_URL_DEFAULT,
+        field_name="Audiobookshelf URL",
+    )
 
 
 def _get_abs_api_key() -> str:
@@ -4949,7 +5000,10 @@ class AbsSaveConfigRequest(BaseModel):
 def abs_save_config(req: AbsSaveConfigRequest) -> dict[str, Any]:
     if not req.api_key.strip():
         raise HTTPException(status_code=400, detail="API key cannot be empty.")
-    config = {"url": req.url.strip().rstrip("/"), "api_key": req.api_key.strip()}
+    config = {
+        "url": require_http_base_url(req.url, field_name="Audiobookshelf URL"),
+        "api_key": req.api_key.strip(),
+    }
     _save_abs_config(config)
     # Verify the key works before confirming success.
     try:
@@ -6379,13 +6433,11 @@ def current_manual_review_cover(
         headers={"Cache-Control": "private, max-age=300"},
     )
 
-
-COVER_UPLOAD_DIR = Path(tempfile.gettempdir()) / "libraforge-cover-uploads"
-
-
 @app.post("/api/manual-review/cover-upload")
 async def upload_manual_review_cover(file: UploadFile = File(...)) -> dict[str, str]:
-    data = await file.read()
+    data = await file.read(MAX_COVER_DOWNLOAD_BYTES + 1)
+    if len(data) > MAX_COVER_DOWNLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Uploaded cover image is too large")
     if data.startswith(b"\xff\xd8\xff"):
         suffix = ".jpg"
     elif data.startswith(b"\x89PNG\r\n\x1a\n"):
