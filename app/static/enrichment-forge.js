@@ -3,6 +3,7 @@ const { escapeHtml } = window.UiCommon;
 
 let currentBooks = [];
 let currentSeriesName = "";
+let currentSourceStatus = {};
 
 async function searchSeries(query) {
   const res = await fetch(`/api/enrichment/series?q=${encodeURIComponent(query)}`).catch(() => null);
@@ -57,6 +58,7 @@ function addGenreChip(value) {
 }
 
 function renderBookList(books) {
+  const showAbs = currentSourceStatus.abs?.state === "searched" || books.some((book) => (book.abs_genres || []).length);
   $("bookList").innerHTML = books.map((book) => `
     <div class="book-row" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
@@ -64,7 +66,10 @@ function renderBookList(books) {
         <div class="book-src-line">
           <span class="audible">Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
+          ${showAbs ? `<span class="abs">ABS: ${escapeHtml((book.abs_genres || []).join(", ") || "none")}</span>&nbsp;&middot;&nbsp;` : ""}
           <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
+          &nbsp;&middot;&nbsp;
+          <span class="local">Local: ${escapeHtml((book.existing_genres || []).join(", ") || "none")}</span>
         </div>
       </div>
       ${book.flagged_explicit ? '<span class="badge evidence-pill">&#9888; Erotica</span>' : ""}
@@ -90,11 +95,20 @@ function updateIncludedCount() {
   $("includedCount").textContent = `${included.length} of ${rows.length} included`;
 }
 
-function renderSourceStrip(searchedCount, elapsedSeconds) {
+function sourceChipHtml(key, status, total) {
+  if (!status) return "";
+  const searched = Number(status.searched || 0);
+  const state = status.state === "searched" ? `${searched} of ${total} searched` : "not used";
+  const detail = status.detail ? ` title="${escapeHtml(status.detail)}"` : "";
+  return `<span class="source-chip ${key} ${status.state || ""}"${detail}><span class="dot"></span> ${escapeHtml(status.label || key)}, ${state}</span>`;
+}
+
+function renderSourceStrip(sourceStatus, totalCount, elapsedSeconds) {
+  const chips = ["audible", "abs", "goodreads"]
+    .map((key) => sourceChipHtml(key, sourceStatus[key], totalCount))
+    .filter(Boolean);
   $("sourceStrip").innerHTML = `
-    <span class="source-chip audible"><span class="dot"></span> Audible, ${searchedCount} of ${searchedCount} searched</span>
-    <span class="sep"></span>
-    <span class="source-chip goodreads"><span class="dot"></span> Goodreads, ${searchedCount} of ${searchedCount} searched</span>
+    ${chips.join('<span class="sep"></span>')}
     <span class="time">${elapsedSeconds}s</span>
   `;
 }
@@ -130,8 +144,9 @@ async function compileSeries(seriesName) {
   const data = await res.json();
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   currentBooks = data.books;
+  currentSourceStatus = data.source_status || {};
   $("compileSub").textContent = `${seriesName}, ${data.books.length} books.`;
-  renderSourceStrip(data.books.length, elapsedSeconds);
+  renderSourceStrip(currentSourceStatus, data.books.length, elapsedSeconds);
   renderGenreChips(data.genre);
   $("narratorInput").value = data.narrator;
   $("sequenceRangeInput").value = data.sequence_range;

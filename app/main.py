@@ -42,6 +42,7 @@ from app.enrichment import (
     group_items_by_series,
     list_series_summary,
     resolve_metadata_json_path,
+    search_series_abs,
     search_series_audible,
     search_series_goodreads,
     write_metadata_json_partial,
@@ -4894,11 +4895,19 @@ class EnrichmentBookRow(BaseModel):
     is_file: bool
     title: str
     audible_genres: list[str]
+    abs_genres: list[str] = Field(default_factory=list)
     goodreads_genres: list[str]
     flagged_explicit: bool
     existing_genres: list[str]
     existing_narrator: str
     existing_explicit: bool
+
+
+class EnrichmentSourceStatus(BaseModel):
+    label: str
+    state: str
+    detail: str = ""
+    searched: int = 0
 
 
 class EnrichmentCompileResponse(BaseModel):
@@ -4909,14 +4918,13 @@ class EnrichmentCompileResponse(BaseModel):
     explicit_flagged_count: int
     explicit_total_count: int
     explicit_evidence_note: str
+    source_status: dict[str, EnrichmentSourceStatus] = Field(default_factory=dict)
 
 
 @app.post("/api/enrichment/compile")
 def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileResponse:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-    if not Path(req.auth_file).exists():
-        raise HTTPException(status_code=400, detail="No Audible auth file. Complete auth setup first.")
 
     review_module = load_review_module()
     items = fetch_all_abs_book_items(_abs_request)
@@ -4925,24 +4933,86 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     if not books:
         raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name}")
 
-    auth = audible.Authenticator.from_file(req.auth_file)
-    client = audible.Client(auth=auth)
+    source_status: dict[str, dict[str, Any]] = {}
+    audible_results: dict[str, dict | None] = {}
+    abs_results: dict[str, dict | None] = {}
 
-    # Phase 1: Audible, 5 workers, run to completion for the whole series.
-    # Reuse the real fixer search/lookup functions (including the ASIN
-    # keyword-search fallback in audible_lookup_by_asin), just bound to the
-    # enrichment-only expanded response groups instead of duplicating them.
-    audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-    audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-    audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
+    # Phase 1: Direct Audible when an auth file exists; otherwise fall back to
+    # Audiobookshelf's provider search so Enrichment Forge can still compile.
+    auth_path = Path(req.auth_file)
+    if auth_path.exists():
+        try:
+            auth = audible.Authenticator.from_file(req.auth_file)
+            client = audible.Client(auth=auth)
+            # Reuse the real fixer search/lookup functions (including the ASIN
+            # keyword-search fallback in audible_lookup_by_asin), just bound to
+            # the enrichment-only expanded response groups instead of duplicating them.
+            audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+            audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+            audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
+            source_status["audible"] = {
+                "label": "Audible",
+                "state": "searched",
+                "searched": len(books),
+            }
+            source_status["abs"] = {
+                "label": "ABS",
+                "state": "skipped",
+                "detail": "Direct Audible auth was available.",
+                "searched": 0,
+            }
+        except Exception as exc:
+            abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
+            source_status["audible"] = {
+                "label": "Audible",
+                "state": "skipped",
+                "detail": f"Auth failed; used ABS instead: {exc}",
+                "searched": 0,
+            }
+            source_status["abs"] = {
+                "label": "ABS",
+                "state": "searched",
+                "detail": "Used as the Audible fallback.",
+                "searched": len(books),
+            }
+    else:
+        abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
+        source_status["audible"] = {
+            "label": "Audible",
+            "state": "skipped",
+            "detail": "No Audible auth file; used ABS instead.",
+            "searched": 0,
+        }
+        source_status["abs"] = {
+            "label": "ABS",
+            "state": "searched",
+            "detail": "Used as the Audible fallback.",
+            "searched": len(books),
+        }
 
     # Phase 2: Goodreads, 5 workers, starts only after phase 1 is fully done
     # (never interleaved with Audible calls, see app/enrichment.py's
     # search_series_goodreads docstring).
     abs_tract_config = _load_abs_tract_config()
-    goodreads_results = search_series_goodreads(books, abs_tract_search, abs_tract_config.get("url", ""))
+    abs_tract_url = (abs_tract_config.get("url") or "").strip()
+    if abs_tract_url:
+        goodreads_results = search_series_goodreads(books, abs_tract_search, abs_tract_url)
+        source_status["goodreads"] = {
+            "label": "Goodreads",
+            "state": "searched",
+            "searched": len(books),
+        }
+    else:
+        goodreads_results = {}
+        source_status["goodreads"] = {
+            "label": "Goodreads",
+            "state": "skipped",
+            "detail": "abs-tract is not connected, so Goodreads was not used.",
+            "searched": 0,
+        }
 
-    compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres)
+    compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres, abs_results)
+    compiled["source_status"] = source_status
     return EnrichmentCompileResponse(**compiled)
 
 

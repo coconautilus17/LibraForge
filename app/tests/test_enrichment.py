@@ -265,6 +265,30 @@ class SearchSeriesGoodreadsTests(unittest.TestCase):
         self.assertEqual(result, {"1": []})
 
 
+class SearchSeriesAbsTests(unittest.TestCase):
+    def test_uses_existing_abs_search_function_for_every_book(self):
+        books = [{"id": "1", "title": "T1", "author": "A1"}, {"id": "2", "title": "T2", "author": "A2"}]
+        calls = []
+
+        def abs_search(**kwargs):
+            calls.append((kwargs["title"], kwargs["provider"]))
+            return {"results": [{"title": kwargs["title"], "genre": "Fantasy"}]}
+
+        result = enrichment.search_series_abs(books, abs_search, provider="audible")
+        self.assertCountEqual(calls, [("T1", "audible"), ("T2", "audible")])
+        self.assertEqual(result["1"]["genre"], "Fantasy")
+        self.assertEqual(result["2"]["title"], "T2")
+
+    def test_abs_failure_yields_none_not_exception(self):
+        books = [{"id": "1", "title": "T", "author": "A"}]
+
+        def abs_search(**kwargs):
+            raise RuntimeError("abs unavailable")
+
+        result = enrichment.search_series_abs(books, abs_search)
+        self.assertEqual(result, {"1": None})
+
+
 class AudibleCategoryLadderGenresTests(unittest.TestCase):
     def test_takes_leaf_name_of_each_ladder(self):
         product = {
@@ -352,6 +376,7 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["books"][1]["flagged_explicit"], True)
         self.assertEqual(compiled["books"][0]["path"], "/audiobooks/Scholomance")
         self.assertEqual(compiled["books"][0]["is_file"], False)
+        self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
 
     def test_missing_audible_and_goodreads_results_do_not_crash(self):
         books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
@@ -359,6 +384,18 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["genre"], [])
         self.assertEqual(compiled["narrator"], "")
         self.assertEqual(compiled["explicit_flagged_count"], 0)
+        self.assertEqual(compiled["books"][0]["abs_genres"], [])
+
+    def test_abs_results_feed_genres_and_narrators_when_audible_missing(self):
+        books = [{"id": "1", "title": "T", "existing_genres": ["Local Fantasy"], "existing_narrator": "", "existing_explicit": False}]
+        abs_results = {"1": {"genre": "Fantasy, Adventure", "narrators": ["ABS Narrator"]}}
+        compiled = enrichment.compile_series_enrichment(
+            books, {}, {}, self._clean_genres, abs_results=abs_results
+        )
+        self.assertEqual(compiled["genre"], ["Fantasy", "Adventure"])
+        self.assertEqual(compiled["narrator"], "ABS Narrator")
+        self.assertEqual(compiled["books"][0]["abs_genres"], ["Fantasy", "Adventure"])
+        self.assertEqual(compiled["books"][0]["existing_genres"], ["Local Fantasy"])
 
     def test_sequence_range_spans_min_to_max(self):
         books = [

@@ -243,6 +243,41 @@ def search_series_goodreads(
     return results
 
 
+def search_series_abs(
+    books: list[dict[str, Any]],
+    abs_search_fn: Callable[..., dict[str, Any]],
+    provider: str = "audible",
+    workers: int = ENRICHMENT_SEARCH_WORKERS,
+) -> dict[str, dict | None]:
+    """Search via Audiobookshelf's configured metadata providers.
+
+    This is the no-Audible-auth fallback path. The caller supplies the existing
+    app.main.search_abs_candidates function so Enrichment Forge reuses the same
+    ABS search plumbing as the manual review and M4B flows.
+    """
+    def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        try:
+            query = str(book.get("title", "") or "").strip()
+            if not query:
+                return book["id"], None
+            data = abs_search_fn(
+                title=query,
+                author=str(book.get("author", "") or ""),
+                provider=provider,
+                limit=3,
+            )
+            results = data.get("results", []) if isinstance(data, dict) else []
+            return book["id"], (results[0] if results else None)
+        except Exception:
+            return book["id"], None
+
+    results: dict[str, dict | None] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for book_id, product in pool.map(_search_one, books):
+            results[book_id] = product
+    return results
+
+
 _EROTICA_ROOT = "erotica"
 
 
@@ -345,11 +380,18 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
     return out
 
 
+def _split_abs_genre(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [part.strip() for part in str(value or "").split(",")]
+
+
 def compile_series_enrichment(
     books: list[dict[str, Any]],
     audible_results: dict[str, dict | None],
     goodreads_results: dict[str, list[dict]],
     clean_provider_genres_fn: Callable[[list[str]], list[str]],
+    abs_results: dict[str, dict | None] | None = None,
 ) -> dict[str, Any]:
     """Build the full compile payload: per-book rows plus series-level
     aggregate genre/narrator union and the explicit evidence note.
@@ -361,18 +403,22 @@ def compile_series_enrichment(
 
     for book in books:
         product = audible_results.get(book["id"])
+        abs_product = (abs_results or {}).get(book["id"])
         gr_products = goodreads_results.get(book["id"]) or []
         gr_product = gr_products[0] if gr_products else None
 
         audible_genres = clean_provider_genres_fn(audible_category_ladder_genres(product))
+        abs_genres = clean_provider_genres_fn(_split_abs_genre((abs_product or {}).get("genre", "")))
         goodreads_genres = clean_provider_genres_fn((gr_product or {}).get("_abs_genres") or [])
         flagged = is_flagged_explicit(product)
         if flagged:
             flagged_count += 1
 
         narrators = [n.get("name", "") for n in ((product or {}).get("narrators") or []) if n.get("name")]
+        narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
         all_genres.extend(audible_genres)
+        all_genres.extend(abs_genres)
         all_genres.extend(goodreads_genres)
         all_narrators.extend(narrators)
 
@@ -382,6 +428,7 @@ def compile_series_enrichment(
             "is_file": book.get("is_file", False),
             "title": book.get("title", ""),
             "audible_genres": audible_genres,
+            "abs_genres": abs_genres,
             "goodreads_genres": goodreads_genres,
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),
