@@ -64,28 +64,34 @@
       <div id="sourceStrip" class="badge" style="display:block;margin-bottom:16px"></div>
 
       <div class="grid">
-        <label style="grid-column:1 / -1">
+        <div class="field field-wide" style="grid-column:1 / -1;display:flex;flex-direction:column;gap:7px">
           <span class="field-label">Genre</span>
-          <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">deduped union across the series, both sources</span>
-          <div id="genreChips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:42px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;background:var(--surface-soft)"></div>
-          <div style="display:flex;gap:6px;margin-top:6px">
+          <span class="field-hint" style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">deduped union across the series, both sources</span>
+          <div id="genreChips" class="chip-field" style="display:flex;flex-wrap:wrap;gap:6px;min-height:42px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;background:var(--surface-soft)"></div>
+          <div class="chip-field-add-row" style="display:flex;gap:6px">
             <input id="genreAddInput" type="text" placeholder="Add a genre..." style="flex:1" />
-            <button id="genreAddBtn" type="button" class="secondary">Add</button>
+            <button id="genreAddBtn" type="button" class="secondary chip-add">Add</button>
           </div>
-        </label>
-        <label><span class="field-label">Narrator</span>
-          <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">union, edit if narrators changed mid-series</span>
+        </div>
+        <div class="field" style="display:flex;flex-direction:column;gap:7px">
+          <label for="narratorInput"><span class="field-label">Narrator</span>
+            <span class="field-hint" style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">union, edit if narrators changed mid-series</span>
+          </label>
           <input id="narratorInput" />
-        </label>
-        <label><span class="field-label">Sequence range</span>
+        </div>
+        <div class="field" style="display:flex;flex-direction:column;gap:7px">
+          <label for="sequenceRangeInput"><span class="field-label">Sequence range</span></label>
           <input id="sequenceRangeInput" readonly />
-        </label>
-      </div>
+        </div>
 
-      <div class="checks" style="margin-top:12px">
-        <label><input id="explicitCheckbox" type="checkbox" /> Explicit</label>
+        <div class="field explicit-field" style="grid-column:1 / -1">
+          <div class="checks explicit-toggle-row" style="margin:0 0 8px">
+            <label><input id="explicitCheckbox" type="checkbox" /> Explicit</label>
+          </div>
+          <div id="explicitEvidence" class="context-note" style="color:var(--warning);font-size:12.5px"></div>
+          <p class="explicit-footnote" style="color:var(--muted);font-size:12px;margin:6px 0 0">Leave unchecked to skip. Checking writes <code>explicit: true</code> to metadata.json for every included book below.</p>
+        </div>
       </div>
-      <p id="explicitEvidence" style="color:var(--warning);font-size:12.5px;margin:6px 0 0"></p>
 
       <hr style="border:none;border-top:1px solid var(--border);margin:18px 0" />
 

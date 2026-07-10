@@ -31,7 +31,7 @@ function renderSeriesResults(rows) {
 function renderGenreChips(genres) {
   const container = $("genreChips");
   container.innerHTML = genres.map((g) => `
-    <span class="badge" data-genre="${escapeHtml(g)}">${escapeHtml(g)} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
+    <span class="badge chip" data-genre="${escapeHtml(g)}">${escapeHtml(g)} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
   `).join("");
   container.querySelectorAll(".chip-remove").forEach((btn) => {
     btn.addEventListener("click", (e) => {
