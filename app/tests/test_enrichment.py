@@ -205,5 +205,101 @@ class SearchSeriesGoodreadsTests(unittest.TestCase):
         self.assertEqual(result, {"1": []})
 
 
+class AudibleCategoryLadderGenresTests(unittest.TestCase):
+    def test_takes_leaf_name_of_each_ladder(self):
+        product = {
+            "category_ladders": [
+                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}, {"name": "Epic"}]},
+                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}]},
+            ]
+        }
+        self.assertEqual(enrichment.audible_category_ladder_genres(product), ["Epic", "Fantasy"])
+
+    def test_none_product_returns_empty(self):
+        self.assertEqual(enrichment.audible_category_ladder_genres(None), [])
+
+
+class IsFlaggedExplicitTests(unittest.TestCase):
+    def test_is_adult_product_true_flags(self):
+        self.assertTrue(enrichment.is_flagged_explicit({"is_adult_product": True}))
+
+    def test_erotica_root_category_flags(self):
+        product = {"category_ladders": [{"ladder": [{"name": "Erotica"}, {"name": "Literature & Fiction"}]}]}
+        self.assertTrue(enrichment.is_flagged_explicit(product))
+
+    def test_fantasy_only_does_not_flag(self):
+        product = {"is_adult_product": False, "category_ladders": [{"ladder": [{"name": "Fantasy"}]}]}
+        self.assertFalse(enrichment.is_flagged_explicit(product))
+
+    def test_none_product_does_not_flag(self):
+        self.assertFalse(enrichment.is_flagged_explicit(None))
+
+
+class ExplicitEvidenceNoteTests(unittest.TestCase):
+    def test_zero_flagged(self):
+        note = enrichment.explicit_evidence_note(0, 4)
+        self.assertIn("No book in this series returned a positive Erotica/adult signal", note)
+        self.assertIn("use your own judgment for the whole series", note)
+
+    def test_all_flagged(self):
+        note = enrichment.explicit_evidence_note(4, 4)
+        self.assertIn("All 4 books in this series show a positive Erotica/adult signal", note)
+
+    def test_some_flagged(self):
+        note = enrichment.explicit_evidence_note(2, 4)
+        self.assertIn("2 of 4 books in this series show a positive Erotica/adult signal", note)
+
+    def test_caveat_always_present(self):
+        for flagged, total in [(0, 3), (3, 3), (1, 3)]:
+            note = enrichment.explicit_evidence_note(flagged, total)
+            self.assertIn("that doesn't confirm the rest are clean".lower(), note.lower())
+
+
+class CompileSeriesEnrichmentTests(unittest.TestCase):
+    def _clean_genres(self, genres):
+        return [g for g in genres if g]
+
+    def test_compiles_union_and_flags(self):
+        books = [
+            {"id": "1", "path": "/audiobooks/Scholomance", "is_file": False, "title": "Scholomance", "existing_genres": ["Fantasy"], "existing_narrator": "", "existing_explicit": False},
+            {"id": "2", "path": "/audiobooks/Scholomance 2", "is_file": False, "title": "Scholomance 2", "existing_genres": [], "existing_narrator": "Andrea Parsneau", "existing_explicit": False},
+        ]
+        audible_results = {
+            "1": {
+                "category_ladders": [{"ladder": [{"name": "Fantasy"}]}],
+                "narrators": [{"name": "Andrea Parsneau"}],
+                "is_adult_product": False,
+            },
+            "2": {
+                "category_ladders": [{"ladder": [{"name": "Erotica"}]}],
+                "narrators": [{"name": "Andrea Parsneau"}],
+                "is_adult_product": True,
+            },
+        }
+        goodreads_results = {
+            "1": [{"_abs_genres": ["Young Adult"]}],
+            "2": [{"_abs_genres": ["Fantasy"]}],
+        }
+        compiled = enrichment.compile_series_enrichment(
+            books, audible_results, goodreads_results, self._clean_genres
+        )
+        self.assertEqual(compiled["genre"], ["Fantasy", "Young Adult", "Erotica"])
+        self.assertEqual(compiled["narrator"], "Andrea Parsneau")
+        self.assertEqual(compiled["explicit_flagged_count"], 1)
+        self.assertEqual(compiled["explicit_total_count"], 2)
+        self.assertIn("1 of 2 books", compiled["explicit_evidence_note"])
+        self.assertEqual(compiled["books"][0]["flagged_explicit"], False)
+        self.assertEqual(compiled["books"][1]["flagged_explicit"], True)
+        self.assertEqual(compiled["books"][0]["path"], "/audiobooks/Scholomance")
+        self.assertEqual(compiled["books"][0]["is_file"], False)
+
+    def test_missing_audible_and_goodreads_results_do_not_crash(self):
+        books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["genre"], [])
+        self.assertEqual(compiled["narrator"], "")
+        self.assertEqual(compiled["explicit_flagged_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
