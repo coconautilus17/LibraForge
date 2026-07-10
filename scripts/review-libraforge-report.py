@@ -816,6 +816,96 @@ def group_existing_series_by_normalized_tag(
     return groups
 
 
+def _split_and_dedupe(value: str) -> list[str]:
+    parts = [p.strip() for p in re.split(r",|;", value) if p.strip()]
+    seen: list[str] = []
+    for p in parts:
+        if p.casefold() not in {s.casefold() for s in seen}:
+            seen.append(p)
+    return seen
+
+
+def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Local books that already have a series tag and share the given
+    Pass-1 base-title key -- used both to source the Series/Genre/Narrator
+    suggestions and as the "+ Add tagged siblings" candidate list.
+    """
+    siblings = []
+    for item in report_items:
+        local = item.get("local") or {}
+        match = item.get("match") or {}
+        series = clean_text(match.get("series")) or clean_text(local.get("series"))
+        if not series:
+            continue
+        title = clean_text(local.get("title")) or clean_text(match.get("title"))
+        base, _ = split_title_base_and_number(title)
+        if normalize(base) != base_key:
+            continue
+        siblings.append({
+            "path": item.get("path") or item.get("source") or "",
+            "title": title,
+            "series": series,
+            "genre": clean_text(local.get("genre")) or clean_text(match.get("genre")),
+            "narrator": clean_text(local.get("narrator")) or clean_text(match.get("narrator")),
+        })
+    return siblings
+
+
+def add_series_group_suspects(
+    suspects: list[dict[str, Any]], report_items: list[dict[str, Any]], args: argparse.Namespace
+) -> None:
+    pass_one_groups = group_missing_series_by_title_pattern(report_items)
+    claimed_paths = {m["path"] for g in pass_one_groups for m in g["members"]}
+    pass_two_groups = group_existing_series_by_normalized_tag(report_items, claimed_paths)
+
+    for group in pass_one_groups:
+        tagged_siblings = _find_tagged_siblings(group["group_key"], report_items)
+        genres: list[str] = []
+        narrators: list[str] = []
+        for sib in tagged_siblings:
+            genres.extend(_split_and_dedupe(sib["genre"]))
+            narrators.extend(_split_and_dedupe(sib["narrator"]))
+
+        suspects.append({
+            "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
+            "severity": "low", "recommendation": "fix_series_group",
+            "reasons": [{
+                "code": "series_group_missing", "severity": "low",
+                "message": group["context_note"],
+                "evidence": {
+                    "suggested_series": group["suggested_series"],
+                    "suggested_author": group["suggested_author"],
+                    "suggested_genre": ", ".join(dict.fromkeys(genres)),
+                    "suggested_narrator": ", ".join(dict.fromkeys(narrators)),
+                    "author_note": group["author_note"],
+                    "members": group["members"],
+                    "tagged_siblings": tagged_siblings,
+                },
+            }],
+            "related_paths": [m["path"] for m in group["members"]],
+        })
+
+    for group in pass_two_groups:
+        suspects.append({
+            "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
+            "severity": "low", "recommendation": "fix_series_group",
+            "reasons": [{
+                "code": "series_group_normalize", "severity": "low",
+                "message": group["context_note"],
+                "evidence": {
+                    "suggested_series": group["suggested_series"],
+                    "suggested_author": group["suggested_author"],
+                    "suggested_genre": "",
+                    "suggested_narrator": "",
+                    "author_note": group["author_note"],
+                    "members": group["members"],
+                    "tagged_siblings": [],
+                },
+            }],
+            "related_paths": [m["path"] for m in group["members"]],
+        })
+
+
 def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
 
@@ -946,6 +1036,7 @@ def extract_suspects(report: dict[str, Any], args: argparse.Namespace) -> tuple[
                 ) or item.get("was_manually_applied"):
                     suppressed += 1
             add_metadata_cross_item_suspects(suspects, report_items, args)
+            add_series_group_suspects(suspects, report_items, args)
         else:
             for item in report.get("items") or []:
                 categories = set(item.get("categories") or [])

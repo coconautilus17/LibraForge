@@ -400,5 +400,79 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertEqual(groups[0]["suggested_series"], "Dungeon Core")
 
 
+class AddSeriesGroupSuspectsTests(unittest.TestCase):
+    def _item(self, path, title, author, series="", genre="", narrator="", **overrides):
+        item = {
+            "path": path,
+            "status": "matched",
+            "local": {"title": title, "author": author, "series": series, "genre": genre, "narrator": narrator},
+            "match": {"title": title, "author": author, "series": series, "genre": genre, "narrator": narrator},
+        }
+        item.update(overrides)
+        return item
+
+    def test_pass_one_group_becomes_a_series_group_suspect(self):
+        report_items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        self.assertEqual(len(suspects), 1)
+        suspect = suspects[0]
+        self.assertEqual(suspect["status"], "series_group")
+        self.assertEqual(suspect["reasons"][0]["code"], "series_group_missing")
+        self.assertEqual(set(suspect["related_paths"]), {"/lib/A2.m4b", "/lib/A3.m4b"})
+
+    def test_pass_two_group_becomes_a_series_group_suspect_with_different_code(self):
+        report_items = [
+            self._item("/lib/B1.m4b", "Dungeon Core", "Eric Vall", series="Dungeon Core"),
+            self._item("/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", series="Dungeon Core, Book 2"),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        self.assertEqual(suspects[0]["reasons"][0]["code"], "series_group_normalize")
+
+    def test_genre_and_narrator_are_deduped_across_tagged_siblings(self):
+        # Two books with no series (the group) plus one already-tagged
+        # sibling that supplies genre/narrator for the suggestion.
+        report_items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            self._item(
+                "/lib/A1.m4b", "Dungeon Core 1", "Eric Vall", series="Dungeon Core",
+                genre="LitRPG", narrator="JD Tanner",
+            ),
+            self._item(
+                "/lib/A4.m4b", "Dungeon Core 4", "Eric Vall", series="Dungeon Core",
+                genre="Fantasy", narrator="Sierra Taft",
+            ),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        pass_one = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_missing")
+        evidence = pass_one["reasons"][0]["evidence"]
+        self.assertEqual(evidence["suggested_genre"], "LitRPG, Fantasy")
+        self.assertEqual(evidence["suggested_narrator"], "JD Tanner, Sierra Taft")
+        sibling_paths = {s["path"] for s in evidence["tagged_siblings"]}
+        self.assertEqual(sibling_paths, {"/lib/A1.m4b", "/lib/A4.m4b"})
+
+    def test_no_series_groups_when_nothing_qualifies(self):
+        report_items = [self._item("/lib/Solo.m4b", "Standalone", "Someone")]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        self.assertEqual(suspects, [])
+
+    def test_extract_suspects_includes_series_groups(self):
+        report = {
+            "report_items": [
+                self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+                self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            ],
+        }
+        suspects, _ = REVIEW.extract_suspects(report, make_args())
+        self.assertTrue(any(s["status"] == "series_group" for s in suspects))
+
+
 if __name__ == "__main__":
     unittest.main()
