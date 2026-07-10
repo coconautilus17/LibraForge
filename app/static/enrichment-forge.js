@@ -129,7 +129,11 @@ async function applyEnrichment() {
 
   if (res && res.ok) {
     const data = await res.json();
-    $("compileSub").textContent = `Applied to ${data.applied} books.`;
+    if (data.failed && data.failed.length) {
+      $("compileSub").textContent = `Applied to ${data.applied} books. ${data.failed.length} failed.`;
+    } else {
+      $("compileSub").textContent = `Applied to ${data.applied} books.`;
+    }
   }
 }
 
