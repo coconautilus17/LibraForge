@@ -7,7 +7,13 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 import app.main as main_module
-from app.main import assert_under_audiobooks, safe_child, validate_audiobook_browse_path
+from app.main import (
+    assert_under_audiobooks,
+    book_cover,
+    read_cover_url_bytes,
+    safe_child,
+    validate_audiobook_browse_path,
+)
 
 
 class SafeChildTests(unittest.TestCase):
@@ -109,6 +115,50 @@ class ValidateAudiobookBrowsePathTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             validate_audiobook_browse_path(str(self.root / "nonexistent"))
         self.assertEqual(ctx.exception.status_code, 404)
+
+
+class BookCoverPathSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name, "library").resolve()
+        self.root.mkdir()
+        self.outside = Path(self.tmp.name, "outside").resolve()
+        self.outside.mkdir()
+        self._orig = main_module.AUDIOBOOKS_ROOT
+        main_module.AUDIOBOOKS_ROOT = self.root
+
+    def tearDown(self):
+        main_module.AUDIOBOOKS_ROOT = self._orig
+        self.tmp.cleanup()
+
+    def test_cover_endpoint_rejects_directory_outside_library(self):
+        (self.outside / "cover.jpg").write_bytes(b"\xff\xd8\xffOUTSIDE")
+
+        with self.assertRaises(HTTPException) as ctx:
+            book_cover(str(self.outside))
+
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class CoverUrlPathSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.uploads = Path(self.tmp.name, "uploads").resolve()
+        self.uploads.mkdir()
+        self.outside = Path(self.tmp.name, "outside.jpg").resolve()
+        self.outside.write_bytes(b"\xff\xd8\xffOUTSIDE")
+        self._orig = main_module.COVER_UPLOAD_DIR
+        main_module.COVER_UPLOAD_DIR = self.uploads
+
+    def tearDown(self):
+        main_module.COVER_UPLOAD_DIR = self._orig
+        self.tmp.cleanup()
+
+    def test_file_cover_url_must_be_from_upload_dir(self):
+        with self.assertRaises(HTTPException) as ctx:
+            read_cover_url_bytes(self.outside.as_uri())
+
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 if __name__ == "__main__":
