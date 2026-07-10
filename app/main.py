@@ -4905,6 +4905,7 @@ class EnrichmentCompileResponse(BaseModel):
     books: list[EnrichmentBookRow]
     genre: list[str]
     narrator: str
+    sequence_range: str
     explicit_flagged_count: int
     explicit_total_count: int
     explicit_evidence_note: str

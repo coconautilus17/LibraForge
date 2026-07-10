@@ -44,6 +44,14 @@ function currentGenreList() {
   return Array.from($("genreChips").querySelectorAll("[data-genre]")).map((el) => el.dataset.genre);
 }
 
+function addGenreChip(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  const existing = currentGenreList();
+  if (existing.some((g) => g.toLowerCase() === trimmed.toLowerCase())) return;
+  renderGenreChips([...existing, trimmed]);
+}
+
 function renderBookList(books) {
   $("bookList").innerHTML = books.map((book) => `
     <div class="book-row" data-id="${escapeHtml(book.id)}" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm)">
@@ -82,7 +90,9 @@ async function compileSeries(seriesName) {
   $("compileCard").hidden = false;
   $("compileTitle").textContent = `2. Compiled from Audible + Goodreads`;
   $("compileSub").textContent = `${seriesName}, searching...`;
+  $("sourceStrip").textContent = "";
 
+  const startedAt = performance.now();
   const res = await fetch("/api/enrichment/compile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -95,10 +105,13 @@ async function compileSeries(seriesName) {
   }
 
   const data = await res.json();
+  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   currentBooks = data.books;
   $("compileSub").textContent = `${seriesName}, ${data.books.length} books.`;
+  $("sourceStrip").textContent = `Audible, ${data.books.length} of ${data.books.length} searched · Goodreads, ${data.books.length} of ${data.books.length} searched · ${elapsedSeconds}s`;
   renderGenreChips(data.genre);
   $("narratorInput").value = data.narrator;
+  $("sequenceRangeInput").value = data.sequence_range;
   $("explicitEvidence").textContent = data.explicit_evidence_note;
   renderBookList(data.books);
   updateIncludedCount();
@@ -150,3 +163,14 @@ $("cancelBtn").addEventListener("click", () => {
   $("compileCard").hidden = true;
 });
 $("applyBtn").addEventListener("click", applyEnrichment);
+
+$("genreAddBtn").addEventListener("click", () => {
+  addGenreChip($("genreAddInput").value);
+  $("genreAddInput").value = "";
+});
+$("genreAddInput").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  addGenreChip($("genreAddInput").value);
+  $("genreAddInput").value = "";
+});

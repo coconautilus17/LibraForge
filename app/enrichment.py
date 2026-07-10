@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 _SERIES_SEQUENCE_SUFFIX_RE = re.compile(r"\s*#\d+\s*$")
+_SERIES_SEQUENCE_NUMBER_RE = re.compile(r"#(\d+(?:\.\d+)?)\s*$")
 
 
 def strip_series_sequence_suffix(series_name: str) -> str:
@@ -23,6 +24,15 @@ def strip_series_sequence_suffix(series_name: str) -> str:
     'Youngest Son of the Black-Hearted'.
     """
     return _SERIES_SEQUENCE_SUFFIX_RE.sub("", series_name or "").strip()
+
+
+def extract_series_sequence(series_name: str) -> str | None:
+    """Extract the trailing Audiobookshelf '#N' sequence number, e.g.
+    'Scholomance #4' becomes '4', 'Scholomance #4.5' becomes '4.5'.
+    Returns None when no sequence suffix is present.
+    """
+    match = _SERIES_SEQUENCE_NUMBER_RE.search(series_name or "")
+    return match.group(1) if match else None
 
 
 def normalize_abs_series_name(series_name: str, normalize_series_fn: Callable[[str], str]) -> str:
@@ -132,6 +142,7 @@ def get_series_books(
     books = []
     for item in group_items:
         metadata = ((item.get("media") or {}).get("metadata") or {})
+        raw_series_name = str(metadata.get("seriesName") or "").strip()
         books.append({
             "id": item.get("id", ""),
             "path": item.get("path", ""),
@@ -142,6 +153,7 @@ def get_series_books(
             "existing_genres": list((item.get("media") or {}).get("tags") or []),
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
+            "sequence": extract_series_sequence(raw_series_name),
         })
     return books
 
@@ -278,6 +290,34 @@ def explicit_evidence_note(flagged_count: int, total_count: int) -> str:
     return f"{headline} {caveat}"
 
 
+def _format_sequence_number(value: float) -> str:
+    if value == int(value):
+        return str(int(value))
+    return str(value)
+
+
+def _compute_sequence_range(books: list[dict[str, Any]]) -> str:
+    """Summarize the series' sequence numbers as 'min to max', a single
+    value when every book shares the same sequence, or blank when no book
+    carries a sequence number at all.
+    """
+    numbers: list[float] = []
+    for book in books:
+        sequence = book.get("sequence")
+        if not sequence:
+            continue
+        try:
+            numbers.append(float(sequence))
+        except (TypeError, ValueError):
+            continue
+    if not numbers:
+        return ""
+    low, high = min(numbers), max(numbers)
+    if low == high:
+        return _format_sequence_number(low)
+    return f"{_format_sequence_number(low)} to {_format_sequence_number(high)}"
+
+
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -341,6 +381,7 @@ def compile_series_enrichment(
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),
         "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books)),
+        "sequence_range": _compute_sequence_range(books),
     }
 
 
