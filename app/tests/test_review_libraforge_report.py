@@ -475,11 +475,16 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         sequences = [m["sequence"] for m in groups[0]["members"]]
         self.assertEqual(sequences, ["1", "2", "3", "10", "11"])
 
-    def test_member_with_unrelated_title_is_flagged_series_mismatch(self):
-        # Reproduces the real-world case: a book incorrectly tagged with an
-        # unrelated series' name (e.g. a bad catalog match) should be
-        # visibly flagged, not silently trusted, even though its raw tag
-        # groups it here.
+    def test_creatively_titled_member_is_not_flagged_just_for_an_unrelated_title(self):
+        # Regression: a title-vs-series-name relation check used to flag
+        # "series_mismatch" here, but most real book titles are creative and
+        # don't textually relate to their own series name at all (e.g. real
+        # Heartstrikers books are titled "Nice Dragons Finish Last", "One
+        # Good Dragon Deserves Another", etc.) -- that produced false
+        # mismatch flags on ~19% of already-correctly-tagged members across
+        # entire legitimate series. The check was removed; a creatively
+        # titled but correctly (and consistently) tagged member must not be
+        # flagged.
         items = [
             self._item("/lib/S2.m4b", "Summoner 2", "Eric Vall", "Summoner"),
             self._item("/lib/S3.m4b", "Summoner 3", "Eric Vall", "Summoner"),
@@ -487,7 +492,7 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         ]
         groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
         by_path = {m["path"]: m for m in groups[0]["members"]}
-        self.assertEqual(by_path["/lib/SSchool6.m4b"]["flag"], "series_mismatch")
+        self.assertIsNone(by_path["/lib/SSchool6.m4b"]["flag"])
         self.assertIsNone(by_path["/lib/S2.m4b"]["flag"])
         self.assertIsNone(by_path["/lib/S3.m4b"]["flag"])
 

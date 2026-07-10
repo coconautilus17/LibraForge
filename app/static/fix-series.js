@@ -58,8 +58,8 @@ function fsRenderBookList() {
     // Series and genre share one line (not stacked) -- both are just
     // "what this book already has", read together at a glance.
     const metaParts = [];
-    if (b.series) metaParts.push(`Current series: ${escapeHtml(b.series)}`);
-    if (b.genre) metaParts.push(`Genre: ${escapeHtml(b.genre)}`);
+    if (b.series) metaParts.push(`<span class="fs-meta-label">Series:</span> ${escapeHtml(b.series)}`);
+    if (b.genre) metaParts.push(`<span class="fs-meta-label">Genre:</span> ${escapeHtml(b.genre)}`);
     const metaLine = metaParts.length ? `<small class="fs-current-series">${metaParts.join(' &middot; ')}</small>` : '';
     return `
     <div class="fs-book-row ${b.included ? '' : 'fs-excluded'}" data-fs-row="${i}">
@@ -233,7 +233,15 @@ function fsOpen(group) {
   fsCurrentGroup = group;
   fsBookState = group.members.map((m) => ({
     path: m.path, title: m.title, series: m.series || '', genre: m.genre || '',
-    flag: m.flag ? m.flag.replace(/_/g, ' ') : null,
+    // "series_mismatch" here means the book's TITLE doesn't look like it
+    // belongs to this series, not that its tag differs -- a mismatched
+    // member is often tagged identically to the rest of the group (that's
+    // exactly what makes it worth a second look: same generic series name,
+    // seemingly different actual series). Spell that out instead of a bare
+    // "series mismatch" that reads as a contradiction next to a matching tag.
+    flag: m.flag === 'series_mismatch'
+      ? `Title doesn't look related to this series (tagged "${m.series || ''}")`
+      : (m.flag ? m.flag.replace(/_/g, ' ') : null),
     sequence: m.sequence || '', included: true,
   }));
   fsSortBookState();

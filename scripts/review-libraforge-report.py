@@ -847,11 +847,14 @@ def group_existing_series_by_normalized_tag(
 
         member_rows = []
         for m in sorted(members, key=_member_sort_key):
-            flag = None
-            if majority_author and m["author"] and m["author"] != majority_author:
-                flag = "author_differs"
-            elif not _normalized_names_plausibly_related(normalize_series(m["title"]), key):
-                flag = "series_mismatch"
+            # Deliberately no title-vs-series-name relation check here (unlike
+            # the pass-1 omnibus sweep, where it's legitimate): most real book
+            # titles are creative and don't textually contain their own
+            # series name at all (e.g. "Nice Dragons Finish Last" is really
+            # book 1 of Heartstrikers) -- that produced false "mismatch"
+            # flags on ~19% of already-correctly-tagged members across whole,
+            # legitimate series. Author is still a real, reliable signal.
+            flag = "author_differs" if (majority_author and m["author"] and m["author"] != majority_author) else None
             member_rows.append({
                 "path": m["path"], "title": m["title"], "author": m["author"],
                 "sequence": m["sequence"], "series": m["raw_series"], "flag": flag,

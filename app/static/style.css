@@ -3675,3 +3675,7 @@ button.danger:hover:not(:disabled) {
   color: var(--muted);
   font-size: 0.76rem;
 }
+.fs-meta-label {
+  color: var(--accent);
+  font-weight: 600;
+}
