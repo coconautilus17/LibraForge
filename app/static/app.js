@@ -160,7 +160,7 @@ async function poll() {
   if (!res.ok) return;
   const state = await res.json();
   latestState = state;
-  render(state);
+  await render(state);
   if (['completed', 'failed', 'cancelled'].includes(state.status)) {
     if (state.workers_draining) {
       // Workers are still finishing writes -- keep polling, block start.
@@ -1179,6 +1179,7 @@ async function loadLastReport() {
 
 let matchReportItems = [];
 let currentReportId = null;
+let seriesGroupsRenderToken = 0;
 
 async function renderMatchReport(items) {
   matchReportItems = items || [];
@@ -1197,7 +1198,9 @@ async function renderMatchReport(items) {
   buildMatchReportCards();
   if (currentReportId) {
     probeSuspectReport(currentReportId);
+    const myToken = ++seriesGroupsRenderToken;
     const groups = await ensureSeriesGroupsForMatchReport(currentReportId);
+    if (myToken !== seriesGroupsRenderToken) return; // a newer render call superseded this one
     if (groups.length) {
       const container = $('matchReportList');
       for (const group of groups.reverse()) {
