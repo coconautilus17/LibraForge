@@ -137,6 +137,14 @@
   background: var(--success);
 }
 
+.source-chip.skipped {
+  color: var(--muted);
+}
+
+.source-chip.skipped .dot {
+  background: var(--border-strong);
+}
+
 .source-strip .sep {
   width: 1px;
   height: 13px;
@@ -341,6 +349,10 @@
 
 .book-src-line .goodreads {
   color: var(--success);
+}
+
+.book-src-line .local {
+  color: var(--accent);
 }
 
 .evidence-pill {
