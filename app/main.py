@@ -1188,7 +1188,7 @@ class OrganizerRunRequest(BaseModel):
     consolidate_structures: bool = False
     remove_empty_dirs: bool = False
     max_items: int = 0
-    progress_every: int = 25
+    progress_every: int = 1
     skip_patterns: list[str] = Field(default_factory=list)
     acknowledge_no_sidecars: bool = False
 

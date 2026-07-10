@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260706-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260706-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260711-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -53,9 +53,12 @@
     </div>
 
     <section class="card">
-      <h2>Run Settings</h2>
+      <div class="run-settings-heading">
+        <h2>Run Settings</h2>
+        <button id="advancedRunToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced</button>
+      </div>
       <div class="grid">
-        <label><span class="field-label">Organizer script <span class="info-tip" data-tooltip="Selects the organizer implementation used to inspect metadata and plan destination paths."></span></span>
+        <label class="organizer-advanced-setting"><span class="field-label">Organizer script <span class="info-tip" data-tooltip="Selects the organizer implementation used to inspect metadata and plan destination paths."></span></span>
           <select id="script"></select>
         </label>
         <label><span class="field-label">Scan root <span class="info-tip" data-tooltip="Folder containing books to inspect. The normal import workflow scans /audiobooks/_unorganized."></span></span>
@@ -64,11 +67,11 @@
         <label><span class="field-label">Destination library root <span class="info-tip" data-tooltip="Library root under which author, series, and book destination folders are planned or created."></span></span>
           <input id="destinationRoot" value="/audiobooks" />
         </label>
-        <label><span class="field-label">Max items, 0 means all <span class="info-tip" data-tooltip="Limits the number of organizer items inspected. Use a small value for testing; 0 includes all discovered items."></span></span>
+        <label class="organizer-advanced-setting"><span class="field-label">Max items, 0 means all <span class="info-tip" data-tooltip="Limits the number of organizer items inspected. Use a small value for testing; 0 includes all discovered items."></span></span>
           <input id="maxItems" type="number" value="0" />
         </label>
-        <label><span class="field-label">Progress every N items, 0 disables <span class="info-tip" data-tooltip="Controls how often the script prints scan and cache progress. Smaller values give more frequent UI updates."></span></span>
-          <input id="progressEvery" type="number" value="25" />
+        <label class="organizer-advanced-setting"><span class="field-label">Progress every N items, 0 disables <span class="info-tip" data-tooltip="Controls how often the script prints scan and cache progress. Smaller values give more frequent UI updates."></span></span>
+          <input id="progressEvery" type="number" value="1" />
         </label>
       </div>
 
@@ -82,13 +85,13 @@
 
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply moves <span class="info-tip" data-tooltip="Moves folders and files to the planned destinations. Leave disabled to preview without changing the library."></span></label>
-        <label><input id="m4bOnly" type="checkbox" /> Only process `.m4b` items <span class="info-tip" data-tooltip="Excludes other supported formats and grouped chapter folders unless every audio file is M4B."></span></label>
-        <label><input id="includeExisting" type="checkbox" /> Include existing book folders <span class="info-tip" data-tooltip="Includes folders that look already organized instead of skipping them as likely existing books."></span></label>
-        <label><input id="noCompanions" type="checkbox" /> Ignore companion files for loose books <span class="info-tip" data-tooltip="Moves only the loose audio file and leaves matching marker, sidecar, image, and metadata companion files behind."></span></label>
-        <label><input id="allowUnknownAuthor" type="checkbox" /> Allow moves with unknown author <span class="info-tip" data-tooltip="Permits destinations under Unknown Author. Disabled by default because missing author metadata often indicates an unsafe plan."></span></label>
+        <label class="organizer-advanced-setting"><input id="m4bOnly" type="checkbox" /> Only process `.m4b` items <span class="info-tip" data-tooltip="Excludes other supported formats and grouped chapter folders unless every audio file is M4B."></span></label>
+        <label class="organizer-advanced-setting"><input id="includeExisting" type="checkbox" /> Include existing book folders <span class="info-tip" data-tooltip="Includes folders that look already organized instead of skipping them as likely existing books."></span></label>
+        <label class="organizer-advanced-setting"><input id="noCompanions" type="checkbox" /> Ignore companion files for loose books <span class="info-tip" data-tooltip="Moves only the loose audio file and leaves matching marker, sidecar, image, and metadata companion files behind."></span></label>
+        <label class="organizer-advanced-setting"><input id="allowUnknownAuthor" type="checkbox" /> Allow moves with unknown author <span class="info-tip" data-tooltip="Permits destinations under Unknown Author. Disabled by default because missing author metadata often indicates an unsafe plan."></span></label>
         <label><input id="removeEmptyDirs" type="checkbox" /> Remove empty source directories after apply <span class="info-tip" data-tooltip="After successful moves, removes empty parent folders up to the scan root. Non-empty folders are preserved."></span></label>
-        <label><input id="rebuildStructureCache" type="checkbox" /> Refresh cache before this run <span class="info-tip" data-tooltip="First rescans the destination library and replaces the saved structure cache, then continues with this organizer preview or apply run. Use after manual library changes when you also want to organize books now."></span></label>
-        <label><input id="indexOnly" type="checkbox" /> Index library and exit <span class="info-tip" data-tooltip="Rescans the destination library, writes a fresh structure cache, and exits without planning or applying moves. Use for initial setup or a standalone cache refresh."></span></label>
+        <label class="organizer-advanced-setting"><input id="rebuildStructureCache" type="checkbox" /> Refresh cache before this run <span class="info-tip" data-tooltip="First rescans the destination library and replaces the saved structure cache, then continues with this organizer preview or apply run. Use after manual library changes when you also want to organize books now."></span></label>
+        <label class="organizer-advanced-setting"><input id="indexOnly" type="checkbox" /> Index library and exit <span class="info-tip" data-tooltip="Rescans the destination library, writes a fresh structure cache, and exits without planning or applying moves. Use for initial setup or a standalone cache refresh."></span></label>
         <label><input id="consolidateStructures" type="checkbox" /> Consolidate existing series folders, full-root dry run recommended <span class="info-tip" data-tooltip="Plans parent-folder consolidation across the existing library while preserving book folder names. Run against the full root in dry-run mode first."></span></label>
       </div>
 
@@ -190,6 +193,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260705-2"></script>
-  <script src="/static/organizer.js?v=20260701-3"></script>
+  <script src="/static/organizer.js?v=20260711-1"></script>
 </body>
 </html>
