@@ -151,6 +151,28 @@ class GetSeriesBooksTests(unittest.TestCase):
         books = enrichment.get_series_books(groups, "Scholomance", _fake_normalize_series)
         self.assertEqual(books[0]["sequence"], "2")
 
+    def test_orders_books_by_sequence_number_ascending(self):
+        groups = {
+            "scholomance": [
+                {"id": "item-4", "path": "/x/4", "isFile": False, "media": {"metadata": {"title": "Scholomance 4", "seriesName": "Scholomance #4"}, "tags": []}},
+                {"id": "item-1", "path": "/x/1", "isFile": False, "media": {"metadata": {"title": "Scholomance", "seriesName": "Scholomance #1"}, "tags": []}},
+                {"id": "item-2", "path": "/x/2", "isFile": False, "media": {"metadata": {"title": "Scholomance 2", "seriesName": "Scholomance #2"}, "tags": []}},
+            ]
+        }
+        books = enrichment.get_series_books(groups, "Scholomance", _fake_normalize_series)
+        self.assertEqual([b["id"] for b in books], ["item-1", "item-2", "item-4"])
+
+    def test_books_without_a_sequence_sort_after_numbered_ones(self):
+        groups = {
+            "scholomance": [
+                {"id": "no-seq", "path": "/x/n", "isFile": False, "media": {"metadata": {"title": "Scholomance Extra", "seriesName": "Scholomance"}, "tags": []}},
+                {"id": "item-2", "path": "/x/2", "isFile": False, "media": {"metadata": {"title": "Scholomance 2", "seriesName": "Scholomance #2"}, "tags": []}},
+                {"id": "item-1", "path": "/x/1", "isFile": False, "media": {"metadata": {"title": "Scholomance", "seriesName": "Scholomance #1"}, "tags": []}},
+            ]
+        }
+        books = enrichment.get_series_books(groups, "Scholomance", _fake_normalize_series)
+        self.assertEqual([b["id"] for b in books], ["item-1", "item-2", "no-seq"])
+
     def test_unknown_series_returns_empty(self):
         books = enrichment.get_series_books({}, "Nonexistent", _fake_normalize_series)
         self.assertEqual(books, [])

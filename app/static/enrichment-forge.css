@@ -81,10 +81,6 @@
   background: var(--surface-hover);
 }
 
-.series-result-row.picked {
-  background: var(--accent-soft);
-}
-
 .series-result-name {
   font-weight: 650;
   font-size: 14px;
