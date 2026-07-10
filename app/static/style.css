@@ -851,12 +851,14 @@ body.settings-open {
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 80%), transparent);
 }
 
-.card > h2:first-child {
+.card > h2:first-child,
+.run-settings-heading > h2 {
   margin-bottom: 16px;
   font-size: 21px;
 }
 
-.card > h2:first-child::after {
+.card > h2:first-child::after,
+.run-settings-heading > h2::after {
   display: block;
   width: 32px;
   height: 3px;
@@ -864,6 +866,36 @@ body.settings-open {
   border-radius: 99px;
   background: var(--accent);
   content: "";
+}
+
+.run-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.run-settings-heading > h2 {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.advanced-toggle {
+  min-height: 32px;
+  padding: 6px 12px;
+  flex: 0 0 auto;
+  border-color: rgb(var(--accent-rgb) / 38%);
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.advanced-toggle[aria-expanded="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  box-shadow: 0 6px 16px rgb(var(--accent-rgb) / 16%);
 }
 
 .grid {

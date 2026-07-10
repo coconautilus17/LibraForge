@@ -47,9 +47,28 @@ function fixerMajorVersion(scriptName) {
   return m ? parseInt(m[1]) : 0;
 }
 
+function isAdvancedRunSettingsOpen() {
+  return $('advancedRunToggle')?.getAttribute('aria-expanded') === 'true';
+}
+
+function syncAdvancedRunSettings() {
+  const open = isAdvancedRunSettingsOpen();
+  const toggle = $('advancedRunToggle');
+  if (toggle) {
+    toggle.textContent = open ? 'Hide advanced' : 'Advanced';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  document.querySelectorAll('.advanced-run-setting').forEach((el) => {
+    if (el.id === 'batchAbsProviderLabel' || el.classList.contains('force-original-setting')) return;
+    el.hidden = !open;
+  });
+  syncForceOriginal();
+}
+
 function updateV5Fields() {
   const isV5 = fixerMajorVersion($('script').value) >= 5;
   $('v5Fields').style.display = isV5 ? '' : 'none';
+  syncAdvancedRunSettings();
 }
 
 async function loadScripts() {
@@ -1134,15 +1153,23 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
 function syncForceOriginal() {
   const forceOn = $('force').checked;
   const fo = $('forceOriginal');
+  const label = fo.closest('label');
+  const advancedOpen = isAdvancedRunSettingsOpen();
+  if (label) label.hidden = !(advancedOpen || forceOn);
   fo.disabled = !forceOn;
-  fo.closest('label').style.opacity = forceOn ? '' : '0.4';
+  if (label) label.style.opacity = forceOn ? '' : '0.4';
   if (!forceOn) fo.checked = false;
   const note = $('manualBackupNote');
   if (note) note.hidden = !(forceOn && fo.checked);
 }
 $('force').addEventListener('change', syncForceOriginal);
 $('forceOriginal').addEventListener('change', syncForceOriginal);
-syncForceOriginal();
+$('advancedRunToggle')?.addEventListener('click', () => {
+  const open = !isAdvancedRunSettingsOpen();
+  $('advancedRunToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  syncAdvancedRunSettings();
+});
+syncAdvancedRunSettings();
 
 $('workers').addEventListener('input', () => {
   $('writeWorkers').value = Math.min(parseInt($('workers').value || '1', 10), 10);
@@ -1622,10 +1649,11 @@ if ($('targetScanBtn')) {
   function toggleBatchProviderFields() {
     if (!$('batchProvider')) return;
     const isAbs = $('batchProvider').value === 'abs';
-    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !isAbs;
+    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !(isAdvancedRunSettingsOpen() && isAbs);
   }
   if ($('batchProvider')) {
     $('batchProvider').addEventListener('change', toggleBatchProviderFields);
+    $('advancedRunToggle')?.addEventListener('click', toggleBatchProviderFields);
     toggleBatchProviderFields();
   }
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
