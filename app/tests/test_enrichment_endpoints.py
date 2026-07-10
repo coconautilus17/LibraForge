@@ -195,18 +195,20 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
 class EnrichmentApplyEndpointTests(unittest.TestCase):
     def test_applies_only_included_books(self):
         with tempfile.TemporaryDirectory() as tmp:
-            book_dir = Path(tmp) / "Scholomance"
+            root = Path(tmp).resolve()
+            book_dir = root / "Scholomance"
             book_dir.mkdir()
             payload = {
                 "books": [
                     {"id": "1", "path": str(book_dir), "is_file": False, "include": True},
-                    {"id": "2", "path": str(Path(tmp) / "Excluded"), "is_file": False, "include": False},
+                    {"id": "2", "path": str(root / "Excluded"), "is_file": False, "include": False},
                 ],
                 "genre": ["Fantasy", "LitRPG"],
                 "narrator": "Andrea Parsneau",
                 "explicit": False,
             }
-            resp = client.post("/api/enrichment/apply", json=payload)
+            with patch.object(main, "AUDIOBOOKS_ROOT", root):
+                resp = client.post("/api/enrichment/apply", json=payload)
             self.assertEqual(resp.status_code, 200)
             body = resp.json()
             self.assertEqual(body["applied"], 1)
@@ -214,7 +216,7 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
             written = json.loads((book_dir / "metadata.json").read_text())
             self.assertEqual(written["genres"], ["Fantasy", "LitRPG"])
             self.assertEqual(written["narrators"], ["Andrea Parsneau"])
-            self.assertFalse((Path(tmp) / "Excluded" / "metadata.json").exists())
+            self.assertFalse((root / "Excluded" / "metadata.json").exists())
 
     def test_corrupt_sidecar_reported_as_failure_without_sinking_batch(self):
         """One book with an unreadable existing metadata.json must not crash
@@ -222,9 +224,10 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
         for a corrupt existing file, and the endpoint must catch that per book,
         skip it, and still apply the rest of the batch (200, not 500)."""
         with tempfile.TemporaryDirectory() as tmp:
-            good_dir = Path(tmp) / "Good"
+            root = Path(tmp).resolve()
+            good_dir = root / "Good"
             good_dir.mkdir()
-            corrupt_dir = Path(tmp) / "Corrupt"
+            corrupt_dir = root / "Corrupt"
             corrupt_dir.mkdir()
             (corrupt_dir / "metadata.json").write_text("{not valid json", encoding="utf-8")
 
@@ -237,7 +240,8 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
                 "narrator": "Andrea Parsneau",
                 "explicit": False,
             }
-            resp = client.post("/api/enrichment/apply", json=payload)
+            with patch.object(main, "AUDIOBOOKS_ROOT", root):
+                resp = client.post("/api/enrichment/apply", json=payload)
             self.assertEqual(resp.status_code, 200)
             body = resp.json()
             self.assertEqual(body["applied"], 1)
@@ -248,6 +252,61 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
 
             written = json.loads((good_dir / "metadata.json").read_text())
             self.assertEqual(written["genres"], ["Fantasy"])
+
+    def test_rejects_book_path_outside_audiobooks_root(self):
+        """A book whose path is not under AUDIOBOOKS_ROOT must be rejected
+        before any write is attempted, not silently written anywhere."""
+        with tempfile.TemporaryDirectory() as root_tmp, \
+             tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(root_tmp).resolve()
+            outside = Path(outside_tmp).resolve()
+
+            payload = {
+                "books": [
+                    {"id": "1", "path": str(outside), "is_file": False, "include": True},
+                ],
+                "genre": ["Fantasy"],
+                "narrator": "Andrea Parsneau",
+                "explicit": False,
+            }
+            with patch.object(main, "AUDIOBOOKS_ROOT", root):
+                resp = client.post("/api/enrichment/apply", json=payload)
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertEqual(body["applied"], 0)
+            self.assertEqual(len(body["failed"]), 1)
+            self.assertEqual(body["failed"][0]["id"], "1")
+            self.assertIn("must be under", body["failed"][0]["error"])
+            self.assertFalse((outside / "metadata.json").exists())
+
+    def test_rejects_traversal_path_escaping_root(self):
+        """A path using '..' segments to climb out of AUDIOBOOKS_ROOT must be
+        rejected even though the resolved target exists on disk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            container = Path(tmp).resolve()
+            root = container / "root"
+            root.mkdir()
+            sibling = container / "sibling"
+            sibling.mkdir()
+
+            escape_path = str(root / ".." / "sibling")
+            payload = {
+                "books": [
+                    {"id": "1", "path": escape_path, "is_file": False, "include": True},
+                ],
+                "genre": ["Fantasy"],
+                "narrator": "Andrea Parsneau",
+                "explicit": False,
+            }
+            with patch.object(main, "AUDIOBOOKS_ROOT", root):
+                resp = client.post("/api/enrichment/apply", json=payload)
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertEqual(body["applied"], 0)
+            self.assertEqual(len(body["failed"]), 1)
+            self.assertEqual(body["failed"][0]["id"], "1")
+            self.assertIn("must be under", body["failed"][0]["error"])
+            self.assertFalse((sibling / "metadata.json").exists())
 
 
 if __name__ == "__main__":
