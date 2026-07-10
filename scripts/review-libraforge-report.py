@@ -816,13 +816,26 @@ def group_existing_series_by_normalized_tag(
     return groups
 
 
+def _dedupe_casefold(items: list[str]) -> list[str]:
+    """Dedupe a list case-insensitively, keeping first-seen casing.
+
+    Used for both deduping within comma-separated values and across sibling
+    values, so genre/narrator dedup is case-insensitive at all levels.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
+
+
 def _split_and_dedupe(value: str) -> list[str]:
+    """Split comma/semicolon-separated value and dedupe case-insensitively."""
     parts = [p.strip() for p in re.split(r",|;", value) if p.strip()]
-    seen: list[str] = []
-    for p in parts:
-        if p.casefold() not in {s.casefold() for s in seen}:
-            seen.append(p)
-    return seen
+    return _dedupe_casefold(parts)
 
 
 def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -875,8 +888,8 @@ def add_series_group_suspects(
                 "evidence": {
                     "suggested_series": group["suggested_series"],
                     "suggested_author": group["suggested_author"],
-                    "suggested_genre": ", ".join(dict.fromkeys(genres)),
-                    "suggested_narrator": ", ".join(dict.fromkeys(narrators)),
+                    "suggested_genre": ", ".join(_dedupe_casefold(genres)),
+                    "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
                     "author_note": group["author_note"],
                     "members": group["members"],
                     "tagged_siblings": tagged_siblings,

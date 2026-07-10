@@ -473,6 +473,32 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         suspects, _ = REVIEW.extract_suspects(report, make_args())
         self.assertTrue(any(s["status"] == "series_group" for s in suspects))
 
+    def test_genre_dedup_is_case_insensitive_across_siblings(self):
+        # Regression test: genre/narrator aggregation across multiple tagged
+        # sibling books should be case-insensitive, consistent with the
+        # case-insensitive dedup already happening within a single sibling's
+        # comma-separated tag.
+        report_items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall"),
+            self._item(
+                "/lib/A1.m4b", "Dungeon Core 1", "Eric Vall", series="Dungeon Core",
+                genre="Fantasy", narrator="JD Tanner",
+            ),
+            self._item(
+                "/lib/A4.m4b", "Dungeon Core 4", "Eric Vall", series="Dungeon Core",
+                genre="fantasy", narrator="jd tanner",
+            ),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        pass_one = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_missing")
+        evidence = pass_one["reasons"][0]["evidence"]
+        # Only one entry should survive per casefold-equal value, keeping
+        # first-seen casing.
+        self.assertEqual(evidence["suggested_genre"], "Fantasy")
+        self.assertEqual(evidence["suggested_narrator"], "JD Tanner")
+
 
 if __name__ == "__main__":
     unittest.main()
