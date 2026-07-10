@@ -32,6 +32,12 @@ RESPONSE_GROUPS = ",".join(
     ]
 )
 
+# Enrichment Forge needs richer per-product data than the fixer's normal
+# matching flow (category_ladders for genre, rating for is_adult_product).
+# Kept as a separate constant, not merged into RESPONSE_GROUPS, so the
+# high-volume batch matcher calls don't get a heavier payload per request.
+ENRICHMENT_RESPONSE_GROUPS = RESPONSE_GROUPS + ",category_ladders,rating"
+
 
 def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]:
     response = client.get(

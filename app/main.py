@@ -34,6 +34,19 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+from app.enrichment import (
+    compile_series_enrichment,
+    fetch_all_abs_book_items,
+    get_series_books,
+    group_items_by_series,
+    list_series_summary,
+    resolve_metadata_json_path,
+    search_series_audible,
+    search_series_goodreads,
+    write_metadata_json_partial,
+)
+from app.fixer.scoring import clean_provider_genres
+from app.fixer.search import ENRICHMENT_RESPONSE_GROUPS, abs_tract_search
 from app.m4b_naming import canonical_m4b_title
 from app.manual_review import build_sidecar_multipart_context
 from app.progress_phases import (
@@ -754,6 +767,34 @@ def load_fixer_module(script_name: str = ""):
     spec.loader.exec_module(module)
     _fixer_module_cache.clear()  # only keep the current script version
     _fixer_module_cache[key] = module
+    return module
+
+
+_REVIEW_MODULE_CACHE: dict[tuple[str, int], Any] = {}
+
+
+def load_review_module():
+    """Dynamically load scripts/review-libraforge-report.py, mirroring
+    load_fixer_module()'s pattern (cached by mtime) so Enrichment Forge
+    reuses its normalize_series() instead of duplicating series-name
+    cleanup logic.
+    """
+    script_path = SCRIPTS_DIR / "review-libraforge-report.py"
+    try:
+        mtime = script_path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    key = (str(script_path), mtime)
+    cached = _REVIEW_MODULE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location("review_libraforge_report", script_path)
+    if spec is None or spec.loader is None:
+        raise HTTPException(status_code=500, detail="Could not load review-libraforge-report.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _REVIEW_MODULE_CACHE.clear()
+    _REVIEW_MODULE_CACHE[key] = module
     return module
 
 
@@ -4682,6 +4723,146 @@ def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
         kindle_region=(cfg.get("kindle_region") or "us").strip() or "us",
         limit=req.limit,
     )
+
+
+# ---------------------------------------------------------------------------
+# Enrichment Forge
+# ---------------------------------------------------------------------------
+
+
+class EnrichmentSeriesRow(BaseModel):
+    name: str
+    book_count: int
+
+
+class EnrichmentSeriesResponse(BaseModel):
+    series: list[EnrichmentSeriesRow]
+
+
+@app.get("/api/enrichment/series")
+def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    review_module = load_review_module()
+    items = fetch_all_abs_book_items(_abs_request)
+    groups = group_items_by_series(items, review_module.normalize_series)
+    summary = list_series_summary(groups, q)
+    return EnrichmentSeriesResponse(series=[EnrichmentSeriesRow(**row) for row in summary])
+
+
+class EnrichmentCompileRequest(BaseModel):
+    series_name: str
+    auth_file: str = "/auth/audible-metadata.json"
+
+
+class EnrichmentBookRow(BaseModel):
+    id: str
+    path: str
+    is_file: bool
+    title: str
+    audible_genres: list[str]
+    goodreads_genres: list[str]
+    flagged_explicit: bool
+    existing_genres: list[str]
+    existing_narrator: str
+    existing_explicit: bool
+
+
+class EnrichmentCompileResponse(BaseModel):
+    books: list[EnrichmentBookRow]
+    genre: list[str]
+    narrator: str
+    explicit_flagged_count: int
+    explicit_total_count: int
+    explicit_evidence_note: str
+
+
+def _audible_search_expanded(client, query: str, limit: int) -> list[dict]:
+    """Same call shape as fixer.audible_search but with the enrichment-only
+    expanded response groups (category_ladders + rating)."""
+    response = client.get(
+        "catalog/products",
+        params={"keywords": query, "num_results": limit, "response_groups": ENRICHMENT_RESPONSE_GROUPS},
+    )
+    return response.get("products", []) or []
+
+
+def _audible_lookup_expanded(client, asin: str) -> dict | None:
+    """Same call shape as fixer.audible_lookup_by_asin but with the
+    enrichment-only expanded response groups."""
+    try:
+        response = client.get(
+            f"catalog/products/{asin.upper()}",
+            params={"response_groups": ENRICHMENT_RESPONSE_GROUPS},
+        )
+        return response.get("product") or None
+    except Exception:
+        return None
+
+
+@app.post("/api/enrichment/compile")
+def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileResponse:
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    if not Path(req.auth_file).exists():
+        raise HTTPException(status_code=400, detail="No Audible auth file. Complete auth setup first.")
+
+    review_module = load_review_module()
+    items = fetch_all_abs_book_items(_abs_request)
+    groups = group_items_by_series(items, review_module.normalize_series)
+    books = get_series_books(groups, req.series_name, review_module.normalize_series)
+    if not books:
+        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name}")
+
+    auth = audible.Authenticator.from_file(req.auth_file)
+    client = audible.Client(auth=auth)
+
+    # Phase 1: Audible, 5 workers, run to completion for the whole series.
+    audible_results = search_series_audible(books, _audible_search_expanded, _audible_lookup_expanded, client)
+
+    # Phase 2: Goodreads, 5 workers, starts only after phase 1 is fully done
+    # (never interleaved with Audible calls, see app/enrichment.py's
+    # search_series_goodreads docstring).
+    abs_tract_config = _load_abs_tract_config()
+    goodreads_results = search_series_goodreads(books, abs_tract_search, abs_tract_config.get("url", ""))
+
+    compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres)
+    return EnrichmentCompileResponse(**compiled)
+
+
+class EnrichmentApplyBook(BaseModel):
+    id: str
+    path: str
+    is_file: bool
+    include: bool
+
+
+class EnrichmentApplyRequest(BaseModel):
+    books: list[EnrichmentApplyBook]
+    genre: list[str] = []
+    narrator: str = ""
+    explicit: bool = False
+
+
+class EnrichmentApplyResponse(BaseModel):
+    applied: int
+    failed: list[dict] = []
+
+
+@app.post("/api/enrichment/apply")
+def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
+    applied = 0
+    failed: list[dict] = []
+    for book in req.books:
+        if not book.include:
+            continue
+        target = resolve_metadata_json_path(book.path, book.is_file)
+        try:
+            write_metadata_json_partial(target, req.genre, req.narrator, req.explicit)
+            applied += 1
+        except Exception as exc:
+            failed.append({"id": book.id, "path": book.path, "error": str(exc)})
+    return EnrichmentApplyResponse(applied=applied, failed=failed)
 
 
 # ---------------------------------------------------------------------------
