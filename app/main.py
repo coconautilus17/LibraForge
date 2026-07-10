@@ -6231,6 +6231,11 @@ def library_page() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "downloader.html").read_text(encoding="utf-8"))
 
 
+@app.get("/enrichment-forge", response_class=HTMLResponse)
+def enrichment_forge_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "enrichment-forge.html").read_text(encoding="utf-8"))
+
+
 @app.get("/api/scripts")
 def list_scripts() -> dict[str, Any]:
     fixer_scripts, organizer_scripts = discover_scripts()
