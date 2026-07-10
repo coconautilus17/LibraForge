@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - M4B Tool</title>
   <script src="/static/ui-preferences.js?v=20260706-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260706-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260711-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -53,7 +53,10 @@
     </div>
 
     <section class="card">
-      <h2>Source</h2>
+      <div class="run-settings-heading">
+        <h2>Source</h2>
+        <button id="advancedRunToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced</button>
+      </div>
       <div class="grid">
         <label><span class="field-label">Folder or file <span class="info-tip" data-tooltip="Audio file or folder of chapter files to load, inspect, and merge into the output M4B."></span></span>
           <div class="search-row">
@@ -83,10 +86,10 @@
       </div>
 
       <div class="grid" style="margin-top:12px">
-        <label><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used for manual catalog search."></span></span>
+        <label class="m4b-advanced-setting"><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used for manual catalog search."></span></span>
           <input id="authFile" value="/auth/audible-metadata.json" />
         </label>
-        <label><span class="field-label">Fixer search logic <span class="info-tip" data-tooltip="Selects which fixer script supplies title parsing, Audible search, scoring, and metadata normalization logic."></span></span>
+        <label class="m4b-advanced-setting"><span class="field-label">Fixer search logic <span class="info-tip" data-tooltip="Selects which fixer script supplies title parsing, Audible search, scoring, and metadata normalization logic."></span></span>
           <select id="searchScript"></select>
         </label>
       </div>
@@ -110,54 +113,64 @@
     </section>
 
     <section class="card">
-      <h2>Find Books To Convert</h2>
-      <p class="note">Uses the selected fixer's existing processing and multipart safety rules. Discovery is read-only, does not inspect Audible metadata, and one inventory supplies both result views. It also caches codec, container, bitrate, sample-rate, and channel probes so each result can show whether No conversion is appropriate.</p>
-      <div class="path-controls">
-        <label><span class="field-label">Discovery root <span class="info-tip" data-tooltip="Library folder to scan for conversion candidates. Results are grouped using the selected fixer's trusted processing rules."></span></span>
-          <input id="discoveryRoot" value="/audiobooks" />
-        </label>
-        <button id="findMultipartBtn" class="secondary">Find multipart books</button>
-        <button id="findNonM4bBtn" class="secondary">Find non-M4B books</button>
-        <button id="refreshDiscoveryBtn" class="secondary">Refresh search</button>
-        <button id="refreshAudioProfilesBtn" class="secondary" disabled>Update multipart sidecars</button>
+      <div class="run-settings-heading">
+        <h2>Find Books To Convert</h2>
+        <button id="discoverySectionToggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="discoverySectionBody">Show</button>
       </div>
-      <p class="action-explanation"><strong>Find</strong> loads the persistent saved inventory without scanning when one is available. <strong>Refresh search</strong> walks the selected root and probes only new or changed files. <strong>Update multipart sidecars</strong> stores cached all-file audio profiles without changing audio or contacting Audible.</p>
-      <p id="discoveryMeta" class="note">No discovery scan run yet.</p>
-      <div id="discoveryResults" class="file-list"></div>
+      <div id="discoverySectionBody" hidden>
+        <p class="note">Uses the selected fixer's existing processing and multipart safety rules. Discovery is read-only, does not inspect Audible metadata, and one inventory supplies both result views. It also caches codec, container, bitrate, sample-rate, and channel probes so each result can show whether No conversion is appropriate.</p>
+        <div class="path-controls">
+          <label><span class="field-label">Discovery root <span class="info-tip" data-tooltip="Library folder to scan for conversion candidates. Results are grouped using the selected fixer's trusted processing rules."></span></span>
+            <input id="discoveryRoot" value="/audiobooks" />
+          </label>
+          <button id="findMultipartBtn" class="secondary">Find multipart books</button>
+          <button id="findNonM4bBtn" class="secondary">Find non-M4B books</button>
+          <button id="refreshDiscoveryBtn" class="secondary">Refresh search</button>
+          <button id="refreshAudioProfilesBtn" class="secondary" disabled>Update multipart sidecars</button>
+        </div>
+        <p class="action-explanation"><strong>Find</strong> loads the persistent saved inventory without scanning when one is available. <strong>Refresh search</strong> walks the selected root and probes only new or changed files. <strong>Update multipart sidecars</strong> stores cached all-file audio profiles without changing audio or contacting Audible.</p>
+        <p id="discoveryMeta" class="note">No discovery scan run yet.</p>
+        <div id="discoveryResults" class="file-list"></div>
+      </div>
     </section>
 
     <section class="card">
-      <h2>Metadata Search</h2>
-      <div class="grid">
-        <label><span class="field-label">Metadata provider</span>
-          <select id="metaProvider">
-            <option value="audible">Audible</option>
-            <option value="abs">Audiobookshelf (ABS)</option>
-            <option value="abs-agg">abs-agg</option>
-          </select>
-        </label>
-        <label id="absProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf."></span></span>
-          <select id="absProvider"></select>
-        </label>
-        <p id="absWarning" class="note" hidden style="color:var(--warning,#e8a020)">Audiobookshelf is not connected. <a href="/settings#accounts" style="color:inherit;text-decoration:underline">Set up ABS connection →</a></p>
-        <label id="absAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
-          <select id="absAggProvider"></select>
-        </label>
-        <label id="absAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="absAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value — e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
-          <input id="absAggParams" placeholder="en" />
-        </label>
-        <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
-          <input id="absAggUrl" placeholder="http://abs-agg:3000" />
-        </label>
-        <p id="absAggWarning" class="note" hidden style="color:var(--warning,#e8a020)">abs-agg is not reachable at the configured URL. Start the service or check the URL above.</p>
+      <div class="run-settings-heading">
+        <h2>Metadata Search</h2>
+        <button id="metadataSectionToggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="metadataSectionBody">Show</button>
       </div>
-      <div class="search-row">
-        <input id="searchQuery" placeholder="Search title, author, series..." />
-        <button id="searchBtn">Search metadata</button>
+      <div id="metadataSectionBody" hidden>
+        <div class="grid">
+          <label><span class="field-label">Metadata provider</span>
+            <select id="metaProvider">
+              <option value="audible">Audible</option>
+              <option value="abs">Audiobookshelf (ABS)</option>
+              <option value="abs-agg">abs-agg</option>
+            </select>
+          </label>
+          <label id="absProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf."></span></span>
+            <select id="absProvider"></select>
+          </label>
+          <p id="absWarning" class="note" hidden style="color:var(--warning,#e8a020)">Audiobookshelf is not connected. <a href="/settings#accounts" style="color:inherit;text-decoration:underline">Set up ABS connection →</a></p>
+          <label id="absAggProviderLabel" hidden><span class="field-label">abs-agg source</span>
+            <select id="absAggProvider"></select>
+          </label>
+          <label id="absAggParamsLabel" hidden><span class="field-label">Provider params <span class="info-tip" id="absAggParamsTip" data-tooltip="Some providers require a path parameter. Enter just the value — e.g. 'en' for Storytel, 'pl' for Audioteka, 'germany' for BookBeat."></span></span>
+            <input id="absAggParams" placeholder="en" />
+          </label>
+          <label id="absAggUrlLabel" hidden><span class="field-label">abs-agg URL <span class="info-tip" data-tooltip="Base URL of your abs-agg instance."></span></span>
+            <input id="absAggUrl" placeholder="http://abs-agg:3000" />
+          </label>
+          <p id="absAggWarning" class="note" hidden style="color:var(--warning,#e8a020)">abs-agg is not reachable at the configured URL. Start the service or check the URL above.</p>
+        </div>
+        <div class="search-row">
+          <input id="searchQuery" placeholder="Search title, author, series..." />
+          <button id="searchBtn">Search metadata</button>
+        </div>
+        <p class="action-explanation">This optional search fills the metadata form from a selected result. It does not start conversion or write to the source.</p>
+        <div id="searchMeta" class="note"></div>
+        <div id="searchResults" class="results-grid"></div>
       </div>
-      <p class="action-explanation">This optional search fills the metadata form from a selected result. It does not start conversion or write to the source.</p>
-      <div id="searchMeta" class="note"></div>
-      <div id="searchResults" class="results-grid"></div>
     </section>
 
     <section class="card">
@@ -277,6 +290,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260624-1"></script>
-  <script src="/static/m4b-tool.js?v=20260624-3"></script>
+  <script src="/static/m4b-tool.js?v=20260711-1"></script>
 </body>
 </html>
