@@ -1,6 +1,9 @@
 """Tests for app.enrichment: ABS series discovery and grouping."""
+import json
 import re
+import tempfile
 import unittest
+from pathlib import Path
 
 from app import enrichment
 
@@ -299,6 +302,67 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["genre"], [])
         self.assertEqual(compiled["narrator"], "")
         self.assertEqual(compiled["explicit_flagged_count"], 0)
+
+
+class ResolveMetadataJsonPathTests(unittest.TestCase):
+    def test_folder_item(self):
+        result = enrichment.resolve_metadata_json_path("/audiobooks/Author/Book", is_file=False)
+        self.assertEqual(str(result), "/audiobooks/Author/Book/metadata.json")
+
+    def test_loose_file_item(self):
+        result = enrichment.resolve_metadata_json_path("/audiobooks/Author/Book/Book.m4b", is_file=True)
+        self.assertEqual(str(result), "/audiobooks/Author/Book/Book.m4b.metadata.json")
+
+
+class MergeMetadataJsonTests(unittest.TestCase):
+    def test_blank_genre_and_narrator_leave_existing_untouched(self):
+        existing = {"genres": ["Fantasy"], "narrators": ["Andrea Parsneau"], "explicit": False}
+        merged = enrichment.merge_metadata_json(existing, genre=[], narrator="", explicit_checked=False)
+        self.assertEqual(merged, existing)
+
+    def test_non_blank_genre_overwrites_existing(self):
+        existing = {"genres": ["Fantasy"]}
+        merged = enrichment.merge_metadata_json(existing, genre=["Fantasy", "LitRPG"], narrator="", explicit_checked=False)
+        self.assertEqual(merged["genres"], ["Fantasy", "LitRPG"])
+
+    def test_narrator_splits_on_comma(self):
+        merged = enrichment.merge_metadata_json({}, genre=[], narrator="A, B", explicit_checked=False)
+        self.assertEqual(merged["narrators"], ["A", "B"])
+
+    def test_explicit_checked_writes_true(self):
+        merged = enrichment.merge_metadata_json({"explicit": False}, genre=[], narrator="", explicit_checked=True)
+        self.assertTrue(merged["explicit"])
+
+    def test_explicit_unchecked_never_writes_false_over_existing_true(self):
+        merged = enrichment.merge_metadata_json({"explicit": True}, genre=[], narrator="", explicit_checked=False)
+        self.assertTrue(merged["explicit"])
+
+    def test_other_existing_fields_preserved(self):
+        existing = {"title": "Scholomance", "isbn": "123", "genres": ["Fantasy"]}
+        merged = enrichment.merge_metadata_json(existing, genre=["LitRPG"], narrator="", explicit_checked=False)
+        self.assertEqual(merged["title"], "Scholomance")
+        self.assertEqual(merged["isbn"], "123")
+
+
+class WriteMetadataJsonPartialTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_creates_new_file_when_absent(self):
+        path = Path(self.tmp.name) / "book" / "metadata.json"
+        result = enrichment.write_metadata_json_partial(path, genre=["Fantasy"], narrator="A", explicit_checked=False)
+        self.assertTrue(path.exists())
+        self.assertEqual(json.loads(path.read_text()), result)
+        self.assertEqual(result["genres"], ["Fantasy"])
+        self.assertEqual(result["narrators"], ["A"])
+
+    def test_merges_onto_existing_file(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        path.write_text(json.dumps({"title": "Scholomance", "genres": ["Fantasy"]}))
+        result = enrichment.write_metadata_json_partial(path, genre=["Fantasy", "LitRPG"], narrator="", explicit_checked=False)
+        self.assertEqual(result["title"], "Scholomance")
+        self.assertEqual(result["genres"], ["Fantasy", "LitRPG"])
 
 
 if __name__ == "__main__":

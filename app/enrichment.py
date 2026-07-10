@@ -9,6 +9,7 @@ module has no import-time dependency on app.main and no circular-import risk
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -341,3 +342,70 @@ def compile_series_enrichment(
         "explicit_total_count": len(books),
         "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books)),
     }
+
+
+_METADATA_JSON_NAME = "metadata.json"
+
+
+def resolve_metadata_json_path(item_path: str, is_file: bool) -> Path:
+    """Resolve the metadata.json target for an already-organized ABS item.
+
+    Simpler than the fixer's clues/alone_in_folder plumbing (meant for raw
+    unorganized scans), ABS already tells us whether this item is a folder
+    (the common case) or a single loose file it still indexed.
+    """
+    path = Path(item_path)
+    if is_file:
+        return path.with_name(path.name + "." + _METADATA_JSON_NAME)
+    return path / _METADATA_JSON_NAME
+
+
+def merge_metadata_json(
+    existing: dict[str, Any],
+    genre: list[str],
+    narrator: str,
+    explicit_checked: bool,
+) -> dict[str, Any]:
+    """Merge Enrichment Forge's edited fields onto an existing metadata.json
+    dict. Blank genre/narrator means don't touch that field; non-blank means
+    overwrite for every included book, even one that already had a value,
+    same semantics as the Fix Series modal. explicit_checked=True writes
+    true; False leaves whatever was already there untouched (v1 never writes
+    false over an existing true).
+    """
+    merged = dict(existing)
+    if genre:
+        merged["genres"] = list(genre)
+    if narrator.strip():
+        merged["narrators"] = [n.strip() for n in narrator.split(",") if n.strip()]
+    if explicit_checked:
+        merged["explicit"] = True
+    return merged
+
+
+def write_metadata_json_partial(
+    path: Path,
+    genre: list[str],
+    narrator: str,
+    explicit_checked: bool,
+) -> dict[str, Any]:
+    """Read the existing metadata.json (or {} if absent), apply the partial
+    merge, and write it back. Returns the merged dict that was written.
+    """
+    existing: dict[str, Any] = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+    merged = merge_metadata_json(existing, genre, narrator, explicit_checked)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+    try:
+        path.write_text(content, encoding="utf-8")
+    except PermissionError:
+        # Matches the existing write_audiobookshelf_metadata_json's retry:
+        # an existing file may be read-only.
+        path.unlink()
+        path.write_text(content, encoding="utf-8")
+    return merged
