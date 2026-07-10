@@ -63,9 +63,12 @@
     </div>
 
     <section id="run-settings" class="card side-nav-card">
-      <h2>Run settings</h2>
+      <div class="run-settings-heading">
+        <h2>Run settings</h2>
+        <button id="advancedRunToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced</button>
+      </div>
       <div class="grid">
-        <label><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
+        <label class="advanced-run-setting"><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
         <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads/Kindle: via abs-tract (configure its URL in Settings); Goodreads for metadata, Kindle for cover art only."></span></span>
@@ -147,20 +150,20 @@
       </div>
       <p id="fixerScanError" class="note" style="color:var(--danger);margin:6px 0 0" hidden></p>
 
-      <div class="grid">
-        <label><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used only for catalog searches."></span></span>
+      <div class="grid advanced-run-settings-grid">
+        <label class="advanced-run-setting"><span class="field-label">Audible auth file <span class="info-tip" data-tooltip="Path inside the container to the unencrypted Audible authentication JSON used only for catalog searches."></span></span>
           <input id="authFile" value="/auth/audible-metadata.json" />
         </label>
-        <label><span class="field-label">Minimum score <span class="info-tip" data-tooltip="Lowest accepted match score from 0 to 1. Higher values are safer but may skip valid books."></span></span>
+        <label class="advanced-run-setting"><span class="field-label">Minimum score <span class="info-tip" data-tooltip="Lowest accepted match score from 0 to 1. Higher values are safer but may skip valid books."></span></span>
           <input id="minScore" type="number" step="0.01" value="0.70" />
         </label>
-        <label><span class="field-label">Search results per book <span class="info-tip" data-tooltip="Maximum results requested per search query. Higher limits may improve difficult matches but take longer to score."></span></span>
+        <label class="advanced-run-setting"><span class="field-label">Search results per book <span class="info-tip" data-tooltip="Maximum results requested per search query. Higher limits may improve difficult matches but take longer to score."></span></span>
           <input id="limit" type="number" value="50" />
         </label>
-        <label><span class="field-label">Book limit (0 = all) <span class="info-tip" data-tooltip="Limits how many books are processed in this run. Use a small number for a bounded test; 0 processes everything found."></span></span>
+        <label class="advanced-run-setting"><span class="field-label">Book limit (0 = all) <span class="info-tip" data-tooltip="Limits how many books are processed in this run. Use a small number for a bounded test; 0 processes everything found."></span></span>
           <input id="maxFiles" type="number" value="0" />
         </label>
-        <label><span class="field-label">Duration mismatch review <span class="info-tip" data-tooltip="Books whose runtime from the search endpoint differs from the local file by more than this percentage are added to the manual review queue, even if the match score is otherwise acceptable. Helps catch wrong matches that share a similar title but different length."></span></span>
+        <label class="advanced-run-setting"><span class="field-label">Duration mismatch review <span class="info-tip" data-tooltip="Books whose runtime from the search endpoint differs from the local file by more than this percentage are added to the manual review queue, even if the match score is otherwise acceptable. Helps catch wrong matches that share a similar title but different length."></span></span>
           <input id="durationThreshold" type="number" step="0.1" value="10" />
         </label>
       </div>
@@ -181,7 +184,7 @@
           <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Capped at 10 (stress-tested limit). For NAS over SMB 4-8 is typical; local SSD can handle the full 10. Raising above your storage throughput ceiling gives no benefit."></span></span>
             <input id="writeWorkers" type="number" min="1" max="10" value="1" />
           </label>
-          <label><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
+          <label class="advanced-run-setting"><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
             <input id="apiDelayMs" type="number" min="0" value="0" />
           </label>
           <label><span class="field-label">Write mode <span class="info-tip" data-tooltip="Controls how existing tags are handled on apply. Smart: skip write if all fields already match (saves time, avoids unnecessary writes). Overwrite: always write all fields. Fill missing: only write fields that are currently empty."></span></span>
@@ -191,13 +194,13 @@
               <option value="overwrite">Overwrite (always write all fields)</option>
             </select>
           </label>
-          <label><span class="field-label">Batch provider <span class="info-tip" data-tooltip="Search backend for batch runs. Audible uses the auth file directly. ABS proxies through your Audiobookshelf instance, no Audible auth file needed."></span></span>
+          <label class="advanced-run-setting"><span class="field-label">Batch provider <span class="info-tip" data-tooltip="Search backend for batch runs. Audible uses the auth file directly. ABS proxies through your Audiobookshelf instance, no Audible auth file needed."></span></span>
             <select id="batchProvider">
               <option value="audible">Audible (direct)</option>
               <option value="abs">Audiobookshelf (ABS)</option>
             </select>
           </label>
-          <label id="batchAbsProviderLabel" hidden><span class="field-label">ABS source</span>
+          <label id="batchAbsProviderLabel" class="advanced-run-setting" hidden><span class="field-label">ABS source</span>
             <select id="batchAbsProvider"></select>
           </label>
         </div>
@@ -212,12 +215,12 @@
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
         <label><input id="backup" type="checkbox" /> Back up and cache original metadata <span class="info-tip" data-tooltip="Saves a per-file JSON with the original embedded tags and full audio probe data (duration, chapters, ASIN, codec info). After a successful apply, the matched metadata is also written into this cache so future re-runs skip re-probing. Run a dry-run with Backup first to pre-populate the cache. Apply runs create the backup automatically if one does not exist yet. Required for Search from original backup to work."></span></label>
-        <label><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
+        <label class="advanced-run-setting"><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
         <label><input id="metadataJsonOnly" type="checkbox" /> Write only metadata.json (don't modify audio files) <span class="info-tip" data-tooltip="An Audiobookshelf metadata.json is always written for matched books. Check this to write ONLY that file and leave the audio files' embedded tags untouched. Loose/multi-file books still get their M4B-tool merge sidecar."></span></label>
         <label><input id="force" type="checkbox" /> Force reprocess <span class="info-tip" data-tooltip="Ignores already-processed markers and re-searches every matched book through the search endpoint. Search clues are read from the backup JSON cache (the clean metadata applied last time), or from the original embedded tags if the backup has no applied cache yet. Requires a prior run with backup enabled to avoid re-probing every file."></span></label>
-        <label style="padding-left:20px"><input id="forceOriginal" type="checkbox" /> Search from original backup <span class="info-tip" data-tooltip="Only active when Force reprocess is on. Overrides the cached applied metadata and searches from the original pre-fixer embedded tags instead. Use this when a previous match was wrong and you want to re-search from scratch using what the file contained before the fixer ever touched it. Requires a backup JSON from a prior run."></span></label>
-        <label><input id="coverIfMissing" type="checkbox" /> Add cover only if missing <span class="info-tip" data-tooltip="Embeds the Audible cover only when the book does not already have cover art. Existing covers are preserved."></span></label>
-        <label><input id="replaceCover" type="checkbox" /> Replace existing cover <span class="info-tip" data-tooltip="Replaces current cover art with the selected Audible cover during apply. This is intentionally more destructive."></span></label>
+        <label class="advanced-run-setting force-original-setting" style="padding-left:20px"><input id="forceOriginal" type="checkbox" /> Search from original backup <span class="info-tip" data-tooltip="Only active when Force reprocess is on. Overrides the cached applied metadata and searches from the original pre-fixer embedded tags instead. Use this when a previous match was wrong and you want to re-search from scratch using what the file contained before the fixer ever touched it. Requires a backup JSON from a prior run."></span></label>
+        <label class="advanced-run-setting"><input id="coverIfMissing" type="checkbox" /> Add cover only if missing <span class="info-tip" data-tooltip="Embeds the Audible cover only when the book does not already have cover art. Existing covers are preserved."></span></label>
+        <label class="advanced-run-setting"><input id="replaceCover" type="checkbox" /> Replace existing cover <span class="info-tip" data-tooltip="Replaces current cover art with the selected Audible cover during apply. This is intentionally more destructive."></span></label>
       </div>
 
       <div class="actions">
