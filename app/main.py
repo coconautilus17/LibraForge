@@ -4851,8 +4851,11 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
             continue
         target = resolve_metadata_json_path(str(validated_path), book.is_file)
         try:
+            assert_under_audiobooks(target)
             write_metadata_json_partial(target, req.genre, req.narrator, req.explicit)
             applied += 1
+        except HTTPException as exc:
+            failed.append({"id": book.id, "path": book.path, "error": str(exc.detail)})
         except Exception as exc:
             failed.append({"id": book.id, "path": book.path, "error": str(exc)})
     return EnrichmentApplyResponse(applied=applied, failed=failed)

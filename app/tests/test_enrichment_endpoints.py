@@ -308,6 +308,36 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
             self.assertIn("must be under", body["failed"][0]["error"])
             self.assertFalse((sibling / "metadata.json").exists())
 
+    def test_rejects_derived_sidecar_path_escaping_root(self):
+        """A book path that itself resolves to AUDIOBOOKS_ROOT, combined with
+        is_file=True, derives a sibling '<root>.metadata.json' target that
+        sits OUTSIDE the root even though the book path passed validation.
+        The derived write target must be boundary-checked too, not just the
+        input book path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            container = Path(tmp).resolve()
+            root = container / "root"
+            root.mkdir()
+
+            payload = {
+                "books": [
+                    {"id": "1", "path": str(root), "is_file": True, "include": True},
+                ],
+                "genre": ["Fantasy"],
+                "narrator": "Andrea Parsneau",
+                "explicit": False,
+            }
+            with patch.object(main, "AUDIOBOOKS_ROOT", root):
+                resp = client.post("/api/enrichment/apply", json=payload)
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertEqual(body["applied"], 0)
+            self.assertEqual(len(body["failed"]), 1)
+            self.assertEqual(body["failed"][0]["id"], "1")
+            self.assertIn("must be under", body["failed"][0]["error"])
+            escaped_target = container / "root.metadata.json"
+            self.assertFalse(escaped_target.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
