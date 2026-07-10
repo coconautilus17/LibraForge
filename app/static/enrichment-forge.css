@@ -11,8 +11,44 @@
   font-size: 13px;
 }
 
-#seriesSearch {
+.card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.card-title h2 {
+  margin: 0;
+}
+
+.step-n {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.search-box {
+  position: relative;
   max-width: 420px;
+}
+
+.search-box .icon {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+#seriesSearch {
+  width: 100%;
+  padding-left: 32px;
 }
 
 #seriesResults {
@@ -45,6 +81,10 @@
   background: var(--surface-hover);
 }
 
+.series-result-row.picked {
+  background: var(--accent-soft);
+}
+
 .series-result-name {
   font-weight: 650;
   font-size: 14px;
@@ -56,15 +96,64 @@
   font-variant-numeric: tabular-nums;
 }
 
+.series-footnote {
+  margin-top: 8px;
+}
+
 #compileSub {
-  margin: 0 0 16px;
+  margin: 0 0 4px;
   color: var(--muted);
   font-size: 13px;
 }
 
-#sourceStrip {
-  display: block;
+.source-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
   margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.source-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.source-chip.audible .dot {
+  background: var(--warning);
+}
+
+.source-chip.goodreads .dot {
+  background: var(--success);
+}
+
+.source-strip .sep {
+  width: 1px;
+  height: 13px;
+  background: var(--border);
+}
+
+.source-strip .time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+#compileCard .grid {
+  grid-template-columns: 1fr 1fr;
 }
 
 #compileCard .field {
@@ -134,6 +223,9 @@
    existing left-border-only .dryrun-notice (which the "Heads up" strip
    below already reuses correctly). */
 .context-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -141,6 +233,11 @@
   color: var(--warning);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.context-note .dot {
+  flex: none;
+  margin-top: 1px;
 }
 
 .explicit-footnote {

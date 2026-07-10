@@ -52,17 +52,22 @@
     </div>
 
     <section class="card">
-      <h2>1. Choose a series</h2>
+      <div class="card-title"><span class="step-n">1</span><h2>Choose a series</h2></div>
       <p class="section-note">Searches series already indexed by Audiobookshelf, not a provider search.</p>
-      <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" />
+      <div class="search-box">
+        <span class="icon" aria-hidden="true">&#8981;</span>
+        <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" />
+      </div>
       <div id="seriesResults"></div>
+      <p class="section-note series-footnote">Series names come from Audiobookshelf's own library index, normalized so tag variants collapse into one entry.</p>
     </section>
 
     <section class="card" id="compileCard" hidden>
-      <h2 id="compileTitle">2. Compiled from Audible + Goodreads</h2>
+      <div class="card-title"><span class="step-n">2</span><h2>Compiled from Audible + Goodreads</h2></div>
       <p id="compileSub"></p>
+      <p class="section-note">Every book is searched against both sources; nothing is written until you apply.</p>
 
-      <div id="sourceStrip" class="badge"></div>
+      <div id="sourceStrip" class="source-strip"></div>
 
       <div class="grid">
         <div class="field field-wide">

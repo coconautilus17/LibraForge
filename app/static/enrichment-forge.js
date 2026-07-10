@@ -24,7 +24,11 @@ function renderSeriesResults(rows) {
     </div>
   `).join("");
   container.querySelectorAll(".series-result-row").forEach((el) => {
-    el.addEventListener("click", () => compileSeries(el.dataset.name));
+    el.addEventListener("click", () => {
+      container.querySelectorAll(".series-result-row.picked").forEach((picked) => picked.classList.remove("picked"));
+      el.classList.add("picked");
+      compileSeries(el.dataset.name);
+    });
   });
 }
 
@@ -63,7 +67,7 @@ function renderBookList(books) {
           <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
         </div>
       </div>
-      ${book.flagged_explicit ? '<span class="badge evidence-pill">Erotica</span>' : ""}
+      ${book.flagged_explicit ? '<span class="badge evidence-pill">&#9888; Erotica</span>' : ""}
       <button type="button" class="secondary include-toggle in" data-included="true">In</button>
     </div>
   `).join("");
@@ -86,12 +90,24 @@ function updateIncludedCount() {
   $("includedCount").textContent = `${included.length} of ${rows.length} included`;
 }
 
+function renderSourceStrip(searchedCount, elapsedSeconds) {
+  $("sourceStrip").innerHTML = `
+    <span class="source-chip audible"><span class="dot"></span> Audible, ${searchedCount} of ${searchedCount} searched</span>
+    <span class="sep"></span>
+    <span class="source-chip goodreads"><span class="dot"></span> Goodreads, ${searchedCount} of ${searchedCount} searched</span>
+    <span class="time">${elapsedSeconds}s</span>
+  `;
+}
+
+function renderExplicitEvidence(note) {
+  $("explicitEvidence").innerHTML = `<span class="dot">&#9679;</span><span>${escapeHtml(note)}</span>`;
+}
+
 async function compileSeries(seriesName) {
   currentSeriesName = seriesName;
   $("compileCard").hidden = false;
-  $("compileTitle").textContent = `2. Compiled from Audible + Goodreads`;
   $("compileSub").textContent = `${seriesName}, searching...`;
-  $("sourceStrip").textContent = "";
+  $("sourceStrip").innerHTML = "";
 
   const startedAt = performance.now();
   const res = await fetch("/api/enrichment/compile", {
@@ -109,11 +125,11 @@ async function compileSeries(seriesName) {
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   currentBooks = data.books;
   $("compileSub").textContent = `${seriesName}, ${data.books.length} books.`;
-  $("sourceStrip").textContent = `Audible, ${data.books.length} of ${data.books.length} searched · Goodreads, ${data.books.length} of ${data.books.length} searched · ${elapsedSeconds}s`;
+  renderSourceStrip(data.books.length, elapsedSeconds);
   renderGenreChips(data.genre);
   $("narratorInput").value = data.narrator;
   $("sequenceRangeInput").value = data.sequence_range;
-  $("explicitEvidence").textContent = data.explicit_evidence_note;
+  renderExplicitEvidence(data.explicit_evidence_note);
   renderBookList(data.books);
   updateIncludedCount();
 }
