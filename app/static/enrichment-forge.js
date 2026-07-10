@@ -18,9 +18,9 @@ function renderSeriesResults(rows) {
     return;
   }
   container.innerHTML = rows.map((row) => `
-    <div class="series-result-row" data-name="${escapeHtml(row.name)}" style="display:flex;justify-content:space-between;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:6px;cursor:pointer">
-      <span>${escapeHtml(row.name)}</span>
-      <span style="color:var(--muted);font-size:12.5px">${row.book_count} books</span>
+    <div class="series-result-row" data-name="${escapeHtml(row.name)}">
+      <span class="series-result-name">${escapeHtml(row.name)}</span>
+      <span class="series-result-count">${row.book_count} books</span>
     </div>
   `).join("");
   container.querySelectorAll(".series-result-row").forEach((el) => {
@@ -54,17 +54,17 @@ function addGenreChip(value) {
 
 function renderBookList(books) {
   $("bookList").innerHTML = books.map((book) => `
-    <div class="book-row" data-id="${escapeHtml(book.id)}" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius-sm)">
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:650;font-size:14px">${escapeHtml(book.title)}</div>
-        <div style="font-size:12px;color:var(--muted)">
-          Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}
+    <div class="book-row" data-id="${escapeHtml(book.id)}">
+      <div class="book-main">
+        <div class="book-title">${escapeHtml(book.title)}</div>
+        <div class="book-src-line">
+          <span class="audible">Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
-          Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}
+          <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
         </div>
       </div>
-      ${book.flagged_explicit ? '<span class="badge" style="background:var(--warning-soft);color:var(--warning)">Erotica</span>' : ""}
-      <button type="button" class="secondary include-toggle" data-included="true">In</button>
+      ${book.flagged_explicit ? '<span class="badge evidence-pill">Erotica</span>' : ""}
+      <button type="button" class="secondary include-toggle in" data-included="true">In</button>
     </div>
   `).join("");
 
@@ -73,7 +73,8 @@ function renderBookList(books) {
       const included = btn.dataset.included === "true";
       btn.dataset.included = included ? "false" : "true";
       btn.textContent = included ? "Excluded" : "In";
-      btn.closest(".book-row").style.opacity = included ? "0.5" : "1";
+      btn.classList.toggle("in", !included);
+      btn.closest(".book-row").classList.toggle("excluded", included);
       updateIncludedCount();
     });
   });
