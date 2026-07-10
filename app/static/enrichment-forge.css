@@ -163,6 +163,13 @@
   min-width: 0;
 }
 
+#compileCard .field label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
 .field-wide {
   grid-column: 1 / -1;
 }
@@ -219,9 +226,30 @@
   flex: 1;
 }
 
+.explicit-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.explicit-toggle-row input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.explicit-toggle-label {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
 /* Explicit evidence note: a filled callout box, distinct from the page's
    existing left-border-only .dryrun-notice (which the "Heads up" strip
-   below already reuses correctly). */
+   below already reuses correctly). Base text is muted, not full warning
+   color; only the leading dot is warning-colored and only the bolded
+   headline clause (a <strong>) uses full text color, matching the mockup. */
 .context-note {
   display: flex;
   gap: 8px;
@@ -230,7 +258,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
-  color: var(--warning);
+  color: var(--muted);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -238,6 +266,13 @@
 .context-note .dot {
   flex: none;
   margin-top: 1px;
+  color: var(--warning);
+  font-size: 0.9em;
+}
+
+.context-note strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .explicit-footnote {
