@@ -64,11 +64,21 @@
       <div id="sourceStrip" class="badge" style="display:block;margin-bottom:16px"></div>
 
       <div class="grid">
-        <label><span class="field-label">Genre</span>
+        <label style="grid-column:1 / -1">
+          <span class="field-label">Genre</span>
+          <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">deduped union across the series, both sources</span>
           <div id="genreChips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:42px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;background:var(--surface-soft)"></div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <input id="genreAddInput" type="text" placeholder="Add a genre..." style="flex:1" />
+            <button id="genreAddBtn" type="button" class="secondary">Add</button>
+          </div>
         </label>
         <label><span class="field-label">Narrator</span>
+          <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:6px">union, edit if narrators changed mid-series</span>
           <input id="narratorInput" />
+        </label>
+        <label><span class="field-label">Sequence range</span>
+          <input id="sequenceRangeInput" readonly />
         </label>
       </div>
 

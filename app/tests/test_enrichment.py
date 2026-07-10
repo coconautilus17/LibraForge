@@ -128,11 +128,46 @@ class GetSeriesBooksTests(unittest.TestCase):
             "existing_genres": ["Fantasy", "LitRPG"],
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
+            "sequence": None,
         }])
+
+    def test_captures_sequence_from_series_name(self):
+        groups = {
+            "scholomance": [
+                {
+                    "id": "item-1",
+                    "path": "/audiobooks/Scholomance 2",
+                    "isFile": False,
+                    "media": {
+                        "metadata": {
+                            "title": "Scholomance 2",
+                            "seriesName": "Scholomance #2",
+                        },
+                        "tags": [],
+                    },
+                }
+            ]
+        }
+        books = enrichment.get_series_books(groups, "Scholomance", _fake_normalize_series)
+        self.assertEqual(books[0]["sequence"], "2")
 
     def test_unknown_series_returns_empty(self):
         books = enrichment.get_series_books({}, "Nonexistent", _fake_normalize_series)
         self.assertEqual(books, [])
+
+
+class ExtractSeriesSequenceTests(unittest.TestCase):
+    def test_extracts_integer_sequence(self):
+        self.assertEqual(enrichment.extract_series_sequence("Scholomance #4"), "4")
+
+    def test_extracts_decimal_sequence(self):
+        self.assertEqual(enrichment.extract_series_sequence("Scholomance #4.5"), "4.5")
+
+    def test_no_suffix_returns_none(self):
+        self.assertIsNone(enrichment.extract_series_sequence("Scholomance"))
+
+    def test_blank_returns_none(self):
+        self.assertIsNone(enrichment.extract_series_sequence(""))
 
 
 class SearchSeriesAudibleTests(unittest.TestCase):
@@ -302,6 +337,44 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["genre"], [])
         self.assertEqual(compiled["narrator"], "")
         self.assertEqual(compiled["explicit_flagged_count"], 0)
+
+    def test_sequence_range_spans_min_to_max(self):
+        books = [
+            {"id": "1", "title": "T1", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "1"},
+            {"id": "2", "title": "T2", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "4"},
+            {"id": "3", "title": "T3", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "2"},
+        ]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["sequence_range"], "1 to 4")
+
+    def test_sequence_range_single_value_when_all_match(self):
+        books = [
+            {"id": "1", "title": "T1", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "1"},
+        ]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["sequence_range"], "1")
+
+    def test_sequence_range_blank_when_no_sequences_found(self):
+        books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["sequence_range"], "")
+
+    def test_sequence_range_ignores_missing_sequences_among_present_ones(self):
+        books = [
+            {"id": "1", "title": "T1", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "1"},
+            {"id": "2", "title": "T2", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": None},
+            {"id": "3", "title": "T3", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "3"},
+        ]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["sequence_range"], "1 to 3")
+
+    def test_sequence_range_formats_whole_number_decimals_without_trailing_zero(self):
+        books = [
+            {"id": "1", "title": "T1", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "1.0"},
+            {"id": "2", "title": "T2", "existing_genres": [], "existing_narrator": "", "existing_explicit": False, "sequence": "4.5"},
+        ]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["sequence_range"], "1 to 4.5")
 
 
 class ResolveMetadataJsonPathTests(unittest.TestCase):
