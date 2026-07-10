@@ -301,6 +301,38 @@ def is_multi_book(local: dict, match: dict, path: str = "") -> bool:
     return False
 
 
+_OMNIBUS_REMAINDER_RE = re.compile(
+    r"^(?:complete\s+)?(?:series|collection|trilogy|duology|saga|omnibus|box\s?set|edition)?"
+    r"\s*(?:\d+(?:\.\d+)?)?\s*$"
+)
+
+
+def _normalized_names_plausibly_related(a_norm: str, b_norm: str, threshold: float = 0.80) -> bool:
+    """True when two already-normalized strings plausibly refer to the same
+    series/work.
+
+    Deliberately does NOT reuse series_similarity()/similarity()'s substring
+    containment shortcut ("if a in b: return 0.92") -- that has no concept of
+    word boundaries, so it scores "summoner" against "summoner school" the
+    same 0.92 as "war god for hire" against "war god for hire complete
+    series", even though the first pair are two unrelated series that merely
+    share a leading word. Here, a shared prefix only counts as related if
+    everything after it is omnibus/collection vocabulary (e.g. "complete
+    series", "trilogy") -- a real distinguishing word like "school" is
+    rejected. Falls back to a real SequenceMatcher ratio when neither string
+    is a prefix of the other.
+    """
+    if not a_norm or not b_norm:
+        return False
+    if a_norm == b_norm:
+        return True
+    shorter, longer = (a_norm, b_norm) if len(a_norm) <= len(b_norm) else (b_norm, a_norm)
+    if longer.startswith(shorter):
+        remainder = longer[len(shorter):].strip()
+        return bool(_OMNIBUS_REMAINDER_RE.match(remainder))
+    return SequenceMatcher(None, a_norm, b_norm).ratio() >= threshold
+
+
 def is_folder_like_series(series: str) -> bool:
     """Return True when the local series looks like a folder-organization prefix.
 
@@ -692,10 +724,17 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
             continue
         title_key = normalize(candidate["title"])
         for base_key in numbered_groups:
-            if base_key and title_key.startswith(base_key):
+            if base_key and _normalized_names_plausibly_related(base_key, title_key):
                 numbered_groups[base_key].append(candidate)
                 candidate["is_omnibus"] = True
                 break
+
+    def _member_sort_key(m: dict[str, Any]) -> tuple:
+        seq = m.get("sequence") or ""
+        try:
+            return (0, float(seq))
+        except ValueError:
+            return (1, m.get("title") or "")
 
     groups: list[dict[str, Any]] = []
     for base_key, members in sorted(numbered_groups.items()):
@@ -704,7 +743,7 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
         majority_author, author_note = _majority_author_and_note(members)
 
         member_rows = []
-        for m in members:
+        for m in sorted(members, key=_member_sort_key):
             if m.get("is_omnibus"):
                 flag = "omnibus"
             elif not m["sequence"]:
@@ -715,7 +754,7 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
                 flag = None
             member_rows.append({
                 "path": m["path"], "title": m["title"], "author": m["author"],
-                "sequence": m["sequence"], "flag": flag,
+                "sequence": m["sequence"], "series": "", "flag": flag,
             })
 
         base_display = members[0]["base"]
@@ -786,14 +825,23 @@ def group_existing_series_by_normalized_tag(
         raw_counts = Counter(_strip_series_display_suffix(m["raw_series"]) for m in members)
         suggested_series = clean_text(raw_counts.most_common(1)[0][0])
 
+        def _member_sort_key(m: dict[str, Any]) -> tuple:
+            seq = m.get("sequence") or ""
+            try:
+                return (0, float(seq))
+            except ValueError:
+                return (1, m.get("title") or "")
+
         member_rows = []
-        for m in members:
+        for m in sorted(members, key=_member_sort_key):
             flag = None
             if majority_author and m["author"] and m["author"] != majority_author:
                 flag = "author_differs"
+            elif not _normalized_names_plausibly_related(normalize_series(m["title"]), key):
+                flag = "series_mismatch"
             member_rows.append({
                 "path": m["path"], "title": m["title"], "author": m["author"],
-                "sequence": m["sequence"], "flag": flag,
+                "sequence": m["sequence"], "series": m["raw_series"], "flag": flag,
             })
 
         raw_variants = sorted(raw_values_by_key[key])
@@ -851,13 +899,14 @@ def _find_tagged_siblings(base_key: str, report_items: list[dict[str, Any]]) -> 
         if not series:
             continue
         title = clean_text(local.get("title")) or clean_text(match.get("title"))
-        base, _ = split_title_base_and_number(title)
+        base, number = split_title_base_and_number(title)
         if normalize(base) != base_key:
             continue
         siblings.append({
             "path": item.get("path") or item.get("source") or "",
             "title": title,
             "series": series,
+            "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
             "genre": clean_text(local.get("genre")) or clean_text(match.get("genre")),
             "narrator": clean_text(local.get("narrator")) or clean_text(match.get("narrator")),
         })

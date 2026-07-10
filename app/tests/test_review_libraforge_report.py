@@ -305,6 +305,45 @@ class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
         omni = next(m for m in group["members"] if m["path"] == "/lib/AOmni.m4b")
         self.assertEqual(omni["flag"], "omnibus")
 
+    def test_omnibus_sweep_rejects_unrelated_series_sharing_a_leading_word(self):
+        # "Summoner School" is a real, distinct series that happens to share
+        # a leading word with "Summoner" -- even if flagged as an omnibus
+        # candidate, it must never be attached to the wrong numbered group
+        # via a naive prefix/substring match.
+        items = [
+            self._item("/lib/S2.m4b", "Summoner 2", "Eric Vall"),
+            self._item("/lib/S3.m4b", "Summoner 3", "Eric Vall"),
+            self._item(
+                "/lib/SSchool.m4b", "Summoner School: The Complete Trilogy", "Eric Vall",
+            ),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(len(groups), 1)
+        paths = {m["path"] for m in groups[0]["members"]}
+        self.assertNotIn("/lib/SSchool.m4b", paths)
+
+    def test_omnibus_sweep_still_accepts_a_genuine_omnibus_of_the_same_series(self):
+        items = [
+            self._item("/lib/W2.m4b", "War God For Hire 2", "Eric Vall"),
+            self._item("/lib/W3.m4b", "War God For Hire 3", "Eric Vall"),
+            self._item(
+                "/lib/WOmni.m4b", "War God For Hire: The Complete Series", "Eric Vall",
+            ),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(len(groups), 1)
+        paths = {m["path"] for m in groups[0]["members"]}
+        self.assertIn("/lib/WOmni.m4b", paths)
+
+    def test_members_are_ordered_numerically_not_lexically(self):
+        items = [
+            self._item(f"/lib/D{n}.m4b", f"Dungeon Core {n}", "Eric Vall")
+            for n in (1, 2, 3, 10, 11)
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        sequences = [m["sequence"] for m in groups[0]["members"]]
+        self.assertEqual(sequences, ["1", "2", "3", "10", "11"])
+
     def test_title_that_normalizes_to_empty_does_not_crash_grouping(self):
         # A title like "A" normalizes to an empty string (normalize() strips
         # stopwords and non-alphanumeric characters) -- this must not crash
@@ -399,6 +438,41 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["suggested_series"], "Dungeon Core")
 
+    def test_member_rows_carry_each_books_own_raw_series(self):
+        items = [
+            self._item("/lib/B1.m4b", "Dungeon Core", "Eric Vall", "Dungeon Core "),
+            self._item("/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", "Dungeon Core, Book 2"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        by_path = {m["path"]: m for m in groups[0]["members"]}
+        self.assertEqual(by_path["/lib/B1.m4b"]["series"], "Dungeon Core ")
+        self.assertEqual(by_path["/lib/B2.m4b"]["series"], "Dungeon Core, Book 2")
+
+    def test_members_are_ordered_numerically_not_lexically(self):
+        items = [
+            self._item(f"/lib/D{n}.m4b", f"Dungeon Core {n}", "Eric Vall", "Dungeon Core")
+            for n in (1, 2, 3, 10, 11)
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        sequences = [m["sequence"] for m in groups[0]["members"]]
+        self.assertEqual(sequences, ["1", "2", "3", "10", "11"])
+
+    def test_member_with_unrelated_title_is_flagged_series_mismatch(self):
+        # Reproduces the real-world case: a book incorrectly tagged with an
+        # unrelated series' name (e.g. a bad catalog match) should be
+        # visibly flagged, not silently trusted, even though its raw tag
+        # groups it here.
+        items = [
+            self._item("/lib/S2.m4b", "Summoner 2", "Eric Vall", "Summoner"),
+            self._item("/lib/S3.m4b", "Summoner 3", "Eric Vall", "Summoner"),
+            self._item("/lib/SSchool6.m4b", "Summoner School 6", "Eric Vall", "Summoner"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        by_path = {m["path"]: m for m in groups[0]["members"]}
+        self.assertEqual(by_path["/lib/SSchool6.m4b"]["flag"], "series_mismatch")
+        self.assertIsNone(by_path["/lib/S2.m4b"]["flag"])
+        self.assertIsNone(by_path["/lib/S3.m4b"]["flag"])
+
 
 class AddSeriesGroupSuspectsTests(unittest.TestCase):
     def _item(self, path, title, author, series="", genre="", narrator="", **overrides):
@@ -456,6 +530,9 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         self.assertEqual(evidence["suggested_narrator"], "JD Tanner, Sierra Taft")
         sibling_paths = {s["path"] for s in evidence["tagged_siblings"]}
         self.assertEqual(sibling_paths, {"/lib/A1.m4b", "/lib/A4.m4b"})
+        siblings_by_path = {s["path"]: s for s in evidence["tagged_siblings"]}
+        self.assertEqual(siblings_by_path["/lib/A1.m4b"]["sequence"], "1")
+        self.assertEqual(siblings_by_path["/lib/A4.m4b"]["sequence"], "4")
 
     def test_no_series_groups_when_nothing_qualifies(self):
         report_items = [self._item("/lib/Solo.m4b", "Standalone", "Someone")]

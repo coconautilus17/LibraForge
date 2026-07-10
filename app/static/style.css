@@ -3667,3 +3667,11 @@ button.danger:hover:not(:disabled) {
 }
 .fs-toggle-pill.fs-in { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .fs-author-note { color: var(--warning); }
+.fs-dialog {
+  width: min(540px, calc(100vw - 32px));
+}
+.fs-current-series {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+}

@@ -8,7 +8,7 @@
 // $, escapeHtml, matchReportItems.
 
 let fsCurrentGroup = null;
-let fsBookState = []; // [{path, title, flag, sequence, included}]
+let fsBookState = []; // [{path, title, series, flag, sequence, included}]
 
 function fsBuildDialog() {
   if ($('fsDialog')) return;
@@ -56,7 +56,7 @@ function fsBuildDialog() {
 function fsRenderBookList() {
   $('fsBookList').innerHTML = fsBookState.map((b, i) => `
     <div class="fs-book-row ${b.included ? '' : 'fs-excluded'}" data-fs-row="${i}">
-      <div class="fs-book-title">${escapeHtml(b.title)}${b.flag ? `<span class="fs-flag">${escapeHtml(b.flag)}</span>` : ''}</div>
+      <div class="fs-book-title">${escapeHtml(b.title)}${b.series ? `<small class="fs-current-series">Current series: ${escapeHtml(b.series)}</small>` : ''}${b.flag ? `<span class="fs-flag">${escapeHtml(b.flag)}</span>` : ''}</div>
       <input class="fs-seq-input" data-fs-seq="${i}" value="${escapeHtml(b.sequence || '')}" placeholder="-" />
       <div class="fs-toggle-pill ${b.included ? 'fs-in' : ''}" data-fs-toggle="${i}">${b.included ? 'In' : 'Excluded'}</div>
     </div>
@@ -92,7 +92,7 @@ function fsAddTaggedSiblings() {
       path: sib.path,
       title: sib.title,
       flag: `Already tagged: series "${sib.series}"`,
-      sequence: '',
+      sequence: sib.sequence || '',
       included: true,
     });
   }
@@ -105,7 +105,12 @@ function fsRunSearch() {
   if (!query) { dropdown.hidden = true; return; }
 
   const existing = new Set(fsBookState.map((b) => b.path));
-  const results = (window.matchReportItems || []).filter((item) => {
+  // NOTE: matchReportItems is declared with `let` in app.js -- a top-level
+  // `let`/`const` in a classic script does NOT attach to `window` (unlike
+  // `var` or a function declaration), so `window.matchReportItems` is always
+  // undefined here. Reference the bare identifier instead, which resolves
+  // correctly since both scripts share the same top-level lexical scope.
+  const results = (matchReportItems || []).filter((item) => {
     const path = item.path || '';
     if (existing.has(path)) return false;
     const title = ((item.local || {}).title || '').toLowerCase();
@@ -189,7 +194,8 @@ function fsOpen(group) {
   fsBuildDialog();
   fsCurrentGroup = group;
   fsBookState = group.members.map((m) => ({
-    path: m.path, title: m.title, flag: m.flag ? m.flag.replace(/_/g, ' ') : null,
+    path: m.path, title: m.title, series: m.series || '',
+    flag: m.flag ? m.flag.replace(/_/g, ' ') : null,
     sequence: m.sequence || '', included: true,
   }));
 
