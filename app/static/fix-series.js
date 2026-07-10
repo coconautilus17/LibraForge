@@ -54,13 +54,21 @@ function fsBuildDialog() {
 }
 
 function fsRenderBookList() {
-  $('fsBookList').innerHTML = fsBookState.map((b, i) => `
+  $('fsBookList').innerHTML = fsBookState.map((b, i) => {
+    // Series and genre share one line (not stacked) -- both are just
+    // "what this book already has", read together at a glance.
+    const metaParts = [];
+    if (b.series) metaParts.push(`Current series: ${escapeHtml(b.series)}`);
+    if (b.genre) metaParts.push(`Genre: ${escapeHtml(b.genre)}`);
+    const metaLine = metaParts.length ? `<small class="fs-current-series">${metaParts.join(' &middot; ')}</small>` : '';
+    return `
     <div class="fs-book-row ${b.included ? '' : 'fs-excluded'}" data-fs-row="${i}">
-      <div class="fs-book-title">${escapeHtml(b.title)}${b.series ? `<small class="fs-current-series">Current series: ${escapeHtml(b.series)}</small>` : ''}${b.flag ? `<span class="fs-flag">${escapeHtml(b.flag)}</span>` : ''}</div>
+      <div class="fs-book-title">${escapeHtml(b.title)}${metaLine}${b.flag ? `<span class="fs-flag">${escapeHtml(b.flag)}</span>` : ''}</div>
       <input class="fs-seq-input" data-fs-seq="${i}" value="${escapeHtml(b.sequence || '')}" placeholder="-" />
       <div class="fs-toggle-pill ${b.included ? 'fs-in' : ''}" data-fs-toggle="${i}">${b.included ? 'In' : 'Excluded'}</div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   for (const el of $('fsBookList').querySelectorAll('[data-fs-toggle]')) {
     el.addEventListener('click', () => {
@@ -95,6 +103,7 @@ function fsAddTaggedSiblings() {
         ? `Series mismatch: tagged "${sib.series}"`
         : `Already tagged: series "${sib.series}"`,
       sequence: sib.sequence || '',
+      genre: sib.genre || '',
       included: true,
     });
   }
@@ -150,7 +159,7 @@ function fsRunSearch() {
         const item = results[i];
         fsBookState.push({
           path: item.path, title: (item.local || {}).title || item.path,
-          flag: null, sequence: '', included: true,
+          flag: null, sequence: '', genre: (item.local || {}).genre || '', included: true,
         });
         $('fsSearchInput').value = '';
         dropdown.hidden = true;
@@ -223,7 +232,7 @@ function fsOpen(group) {
   fsBuildDialog();
   fsCurrentGroup = group;
   fsBookState = group.members.map((m) => ({
-    path: m.path, title: m.title, series: m.series || '',
+    path: m.path, title: m.title, series: m.series || '', genre: m.genre || '',
     flag: m.flag ? m.flag.replace(/_/g, ' ') : null,
     sequence: m.sequence || '', included: true,
   }));

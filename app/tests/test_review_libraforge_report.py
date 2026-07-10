@@ -568,6 +568,41 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         suspects, _ = REVIEW.extract_suspects(report, make_args())
         self.assertTrue(any(s["status"] == "series_group" for s in suspects))
 
+    def test_pass_one_also_pulls_genre_from_the_untagged_members_themselves(self):
+        # A group member has no series tag yet but can still carry its own
+        # genre independently -- that must feed the suggestion too, not just
+        # genre found on already-tagged siblings.
+        report_items = [
+            self._item("/lib/A2.m4b", "Dungeon Core 2", "Eric Vall", genre="LitRPG"),
+            self._item("/lib/A3.m4b", "Dungeon Core 3", "Eric Vall", genre="Fantasy"),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        pass_one = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_missing")
+        self.assertEqual(pass_one["reasons"][0]["evidence"]["suggested_genre"], "LitRPG, Fantasy")
+
+    def test_pass_two_normalize_group_populates_genre_and_narrator(self):
+        # Regression: pass 2 (already-tagged, normalize) used to hardcode
+        # suggested_genre/suggested_narrator to "" unconditionally -- these
+        # groups' own members ARE the tagged books, so genre/narrator must be
+        # aggregated from them directly.
+        report_items = [
+            self._item(
+                "/lib/B1.m4b", "Dungeon Core 1", "Eric Vall", series="Dungeon Core ",
+                genre="LitRPG", narrator="JD Tanner",
+            ),
+            self._item(
+                "/lib/B2.m4b", "Dungeon Core 2", "Eric Vall", series="Dungeon Core, Book 2",
+                genre="Fantasy", narrator="JD Tanner",
+            ),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_normalize")
+        evidence = normalize_suspect["reasons"][0]["evidence"]
+        self.assertEqual(evidence["suggested_genre"], "LitRPG, Fantasy")
+        self.assertEqual(evidence["suggested_narrator"], "JD Tanner")
+
     def test_tagged_sibling_with_divergent_series_gets_mismatch_flag(self):
         # A sibling whose own series tag doesn't plausibly match the group's
         # base title (tagged "Summoner" but grouped under "Summoner School")

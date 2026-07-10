@@ -701,8 +701,13 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
         if not title:
             continue
         author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        genre = clean_text(local.get("genre")) or clean_text(match.get("genre"))
+        narrator = clean_text(local.get("narrator")) or clean_text(match.get("narrator"))
         path = item.get("path") or item.get("source") or ""
-        candidates.append({"path": path, "title": title, "author": author, "item": item})
+        candidates.append({
+            "path": path, "title": title, "author": author,
+            "genre": genre, "narrator": narrator, "item": item,
+        })
 
     by_base_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
@@ -758,6 +763,7 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
             member_rows.append({
                 "path": m["path"], "title": m["title"], "author": m["author"],
                 "sequence": m["sequence"], "series": "", "flag": flag,
+                "genre": m.get("genre", ""), "narrator": m.get("narrator", ""),
             })
 
         base_display = members[0]["base"]
@@ -809,11 +815,14 @@ def group_existing_series_by_normalized_tag(
             continue
         title = clean_text(local.get("title")) or clean_text(match.get("title"))
         author = clean_text(local.get("author")) or clean_text(match.get("author"))
+        genre = clean_text(local.get("genre")) or clean_text(match.get("genre"))
+        narrator = clean_text(local.get("narrator")) or clean_text(match.get("narrator"))
         _, number = split_title_base_and_number(title)
         by_key[key].append({
             "path": path, "title": title, "author": author,
             "sequence": clean_text(local.get("sequence") or match.get("sequence")) or number,
             "raw_series": raw_series_original,
+            "genre": genre, "narrator": narrator,
         })
         raw_values_by_key[key].add(raw_series_original)
 
@@ -846,6 +855,7 @@ def group_existing_series_by_normalized_tag(
             member_rows.append({
                 "path": m["path"], "title": m["title"], "author": m["author"],
                 "sequence": m["sequence"], "series": m["raw_series"], "flag": flag,
+                "genre": m.get("genre", ""), "narrator": m.get("narrator", ""),
             })
 
         raw_variants = sorted(raw_values_by_key[key])
@@ -933,8 +943,14 @@ def add_series_group_suspects(
 
     for group in pass_one_groups:
         tagged_siblings = _find_tagged_siblings(group["group_key"], report_items)
+        # Pull genre/narrator from every book already carrying one -- the
+        # group's own (untagged-series) members can still have a genre/
+        # narrator tag independently of series, not just tagged siblings.
         genres: list[str] = []
         narrators: list[str] = []
+        for m in group["members"]:
+            genres.extend(_split_and_dedupe(m.get("genre", "")))
+            narrators.extend(_split_and_dedupe(m.get("narrator", "")))
         for sib in tagged_siblings:
             genres.extend(_split_and_dedupe(sib["genre"]))
             narrators.extend(_split_and_dedupe(sib["narrator"]))
@@ -959,6 +975,15 @@ def add_series_group_suspects(
         })
 
     for group in pass_two_groups:
+        # Pass 2's own members are already-tagged books -- unlike pass 1
+        # there's no separate "tagged siblings" list, so genre/narrator must
+        # be aggregated from the members themselves or it's never populated.
+        genres = []
+        narrators = []
+        for m in group["members"]:
+            genres.extend(_split_and_dedupe(m.get("genre", "")))
+            narrators.extend(_split_and_dedupe(m.get("narrator", "")))
+
         suspects.append({
             "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
             "severity": "low", "recommendation": "fix_series_group",
@@ -968,8 +993,8 @@ def add_series_group_suspects(
                 "evidence": {
                     "suggested_series": group["suggested_series"],
                     "suggested_author": group["suggested_author"],
-                    "suggested_genre": "",
-                    "suggested_narrator": "",
+                    "suggested_genre": ", ".join(_dedupe_casefold(genres)),
+                    "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
                     "author_note": group["author_note"],
                     "members": group["members"],
                     "tagged_siblings": [],
