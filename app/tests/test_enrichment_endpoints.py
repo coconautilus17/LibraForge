@@ -109,7 +109,7 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
             "B0BBB": {"category_ladders": [{"ladder": [{"name": "Erotica"}]}], "narrators": [{"name": "Andrea Parsneau"}], "is_adult_product": True},
         }
 
-        def fake_lookup(client_arg, asin):
+        def fake_lookup(client_arg, asin, response_groups=None):
             return fake_products.get(asin.upper())
 
         with patch("app.main._get_abs_api_key", return_value="key"), \
@@ -117,7 +117,7 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
              patch("app.main.load_review_module", return_value=_FakeReviewModule), \
              patch("app.main.audible.Authenticator.from_file", return_value=MagicMock()), \
              patch("app.main.audible.Client", return_value=fake_audible_client), \
-             patch("app.main._audible_lookup_expanded", side_effect=fake_lookup), \
+             patch("app.main.audible_lookup_by_asin", side_effect=fake_lookup), \
              patch("app.main.abs_tract_search", return_value=[]), \
              patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}), \
              tempfile.NamedTemporaryFile(suffix=".json") as auth_file:
@@ -130,6 +130,66 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
         self.assertEqual(body["explicit_flagged_count"], 1)
         self.assertEqual(body["explicit_total_count"], 2)
         self.assertIn("Fantasy", body["genre"])
+
+    def test_compile_preserves_asin_lookup_fallback(self):
+        """audible_lookup_by_asin's real fallback (direct lookup miss -> keyword
+        search for the ASIN) must still run through the endpoint: the endpoint
+        must call the real fixer.search functions (bound to the enrichment
+        response groups), not a duplicate that dropped the fallback.
+        """
+        fake_audible_client = MagicMock()
+
+        def fake_client_get(path, params=None, **kwargs):
+            params = params or {}
+            if path == "catalog/products/B0AAA":
+                return {
+                    "product": {
+                        "asin": "B0AAA",
+                        "category_ladders": [{"ladder": [{"name": "Fantasy"}]}],
+                        "narrators": [{"name": "Andrea Parsneau"}],
+                        "is_adult_product": False,
+                    }
+                }
+            if path == "catalog/products/B0BBB":
+                # Direct lookup deliberately misses, forcing the fallback.
+                return {"product": None}
+            if path == "catalog/products":
+                # Fallback keyword search inside audible_lookup_by_asin searches
+                # for the ASIN itself as the query.
+                if params.get("keywords", "").upper() == "B0BBB":
+                    return {
+                        "products": [
+                            {
+                                "asin": "B0BBB",
+                                "category_ladders": [{"ladder": [{"name": "LitRPG"}]}],
+                                "narrators": [{"name": "Andrea Parsneau"}],
+                                "is_adult_product": False,
+                            }
+                        ]
+                    }
+                return {"products": []}
+            raise AssertionError(f"unexpected audible path {path}")
+
+        fake_audible_client.get.side_effect = fake_client_get
+
+        with patch("app.main._get_abs_api_key", return_value="key"), \
+             patch("app.main._abs_request", side_effect=_abs_request), \
+             patch("app.main.load_review_module", return_value=_FakeReviewModule), \
+             patch("app.main.audible.Authenticator.from_file", return_value=MagicMock()), \
+             patch("app.main.audible.Client", return_value=fake_audible_client), \
+             patch("app.main.abs_tract_search", return_value=[]), \
+             patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}), \
+             tempfile.NamedTemporaryFile(suffix=".json") as auth_file:
+            resp = client.post(
+                "/api/enrichment/compile",
+                json={"series_name": "Scholomance", "auth_file": auth_file.name},
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        # If the fallback had been dropped, item-2's genre (LitRPG, only
+        # reachable via the keyword-search fallback) would be missing.
+        self.assertIn("Fantasy", body["genre"])
+        self.assertIn("LitRPG", body["genre"])
 
 
 class EnrichmentApplyEndpointTests(unittest.TestCase):

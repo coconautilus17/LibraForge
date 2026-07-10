@@ -1,3 +1,4 @@
+import functools
 import importlib.util
 import json
 import os
@@ -46,7 +47,12 @@ from app.enrichment import (
     write_metadata_json_partial,
 )
 from app.fixer.scoring import clean_provider_genres
-from app.fixer.search import ENRICHMENT_RESPONSE_GROUPS, abs_tract_search
+from app.fixer.search import (
+    ENRICHMENT_RESPONSE_GROUPS,
+    abs_tract_search,
+    audible_lookup_by_asin,
+)
+from app.fixer.search import audible_search as fixer_audible_search
 from app.m4b_naming import canonical_m4b_title
 from app.manual_review import build_sidecar_multipart_context
 from app.progress_phases import (
@@ -4777,29 +4783,6 @@ class EnrichmentCompileResponse(BaseModel):
     explicit_evidence_note: str
 
 
-def _audible_search_expanded(client, query: str, limit: int) -> list[dict]:
-    """Same call shape as fixer.audible_search but with the enrichment-only
-    expanded response groups (category_ladders + rating)."""
-    response = client.get(
-        "catalog/products",
-        params={"keywords": query, "num_results": limit, "response_groups": ENRICHMENT_RESPONSE_GROUPS},
-    )
-    return response.get("products", []) or []
-
-
-def _audible_lookup_expanded(client, asin: str) -> dict | None:
-    """Same call shape as fixer.audible_lookup_by_asin but with the
-    enrichment-only expanded response groups."""
-    try:
-        response = client.get(
-            f"catalog/products/{asin.upper()}",
-            params={"response_groups": ENRICHMENT_RESPONSE_GROUPS},
-        )
-        return response.get("product") or None
-    except Exception:
-        return None
-
-
 @app.post("/api/enrichment/compile")
 def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileResponse:
     if not _get_abs_api_key():
@@ -4818,7 +4801,12 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     client = audible.Client(auth=auth)
 
     # Phase 1: Audible, 5 workers, run to completion for the whole series.
-    audible_results = search_series_audible(books, _audible_search_expanded, _audible_lookup_expanded, client)
+    # Reuse the real fixer search/lookup functions (including the ASIN
+    # keyword-search fallback in audible_lookup_by_asin), just bound to the
+    # enrichment-only expanded response groups instead of duplicating them.
+    audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+    audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+    audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
 
     # Phase 2: Goodreads, 5 workers, starts only after phase 1 is fully done
     # (never interleaved with Audible calls, see app/enrichment.py's
