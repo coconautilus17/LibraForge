@@ -99,8 +99,14 @@ function renderSourceStrip(searchedCount, elapsedSeconds) {
   `;
 }
 
+const EXPLICIT_EVIDENCE_CAVEAT = "That doesn't confirm the rest are clean, the same signal has missed equally explicit books before, so use your own judgment for the whole series.";
+
 function renderExplicitEvidence(note) {
-  $("explicitEvidence").innerHTML = `<span class="dot">&#9679;</span><span>${escapeHtml(note)}</span>`;
+  const caveatIndex = note.indexOf(EXPLICIT_EVIDENCE_CAVEAT);
+  const body = caveatIndex === -1
+    ? escapeHtml(note)
+    : `<strong>${escapeHtml(note.slice(0, caveatIndex).trim())}</strong> ${escapeHtml(note.slice(caveatIndex))}`;
+  $("explicitEvidence").innerHTML = `<span class="dot">&#9679;</span><span>${body}</span>`;
 }
 
 async function compileSeries(seriesName) {
