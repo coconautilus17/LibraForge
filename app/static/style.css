@@ -808,7 +808,7 @@ body.settings-open {
 
 .side-nav-card {
   margin: 0 0 18px;
-  scroll-margin-top: 16px;
+  scroll-margin-top: calc(var(--topbar-height) + 18px);
 }
 
 @media (max-width: 760px) {
