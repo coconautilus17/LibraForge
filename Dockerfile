@@ -6,12 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REPORTS_DIR=/app/reports \
     PATH=/opt/venv/bin:$PATH
 
-RUN apk add --no-cache ffmpeg python3 py3-pip \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ffmpeg python3 py3-pip \
     && python3 -m venv /opt/venv
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app/app
 COPY scripts /app/scripts
