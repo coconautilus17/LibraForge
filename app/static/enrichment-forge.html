@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LibraForge - Enrichment Forge</title>
+  <script src="/static/ui-preferences.js?v=20260706-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260706-1" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
+</head>
+<body data-page="enrichment-forge">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <img class="app-logo" src="/app-icon.png?v=20260613-3" alt="" aria-hidden="true" />
+        <div class="brand-text">
+          <span class="brand-name">LibraForge</span>
+          <span class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</span>
+        </div>
+      </div>
+      <nav class="site-nav" aria-label="LibraForge tools">
+        <a class="site-nav-link" href="/">Start Here</a>
+        <a class="site-nav-link" href="/forge">Metadata Forge</a>
+        <a class="site-nav-link" href="/m4b-tool">M4B Tool</a>
+        <a class="site-nav-link" href="/organizer">Folder Forge</a>
+        <a class="site-nav-link active" href="/enrichment-forge" aria-current="page">Enrichment Forge</a>
+        <a class="site-nav-link" href="/library">Library</a>
+      </nav>
+      <div class="topbar-actions">
+        <a id="settingsToggle" class="icon-button" href="/settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+        </a>
+        <a id="versionTag" class="version-tag" href="https://github.com/coconautilus17/LibraForge/releases" target="_blank" rel="noopener noreferrer" title="View changelog / release notes"></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell" id="main-content">
+    <div class="page-descriptor">
+      <div class="page-descriptor-icon">
+        <img src="/static/enrichment-forge.png?v=20260710-1" alt="" aria-hidden="true" />
+      </div>
+      <div class="page-descriptor-copy">
+        <span class="eyebrow">Series-wide metadata</span>
+        <h2 class="page-descriptor-title">Enrichment Forge</h2>
+        <p class="page-descriptor-text">Find a series already in your Audiobookshelf library, pull genre and narrator from Audible and Goodreads across every book in it, then apply the compiled result to the whole series at once.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>1. Choose a series</h2>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 12px">Searches series already indexed by Audiobookshelf, not a provider search.</p>
+      <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" style="max-width:420px" />
+      <div id="seriesResults" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card" id="compileCard" hidden>
+      <h2 id="compileTitle">2. Compiled from Audible + Goodreads</h2>
+      <p id="compileSub" style="color:var(--muted);font-size:13px;margin:0 0 16px"></p>
+
+      <div id="sourceStrip" class="badge" style="display:block;margin-bottom:16px"></div>
+
+      <div class="grid">
+        <label><span class="field-label">Genre</span>
+          <div id="genreChips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:42px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;background:var(--surface-soft)"></div>
+        </label>
+        <label><span class="field-label">Narrator</span>
+          <input id="narratorInput" />
+        </label>
+      </div>
+
+      <div class="checks" style="margin-top:12px">
+        <label><input id="explicitCheckbox" type="checkbox" /> Explicit</label>
+      </div>
+      <p id="explicitEvidence" style="color:var(--warning);font-size:12.5px;margin:6px 0 0"></p>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:18px 0" />
+
+      <h3 style="font-size:15px;margin:0 0 10px">Books in this series</h3>
+      <div id="bookList" style="display:flex;flex-direction:column;gap:8px"></div>
+
+      <div class="dryrun-notice" style="margin-top:18px">
+        <strong>Heads up:</strong> Apply only writes metadata.json, it never edits the audio files' own tags. If this library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you apply here.
+      </div>
+
+      <div class="actions">
+        <span id="includedCount" style="color:var(--muted);font-size:13px;margin-right:auto"></span>
+        <button id="cancelBtn" class="secondary" type="button">Cancel</button>
+        <button id="applyBtn" type="button">Apply</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/ui-common.js?v=20260706-1"></script>
+  <script src="/static/enrichment-forge.js?v=20260710-1"></script>
+</body>
+</html>

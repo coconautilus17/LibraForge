@@ -32,21 +32,31 @@ RESPONSE_GROUPS = ",".join(
     ]
 )
 
+# Enrichment Forge needs richer per-product data than the fixer's normal
+# matching flow (category_ladders for genre, rating for is_adult_product).
+# Kept as a separate constant, not merged into RESPONSE_GROUPS, so the
+# high-volume batch matcher calls don't get a heavier payload per request.
+ENRICHMENT_RESPONSE_GROUPS = RESPONSE_GROUPS + ",category_ladders,rating"
 
-def audible_search(client: audible.Client, query: str, limit: int) -> list[dict]:
+
+def audible_search(
+    client: audible.Client, query: str, limit: int, response_groups: str = RESPONSE_GROUPS
+) -> list[dict]:
     response = client.get(
         "catalog/products",
         params={
             "keywords": query,
             "num_results": limit,
-            "response_groups": RESPONSE_GROUPS,
+            "response_groups": response_groups,
         },
     )
 
     return response.get("products", []) or []
 
 
-def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
+def audible_lookup_by_asin(
+    client: audible.Client, asin: str, response_groups: str = RESPONSE_GROUPS
+) -> dict | None:
     """Look up a product by ASIN.
 
     Tries catalog/products/{asin} (direct) first. If that returns nothing,
@@ -58,7 +68,7 @@ def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
     try:
         response = client.get(
             f"catalog/products/{asin_upper}",
-            params={"response_groups": RESPONSE_GROUPS},
+            params={"response_groups": response_groups},
         )
         product = response.get("product") or None
         if product:
@@ -67,7 +77,7 @@ def audible_lookup_by_asin(client: audible.Client, asin: str) -> dict | None:
         pass
     # Fallback: keyword search -- some ASINs surface here but not via direct lookup
     try:
-        results = audible_search(client, asin_upper, 5)
+        results = audible_search(client, asin_upper, 5, response_groups)
         for p in results:
             if str(p.get("asin", "") or "").upper() == asin_upper:
                 return p
