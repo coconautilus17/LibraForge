@@ -20,13 +20,15 @@
 
 .card-title h2 {
   margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
 }
 
 .step-n {
   padding: 2px 7px;
   border-radius: 5px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-dim-text);
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -130,11 +132,11 @@
 }
 
 .source-chip.audible .dot {
-  background: var(--warning);
+  background: #d9954f;
 }
 
 .source-chip.goodreads .dot {
-  background: var(--success);
+  background: #5fae9c;
 }
 
 .source-chip.skipped {
@@ -174,6 +176,14 @@
   gap: 5px;
 }
 
+#compileCard .field-label {
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .field-wide {
   grid-column: 1 / -1;
 }
@@ -181,17 +191,19 @@
 .field-hint {
   margin-left: 6px;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
+  font-size: var(--font-2xs);
+  font-weight: 500;
+  opacity: 0.85;
 }
 
 .chip-field {
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
+  align-items: center;
   gap: 6px;
-  min-height: 42px;
-  padding: 7px;
+  min-height: 36px;
+  padding: 6px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
@@ -206,10 +218,10 @@
 
 .chip-remove {
   all: unset;
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  line-height: 15px;
+  line-height: 13px;
   text-align: center;
   cursor: pointer;
   opacity: 0.75;
@@ -316,6 +328,7 @@
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  background: var(--bg);
   transition: opacity 120ms ease, border-color 120ms ease;
 }
 
@@ -344,11 +357,11 @@
 }
 
 .book-src-line .audible {
-  color: var(--warning);
+  color: #d9954f;
 }
 
 .book-src-line .goodreads {
-  color: var(--success);
+  color: #5fae9c;
 }
 
 .book-src-line .local {
@@ -365,14 +378,17 @@
 .include-toggle {
   flex: none;
   white-space: nowrap;
+  min-height: 0;
   border-radius: 999px;
-  padding: 4px 12px;
+  padding: var(--space-xs) 10px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
 }
 
 .include-toggle.in {
-  border-color: rgb(var(--accent-rgb) / 55%);
-  color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-dim-text);
+  background: var(--accent-dim);
 }
 
 #compileCard .dryrun-notice {
