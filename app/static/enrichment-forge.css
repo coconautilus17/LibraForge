@@ -130,11 +130,11 @@
 }
 
 .source-chip.audible .dot {
-  background: var(--warning);
+  background: #d9954f;
 }
 
 .source-chip.goodreads .dot {
-  background: var(--success);
+  background: #5fae9c;
 }
 
 .source-chip.skipped {
@@ -345,11 +345,11 @@
 }
 
 .book-src-line .audible {
-  color: var(--warning);
+  color: #d9954f;
 }
 
 .book-src-line .goodreads {
-  color: var(--success);
+  color: #5fae9c;
 }
 
 .book-src-line .local {
