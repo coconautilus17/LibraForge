@@ -555,13 +555,18 @@ function renderManualReviewList() {
     : manualReviewItems;
 
   const _dangerReasons = new Set(['no match','asin conflict','low score','missing metadata','unsafe match','no metadata','status:skipped','mode:none']);
-  const _successReasons = new Set(['manually applied']);
+  // "manually applied" is the exact same fact as the Match Report card's
+  // match-manual-badge (both derive from the marker's manually_applied flag,
+  // see should_skip_due_to_marker) -- reuse that badge instead of a second
+  // reason-chip rendering of the same thing.
   $('manualReviewList').innerHTML = items.length
     ? items.map((item) => `
       <div class="file-item">
         <div>${escapeHtml(item.path)}</div>
         <div class="reason-badges">
-          ${(item.reasons || []).map((reason) => `<span class="reason-badge ${_dangerReasons.has(reason) ? 'danger' : _successReasons.has(reason) ? 'recommended' : ''}">${escapeHtml(reason)}</span>`).join('')}
+          ${(item.reasons || []).map((reason) => reason === 'manually applied'
+            ? '<span class="match-manual-badge">Manually Applied</span>'
+            : `<span class="reason-badge ${_dangerReasons.has(reason) ? 'danger' : ''}">${escapeHtml(reason)}</span>`).join('')}
           ${item.diff_percent ? `<span class="reason-badge danger">${escapeHtml(String(item.diff_percent))}% diff</span>` : ''}
         </div>
         <button class="secondary" data-manual-load="${escapeHtml(item.path)}">Load target</button>
@@ -1318,9 +1323,9 @@ function buildMatchReportCards() {
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
       if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
       if (statusFilter === 'written' && writeAction !== 'written') continue;
-      if (statusFilter === 'unmatched' && (hasMatch || s === 'skipped' || s === 'error')) continue;
+      if (statusFilter === 'unmatched' && (hasMatch || s === 'skipped' || s === 'error' || s === 'failed')) continue;
       if (statusFilter === 'skipped' && s !== 'skipped') continue;
-      if (statusFilter === 'error' && s !== 'error') continue;
+      if (statusFilter === 'error' && s !== 'error' && s !== 'failed') continue;
       if (statusFilter === 'manually_applied' && !item.was_manually_applied) continue;
       if (statusFilter === 'multi_file' && !item.is_grouped) continue;
     }
@@ -1363,7 +1368,7 @@ function matchStatusInfo(item) {
     const reason = item.skip_reason ? ` — ${item.skip_reason}` : '';
     return { label: `Skipped${reason}`, cls: 'status-skipped' };
   }
-  if (s === 'error') return { label: 'Error', cls: 'status-error' };
+  if (s === 'error' || s === 'failed') return { label: 'Error', cls: 'status-error' };
   if (s === 'matched' || s === 'applied' || s === 'written') return { label: 'Matched', cls: 'status-matched' };
   return { label: 'Not Matched', cls: 'status-unmatched' };
 }

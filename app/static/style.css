@@ -3626,15 +3626,19 @@ button.danger:hover:not(:disabled) {
   border-bottom: none;
 }
 
-.guide-subheading {
-  margin: 18px 0 4px;
-  font-size: 13.5px;
+.guide-badge-table tr.guide-badge-section td {
+  padding-top: 16px;
+  white-space: normal;
+  width: auto;
+  font-size: 11px;
   font-weight: 700;
-  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
 }
 
-.guide-subheading:first-of-type {
-  margin-top: 8px;
+.guide-badge-table tr.guide-badge-section:first-child td {
+  padding-top: 0;
 }
 
 .guide-screenshot {
