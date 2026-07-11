@@ -309,6 +309,43 @@
     if (target) target.scrollIntoView({ block: "start" });
   }
 
+  // Landed here via the auth/ABS-required redirect (see ui-common.js
+  // ensureConnected/the auth-page load check) -- explain why, and flash the
+  // sections that need attention so it's not just a silent drop-off.
+  function initializeConnectionNotice() {
+    if (document.body.dataset.page !== "settings") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("authRequired") !== "1") return;
+
+    // Don't leave the param in the URL -- a refresh/bookmark shouldn't re-show this.
+    params.delete("authRequired");
+    const query = params.toString();
+    const newUrl = window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
+    window.history.replaceState(null, "", newUrl);
+
+    const flashTargets = ["accounts", "absSection", "skipBtn"]
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    flashTargets.forEach((el) => {
+      el.classList.add("connection-flash-highlight");
+      el.addEventListener("animationend", () => el.classList.remove("connection-flash-highlight"), { once: true });
+    });
+
+    const dlg = document.createElement("dialog");
+    dlg.className = "manual-apply-dialog connection-notice-dialog";
+    dlg.innerHTML = `
+      <h3 class="manual-apply-title">Connect a metadata provider to continue</h3>
+      <p class="manual-apply-body">LibraForge needs at least one of the two highlighted sections below to work: an <strong>Audible account</strong>, or an <strong>Audiobookshelf (ABS) connection</strong>. Set up either one, or use <strong>Skip for now</strong> if you'll do this later.</p>
+      <div class="manual-apply-actions">
+        <button id="connectionNoticeOk" class="secondary">Got it</button>
+      </div>`;
+    document.body.appendChild(dlg);
+    const close = () => { dlg.close(); dlg.remove(); };
+    dlg.querySelector("#connectionNoticeOk").addEventListener("click", close);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
+    dlg.showModal();
+  }
+
   function initializeTitleNoiseSettings() {
     const defaultsContainer = document.getElementById("titleNoiseDefaults");
     const customContainer = document.getElementById("titleNoiseCustom");
@@ -609,6 +646,7 @@
     initializeInfoTips();
     initializeSettingsPanel();
     initializeExplanations();
+    initializeConnectionNotice();
     initializeTitleNoiseSettings();
     initializePublisherSettings();
     const theme = document.getElementById("uiTheme");

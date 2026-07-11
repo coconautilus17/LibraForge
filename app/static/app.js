@@ -143,6 +143,11 @@ function collectManualMetadata() {
 }
 
 async function startRun() {
+  // Re-check live (even if the connection notice was already shown once
+  // before) — starting a run with no metadata provider connected can't work.
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+    return;
+  }
   // Block if a previous run's workers are still draining.
   const drainCheck = await fetch('/api/runs/draining').then(r => r.json()).catch(() => ({ draining: false }));
   if (drainCheck.draining) {

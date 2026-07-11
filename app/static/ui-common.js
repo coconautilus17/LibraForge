@@ -23,22 +23,22 @@
     return `<div class="stat"><small>${label}</small><strong>${value ?? 0}</strong><small>${help || ""}</small></div>`;
   }
 
-  // Redirect to the Settings Accounts section if the auth file is missing on
-  // pages that need it, unless the user explicitly skipped Audible setup or debug mode is on.
+  // Redirect to the Settings Accounts section if neither an Audible account
+  // nor an ABS connection is configured, unless the user explicitly skipped
+  // setup or debug mode is on. See CONNECTION_NOTICE_KEY below for how this
+  // avoids re-nagging on every page load.
   const _AUTH_PAGES = new Set(["fixer", "m4b-tool"]);
   const _page = document.body.dataset.page;
   function _isDebugMode() {
     try { return JSON.parse(localStorage.getItem("libraforge-preferences") || "{}").debugMode === true; } catch { return false; }
   }
-  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped") && !_isDebugMode()) {
-    fetch("/api/auth/status")
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data.auth_ok) {
-          window.location.href = "/settings#accounts";
-        }
-      })
-      .catch(() => {});
+
+  const CONNECTION_NOTICE_KEY = "libraforge-connection-notice-shown";
+  function _hasShownConnectionNotice() {
+    try { return localStorage.getItem(CONNECTION_NOTICE_KEY) === "1"; } catch { return false; }
+  }
+  function _markConnectionNoticeShown() {
+    try { localStorage.setItem(CONNECTION_NOTICE_KEY, "1"); } catch { /* ignore */ }
   }
 
   // ABS reachability — checked once on load, result shared across the page.
@@ -54,6 +54,41 @@
   }
 
   function isAbsConfigured() { return _absStatus.configured; }
+
+  async function _isAnyProviderConnected() {
+    const [authData] = await Promise.all([
+      fetch("/api/auth/status").then((r) => r.json()).catch(() => ({ auth_ok: false })),
+      _absStatusReady,
+    ]);
+    return Boolean(authData.auth_ok || _absStatus.configured);
+  }
+
+  // Shared entry point other pages can call right before an action that
+  // actually needs a provider (e.g. starting a Metadata Forge run). Unlike
+  // the silent page-load check below, this always re-checks live and always
+  // redirects (with the explanatory notice) if still disconnected, even if
+  // the notice was already shown once before.
+  async function ensureConnected() {
+    if (sessionStorage.getItem("audible-skipped")) return true;
+    if (_isDebugMode()) return true;
+    const connected = await _isAnyProviderConnected();
+    if (!connected) {
+      _markConnectionNoticeShown();
+      window.location.href = "/settings?authRequired=1#accounts";
+      return false;
+    }
+    return true;
+  }
+  window.LibraForgeAuth = { ensureConnected };
+
+  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
+    _isAnyProviderConnected().then((connected) => {
+      if (!connected) {
+        _markConnectionNoticeShown();
+        window.location.href = "/settings?authRequired=1#accounts";
+      }
+    });
+  }
 
   let _absAggRequiredParams = {};
   let _absAggReachable = false;
