@@ -52,7 +52,19 @@
       </div>
     </div>
 
-    <section class="card">
+   <div class="side-nav-layout">
+    <aside class="side-nav" aria-label="M4B Tool sections">
+      <a href="#source">Source</a>
+      <a href="#discovery">Find books</a>
+      <a href="#metadata-search">Metadata search</a>
+      <a href="#editable-metadata">Editable metadata</a>
+      <a href="#merge-settings">Merge settings</a>
+      <a href="#progress">Progress</a>
+      <a href="#live-output">Live output</a>
+    </aside>
+    <div class="side-nav-content">
+
+    <section id="source" class="card side-nav-card">
       <div class="run-settings-heading">
         <h2>Source</h2>
         <button id="advancedRunToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced</button>
@@ -112,7 +124,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="discovery" class="card side-nav-card">
       <div class="run-settings-heading">
         <h2>Find Books To Convert</h2>
         <button id="discoverySectionToggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="discoverySectionBody">Show</button>
@@ -134,7 +146,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="metadata-search" class="card side-nav-card">
       <div class="run-settings-heading">
         <h2>Metadata Search</h2>
         <button id="metadataSectionToggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="metadataSectionBody">Show</button>
@@ -173,7 +185,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="editable-metadata" class="card side-nav-card">
       <h2>Editable Metadata</h2>
       <div class="grid">
         <label>Title
@@ -209,7 +221,7 @@
       </label>
     </section>
 
-    <section class="card">
+    <section id="merge-settings" class="card side-nav-card">
       <h2>Merge Settings</h2>
       <div class="grid">
         <label><span class="field-label">Output `.m4b` <span class="info-tip" data-tooltip="Full destination path for the merged audiobook. Existing output is replaced only when Force overwrite is enabled."></span></span>
@@ -271,7 +283,7 @@
       <p class="action-explanation"><strong>Create M4B</strong> writes a new output file using the command above. Source audio is read, not replaced; an existing output can be replaced only when Force overwrite is enabled.</p>
     </section>
 
-    <section class="card status-card">
+    <section id="progress" class="card side-nav-card status-card">
       <div class="progress-wrap">
         <div class="ring" id="ring" style="--pct: 0"><span id="percent">0%</span></div>
         <div>
@@ -284,10 +296,12 @@
       </div>
     </section>
 
-    <section class="card">
+    <section id="live-output" class="card side-nav-card">
       <h2>Live Output</h2>
       <pre id="tail"></pre>
     </section>
+    </div>
+   </div>
   </main>
   <script src="/static/ui-common.js?v=20260624-1"></script>
   <script src="/static/m4b-tool.js?v=20260711-1"></script>
