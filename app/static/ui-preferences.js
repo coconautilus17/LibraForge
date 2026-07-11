@@ -27,7 +27,6 @@
     accent: "sky",
     density: "comfortable",
     explanationsExpanded: true,
-    debugMode: false,
     debugTrace: false,
     debugTraceFile: "",
     defaultRootPath: "",
@@ -694,18 +693,6 @@
     const surface = document.getElementById("uiSurface");
     const accent = document.getElementById("uiAccent");
     const density = document.getElementById("uiDensity");
-    const debugModeEl = document.getElementById("debugMode");
-    const debugLinks = document.getElementById("debugLinks");
-
-    if (debugModeEl) {
-      debugModeEl.checked = preferences.debugMode;
-      if (debugLinks) debugLinks.hidden = !preferences.debugMode;
-      debugModeEl.addEventListener("change", () => {
-        preferences = { ...preferences, debugMode: debugModeEl.checked };
-        savePreferences(preferences);
-        if (debugLinks) debugLinks.hidden = !preferences.debugMode;
-      });
-    }
 
     const debugTraceEl = document.getElementById("debugTrace");
     const debugTraceFileEl = document.getElementById("debugTraceFile");
