@@ -476,6 +476,13 @@ function renderResults(results = []) {
 }
 
 async function searchMetadata() {
+  // Route through whichever check the selected provider actually needs:
+  // auto-swap for audible/abs, redirect only for abs-agg-backed choices
+  // (mirrors the same logic in app.js's startRun()).
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureProviderConnected($('metaProvider'), 'search'))) {
+    return;
+  }
+
   const provider = $('metaProvider').value;
   let res, data;
 

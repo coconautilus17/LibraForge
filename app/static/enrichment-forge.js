@@ -122,6 +122,13 @@ function renderExplicitEvidence(note) {
 }
 
 async function compileSeries(seriesName) {
+  // Compile always reads the series from ABS first -- it's the mandatory
+  // library source here. Audible is only an optional, better-quality search
+  // source (the backend falls back to ABS's own Audible provider when direct
+  // auth is missing), so gate on ABS specifically rather than "any provider".
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected("abs"))) {
+    return;
+  }
   currentSeriesName = seriesName;
   $("compileCard").hidden = false;
   $("compileSub").textContent = `${seriesName}, searching...`;
@@ -195,6 +202,13 @@ $("seriesSearch").addEventListener("input", (e) => {
     return;
   }
   searchDebounce = setTimeout(async () => {
+    // The page-load redirect (ui-common.js) only fires once per notice --
+    // it won't re-trigger on a later visit once dismissed. Every search
+    // still hits /api/enrichment/series, which needs ABS just like compile
+    // does, so re-check live here too instead of silently 400ing.
+    if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected("abs"))) {
+      return;
+    }
     renderSeriesResults(await searchSeries(query));
   }, 250);
 });

@@ -3181,6 +3181,21 @@ button.danger:hover:not(:disabled) {
   width: min(540px, calc(100vw - 32px));
 }
 
+/* ── Connection-required notice (Settings redirect explanation) ─────────── */
+
+.connection-notice-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+@keyframes connection-flash-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--accent-rgb) / 0%); border-color: var(--border); }
+  50% { box-shadow: 0 0 0 6px rgb(var(--accent-rgb) / 35%); border-color: var(--accent); }
+}
+
+.connection-flash-highlight {
+  animation: connection-flash-pulse 1s ease-in-out 1;
+}
+
 .org-confirm-danger-title {
   color: var(--danger);
   font-size: var(--font-md);
