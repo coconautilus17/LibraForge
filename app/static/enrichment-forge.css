@@ -20,6 +20,8 @@
 
 .card-title h2 {
   margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
 }
 
 .step-n {
@@ -198,9 +200,10 @@
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
+  align-items: center;
   gap: 6px;
-  min-height: 42px;
-  padding: 7px;
+  min-height: 36px;
+  padding: 6px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
