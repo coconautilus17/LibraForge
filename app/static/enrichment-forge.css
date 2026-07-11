@@ -316,6 +316,7 @@
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  background: var(--bg);
   transition: opacity 120ms ease, border-color 120ms ease;
 }
 
@@ -365,8 +366,11 @@
 .include-toggle {
   flex: none;
   white-space: nowrap;
+  min-height: 0;
   border-radius: 999px;
-  padding: 4px 12px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--font-2xs);
+  font-weight: 600;
 }
 
 .include-toggle.in {
