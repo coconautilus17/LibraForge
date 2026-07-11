@@ -422,6 +422,7 @@ def compile_series_enrichment(
 
         all_genres.extend(audible_genres)
         all_genres.extend(goodreads_genres)
+        all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", [])))
         all_narrators.extend(narrators)
 
         rows.append({
