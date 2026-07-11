@@ -59,7 +59,7 @@ function syncAdvancedRunSettings() {
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   document.querySelectorAll('.advanced-run-setting').forEach((el) => {
-    if (el.classList.contains('force-original-setting')) return;
+    if (el.id === 'batchAbsProviderLabel' || el.classList.contains('force-original-setting')) return;
     el.hidden = !open;
   });
   syncForceOriginal();
@@ -155,6 +155,10 @@ async function startRun() {
   if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('batchProvider')?.value === 'audible') {
     const state = await window.LibraForgeAuth.getConnectionState();
     if (!state.audible && state.abs) {
+      // The provider selector lives inside "Advanced" run settings, which is
+      // collapsed by default, so switching its value alone would be invisible.
+      // Open the section so the switch actually shows.
+      if (!isAdvancedRunSettingsOpen()) $('advancedRunToggle')?.click();
       $('batchProvider').value = 'abs';
       $('batchProvider').dispatchEvent(new Event('change'));
       await window.UiCommon.showNotice(
@@ -914,6 +918,24 @@ async function searchManualTarget() {
   if (!manualContext?.path) {
     alert('Load a manual review target first.');
     return;
+  }
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+    return;
+  }
+  // The provider selector defaults to Audible regardless of what's actually
+  // connected. If Audible auth is missing but ABS is connected, route through
+  // ABS automatically instead of letting the search fail against a
+  // nonexistent auth file (mirrors startRun() and m4b-tool's searchMetadata()).
+  if (window.LibraForgeAuth && $('manualProvider').value === 'audible') {
+    const state = await window.LibraForgeAuth.getConnectionState();
+    if (!state.audible && state.abs) {
+      $('manualProvider').value = 'abs';
+      $('manualProvider').dispatchEvent(new Event('change'));
+      await window.UiCommon.showNotice(
+        'Switched to Audiobookshelf',
+        'No Audible account is connected, so this search has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.',
+      );
+    }
   }
 
   // When "search from original backup" is active, reload the displayed metadata
@@ -1684,10 +1706,11 @@ if ($('targetScanBtn')) {
   function toggleBatchProviderFields() {
     if (!$('batchProvider')) return;
     const isAbs = $('batchProvider').value === 'abs';
-    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !isAbs;
+    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !(isAdvancedRunSettingsOpen() && isAbs);
   }
   if ($('batchProvider')) {
     $('batchProvider').addEventListener('change', toggleBatchProviderFields);
+    $('advancedRunToggle')?.addEventListener('click', toggleBatchProviderFields);
     toggleBatchProviderFields();
   }
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
