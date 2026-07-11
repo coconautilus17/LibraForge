@@ -122,6 +122,13 @@ function renderExplicitEvidence(note) {
 }
 
 async function compileSeries(seriesName) {
+  // Compile always reads the series from ABS first -- it's the mandatory
+  // library source here. Audible is only an optional, better-quality search
+  // source (the backend falls back to ABS's own Audible provider when direct
+  // auth is missing), so gate on ABS specifically rather than "any provider".
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected("abs"))) {
+    return;
+  }
   currentSeriesName = seriesName;
   $("compileCard").hidden = false;
   $("compileSub").textContent = `${seriesName}, searching...`;

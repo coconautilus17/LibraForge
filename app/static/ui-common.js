@@ -76,18 +76,32 @@
   }
 
   // Shared entry point other pages can call right before an action that
-  // actually needs a provider (e.g. starting a Metadata Forge run). Unlike
-  // the silent page-load check below, this always re-checks live and always
-  // redirects (with the explanatory notice) if still disconnected, even if
-  // the notice was already shown once before. "Skip for now" only suppresses
-  // the passive page-load nag (below) -- it can NOT bypass this check, since
-  // a run genuinely cannot proceed with zero providers connected.
-  async function ensureConnected() {
+  // actually needs a provider (e.g. starting a Metadata Forge run, or the
+  // m4b-tool/Enrichment Forge/Library actions below). Unlike the silent
+  // page-load check below, this always re-checks live and always redirects
+  // (with the explanatory notice) if the requirement still isn't met, even
+  // if the notice was already shown once before. "Skip for now" only
+  // suppresses the passive page-load nag (below) -- it can NOT bypass this
+  // check, since these actions genuinely cannot work without their provider.
+  //
+  // `require` narrows what counts as "connected": some actions work with
+  // either provider ("any", the default), but some have a hard dependency
+  // on one specific provider regardless of the other:
+  //   - "audible": e.g. Load my library -- lists Audible purchases directly,
+  //     no ABS equivalent exists.
+  //   - "abs": e.g. Enrichment Forge compile -- ABS is the mandatory library
+  //     source; Audible is only an optional, better-quality search source.
+  async function ensureConnected(require = "any") {
     if (_isDebugMode()) return true;
-    const connected = await _isAnyProviderConnected();
-    if (!connected) {
+    const state = await getConnectionState();
+    const ok = require === "audible" ? state.audible
+      : require === "abs" ? state.abs
+      : (state.audible || state.abs);
+    if (!ok) {
       _markConnectionNoticeShown();
-      window.location.href = "/settings?authRequired=1#accounts";
+      const params = new URLSearchParams({ authRequired: "1" });
+      if (require !== "any") params.set("require", require);
+      window.location.href = `/settings?${params.toString()}#accounts`;
       return false;
     }
     return true;

@@ -476,6 +476,22 @@ function renderResults(results = []) {
 }
 
 async function searchMetadata() {
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+    return;
+  }
+  // The provider selector defaults to Audible regardless of what's actually
+  // connected. If Audible auth is missing but ABS is connected, route through
+  // ABS automatically instead of letting the search fail against a
+  // nonexistent auth file (mirrors the same logic in app.js's startRun()).
+  if (window.LibraForgeAuth && $('metaProvider').value === 'audible') {
+    const state = await window.LibraForgeAuth.getConnectionState();
+    if (!state.audible && state.abs) {
+      $('metaProvider').value = 'abs';
+      $('metaProvider').dispatchEvent(new Event('change'));
+      alert('No Audible account connected — routing this search through your Audiobookshelf (ABS) connection instead.');
+    }
+  }
+
   const provider = $('metaProvider').value;
   let res, data;
 
