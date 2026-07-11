@@ -391,12 +391,12 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         compiled = enrichment.compile_series_enrichment(
             books, {}, {}, self._clean_genres, abs_results=abs_results
         )
-        self.assertEqual(compiled["genre"], ["Fantasy", "Adventure"])
+        self.assertEqual(compiled["genre"], ["Fantasy", "Adventure", "Local Fantasy"])
         self.assertEqual(compiled["narrator"], "ABS Narrator")
         self.assertEqual(compiled["books"][0]["audible_genres"], ["Fantasy", "Adventure"])
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Local Fantasy"])
 
-    def test_falls_back_to_existing_genres_when_audible_and_goodreads_empty(self):
+    def test_existing_genres_used_when_audible_and_goodreads_empty(self):
         books = [
             {"id": "1", "title": "Dashing Devil", "existing_genres": ["Romance", "Fantasy"], "existing_narrator": "", "existing_explicit": False},
         ]
@@ -404,13 +404,17 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["genre"], ["Romance", "Fantasy"])
         self.assertEqual(compiled["books"][0]["audible_genres"], [])
 
-    def test_does_not_fall_back_to_existing_genres_when_audible_found_some(self):
+    def test_existing_genres_are_unioned_in_even_when_audible_found_some(self):
+        # Local genres are part of the full genre equation, not a
+        # last-resort fallback gated on every other source coming up empty --
+        # a book can have accurate local tags Audible/Goodreads simply don't
+        # carry (or vice versa), so all three sources always contribute.
         books = [
             {"id": "1", "title": "T", "existing_genres": ["Local Only"], "existing_narrator": "", "existing_explicit": False},
         ]
         audible_results = {"1": {"category_ladders": [{"ladder": [{"name": "Fantasy"}]}]}}
         compiled = enrichment.compile_series_enrichment(books, audible_results, {}, self._clean_genres)
-        self.assertEqual(compiled["genre"], ["Fantasy"])
+        self.assertEqual(compiled["genre"], ["Fantasy", "Local Only"])
 
     def test_sequence_range_spans_min_to_max(self):
         books = [
