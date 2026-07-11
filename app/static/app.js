@@ -59,7 +59,7 @@ function syncAdvancedRunSettings() {
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   document.querySelectorAll('.advanced-run-setting').forEach((el) => {
-    if (el.id === 'batchAbsProviderLabel' || el.classList.contains('force-original-setting')) return;
+    if (el.classList.contains('force-original-setting')) return;
     el.hidden = !open;
   });
   syncForceOriginal();
@@ -155,10 +155,6 @@ async function startRun() {
   if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('batchProvider')?.value === 'audible') {
     const state = await window.LibraForgeAuth.getConnectionState();
     if (!state.audible && state.abs) {
-      // The provider selector lives inside "Advanced" run settings, which is
-      // collapsed by default, so switching its value alone would be invisible.
-      // Open the section so the switch actually shows.
-      if (!isAdvancedRunSettingsOpen()) $('advancedRunToggle')?.click();
       $('batchProvider').value = 'abs';
       $('batchProvider').dispatchEvent(new Event('change'));
       await window.UiCommon.showNotice(
@@ -1688,11 +1684,10 @@ if ($('targetScanBtn')) {
   function toggleBatchProviderFields() {
     if (!$('batchProvider')) return;
     const isAbs = $('batchProvider').value === 'abs';
-    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !(isAdvancedRunSettingsOpen() && isAbs);
+    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !isAbs;
   }
   if ($('batchProvider')) {
     $('batchProvider').addEventListener('change', toggleBatchProviderFields);
-    $('advancedRunToggle')?.addEventListener('click', toggleBatchProviderFields);
     toggleBatchProviderFields();
   }
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
