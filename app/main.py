@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import audible
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
@@ -6785,6 +6785,55 @@ def audible_search(req: AudibleSearchRequest) -> dict[str, Any]:
 @app.get("/api/manual-review/browse")
 def browse_manual_review(path: str = "/audiobooks") -> dict[str, Any]:
     return browse_manual_review_path(path)
+
+
+class ManualReviewSearchIndexStatusResponse(BaseModel):
+    status: str
+    book_count: int
+    error: str | None = None
+
+
+@app.get("/api/manual-review/search-index/status")
+def manual_review_search_index_status(
+    ignored_folders: list[str] = Query(default=[]),
+) -> ManualReviewSearchIndexStatusResponse:
+    _ensure_manual_review_search_index_fresh(ignored_folders)
+    state = _manual_review_search_index
+    return ManualReviewSearchIndexStatusResponse(
+        status=state.status, book_count=state.book_count, error=state.error,
+    )
+
+
+class ManualReviewSearchRequest(BaseModel):
+    query: str = ""
+    ignored_folders: list[str] = Field(default_factory=list)
+
+
+class ManualReviewSearchResult(BaseModel):
+    name: str
+    path: str
+    is_file: bool
+
+
+class ManualReviewSearchResponse(BaseModel):
+    results: list[ManualReviewSearchResult]
+    index_status: str
+    book_count: int
+
+
+@app.post("/api/manual-review/search")
+def manual_review_search(req: ManualReviewSearchRequest) -> ManualReviewSearchResponse:
+    _ensure_manual_review_search_index_fresh(req.ignored_folders)
+    state = _manual_review_search_index
+    query = req.query.strip().lower()
+    results = [
+        ManualReviewSearchResult(name=Path(path).name, path=path, is_file=is_file)
+        for path, is_file in state.entries
+        if not query or query in path.lower()
+    ]
+    return ManualReviewSearchResponse(
+        results=results, index_status=state.status, book_count=state.book_count,
+    )
 
 
 @app.post("/api/manual-review/discover")
