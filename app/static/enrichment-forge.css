@@ -206,10 +206,10 @@
 
 .chip-remove {
   all: unset;
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  line-height: 15px;
+  line-height: 13px;
   text-align: center;
   cursor: pointer;
   opacity: 0.75;
@@ -368,7 +368,7 @@
   white-space: nowrap;
   min-height: 0;
   border-radius: 999px;
-  padding: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) 10px;
   font-size: var(--font-2xs);
   font-weight: 600;
 }
