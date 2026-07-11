@@ -3193,7 +3193,7 @@ button.danger:hover:not(:disabled) {
 }
 
 .connection-flash-highlight {
-  animation: connection-flash-pulse 1s ease-in-out 3;
+  animation: connection-flash-pulse 1s ease-in-out 1;
 }
 
 .org-confirm-danger-title {
