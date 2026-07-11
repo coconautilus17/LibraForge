@@ -56,9 +56,6 @@
     ["m4b-tool", "any"],
   ]);
   const _page = document.body.dataset.page;
-  function _isDebugMode() {
-    try { return JSON.parse(localStorage.getItem("libraforge-preferences") || "{}").debugMode === true; } catch { return false; }
-  }
 
   const CONNECTION_NOTICE_KEY = "libraforge-connection-notice-shown";
   function _hasShownConnectionNotice() {
@@ -157,7 +154,6 @@
   //     auto-swap for these -- just redirect to the relevant settings
   //     section, since there's no sensible "other provider" to fall back to.
   async function ensureConnected(require = "any") {
-    if (_isDebugMode()) return true;
     const ok = require === "abs-agg" ? await isAbsAggConnected()
       : require === "abs-tract" ? await isAbsTractConnected()
       : _meetsRequirement(await getConnectionState(), require);
@@ -230,7 +226,7 @@
   window.LibraForgeAuth = { ensureConnected, getConnectionState, autoRouteProvider, ensureProviderConnected };
 
   const _pageRequire = _AUTH_PAGE_REQUIREMENTS.get(_page);
-  if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
+  if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_hasShownConnectionNotice()) {
     getConnectionState().then((state) => {
       if (!_meetsRequirement(state, _pageRequire)) {
         _markConnectionNoticeShown();
