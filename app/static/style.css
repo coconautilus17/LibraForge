@@ -148,9 +148,17 @@
   --text: #201d1a;
   --text-soft: #48423d;
   --muted: #645e59;
+  --accent: #1369ae;
+  --accent-rgb: 19 105 174;
   --accent-ink: #ffffff;
   --accent-dim: #a7cae7;
-  --accent-dim-text: var(--accent);
+  --accent-dim-text: #0b3d65;
+  --success: #207948;
+  --success-soft: rgb(32 121 72 / 12%);
+  --warning: #8d5e0c;
+  --warning-soft: rgb(141 94 12 / 13%);
+  --danger: #b80a1b;
+  --danger-soft: rgb(184 10 27 / 12%);
   --shadow-sm: 0 1px 3px rgb(52 43 31 / 9%);
   --shadow-lg: 0 18px 45px rgb(52 43 31 / 10%);
 }
@@ -238,7 +246,7 @@
   --accent-rgb: 114 87 217;
   --accent-ink: #ffffff;
   --accent-dim: #b4a7e7;
-  --accent-dim-text: var(--accent);
+  --accent-dim-text: #2d1a74;
 }
 
 :root[data-accent="emerald"] {
@@ -250,11 +258,11 @@
 }
 
 :root[data-theme="light"][data-accent="emerald"] {
-  --accent: #168a67;
-  --accent-rgb: 22 138 103;
+  --accent: #147b5c;
+  --accent-rgb: 20 123 92;
   --accent-ink: #ffffff;
   --accent-dim: #a7e7d4;
-  --accent-dim-text: var(--accent);
+  --accent-dim-text: #115f48;
 }
 
 :root[data-accent="amber"] {
@@ -266,11 +274,11 @@
 }
 
 :root[data-theme="light"][data-accent="amber"] {
-  --accent: #b85c26;
-  --accent-rgb: 184 92 38;
+  --accent: #a15021;
+  --accent-rgb: 161 80 33;
   --accent-ink: #ffffff;
   --accent-dim: #e7c9a8;
-  --accent-dim-text: var(--accent);
+  --accent-dim-text: #7f3f1a;
 }
 
 :root[data-density="compact"] {
