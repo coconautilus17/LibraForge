@@ -488,7 +488,10 @@ async function searchMetadata() {
     if (!state.audible && state.abs) {
       $('metaProvider').value = 'abs';
       $('metaProvider').dispatchEvent(new Event('change'));
-      alert('No Audible account connected — routing this search through your Audiobookshelf (ABS) connection instead.');
+      await window.UiCommon.showNotice(
+        'Switched to Audiobookshelf',
+        'No Audible account is connected, so this search has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.',
+      );
     }
   }
 

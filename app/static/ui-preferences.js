@@ -350,7 +350,7 @@
       : require === "abs"
       ? {
         title: "Connect Audiobookshelf to continue",
-        body: 'This action needs an <strong>Audiobookshelf (ABS) connection</strong> — it\'s the library source this reads from. An Audible account is optional and only improves match quality. Set up ABS below, or use <strong>Skip for now</strong> if you\'ll do this later.',
+        body: 'This action needs an <strong>Audiobookshelf (ABS) connection</strong>, the library source this reads from. An Audible account is optional and only improves match quality. Set up ABS below, or use <strong>Skip for now</strong> if you\'ll do this later.',
       }
       : {
         title: "Connect a metadata provider to continue",

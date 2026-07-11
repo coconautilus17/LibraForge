@@ -23,6 +23,27 @@
     return `<div class="stat"><small>${label}</small><strong>${value ?? 0}</strong><small>${help || ""}</small></div>`;
   }
 
+  // A single-button styled dialog, for anything that would otherwise use a
+  // plain browser alert(). Matches the connection-notice-dialog look. Resolves
+  // once dismissed, so callers can `await` it the same way alert() blocked.
+  function showNotice(title, bodyHtml) {
+    return new Promise((resolve) => {
+      const dlg = document.createElement("dialog");
+      dlg.className = "manual-apply-dialog simple-notice-dialog";
+      dlg.innerHTML = `
+        <h3 class="manual-apply-title">${escapeHtml(title)}</h3>
+        <p class="manual-apply-body">${bodyHtml}</p>
+        <div class="manual-apply-actions">
+          <button type="button" class="secondary" data-notice-ok>Got it</button>
+        </div>`;
+      document.body.appendChild(dlg);
+      const close = () => { dlg.close(); dlg.remove(); resolve(); };
+      dlg.querySelector("[data-notice-ok]").addEventListener("click", close);
+      dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
+      dlg.showModal();
+    });
+  }
+
   // Redirect to the Settings Accounts section if this page's provider
   // requirement isn't met, unless the user explicitly skipped setup or debug
   // mode is on. See CONNECTION_NOTICE_KEY below for how this avoids
@@ -85,10 +106,10 @@
   // Shared entry point other pages can call right before an action that
   // actually needs a provider (e.g. starting a Metadata Forge run, or the
   // m4b-tool/Enrichment Forge/Library actions below). Unlike the silent
-  // page-load check below, this always re-checks live and always redirects
+  // page-load check below, this always re-checks live. It always redirects
   // (with the explanatory notice) if the requirement still isn't met, even
   // if the notice was already shown once before. "Skip for now" only
-  // suppresses the passive page-load nag (below) -- it can NOT bypass this
+  // suppresses the passive page-load nag (below); it can NOT bypass this
   // check, since these actions genuinely cannot work without their provider.
   //
   // `require` narrows what counts as "connected": some actions work with
@@ -679,6 +700,7 @@
     escapeHtml,
     renderDownloadLinks,
     statCard,
+    showNotice,
     saveActiveRun,
     clearActiveRun,
     loadActiveRun,

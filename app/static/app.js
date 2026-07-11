@@ -143,8 +143,8 @@ function collectManualMetadata() {
 }
 
 async function startRun() {
-  // Re-check live (even if the connection notice was already shown once
-  // before) — starting a run with no metadata provider connected can't work.
+  // Re-check live, even if the connection notice was already shown once
+  // before. Starting a run with no metadata provider connected can't work.
   if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
   }
@@ -155,9 +155,16 @@ async function startRun() {
   if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('batchProvider')?.value === 'audible') {
     const state = await window.LibraForgeAuth.getConnectionState();
     if (!state.audible && state.abs) {
+      // The provider selector lives inside "Advanced" run settings, which is
+      // collapsed by default, so switching its value alone would be invisible.
+      // Open the section so the switch actually shows.
+      if (!isAdvancedRunSettingsOpen()) $('advancedRunToggle')?.click();
       $('batchProvider').value = 'abs';
       $('batchProvider').dispatchEvent(new Event('change'));
-      alert('No Audible account connected — routing this run through your Audiobookshelf (ABS) connection instead.');
+      await window.UiCommon.showNotice(
+        'Switched to Audiobookshelf',
+        'No Audible account is connected, so this run has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.',
+      );
     }
   }
   // Block if a previous run's workers are still draining.
