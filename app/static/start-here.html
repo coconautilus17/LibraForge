@@ -107,6 +107,7 @@
             <tr><th>Badge</th><th>Meaning</th></tr>
           </thead>
           <tbody>
+            <tr class="guide-badge-section"><td colspan="2">Match Report card</td></tr>
             <tr>
               <td><span class="match-status-badge status-matched">Matched</span></td>
               <td>A confident match was found. Will write or wrote metadata per the active write/edit mode.</td>
@@ -117,11 +118,11 @@
             </tr>
             <tr>
               <td><span class="match-status-badge status-skipped">Skipped</span></td>
-              <td>Explicitly excluded before matching (skip pattern, ignored folder). The badge also shows the reason.</td>
+              <td>Explicitly excluded before matching (skip pattern, ignored folder), or no usable match was found. The badge also shows the reason, e.g. "Skipped &mdash; no usable Audible match". This is also what puts a book in Manual Review with the <span class="reason-badge danger">no match</span> tag below.</td>
             </tr>
             <tr>
               <td><span class="match-status-badge status-unmatched">Not Matched</span></td>
-              <td>No confident match found. Needs Manual Review.</td>
+              <td>Fallback for a status LibraForge doesn't recognize. Shouldn't normally appear &mdash; every real outcome is one of the other statuses on this list.</td>
             </tr>
             <tr>
               <td><span class="match-status-badge status-error">Error</span></td>
@@ -129,7 +130,7 @@
             </tr>
             <tr>
               <td><span class="match-manual-badge">Manually Applied</span></td>
-              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it permanently from then on (regardless of score), so a later run can never overwrite your manual work by accident. Force reprocess is the only way to make it reprocess again.</td>
+              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it permanently from then on (regardless of score), so a later run can never overwrite your manual work by accident. Force reprocess is the only way to make it reprocess again. Also shown in the Manual Review list, using this same badge, for the same reason.</td>
             </tr>
             <tr>
               <td><span class="match-score-badge">87%</span></td>
@@ -152,12 +153,32 @@
               <td>What actually happened on disk: written, smart-skipped, no-op, skipped, or error.</td>
             </tr>
             <tr>
+              <td><span class="match-grouped-badge">Multi-file</span></td>
+              <td>This book spans multiple audio files that were grouped and treated as one item for matching and writing.</td>
+            </tr>
+
+            <tr class="guide-badge-section"><td colspan="2">Manual Review reason tags</td></tr>
+            <tr>
               <td><span class="reason-badge danger">no match</span></td>
-              <td>Manual Review reason tag (red): no match, asin conflict, low score, missing metadata, unsafe match, no metadata, status:skipped, mode:none, or an N% duration-diff tag.</td>
+              <td>Skipped because no usable match was found (the <strong>Skipped</strong> status above). Other red reason tags: asin conflict, low score, missing metadata, unsafe match, no metadata, status:skipped, mode:none, or an N% duration-diff tag.</td>
+            </tr>
+
+            <tr class="guide-badge-section"><td colspan="2">Suspect Report</td></tr>
+            <tr>
+              <td class="guide-badge-multi"><span class="suspect-sev-badge sev-critical">critical</span> <span class="suspect-sev-badge sev-high">high</span> <span class="suspect-sev-badge sev-medium">medium</span> <span class="suspect-sev-badge sev-low">low</span> <span class="suspect-sev-badge sev-info">info</span></td>
+              <td>Severity, most to least urgent. Shown on Suspect Report cards, generated on demand from the last run's report (Metadata Forge and Folder Forge both produce one).</td>
             </tr>
             <tr>
-              <td><span class="reason-badge recommended">manually applied</span></td>
-              <td>Manual Review reason tag (green): manually applied.</td>
+              <td><span class="suspect-trigger-badge">2 files</span></td>
+              <td>The specific field or fact (duplicate ASIN, missing series, number conflict, etc.) that flagged this item, or how many related files were involved.</td>
+            </tr>
+            <tr>
+              <td><span class="suspect-sev-badge sev-low">no series</span></td>
+              <td>A group of books share strong identity signals (author, narrator, publisher) but have no series tag at all. Opens the Fix Series dialog.</td>
+            </tr>
+            <tr>
+              <td><span class="suspect-sev-badge sev-low">series drift</span></td>
+              <td>A group of books already tagged with a series have inconsistent or drifting series data across the group. Opens the Fix Series dialog.</td>
             </tr>
           </tbody>
         </table>

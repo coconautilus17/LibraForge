@@ -3426,6 +3426,7 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.suspect-sev-badge.sev-critical { background: var(--danger); color: var(--surface); }
 .suspect-sev-badge.sev-high   { background: var(--danger-soft);  color: var(--danger);  }
 .suspect-sev-badge.sev-medium { background: var(--warning-soft); color: var(--warning); }
 .suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
@@ -3650,8 +3651,32 @@ button.danger:hover:not(:disabled) {
   width: 1%;
 }
 
+.guide-badge-table td.guide-badge-multi {
+  white-space: normal;
+  width: auto;
+}
+
+.guide-badge-table td.guide-badge-multi span {
+  margin: 2px 4px 2px 0;
+}
+
 .guide-badge-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.guide-badge-table tr.guide-badge-section td {
+  padding-top: 16px;
+  white-space: normal;
+  width: auto;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.guide-badge-table tr.guide-badge-section:first-child td {
+  padding-top: 0;
 }
 
 .guide-screenshot {
