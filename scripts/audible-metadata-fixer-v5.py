@@ -5494,10 +5494,23 @@ def main():
             for index, file_path in enumerate(processing_items, start=1)
         ]
 
-        # Pass 1: stream log output as futures complete; collect results
+        # Pass 1: stream log output as futures complete; collect results.
+        # _cancel_requested (set by the SIGTERM handler) was previously only
+        # checked in the Pass 2 write loop, so cancelling a run still deep in
+        # search/match did nothing until all `total` items finished searching
+        # -- which, for a full-library run, can be a very long time. Check it
+        # here too: once set, stop picking up newly-completed results (the
+        # future that was already handed to us by as_completed still gets
+        # processed, so nothing already finished is discarded) and cancel any
+        # not-yet-started futures instead of waiting for the whole scatter to
+        # drain.
         all_results: list[ItemResult] = []
         completed = 0
+        cancelled_in_pass1 = False
         for future in as_completed(futures):
+            if _cancel_requested:
+                cancelled_in_pass1 = True
+                break
             result = future.result()
             completed += 1
             print(
@@ -5509,6 +5522,13 @@ def main():
             print(f"REPORT_ITEM_JSON: {json.dumps(_build_report_item(result))}", flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
+
+        if cancelled_in_pass1:
+            print(
+                f"\n[{completed}/{total}] Cancelled - stopping search pass early.",
+                flush=True,
+            )
+            executor.shutdown(wait=False, cancel_futures=True)
 
     all_results.sort(key=lambda result: result.index)
 
