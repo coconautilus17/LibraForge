@@ -3227,7 +3227,7 @@ button.danger:hover:not(:disabled) {
   padding: 2px var(--space-sm);
   border-radius: 99px;
   font-size: var(--font-xs);
-  font-weight: 600;
+  font-weight: 650;
   background: var(--accent-dim);
   color: var(--accent-dim-text);
   vertical-align: middle;
