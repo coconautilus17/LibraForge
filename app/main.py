@@ -4248,6 +4248,60 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders) + sorted(loose_root_files)
 
 
+def _build_manual_review_search_index(
+    root: Path,
+    ignored_folders: list[str],
+    on_progress: Callable[[int], None] | None = None,
+) -> list[tuple[str, bool]]:
+    """Walk root once and return every book-level entry as (path, is_file).
+
+    Same folder-level shape as _find_book_folders (disc-subfolder collapsing,
+    loose root files as their own entries), but also prunes the user's
+    configured ignore tokens *during* the walk -- not as a post-filter --
+    since an ignored folder (e.g. a recycle bin) could itself be huge and
+    pruning at walk time avoids ever descending into it. Reimplements
+    matches_ignored_folders' case-insensitive prefix-match semantics inline
+    (checking the directory's own name is enough here: an ignored ancestor
+    is never descended into, so there's nothing further down to re-check).
+    """
+    tokens = tuple(_FS_SKIP_PREFIXES) + tuple(
+        f.strip().lower() for f in (ignored_folders or []) if f and f.strip()
+    )
+    audio_folders: set[Path] = set()
+    loose_root_files: list[Path] = []
+    count = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not any(d.lower().startswith(t) for t in tokens)
+            )
+            p = Path(dirpath)
+            if p == root:
+                loose_root_files.extend(
+                    p / f for f in sorted(filenames) if is_audio_file(p / f)
+                )
+                continue
+            if any(is_audio_file(p / f) for f in filenames):
+                audio_folders.add(p)
+                count += 1
+                if on_progress:
+                    on_progress(count)
+    except PermissionError:
+        pass
+
+    book_folders: set[Path] = set()
+    for folder in audio_folders:
+        if _DISC_RE.match(folder.name) and folder.parent != root:
+            book_folders.add(folder.parent)
+        else:
+            book_folders.add(folder)
+
+    entries = [(str(f), False) for f in sorted(book_folders)]
+    entries.extend((str(f), True) for f in sorted(loose_root_files))
+    return entries
+
+
 def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     """Book units under ``p``, counted exactly like a real fixer run.
 
@@ -4357,10 +4411,15 @@ def _library_fingerprint(root: Path) -> str:
     return "|".join(parts)
 
 
+def _ignored_signature(ignored_folders: list[str] | None) -> str:
+    """Order/case/whitespace-independent signature of an ignore-folder list,
+    so a config change can be detected by simple string comparison."""
+    return ",".join(sorted(f.strip().lower() for f in (ignored_folders or []) if f and f.strip()))
+
+
 def _scan_cache_key(path: Path, ignored: list[str] | None = None) -> str:
     """Cache key includes the ignored-folder set so a changed filter forces a rescan."""
-    sig = ",".join(sorted(f.strip().lower() for f in (ignored or []) if f and f.strip()))
-    return f"{path}|{sig}"
+    return f"{path}|{_ignored_signature(ignored)}"
 
 
 def _store_scan_cache(
