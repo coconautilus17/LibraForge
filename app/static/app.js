@@ -148,6 +148,18 @@ async function startRun() {
   if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
   }
+  // The batch provider selector defaults to Audible regardless of what's
+  // actually connected. If Audible auth is missing but ABS is connected,
+  // route the run through ABS automatically instead of letting it fail
+  // per-book against a nonexistent auth file.
+  if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('batchProvider')?.value === 'audible') {
+    const state = await window.LibraForgeAuth.getConnectionState();
+    if (!state.audible && state.abs) {
+      $('batchProvider').value = 'abs';
+      $('batchProvider').dispatchEvent(new Event('change'));
+      alert('No Audible account connected — routing this run through your Audiobookshelf (ABS) connection instead.');
+    }
+  }
   // Block if a previous run's workers are still draining.
   const drainCheck = await fetch('/api/runs/draining').then(r => r.json()).catch(() => ({ draining: false }));
   if (drainCheck.draining) {

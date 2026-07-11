@@ -323,13 +323,19 @@
     const newUrl = window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
     window.history.replaceState(null, "", newUrl);
 
-    const flashTargets = ["accounts", "absSection", "skipBtn"]
-      .map((id) => document.getElementById(id))
-      .filter(Boolean);
-    flashTargets.forEach((el) => {
-      el.classList.add("connection-flash-highlight");
-      el.addEventListener("animationend", () => el.classList.remove("connection-flash-highlight"), { once: true });
-    });
+    const flashConnectionTargets = () => {
+      ["accounts", "absSection", "skipBtn"]
+        .map((id) => document.getElementById(id))
+        .filter(Boolean)
+        .forEach((el) => {
+          // Restart the animation even if it's already mid-flash.
+          el.classList.remove("connection-flash-highlight");
+          void el.offsetWidth;
+          el.classList.add("connection-flash-highlight");
+          el.addEventListener("animationend", () => el.classList.remove("connection-flash-highlight"), { once: true });
+        });
+    };
+    flashConnectionTargets();
 
     const dlg = document.createElement("dialog");
     dlg.className = "manual-apply-dialog connection-notice-dialog";
@@ -341,7 +347,10 @@
       </div>`;
     document.body.appendChild(dlg);
     const close = () => { dlg.close(); dlg.remove(); };
-    dlg.querySelector("#connectionNoticeOk").addEventListener("click", close);
+    dlg.querySelector("#connectionNoticeOk").addEventListener("click", () => {
+      flashConnectionTargets();
+      close();
+    });
     dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
     dlg.showModal();
   }

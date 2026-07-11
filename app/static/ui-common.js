@@ -55,7 +55,7 @@
 
   function isAbsConfigured() { return _absStatus.configured; }
 
-  async function _isAnyProviderConnected() {
+  async function getConnectionState() {
     // Always fetch both live -- must NOT reuse the page-load-cached
     // _absStatusReady/_absStatus here. Those are captured once when this
     // script first executes and are never refreshed for the page's
@@ -67,16 +67,22 @@
       fetch("/api/auth/status").then((r) => r.json()).catch(() => ({ auth_ok: false })),
       fetch("/api/abs/status").then((r) => r.json()).catch(() => ({ configured: false })),
     ]);
-    return Boolean(authData.auth_ok || absData.configured);
+    return { audible: Boolean(authData.auth_ok), abs: Boolean(absData.configured) };
+  }
+
+  async function _isAnyProviderConnected() {
+    const state = await getConnectionState();
+    return state.audible || state.abs;
   }
 
   // Shared entry point other pages can call right before an action that
   // actually needs a provider (e.g. starting a Metadata Forge run). Unlike
   // the silent page-load check below, this always re-checks live and always
   // redirects (with the explanatory notice) if still disconnected, even if
-  // the notice was already shown once before.
+  // the notice was already shown once before. "Skip for now" only suppresses
+  // the passive page-load nag (below) -- it can NOT bypass this check, since
+  // a run genuinely cannot proceed with zero providers connected.
   async function ensureConnected() {
-    if (sessionStorage.getItem("audible-skipped")) return true;
     if (_isDebugMode()) return true;
     const connected = await _isAnyProviderConnected();
     if (!connected) {
@@ -86,7 +92,7 @@
     }
     return true;
   }
-  window.LibraForgeAuth = { ensureConnected };
+  window.LibraForgeAuth = { ensureConnected, getConnectionState };
 
   if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
     _isAnyProviderConnected().then((connected) => {
