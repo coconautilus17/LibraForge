@@ -14,6 +14,7 @@ import time
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3850,7 +3851,19 @@ def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
             runs.pop(run_id, None)
 
 
-app = FastAPI(title="LibraForge")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Kick off the Manual Review filesystem search index build immediately
+    # on startup, in the background, so it's already underway (or done, for
+    # a modest library) before anyone opens Manual Review. Referencing
+    # _ensure_manual_review_search_index_fresh here works even though it's
+    # defined later in this module -- name lookup inside a function body
+    # happens at call time, well after the whole module has loaded.
+    _ensure_manual_review_search_index_fresh([])
+    yield
+
+
+app = FastAPI(title="LibraForge", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
