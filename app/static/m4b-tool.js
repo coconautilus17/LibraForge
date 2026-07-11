@@ -479,20 +479,11 @@ async function searchMetadata() {
   if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
   }
-  // The provider selector defaults to Audible regardless of what's actually
-  // connected. If Audible auth is missing but ABS is connected, route through
-  // ABS automatically instead of letting the search fail against a
-  // nonexistent auth file (mirrors the same logic in app.js's startRun()).
-  if (window.LibraForgeAuth && $('metaProvider').value === 'audible') {
-    const state = await window.LibraForgeAuth.getConnectionState();
-    if (!state.audible && state.abs) {
-      $('metaProvider').value = 'abs';
-      $('metaProvider').dispatchEvent(new Event('change'));
-      await window.UiCommon.showNotice(
-        'Switched to Audiobookshelf',
-        'No Audible account is connected, so this search has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.',
-      );
-    }
+  // Auto-route to whichever of Audible/ABS is actually connected, in either
+  // direction, instead of letting the search fail against a disconnected
+  // provider (mirrors the same logic in app.js's startRun()).
+  if (window.LibraForgeAuth) {
+    await window.LibraForgeAuth.autoRouteProvider($('metaProvider'), 'search');
   }
 
   const provider = $('metaProvider').value;

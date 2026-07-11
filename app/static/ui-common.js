@@ -131,7 +131,39 @@
     }
     return true;
   }
-  window.LibraForgeAuth = { ensureConnected, getConnectionState };
+  // Shared by every provider <select> that offers both "audible" and "abs":
+  // if the currently-selected one isn't actually connected but the other one
+  // is, switch to the one that is and tell the user why (via the shared
+  // styled notice, not a native alert). Works in both directions -- audible
+  // missing routes to abs, abs missing routes to audible -- so the same
+  // helper covers Start run, m4b-tool search, and Search For Selected Target
+  // without duplicating the swap logic per direction in each caller.
+  async function autoRouteProvider(selectEl, actionLabel) {
+    const value = selectEl?.value;
+    if (value !== "audible" && value !== "abs") return false;
+    const state = await getConnectionState();
+    let target = null;
+    if (value === "audible" && !state.audible && state.abs) target = "abs";
+    else if (value === "abs" && !state.abs && state.audible) target = "audible";
+    if (!target) return false;
+
+    selectEl.value = target;
+    selectEl.dispatchEvent(new Event("change"));
+
+    const copy = target === "abs"
+      ? {
+        title: "Switched to Audiobookshelf",
+        body: `No Audible account is connected, so this ${actionLabel} has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.`,
+      }
+      : {
+        title: "Switched to Audible",
+        body: `Audiobookshelf isn't connected, so this ${actionLabel} has been routed through your <strong>Audible</strong> account instead.`,
+      };
+    await window.UiCommon.showNotice(copy.title, copy.body);
+    return true;
+  }
+
+  window.LibraForgeAuth = { ensureConnected, getConnectionState, autoRouteProvider };
 
   const _pageRequire = _AUTH_PAGE_REQUIREMENTS.get(_page);
   if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
