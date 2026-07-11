@@ -1205,11 +1205,13 @@ async function loadLastReport() {
 // ── Match Report Widget ──────────────────────────────────────────────────────
 
 let matchReportItems = [];
+let matchReportGroups = [];
 let currentReportId = null;
 let seriesGroupsRenderToken = 0;
 
 async function renderMatchReport(items) {
   matchReportItems = items || [];
+  matchReportGroups = [];
   const count = $('matchReportCount');
   const card = $('matchReportCard');
   if (!card) return;
@@ -1228,12 +1230,8 @@ async function renderMatchReport(items) {
     const myToken = ++seriesGroupsRenderToken;
     const groups = await ensureSeriesGroupsForMatchReport(currentReportId);
     if (myToken !== seriesGroupsRenderToken) return; // a newer render call superseded this one
-    if (groups.length) {
-      const container = $('matchReportList');
-      for (const group of groups.reverse()) {
-        container.insertBefore(window.UiCommon.buildSeriesGroupCard(group), container.firstChild);
-      }
-    }
+    matchReportGroups = groups;
+    buildMatchReportCards();
   }
 }
 
@@ -1307,6 +1305,18 @@ function buildMatchReportCards() {
   const statusFilter = $('matchReportFilter')?.value || '';
   list.innerHTML = '';
   let shown = 0;
+  if (!statusFilter || statusFilter === 'series_groups') {
+    for (const group of matchReportGroups) {
+      list.appendChild(window.UiCommon.buildSeriesGroupCard(group));
+      shown++;
+    }
+  }
+  if (statusFilter === 'series_groups') {
+    if (!shown) {
+      list.innerHTML = '<p class="note" style="grid-column:1/-1">No items match the current filter.</p>';
+    }
+    return;
+  }
   for (const item of matchReportItems) {
     if (statusFilter) {
       const s = (item.status || '').toLowerCase();
