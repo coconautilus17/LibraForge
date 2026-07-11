@@ -4302,6 +4302,90 @@ def _build_manual_review_search_index(
     return entries
 
 
+@dataclass
+class _ManualReviewSearchIndex:
+    """In-memory state for the Manual Review filesystem search index.
+
+    One module-level instance -- scope is always the whole AUDIOBOOKS_ROOT,
+    never a sub-path, so there's no need for the path-keyed dict _scan_cache
+    uses. entries is a flat (path, is_file) list built once per fresh index;
+    search() filters it in memory rather than re-walking or re-stat'ing.
+    """
+    status: str = "idle"  # idle | building | updating | ready | error
+    entries: list[tuple[str, bool]] = field(default_factory=list)
+    book_count: int = 0
+    fingerprint: str | None = None
+    ignored_signature: str | None = None
+    error: str | None = None
+
+
+_manual_review_search_index = _ManualReviewSearchIndex()
+_manual_review_search_lock = threading.Lock()
+
+
+def _manual_review_search_index_is_stale(
+    state: _ManualReviewSearchIndex, fingerprint: str, ignored_signature: str
+) -> bool:
+    """Whether a (re)build should be started for the given library state.
+
+    A build already in flight (building/updating) is never re-triggered --
+    the next check after it finishes will catch any newer drift. An error
+    state is always stale so the next check retries.
+    """
+    if state.status in ("building", "updating"):
+        return False
+    return (
+        state.status != "ready"
+        or state.fingerprint != fingerprint
+        or state.ignored_signature != ignored_signature
+    )
+
+
+def _run_manual_review_search_index_build(
+    state: _ManualReviewSearchIndex, root: Path, ignored_folders: list[str]
+) -> None:
+    """Synchronously (re)build the index into `state`. Callers that want this
+    off the request thread wrap the call in a background thread; this
+    function itself has no threading concerns, which keeps it directly
+    testable."""
+    state.status = "updating" if state.entries else "building"
+    state.error = None
+
+    def progress(n: int) -> None:
+        state.book_count = n
+
+    try:
+        entries = _build_manual_review_search_index(root, ignored_folders, on_progress=progress)
+        state.entries = entries
+        state.book_count = len(entries)
+        state.fingerprint = _library_fingerprint(root)
+        state.ignored_signature = _ignored_signature(ignored_folders)
+        state.status = "ready"
+    except Exception as exc:
+        state.status = "error"
+        state.error = str(exc)
+
+
+def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None:
+    """Kick off a background rebuild if the index is missing or stale.
+    Non-blocking: returns immediately whether or not a build was started."""
+    state = _manual_review_search_index
+    fingerprint = _library_fingerprint(AUDIOBOOKS_ROOT)
+    signature = _ignored_signature(ignored_folders)
+    if not _manual_review_search_index_is_stale(state, fingerprint, signature):
+        return
+    if not _manual_review_search_lock.acquire(blocking=False):
+        return
+
+    def worker() -> None:
+        try:
+            _run_manual_review_search_index_build(state, AUDIOBOOKS_ROOT, ignored_folders)
+        finally:
+            _manual_review_search_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     """Book units under ``p``, counted exactly like a real fixer run.
 

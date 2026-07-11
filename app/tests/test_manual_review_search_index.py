@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.main import _build_manual_review_search_index, _ignored_signature
+from app.main import (
+    _ManualReviewSearchIndex,
+    _build_manual_review_search_index,
+    _ignored_signature,
+    _manual_review_search_index_is_stale,
+    _run_manual_review_search_index_build,
+)
 
 
 class IgnoredSignatureTests(unittest.TestCase):
@@ -86,3 +92,71 @@ class BuildManualReviewSearchIndexTests(unittest.TestCase):
         self._touch("Author/Book/cover.jpg")
         entries = _build_manual_review_search_index(self.root, [])
         self.assertEqual(entries, [])
+
+
+class ManualReviewSearchIndexIsStaleTests(unittest.TestCase):
+    def test_never_built_is_stale(self):
+        state = _ManualReviewSearchIndex()
+        self.assertTrue(_manual_review_search_index_is_stale(state, "fp1", "sig1"))
+
+    def test_ready_with_matching_fingerprint_and_signature_is_fresh(self):
+        state = _ManualReviewSearchIndex(status="ready", fingerprint="fp1", ignored_signature="sig1")
+        self.assertFalse(_manual_review_search_index_is_stale(state, "fp1", "sig1"))
+
+    def test_ready_with_changed_fingerprint_is_stale(self):
+        state = _ManualReviewSearchIndex(status="ready", fingerprint="fp1", ignored_signature="sig1")
+        self.assertTrue(_manual_review_search_index_is_stale(state, "fp2", "sig1"))
+
+    def test_ready_with_changed_ignore_signature_is_stale(self):
+        state = _ManualReviewSearchIndex(status="ready", fingerprint="fp1", ignored_signature="sig1")
+        self.assertTrue(_manual_review_search_index_is_stale(state, "fp1", "sig2"))
+
+    def test_already_building_is_not_re_triggered(self):
+        state = _ManualReviewSearchIndex(status="building")
+        self.assertFalse(_manual_review_search_index_is_stale(state, "fp1", "sig1"))
+
+    def test_already_updating_is_not_re_triggered(self):
+        state = _ManualReviewSearchIndex(status="updating", fingerprint="fp1", ignored_signature="sig1")
+        self.assertFalse(_manual_review_search_index_is_stale(state, "fp2", "sig2"))
+
+    def test_error_state_is_stale_so_it_can_retry(self):
+        state = _ManualReviewSearchIndex(status="error", fingerprint="fp1", ignored_signature="sig1")
+        self.assertTrue(_manual_review_search_index_is_stale(state, "fp1", "sig1"))
+
+
+class RunManualReviewSearchIndexBuildTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _touch(self, rel):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    def test_first_build_goes_building_then_ready(self):
+        self._touch("Author/Book/Book.m4b")
+        state = _ManualReviewSearchIndex()
+        _run_manual_review_search_index_build(state, self.root, [])
+        self.assertEqual(state.status, "ready")
+        self.assertEqual(state.book_count, 1)
+        self.assertEqual(len(state.entries), 1)
+        self.assertIsNotNone(state.fingerprint)
+        self.assertEqual(state.ignored_signature, "")
+
+    def test_rebuild_of_existing_ready_index_replaces_entries(self):
+        self._touch("Author/Book/Book.m4b")
+        state = _ManualReviewSearchIndex(status="ready", entries=[("/stale/path", False)], book_count=1)
+        _run_manual_review_search_index_build(state, self.root, [])
+        self.assertEqual(state.status, "ready")
+        self.assertNotIn(("/stale/path", False), state.entries)
+
+    def test_missing_root_sets_error_status(self):
+        state = _ManualReviewSearchIndex()
+        _run_manual_review_search_index_build(state, self.root / "does-not-exist", [])
+        self.assertEqual(state.status, "error")
+        self.assertIsNotNone(state.error)
