@@ -27,12 +27,12 @@
   // requirement isn't met, unless the user explicitly skipped setup or debug
   // mode is on. See CONNECTION_NOTICE_KEY below for how this avoids
   // re-nagging on every page load. Requirement meanings match ensureConnected()
-  // below -- "abs" here because every Enrichment Forge request (including the
-  // series search box itself) needs ABS as its library source.
+  // below. Enrichment Forge is intentionally NOT here -- landing on that page
+  // does nothing by itself; the redirect should only happen once the user
+  // actually tries to search (gated live in enrichment-forge.js instead).
   const _AUTH_PAGE_REQUIREMENTS = new Map([
     ["fixer", "any"],
     ["m4b-tool", "any"],
-    ["enrichment-forge", "abs"],
   ]);
   const _page = document.body.dataset.page;
   function _isDebugMode() {

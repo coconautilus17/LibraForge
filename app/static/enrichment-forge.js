@@ -202,6 +202,13 @@ $("seriesSearch").addEventListener("input", (e) => {
     return;
   }
   searchDebounce = setTimeout(async () => {
+    // The page-load redirect (ui-common.js) only fires once per notice --
+    // it won't re-trigger on a later visit once dismissed. Every search
+    // still hits /api/enrichment/series, which needs ABS just like compile
+    // does, so re-check live here too instead of silently 400ing.
+    if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected("abs"))) {
+      return;
+    }
     renderSeriesResults(await searchSeries(query));
   }, 250);
 });
