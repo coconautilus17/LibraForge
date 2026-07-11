@@ -103,6 +103,39 @@
       : (state.audible || state.abs);
   }
 
+  // abs-agg (GraphicAudio/SoundBooth Theater) and abs-tract (Goodreads/Kindle)
+  // are unrelated to the Audible/ABS accounts pair above -- each is its own
+  // independent optional service with its own settings section. Always
+  // live-checked, same reasoning as getConnectionState() (no page-load cache).
+  async function isAbsAggConnected() {
+    try {
+      const data = await fetch("/api/abs-agg/providers").then((r) => r.json());
+      return data.reachable === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function isAbsTractConnected() {
+    try {
+      const data = await fetch("/api/abs-tract/settings").then((r) => r.json());
+      return Boolean((data.url || "").trim());
+    } catch {
+      return false;
+    }
+  }
+
+  // Which settings-page section a given `require` value should redirect to
+  // and flash. abs-agg/abs-tract are standalone sections; audible/abs/any
+  // all point at the shared Accounts section.
+  const _REQUIRE_SETTINGS_ANCHOR = {
+    any: "accounts",
+    audible: "accounts",
+    abs: "accounts",
+    "abs-agg": "abs-agg",
+    "abs-tract": "abs-tract",
+  };
+
   // Shared entry point other pages can call right before an action that
   // actually needs a provider (e.g. starting a Metadata Forge run, or the
   // m4b-tool/Enrichment Forge/Library actions below). Unlike the silent
@@ -119,14 +152,21 @@
   //     no ABS equivalent exists.
   //   - "abs": e.g. Enrichment Forge compile -- ABS is the mandatory library
   //     source; Audible is only an optional, better-quality search source.
+  //   - "abs-agg" / "abs-tract": selecting GraphicAudio/SoundBooth Theater or
+  //     Goodreads/Kindle as the provider. Unlike audible/abs, there's no
+  //     auto-swap for these -- just redirect to the relevant settings
+  //     section, since there's no sensible "other provider" to fall back to.
   async function ensureConnected(require = "any") {
     if (_isDebugMode()) return true;
-    const state = await getConnectionState();
-    if (!_meetsRequirement(state, require)) {
+    const ok = require === "abs-agg" ? await isAbsAggConnected()
+      : require === "abs-tract" ? await isAbsTractConnected()
+      : _meetsRequirement(await getConnectionState(), require);
+    if (!ok) {
       _markConnectionNoticeShown();
       const params = new URLSearchParams({ authRequired: "1" });
       if (require !== "any") params.set("require", require);
-      window.location.href = `/settings?${params.toString()}#accounts`;
+      const anchor = _REQUIRE_SETTINGS_ANCHOR[require] || "accounts";
+      window.location.href = `/settings?${params.toString()}#${anchor}`;
       return false;
     }
     return true;
@@ -163,7 +203,31 @@
     return true;
   }
 
-  window.LibraForgeAuth = { ensureConnected, getConnectionState, autoRouteProvider };
+  // GraphicAudio and SoundBooth Theater are both abs-agg-backed; Goodreads
+  // and Kindle cover are both abs-tract-backed. Selecting any of these has no
+  // sensible "other provider" to auto-swap to (unlike audible/abs), so these
+  // just redirect to the relevant settings section via ensureConnected --
+  // same "stop and explain" behavior, no silent switch.
+  const _ABS_AGG_PROVIDER_VALUES = new Set(["abs-agg", "graphicaudio", "soundbooththeater"]);
+  const _ABS_TRACT_PROVIDER_VALUES = new Set(["goodreads", "kindle"]);
+
+  // Single entry point for every provider <select> (Start run, m4b-tool
+  // search, Search For Selected Target): dispatches to the right check for
+  // whatever is currently selected, so callers don't need to know which
+  // family a value belongs to. Returns true if it's safe to proceed.
+  async function ensureProviderConnected(selectEl, actionLabel) {
+    const value = selectEl?.value;
+    if (_ABS_AGG_PROVIDER_VALUES.has(value)) return ensureConnected("abs-agg");
+    if (_ABS_TRACT_PROVIDER_VALUES.has(value)) return ensureConnected("abs-tract");
+    // audible/abs family: auto-swap if the pick isn't connected but the other
+    // one is. If autoRouteProvider found nothing to swap to (both connected,
+    // or neither is), fall through to the real "at least one" gate -- it
+    // no-ops when already satisfied, and redirects when truly nothing works.
+    await autoRouteProvider(selectEl, actionLabel);
+    return ensureConnected("any");
+  }
+
+  window.LibraForgeAuth = { ensureConnected, getConnectionState, autoRouteProvider, ensureProviderConnected };
 
   const _pageRequire = _AUTH_PAGE_REQUIREMENTS.get(_page);
   if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {

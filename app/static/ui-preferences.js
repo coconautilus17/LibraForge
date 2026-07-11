@@ -316,7 +316,7 @@
     if (document.body.dataset.page !== "settings") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("authRequired") !== "1") return;
-    const require = params.get("require") || "any"; // "any" | "audible" | "abs"
+    const require = params.get("require") || "any"; // "any" | "audible" | "abs" | "abs-agg" | "abs-tract"
 
     // Don't leave the params in the URL -- a refresh/bookmark shouldn't re-show this.
     params.delete("authRequired");
@@ -327,6 +327,8 @@
 
     const targetIds = require === "audible" ? ["accounts", "skipBtn"]
       : require === "abs" ? ["absSection", "skipBtn"]
+      : require === "abs-agg" ? ["abs-agg"]
+      : require === "abs-tract" ? ["abs-tract"]
       : ["accounts", "absSection", "skipBtn"];
     const flashConnectionTargets = () => {
       targetIds
@@ -351,6 +353,16 @@
       ? {
         title: "Connect Audiobookshelf to continue",
         body: 'This action needs an <strong>Audiobookshelf (ABS) connection</strong>, the library source this reads from. An Audible account is optional and only improves match quality. Set up ABS below, or use <strong>Skip for now</strong> if you\'ll do this later.',
+      }
+      : require === "abs-agg"
+      ? {
+        title: "Connect abs-agg to continue",
+        body: 'This action needs a reachable <strong>abs-agg</strong> connection, the service LibraForge uses to search GraphicAudio and SoundBooth Theater. Set its URL below.',
+      }
+      : require === "abs-tract"
+      ? {
+        title: "Connect abs-tract to continue",
+        body: 'This action needs an <strong>abs-tract</strong> URL configured, the service LibraForge uses to search Goodreads and Kindle. Set it below.',
       }
       : {
         title: "Connect a metadata provider to continue",

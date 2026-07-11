@@ -476,14 +476,11 @@ function renderResults(results = []) {
 }
 
 async function searchMetadata() {
-  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+  // Route through whichever check the selected provider actually needs:
+  // auto-swap for audible/abs, redirect only for abs-agg-backed choices
+  // (mirrors the same logic in app.js's startRun()).
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureProviderConnected($('metaProvider'), 'search'))) {
     return;
-  }
-  // Auto-route to whichever of Audible/ABS is actually connected, in either
-  // direction, instead of letting the search fail against a disconnected
-  // provider (mirrors the same logic in app.js's startRun()).
-  if (window.LibraForgeAuth) {
-    await window.LibraForgeAuth.autoRouteProvider($('metaProvider'), 'search');
   }
 
   const provider = $('metaProvider').value;

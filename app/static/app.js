@@ -145,15 +145,17 @@ function collectManualMetadata() {
 async function startRun() {
   // Re-check live, even if the connection notice was already shown once
   // before. Starting a run with no metadata provider connected can't work.
-  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+  // Pre-v5 scripts always use Audible direct regardless of the provider
+  // picker (collectRequest() forces it), so they get the plain "any" gate.
+  // v5+ scripts respect the picker, so route through whichever check the
+  // selected provider actually needs (auto-swap for audible/abs, redirect
+  // only for abs-agg/abs-tract-backed choices).
+  if (fixerMajorVersion($('script').value) >= 5) {
+    if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureProviderConnected($('manualProvider'), 'run'))) {
+      return;
+    }
+  } else if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
-  }
-  // The provider selector picks whichever of Audible/ABS is selected, but
-  // that pick might not actually be the one that's connected. Auto-route to
-  // whichever one is, in either direction, instead of letting the run fail
-  // per-book against a disconnected provider.
-  if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5) {
-    await window.LibraForgeAuth.autoRouteProvider($('manualProvider'), 'run');
   }
   // Block if a previous run's workers are still draining.
   const drainCheck = await fetch('/api/runs/draining').then(r => r.json()).catch(() => ({ draining: false }));
@@ -907,14 +909,11 @@ async function searchManualTarget() {
     alert('Load a manual review target first.');
     return;
   }
-  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+  // Route through whichever check the selected provider actually needs:
+  // auto-swap for audible/abs, redirect only for abs-agg/abs-tract-backed
+  // choices (mirrors startRun() and m4b-tool's searchMetadata()).
+  if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureProviderConnected($('manualProvider'), 'search'))) {
     return;
-  }
-  // Auto-route to whichever of Audible/ABS is actually connected, in either
-  // direction, instead of letting the search fail against a disconnected
-  // provider (mirrors startRun() and m4b-tool's searchMetadata()).
-  if (window.LibraForgeAuth) {
-    await window.LibraForgeAuth.autoRouteProvider($('manualProvider'), 'search');
   }
 
   // When "search from original backup" is active, reload the displayed metadata

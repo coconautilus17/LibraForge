@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
-  <script src="/static/ui-preferences.js?v=20260711-5"></script>
+  <script src="/static/ui-preferences.js?v=20260711-6"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260711-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -59,6 +59,7 @@
       <a href="#reports">Reports</a>
       <a href="#accounts">Accounts</a>
       <a href="#absSection">Audiobookshelf</a>
+      <a href="#abs-agg">GA/SBT</a>
       <a href="#abs-tract">Goodreads/Kindle</a>
       <a href="#developer">Developer</a>
       <a href="#cleanup" class="danger">Danger zone</a>
@@ -295,6 +296,22 @@
         <button id="absRemoveBtn" class="secondary" type="button" hidden>Remove key</button>
       </div>
       <p id="absConnectStatus" class="note" style="margin-top:10px"></p>
+    </section>
+
+    <!-- abs-agg (GraphicAudio/SoundBooth Theater) -->
+    <section id="abs-agg" class="card side-nav-card">
+      <h2>GraphicAudio / SoundBooth Theater</h2>
+      <p>Optional. LibraForge can search GraphicAudio and SoundBooth Theater via <a href="https://github.com/advplyr/audiobookshelf" target="_blank" rel="noopener" style="color:var(--accent)">abs-agg</a> (a separate service). Manual searches use this URL directly, and it's always available as an automatic fallback during batch runs regardless of the run's main provider.</p>
+      <div class="grid" style="--grid-cols:1;margin-top:14px">
+        <label>
+          <span class="field-label">abs-agg URL</span>
+          <input id="absAggSettingsUrl" placeholder="http://abs-agg:3000" style="font-family:var(--font-mono);font-size:0.85em" />
+        </label>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="absAggSaveBtn" type="button">Save and verify</button>
+      </div>
+      <p id="absAggSettingsStatus" class="note" style="margin-top:10px"></p>
     </section>
 
     <!-- abs-tract (Goodreads/Kindle) -->
@@ -701,6 +718,30 @@
           absConnectStatus.style.color = data.reachable ? "var(--success)" : "var(--warning,#e8a020)";
         } catch (err) { absConnectStatus.textContent = err.message; absConnectStatus.style.color = "var(--danger)"; }
         finally { absConnectBtn.disabled = false; absConnectBtn.textContent = "Save and verify"; }
+      });
+
+      // ── abs-agg (GraphicAudio/SoundBooth Theater) ───────────────────────────
+      const absAggSettingsUrl = $("absAggSettingsUrl");
+      const absAggSaveBtn = $("absAggSaveBtn"), absAggSettingsStatus = $("absAggSettingsStatus");
+      fetch("/api/abs-agg/settings").then((r) => r.json()).then((d) => {
+        absAggSettingsUrl.value = d.url || "";
+      }).catch(() => {});
+      absAggSaveBtn.addEventListener("click", async () => {
+        absAggSaveBtn.disabled = true; absAggSaveBtn.textContent = "Saving..."; absAggSettingsStatus.textContent = "";
+        try {
+          const res = await fetch("/api/abs-agg/settings", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: absAggSettingsUrl.value.trim() }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to save.");
+          const check = await fetch("/api/abs-agg/providers").then((r) => r.json()).catch(() => ({ reachable: false }));
+          absAggSettingsStatus.textContent = check.reachable
+            ? "Saved. abs-agg is reachable and available for manual search and batch fallback."
+            : "Saved, but abs-agg is not reachable at that URL. Check that the service is running.";
+          absAggSettingsStatus.style.color = check.reachable ? "var(--success)" : "var(--warning,#e8a020)";
+        } catch (err) { absAggSettingsStatus.textContent = err.message; absAggSettingsStatus.style.color = "var(--danger)"; }
+        finally { absAggSaveBtn.disabled = false; absAggSaveBtn.textContent = "Save and verify"; }
       });
 
       // ── abs-tract (Goodreads/Kindle) ──────────────────────────────────────
