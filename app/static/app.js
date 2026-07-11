@@ -59,7 +59,7 @@ function syncAdvancedRunSettings() {
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   document.querySelectorAll('.advanced-run-setting').forEach((el) => {
-    if (el.id === 'batchAbsProviderLabel' || el.classList.contains('force-original-setting')) return;
+    if (el.classList.contains('force-original-setting')) return;
     el.hidden = !open;
   });
   syncForceOriginal();
@@ -112,8 +112,8 @@ function collectRequest() {
     write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
-    provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchProvider')?.value || 'audible') : 'audible',
-    abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('batchAbsProvider')?.value || 'audible') : 'audible',
+    provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualProvider')?.value || 'audible') : 'audible',
+    abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualAbsProvider')?.value || 'audible') : 'audible',
     enable_goodreads_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableGoodreadsFallback')?.checked) : false,
     debug_trace: fixerMajorVersion($('script').value) >= 5 ? Boolean(prefs.debugTrace) : false,
     debug_trace_file: prefs.debugTraceFile || "",
@@ -148,19 +148,15 @@ async function startRun() {
   if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
   }
-  // The batch provider selector defaults to Audible regardless of what's
-  // actually connected. If Audible auth is missing but ABS is connected,
-  // route the run through ABS automatically instead of letting it fail
-  // per-book against a nonexistent auth file.
-  if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('batchProvider')?.value === 'audible') {
+  // The provider selector defaults to Audible regardless of what's actually
+  // connected. If Audible auth is missing but ABS is connected, route the
+  // run through ABS automatically instead of letting it fail per-book
+  // against a nonexistent auth file.
+  if (window.LibraForgeAuth && fixerMajorVersion($('script').value) >= 5 && $('manualProvider')?.value === 'audible') {
     const state = await window.LibraForgeAuth.getConnectionState();
     if (!state.audible && state.abs) {
-      // The provider selector lives inside "Advanced" run settings, which is
-      // collapsed by default, so switching its value alone would be invisible.
-      // Open the section so the switch actually shows.
-      if (!isAdvancedRunSettingsOpen()) $('advancedRunToggle')?.click();
-      $('batchProvider').value = 'abs';
-      $('batchProvider').dispatchEvent(new Event('change'));
+      $('manualProvider').value = 'abs';
+      $('manualProvider').dispatchEvent(new Event('change'));
       await window.UiCommon.showNotice(
         'Switched to Audiobookshelf',
         'No Audible account is connected, so this run has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.',
@@ -1659,7 +1655,6 @@ if ($('targetScanBtn')) {
     } catch {}
   }
   await loadAbsProviders($('manualAbsProvider'));
-  if ($('batchAbsProvider')) await loadAbsProviders($('batchAbsProvider'));
 
   function updateAbsAggParamHint(selectEl, paramsInputEl) {
     const hint = getAbsAggProviderParamHint(selectEl.value);
@@ -1703,15 +1698,5 @@ if ($('targetScanBtn')) {
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
   toggleManualProviderFields();
 
-  function toggleBatchProviderFields() {
-    if (!$('batchProvider')) return;
-    const isAbs = $('batchProvider').value === 'abs';
-    if ($('batchAbsProviderLabel')) $('batchAbsProviderLabel').hidden = !(isAdvancedRunSettingsOpen() && isAbs);
-  }
-  if ($('batchProvider')) {
-    $('batchProvider').addEventListener('change', toggleBatchProviderFields);
-    $('advancedRunToggle')?.addEventListener('click', toggleBatchProviderFields);
-    toggleBatchProviderFields();
-  }
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
 })();
