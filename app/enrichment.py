@@ -422,6 +422,8 @@ def compile_series_enrichment(
 
         all_genres.extend(audible_genres)
         all_genres.extend(goodreads_genres)
+        if not audible_genres and not goodreads_genres:
+            all_genres.extend(book.get("existing_genres", []))
         all_narrators.extend(narrators)
 
         rows.append({
