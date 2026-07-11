@@ -25,8 +25,8 @@
 .step-n {
   padding: 2px 7px;
   border-radius: 5px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-dim-text);
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -370,9 +370,9 @@
 }
 
 .include-toggle.in {
-  border-color: rgb(var(--accent-rgb) / 55%);
-  color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-dim-text);
+  background: var(--accent-dim);
 }
 
 #compileCard .dryrun-notice {

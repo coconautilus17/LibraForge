@@ -6,6 +6,7 @@
       ["charcoal", "Charcoal"],
       ["ash", "Ash"],
       ["warm", "Warm"],
+      ["wood", "Wood"],
       ["forest", "Forest"],
       ["plum", "Plum"],
       ["oled", "OLED"],
