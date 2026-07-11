@@ -23,11 +23,17 @@
     return `<div class="stat"><small>${label}</small><strong>${value ?? 0}</strong><small>${help || ""}</small></div>`;
   }
 
-  // Redirect to the Settings Accounts section if neither an Audible account
-  // nor an ABS connection is configured, unless the user explicitly skipped
-  // setup or debug mode is on. See CONNECTION_NOTICE_KEY below for how this
-  // avoids re-nagging on every page load.
-  const _AUTH_PAGES = new Set(["fixer", "m4b-tool"]);
+  // Redirect to the Settings Accounts section if this page's provider
+  // requirement isn't met, unless the user explicitly skipped setup or debug
+  // mode is on. See CONNECTION_NOTICE_KEY below for how this avoids
+  // re-nagging on every page load. Requirement meanings match ensureConnected()
+  // below -- "abs" here because every Enrichment Forge request (including the
+  // series search box itself) needs ABS as its library source.
+  const _AUTH_PAGE_REQUIREMENTS = new Map([
+    ["fixer", "any"],
+    ["m4b-tool", "any"],
+    ["enrichment-forge", "abs"],
+  ]);
   const _page = document.body.dataset.page;
   function _isDebugMode() {
     try { return JSON.parse(localStorage.getItem("libraforge-preferences") || "{}").debugMode === true; } catch { return false; }
@@ -70,9 +76,10 @@
     return { audible: Boolean(authData.auth_ok), abs: Boolean(absData.configured) };
   }
 
-  async function _isAnyProviderConnected() {
-    const state = await getConnectionState();
-    return state.audible || state.abs;
+  function _meetsRequirement(state, require) {
+    return require === "audible" ? state.audible
+      : require === "abs" ? state.abs
+      : (state.audible || state.abs);
   }
 
   // Shared entry point other pages can call right before an action that
@@ -94,10 +101,7 @@
   async function ensureConnected(require = "any") {
     if (_isDebugMode()) return true;
     const state = await getConnectionState();
-    const ok = require === "audible" ? state.audible
-      : require === "abs" ? state.abs
-      : (state.audible || state.abs);
-    if (!ok) {
+    if (!_meetsRequirement(state, require)) {
       _markConnectionNoticeShown();
       const params = new URLSearchParams({ authRequired: "1" });
       if (require !== "any") params.set("require", require);
@@ -108,11 +112,14 @@
   }
   window.LibraForgeAuth = { ensureConnected, getConnectionState };
 
-  if (_AUTH_PAGES.has(_page) && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
-    _isAnyProviderConnected().then((connected) => {
-      if (!connected) {
+  const _pageRequire = _AUTH_PAGE_REQUIREMENTS.get(_page);
+  if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_isDebugMode() && !_hasShownConnectionNotice()) {
+    getConnectionState().then((state) => {
+      if (!_meetsRequirement(state, _pageRequire)) {
         _markConnectionNoticeShown();
-        window.location.href = "/settings?authRequired=1#accounts";
+        const params = new URLSearchParams({ authRequired: "1" });
+        if (_pageRequire !== "any") params.set("require", _pageRequire);
+        window.location.href = `/settings?${params.toString()}#accounts`;
       }
     });
   }
