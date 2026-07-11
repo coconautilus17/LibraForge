@@ -56,11 +56,18 @@
   function isAbsConfigured() { return _absStatus.configured; }
 
   async function _isAnyProviderConnected() {
-    const [authData] = await Promise.all([
+    // Always fetch both live -- must NOT reuse the page-load-cached
+    // _absStatusReady/_absStatus here. Those are captured once when this
+    // script first executes and are never refreshed for the page's
+    // lifetime; if the browser restores the page from back/forward cache
+    // (bfcache) after the user navigates away and back, that stale
+    // in-memory value survives even though the server-side connection
+    // state may have changed since, producing a false "still connected".
+    const [authData, absData] = await Promise.all([
       fetch("/api/auth/status").then((r) => r.json()).catch(() => ({ auth_ok: false })),
-      _absStatusReady,
+      fetch("/api/abs/status").then((r) => r.json()).catch(() => ({ configured: false })),
     ]);
-    return Boolean(authData.auth_ok || _absStatus.configured);
+    return Boolean(authData.auth_ok || absData.configured);
   }
 
   // Shared entry point other pages can call right before an action that
