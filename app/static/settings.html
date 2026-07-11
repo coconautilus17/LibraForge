@@ -38,7 +38,18 @@
   </header>
 
   <main class="shell" id="main-content">
-   <div class="side-nav-layout settings-layout">
+    <div class="page-descriptor">
+      <div class="page-descriptor-icon">
+        <img src="/static/favicon-64.png?v=20260613-3" alt="" aria-hidden="true" />
+      </div>
+      <div class="page-descriptor-copy">
+        <span class="eyebrow">Global preferences</span>
+        <h2 class="page-descriptor-title">Settings</h2>
+        <p class="page-descriptor-text">Configure appearance, metadata policies, library paths, reports, accounts, and connected services.</p>
+      </div>
+    </div>
+
+   <div class="side-nav-layout">
     <aside class="side-nav" aria-label="Settings sections">
       <a href="#about">About</a>
       <a href="#appearance">Appearance</a>
@@ -53,10 +64,6 @@
       <a href="#cleanup" class="danger">Danger zone</a>
     </aside>
     <div class="side-nav-content">
-    <div class="page-head">
-      <span class="eyebrow">Global preferences</span>
-      <h1 style="margin:4px 0 0">Settings</h1>
-    </div>
 
     <!-- About -->
     <section id="about" class="card side-nav-card">
@@ -372,8 +379,6 @@
   </main>
 
   <style>
-    /* Settings-specific narrowing of the shared .side-nav-layout (see style.css) */
-    .settings-layout { max-width: 1040px; margin: 0 auto; }
     /* Danger zone + compact cleanup selector */
     .danger-zone { border-color: rgb(var(--danger-rgb, 239 68 68) / 40%); }
     .danger-eyebrow { display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); margin-bottom: 4px; }
