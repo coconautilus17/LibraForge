@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-5" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-6" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -100,9 +100,11 @@
             <dt><code>{series}</code></dt>
             <dd>The series name, when the book belongs to one. Example: <code>Mistborn</code></dd>
             <dt><code>{title}</code></dt>
-            <dd>The book's title, left empty when it's redundant with the series and order (e.g. a title that's just "Book 3"), so a template like <code>{order} - {title}</code> doesn't produce "Book 3 - Book 3". Example: <code>The Final Empire</code></dd>
+            <dd>The book's title. Left empty <em>only within a folder level or filename that also uses <code>{order}</code></em> when it's redundant with the series and order (e.g. a title that's just "Book 3"), so a template like <code>{order} - {title}</code> doesn't produce "Book 3 - Book 3". A standalone use of <code>{title}</code> (no <code>{order}</code> in that same part) always renders in full, even if it looks similar to the series name. Example: <code>The Final Empire</code></dd>
             <dt><code>{order}</code></dt>
             <dd>The auto-detected sequence label and number together (Book/Vol./Volume/Side Story, picked up from whatever the source data actually uses), empty when there's no series or no detected number. Examples: <code>Book 3</code>, <code>Vol. 2</code></dd>
+            <dt><code>{number}</code></dt>
+            <dd>The same sequence number as <code>{order}</code>, but bare, with no "Book"/"Vol."/"Volume" label. Empty under the same conditions as <code>{order}</code>. Example: <code>3</code></dd>
             <dt><code>{edition}</code></dt>
             <dd>An auto-detected imprint tag for dramatized/audio-drama adaptations. Example: <code>GraphicAudio</code></dd>
             <dt><code>{publisher}</code></dt>
@@ -112,7 +114,7 @@
             <dt><code>{asin}</code></dt>
             <dd>The Audible ASIN, when known. Example: <code>B002UZZDDU</code></dd>
           </dl>
-          <p>Use <code>/</code> to mark a folder level; everything after the last <code>/</code> is the filename, which only applies to true single-file books. A folder level made of exactly one token is dropped entirely when that token is empty. A level combining two or more tokens is flagged for review only if <em>all</em> of them are empty; otherwise it renders with whatever is there.</p>
+          <p>Use <code>/</code> to mark a folder level; everything after the last <code>/</code> is the filename, which only applies to true single-file books. A folder level made of exactly one <em>core</em> token (<code>author</code>, <code>series</code>, <code>title</code>, <code>order</code>, <code>number</code>) is dropped entirely when that token is empty. A level combining two or more core tokens is flagged for review only if <em>all</em> of them are empty; otherwise it renders with whatever is there. <code>narrator</code>, <code>publisher</code>, <code>year</code>, <code>asin</code>, and <code>edition</code> are decoration, not core: they never count toward that 2-or-more check, so e.g. <code>{series} [{edition}]</code> with no edition behaves exactly like a bare <code>{series}</code> (collapses silently, brackets and all, rather than flagging or leaving a stray "[]").</p>
           <p>Example: <code>{author}/{series}/{order} - {title},{edition}/</code> (the default shown above) never renames files, since it ends in <code>/</code>.</p>
         </details>
         <details class="naming-template-examples explanation-disclosure" open>

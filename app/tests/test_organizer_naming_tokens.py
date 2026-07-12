@@ -96,6 +96,26 @@ class OrderTokenTests(unittest.TestCase):
         self.assertEqual(tokens["order"], "")
 
 
+class NumberTokenTests(unittest.TestCase):
+    def test_number_is_bare_display_number_no_label(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["number"], "5")
+
+    def test_number_matches_display_book_number(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["number"], ORGANIZER.display_book_number("5"))
+
+    def test_number_empty_when_no_series(self):
+        metadata = dict(BASE_METADATA, series="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["number"], "")
+
+    def test_number_empty_when_no_book_number(self):
+        metadata = dict(BASE_METADATA, book_number="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["number"], "")
+
+
 class TitleRedundancyTests(unittest.TestCase):
     def test_title_stays_full_even_when_redundant_with_order(self):
         metadata = dict(BASE_METADATA, title="Book 5")

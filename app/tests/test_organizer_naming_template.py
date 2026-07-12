@@ -12,13 +12,16 @@ sys.modules[SPEC.name] = ORGANIZER
 SPEC.loader.exec_module(ORGANIZER)
 
 
-class EditionExcludedFromSignificanceTests(unittest.TestCase):
-    """{edition} is a special decorator token: it never counts toward the
-    "2+ tokens all empty -> flag for review" rule, and a segment where it's
-    the only *other* token besides one truly-significant field behaves as
-    if that field were alone -- collapsing silently when empty, exactly
-    like a bare {series} already does, rather than being treated as a
-    2-token segment.
+class NonCoreTokensExcludedFromSignificanceTests(unittest.TestCase):
+    """Only the "core" identity tokens (author, series, title, order,
+    number) count toward the "2+ tokens all empty -> flag for review" rule.
+    Everything else (narrator, publisher, year, asin, edition) is
+    decoration -- a book can legitimately have no known narrator/publisher/
+    year/ASIN/edition without that being a data-quality problem worth
+    flagging. A segment where a non-core token is the only *other* token
+    besides one core field behaves as if that field were alone --
+    collapsing silently when empty, exactly like a bare {series} already
+    does, rather than being treated as a 2-token segment.
     """
 
     def test_series_and_edition_both_empty_collapses_silently_not_flagged(self):
@@ -45,12 +48,31 @@ class EditionExcludedFromSignificanceTests(unittest.TestCase):
         self.assertEqual(folders, ["Author Name", "[GraphicAudio]"])
         self.assertEqual(reasons, [])
 
-    def test_two_real_tokens_both_empty_still_flags_review(self):
-        # Edition being excluded doesn't exempt genuinely 2+-significant-
-        # token segments from the review-flag rule.
+    def test_title_and_asin_both_empty_collapses_silently_not_flagged(self):
+        # asin is non-core now too: {title},{asin} with title empty behaves
+        # like a bare {title} would (silently collapses), not a 2-token
+        # all-empty segment.
         folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{author}/{title},{asin} [{edition}]/",
-            {"author": "Author Name", "title": "", "asin": "", "edition": ""},
+            "{author}/{title},{asin}/",
+            {"author": "Author Name", "title": "", "asin": ""},
+        )
+        self.assertEqual(folders, ["Author Name"])
+        self.assertEqual(reasons, [])
+
+    def test_publisher_year_narrator_all_excluded(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{publisher},{year},{narrator}/",
+            {"author": "Author Name", "publisher": "", "year": "", "narrator": ""},
+        )
+        self.assertEqual(folders, ["Author Name"])
+        self.assertEqual(reasons, [])
+
+    def test_two_core_tokens_both_empty_still_flags_review(self):
+        # Core tokens are unaffected by the exclusion -- genuinely
+        # insufficient data still gets flagged, not silently guessed.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title},{series} [{edition}]/",
+            {"author": "Author Name", "title": "", "series": "", "edition": ""},
         )
         self.assertEqual(len(reasons), 1)
 
@@ -85,12 +107,13 @@ class EmptyBracketCollapseTests(unittest.TestCase):
         self.assertIsNone(filename)
 
     def test_two_bracket_wrapped_empty_tokens_stays_flagged_not_silently_dropped(self):
-        # [{title}][{asin}] both empty: bracket removal alone empties the
-        # whole segment before the trailing strip even runs. The flagged
-        # segment must still show up as *something* non-empty, not vanish.
+        # [{title}][{series}] both empty (both core tokens): bracket
+        # removal alone empties the whole segment before the trailing
+        # strip even runs. The flagged segment must still show up as
+        # *something* non-empty, not vanish.
         folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{author}/[{title}][{asin}]/",
-            {"author": "Author Name", "title": "", "asin": ""},
+            "{author}/[{title}][{series}]/",
+            {"author": "Author Name", "title": "", "series": ""},
         )
         self.assertEqual(len(folders), 2)
         self.assertTrue(folders[1])
@@ -120,9 +143,10 @@ class StraySeparatorCleanupTests(unittest.TestCase):
         # separators must never collapse to a true empty string -- Path
         # silently drops empty components, which would make a flagged item
         # vanish from its own directory level instead of staying visible.
+        # {title},{series} are both core tokens, so both-empty flags.
         folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{author}/{title},{asin}/",
-            {"author": "Author Name", "title": "", "asin": ""},
+            "{author}/{title},{series}/",
+            {"author": "Author Name", "title": "", "series": ""},
         )
         self.assertEqual(folders, ["Author Name", ","])
         self.assertEqual(len(reasons), 1)
@@ -150,9 +174,10 @@ class BareSingleTokenSegmentTests(unittest.TestCase):
 
 class MultiTokenSegmentTests(unittest.TestCase):
     def test_all_empty_multi_token_segment_flags_for_review(self):
+        # {title},{series} are both core tokens, so both-empty flags.
         folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{author}/{title},{asin}/",
-            {"author": "Author Name", "title": "", "asin": ""},
+            "{author}/{title},{series}/",
+            {"author": "Author Name", "title": "", "series": ""},
         )
         self.assertEqual(folders, ["Author Name", ","])
         self.assertIsNone(filename)
@@ -207,9 +232,10 @@ class FilenameSegmentTests(unittest.TestCase):
         self.assertEqual(reasons, [])
 
     def test_empty_multi_token_filename_falls_back_to_none_and_flags(self):
+        # {title},{series} are both core tokens, so both-empty flags.
         folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{author}/{title},{asin}",
-            {"author": "Author Name", "title": "", "asin": ""},
+            "{author}/{title},{series}",
+            {"author": "Author Name", "title": "", "series": ""},
         )
         self.assertIsNone(filename)
         self.assertEqual(len(reasons), 1)

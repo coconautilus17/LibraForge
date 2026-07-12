@@ -3607,6 +3607,7 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
     title = raw_title
 
     order = build_sequence_prefix(sequence_label, number) if series and number else ""
+    number_display = display_book_number(number) if series and number else ""
 
     return {
         "author": author,
@@ -3614,6 +3615,7 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
         "series": series,
         "title": title,
         "order": order,
+        "number": number_display,
         "publisher": metadata.get("publisher", "") or "",
         "year": metadata.get("year", "") or "",
         "asin": metadata.get("asin", "") or "",
@@ -3633,14 +3635,18 @@ class UnknownNamingTokenError(ValueError):
         self.token = token
 
 
-# {edition} is a special decorator token: it never counts toward "how many
-# significant tokens does this segment have" -- a segment where it's the
-# only other token besides one real field behaves as if that field were
-# alone (collapsing silently when empty, like a bare {series} always has),
-# and it never contributes toward the "2+ tokens all empty" review-flag
-# either. This reflects that most books simply have no special edition,
-# and that being unremarkable, not a data-quality problem worth flagging.
-_NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset({"edition"})
+# Only the "core" identity tokens (author, series, title, order, number --
+# the fields the app's own hardcoded default scheme has always treated as
+# a book's identity) count toward "how many significant tokens does this
+# segment have". Everything else (narrator, publisher, year, asin,
+# edition) is decoration: a segment where a non-core token is the only
+# other token besides one core field behaves as if that field were alone
+# (collapsing silently when empty, like a bare {series} always has), and
+# non-core tokens never contribute toward the "2+ tokens all empty"
+# review-flag either. This reflects that a book can legitimately have no
+# known narrator/publisher/year/ASIN/edition without that being a
+# data-quality problem worth flagging -- unremarkable, not insufficient.
+_NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset({"narrator", "publisher", "year", "asin", "edition"})
 
 
 def _significant_tokens(tokens: set[str]) -> set[str]:
@@ -3677,6 +3683,7 @@ NAMING_TOKEN_NAMES = frozenset(
         "series",
         "title",
         "order",
+        "number",
         "publisher",
         "year",
         "asin",

@@ -75,12 +75,14 @@ class PreviewNamingTemplateForRootTests(unittest.TestCase):
             self.assertEqual(len(previews), 3)
 
     def test_custom_template_surfaces_review_reasons(self):
+        # {series},{order} are both core tokens; both empty for this
+        # fixture (no series, no book_number) so this should flag.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "_unorganized"
             root.mkdir()
             _write_book(root, "Some Book", "book.m4b", {"title": "The Title", "author": "Author", "series": ""})
             previews = ORGANIZER.preview_naming_template_for_root(
-                root, Path(tmp), "{author}/{asin},{publisher}/{title}"
+                root, Path(tmp), "{author}/{series},{order}/{title}"
             )
             self.assertEqual(len(previews), 1)
             self.assertEqual(len(previews[0]["review_reasons"]), 1)
