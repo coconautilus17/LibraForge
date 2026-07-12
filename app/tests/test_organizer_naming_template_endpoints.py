@@ -128,6 +128,12 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         # cleanup actually fired rather than the name being clean to begin with.
         self.assertNotEqual(raw["No series"], cleaned["No series"])
         self.assertNotEqual(raw["Has publisher"], cleaned["Has publisher"])
+        # Regression guard: the roman-numeral book's folder collapses the
+        # redundant title to "Book 5", but its {filename} must keep the full
+        # title (V and all) -- it is intentionally left un-cluttered so the
+        # noise-cleanup path never collapses the filename down to the folder
+        # leaf and drops the "V".
+        self.assertEqual(cleaned["Title matches series"], "The Dao of Magic V.m4b")
         # Multi-file books never expose a template filename either way.
         self.assertIsNone(raw["Multi-file book"])
         self.assertIsNone(cleaned["Multi-file book"])
