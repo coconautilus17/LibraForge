@@ -1851,6 +1851,63 @@ summary:focus-visible {
   font-family: var(--font-mono);
 }
 
+.naming-template-section input {
+  font-family: var(--font-mono);
+}
+
+.naming-template-status {
+  margin-top: 6px;
+}
+
+.naming-template-status-error {
+  color: var(--danger);
+}
+
+.naming-template-filename-warning {
+  color: var(--danger);
+  margin-top: 6px;
+}
+
+.naming-template-preview {
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.naming-template-preview-row {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.naming-template-preview-row:last-child {
+  border-bottom: none;
+}
+
+.naming-template-preview-source {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.naming-template-preview-arrow {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0;
+}
+
+.naming-template-preview-target {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.naming-template-preview-flag {
+  margin-top: 4px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .reason-badges {
   display: flex;
   gap: var(--space-sm);

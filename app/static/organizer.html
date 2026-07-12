@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
-  <script src="/static/ui-preferences.js?v=20260712-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-1" />
+  <script src="/static/ui-preferences.js?v=20260712-2"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260712-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -81,6 +81,14 @@
           <label style="display:flex;flex-direction:row;align-items:center;gap:5px;font-size:12.5px;color:var(--text-soft);white-space:nowrap;cursor:pointer;flex-shrink:0"><input id="usePersistentSkip" type="checkbox" style="margin:0;cursor:pointer" /> Include persistent patterns from global policy</label>
         </div>
         <textarea id="skipPatterns" rows="3" placeholder="Casual Farming"></textarea>
+      </div>
+
+      <div class="wide naming-template-section">
+        <span class="field-label">Naming template <span class="info-tip" data-tooltip="Controls the destination folder path and, for single-file books only, the filename. Use {token} for metadata (author, series, title, book_number, narrator, asin, publisher, genre, year, series_dir, book_folder), '/' to mark folder levels, and any other text literally. Everything after the last '/' is the filename; leave it blank (trailing '/') to keep the original filename."></span></span>
+        <input id="namingTemplate" value="{author}/{series_dir}/{book_folder}/" spellcheck="false" autocomplete="off" />
+        <p id="namingTemplateStatus" class="note naming-template-status" hidden></p>
+        <p class="note naming-template-filename-warning">Multi-file (multi-chapter/track) books never have their internal filenames renamed by this template, even if the template sets one — those names are left exactly as-is. Run Fixer before Folder Forge so chapter/track names are already correct.</p>
+        <div id="namingTemplatePreview" class="naming-template-preview" hidden></div>
       </div>
 
       <div class="checks">
@@ -193,6 +201,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/organizer.js?v=20260711-1"></script>
+  <script src="/static/organizer.js?v=20260712-2"></script>
 </body>
 </html>

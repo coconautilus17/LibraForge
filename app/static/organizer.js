@@ -113,6 +113,7 @@ function collectRequest() {
     max_items: parseInt($('maxItems').value || '0', 10),
     progress_every: parseInt($('progressEvery').value || '1', 10),
     skip_patterns: skipPatterns,
+    naming_template: $('namingTemplate').value.trim(),
   };
 }
 
@@ -571,6 +572,84 @@ function renderCleanupReport(data) {
   report.hidden = false;
 }
 
+function renderNamingTemplateStatus(problems) {
+  const el = $('namingTemplateStatus');
+  if (!problems || !problems.length) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('naming-template-status-error');
+    return;
+  }
+  el.hidden = false;
+  el.textContent = problems.join(' ');
+  el.classList.add('naming-template-status-error');
+}
+
+function renderNamingTemplatePreview(previews) {
+  const el = $('namingTemplatePreview');
+  if (!previews || !previews.length) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = previews.map((p) => {
+    const dest = p.filename ? `${p.target_dir}/${p.filename}` : `${p.target_dir}/`;
+    const flagged = p.review_reasons && p.review_reasons.length
+      ? `<div class="naming-template-preview-flag">${escapeHtml(p.review_reasons.join('; '))}</div>`
+      : '';
+    return `<div class="naming-template-preview-row">
+      <div class="naming-template-preview-source mono">${escapeHtml(p.source)}</div>
+      <div class="naming-template-preview-arrow">&#8594;</div>
+      <div class="naming-template-preview-target mono">${escapeHtml(dest)}</div>
+      ${flagged}
+    </div>`;
+  }).join('');
+}
+
+let namingTemplateDebounce = null;
+async function refreshNamingTemplatePreview() {
+  const template = $('namingTemplate').value.trim();
+  if (!template) {
+    renderNamingTemplateStatus([]);
+    renderNamingTemplatePreview([]);
+    return;
+  }
+  const validateRes = await fetch('/api/organizer/naming-template/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template }),
+  }).catch(() => null);
+  const validateBody = validateRes && validateRes.ok ? await validateRes.json() : null;
+  if (!validateBody || !validateBody.valid) {
+    renderNamingTemplateStatus((validateBody && validateBody.problems) || ['Could not validate template.']);
+    renderNamingTemplatePreview([]);
+    return;
+  }
+  renderNamingTemplateStatus([]);
+
+  const previewRes = await fetch('/api/organizer/naming-template/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      template,
+      root_path: $('rootPath').value.trim(),
+      destination_root: $('destinationRoot').value.trim(),
+    }),
+  }).catch(() => null);
+  if (!previewRes || !previewRes.ok) {
+    renderNamingTemplatePreview([]);
+    return;
+  }
+  const previewBody = await previewRes.json();
+  renderNamingTemplatePreview(previewBody.previews || []);
+}
+
+$('namingTemplate').addEventListener('input', () => {
+  clearTimeout(namingTemplateDebounce);
+  namingTemplateDebounce = setTimeout(refreshNamingTemplatePreview, 400);
+});
+
 $('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
 $('cleanupBtn').addEventListener('click', runCleanup);
@@ -582,3 +661,4 @@ $('advancedRunToggle')?.addEventListener('click', () => {
 syncAdvancedRunSettings();
 loadScripts();
 resumeActiveRun();
+refreshNamingTemplatePreview();
