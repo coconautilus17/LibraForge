@@ -1855,6 +1855,39 @@ summary:focus-visible {
   font-family: var(--font-mono);
 }
 
+.naming-template-default-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  font-size: 13px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.naming-template-default-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.naming-template-default-example {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.naming-template-section.using-default-scheme #namingTemplate {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.naming-template-section.using-default-scheme .dryrun-notice,
+.naming-template-section.using-default-scheme .naming-template-examples,
+.naming-template-section.using-default-scheme .naming-template-preview,
+.naming-template-section.using-default-scheme .naming-template-status {
+  display: none;
+}
+
 .naming-template-status {
   margin-top: 6px;
 }

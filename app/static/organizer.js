@@ -113,6 +113,7 @@ function collectRequest() {
     max_items: parseInt($('maxItems').value || '0', 10),
     progress_every: parseInt($('progressEvery').value || '1', 10),
     skip_patterns: skipPatterns,
+    use_default_scheme: $('useDefaultScheme').checked,
     naming_template: $('namingTemplate').value.trim(),
   };
 }
@@ -214,6 +215,10 @@ function showNoSidecarsConfirm() {
 
 async function startRun(reqOverride) {
   const req = reqOverride || collectRequest();
+  if (!reqOverride && !req.use_default_scheme && !req.naming_template) {
+    alert('Enter a naming template, or check "Use ABS default structure scheme".');
+    return;
+  }
   if (req.apply && !reqOverride) {
     const ok = await showOrgApplyConfirm(req);
     if (!ok) return;
@@ -686,6 +691,24 @@ $('namingTemplate').addEventListener('input', () => {
   clearTimeout(namingTemplateDebounce);
   namingTemplateDebounce = setTimeout(refreshNamingTemplatePreview, 400);
 });
+
+function syncNamingSchemeToggle() {
+  const useDefault = $('useDefaultScheme').checked;
+  const section = document.querySelector('.naming-template-section');
+  const field = $('namingTemplate');
+  field.disabled = useDefault;
+  section.classList.toggle('using-default-scheme', useDefault);
+  if (useDefault) {
+    renderNamingTemplateStatus([]);
+    renderNamingTemplatePreview([]);
+    renderNamingTemplateExamples([]);
+  } else {
+    refreshNamingTemplatePreview();
+  }
+}
+
+$('useDefaultScheme').addEventListener('change', syncNamingSchemeToggle);
+syncNamingSchemeToggle();
 
 $('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
