@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-4" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -100,7 +100,7 @@
             <dt><code>{series}</code></dt>
             <dd>The series name, when the book belongs to one. Example: <code>Mistborn</code></dd>
             <dt><code>{title}</code></dt>
-            <dd>The book's title &mdash; left empty when it's redundant with the series and order (e.g. a title that's just "Book 3"), so a template like <code>{order} - {title}</code> doesn't produce "Book 3 - Book 3". Example: <code>The Final Empire</code></dd>
+            <dd>The book's title, left empty when it's redundant with the series and order (e.g. a title that's just "Book 3"), so a template like <code>{order} - {title}</code> doesn't produce "Book 3 - Book 3". Example: <code>The Final Empire</code></dd>
             <dt><code>{order}</code></dt>
             <dd>The auto-detected sequence label and number together (Book/Vol./Volume/Side Story, picked up from whatever the source data actually uses), empty when there's no series or no detected number. Examples: <code>Book 3</code>, <code>Vol. 2</code></dd>
             <dt><code>{edition}</code></dt>
@@ -114,6 +114,22 @@
           </dl>
           <p>Use <code>/</code> to mark a folder level; everything after the last <code>/</code> is the filename, which only applies to true single-file books. A folder level made of exactly one token is dropped entirely when that token is empty. A level combining two or more tokens is flagged for review only if <em>all</em> of them are empty; otherwise it renders with whatever is there.</p>
           <p>Example: <code>{author}/{series}/{order} - {title},{edition}/</code> (the default shown above) never renames files, since it ends in <code>/</code>.</p>
+        </details>
+        <details class="naming-template-examples explanation-disclosure" open>
+          <summary>Example scenarios</summary>
+          <p id="namingTemplateExamplesNote" class="note">Live preview against a small set of bundled example books (metadata only, no real audio) covering distinct scenarios, updating as you edit the template above.</p>
+          <div class="naming-template-examples-table-wrap">
+            <table class="naming-template-examples-table">
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Folder</th>
+                  <th>Filename</th>
+                </tr>
+              </thead>
+              <tbody id="namingTemplateExamplesBody"></tbody>
+            </table>
+          </div>
         </details>
         <div id="namingTemplatePreview" class="naming-template-preview" hidden></div>
       </div>
@@ -228,6 +244,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/organizer.js?v=20260712-2"></script>
+  <script src="/static/organizer.js?v=20260712-3"></script>
 </body>
 </html>

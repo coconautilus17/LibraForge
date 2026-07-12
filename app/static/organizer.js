@@ -607,12 +607,46 @@ function renderNamingTemplatePreview(previews) {
   }).join('');
 }
 
+function renderNamingTemplateExamples(previews) {
+  const body = $('namingTemplateExamplesBody');
+  if (!previews || !previews.length) {
+    body.innerHTML = '';
+    return;
+  }
+  body.innerHTML = previews.map((p) => {
+    const dest = p.filename ? `${p.target_dir}/${p.filename}` : `${p.target_dir}/`;
+    const flagged = p.review_reasons && p.review_reasons.length
+      ? `<div class="naming-template-preview-flag">${escapeHtml(p.review_reasons.join('; '))}</div>`
+      : '';
+    return `<tr>
+      <td>${escapeHtml(p.scenario || '')}</td>
+      <td><code>${escapeHtml(p.target_dir)}</code>${flagged}</td>
+      <td>${p.filename ? `<code>${escapeHtml(p.filename)}</code>` : '<em>unchanged</em>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function refreshNamingTemplateExamples(template) {
+  const res = await fetch('/api/organizer/naming-template/example-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    renderNamingTemplateExamples([]);
+    return;
+  }
+  const body = await res.json();
+  renderNamingTemplateExamples(body.previews || []);
+}
+
 let namingTemplateDebounce = null;
 async function refreshNamingTemplatePreview() {
   const template = $('namingTemplate').value.trim();
   if (!template) {
     renderNamingTemplateStatus([]);
     renderNamingTemplatePreview([]);
+    renderNamingTemplateExamples([]);
     return;
   }
   const validateRes = await fetch('/api/organizer/naming-template/validate', {
@@ -624,6 +658,7 @@ async function refreshNamingTemplatePreview() {
   if (!validateBody || !validateBody.valid) {
     renderNamingTemplateStatus((validateBody && validateBody.problems) || ['Could not validate template.']);
     renderNamingTemplatePreview([]);
+    renderNamingTemplateExamples([]);
     return;
   }
   renderNamingTemplateStatus([]);
@@ -639,10 +674,12 @@ async function refreshNamingTemplatePreview() {
   }).catch(() => null);
   if (!previewRes || !previewRes.ok) {
     renderNamingTemplatePreview([]);
-    return;
+  } else {
+    const previewBody = await previewRes.json();
+    renderNamingTemplatePreview(previewBody.previews || []);
   }
-  const previewBody = await previewRes.json();
-  renderNamingTemplatePreview(previewBody.previews || []);
+
+  await refreshNamingTemplateExamples(template);
 }
 
 $('namingTemplate').addEventListener('input', () => {
