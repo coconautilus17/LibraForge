@@ -103,25 +103,36 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         for preview in previews:
             self.assertTrue(preview["scenario"])
 
-    def test_filename_token_shows_real_source_names_not_placeholder(self):
-        # The bundled single-file example books carry their real modelled-on
-        # source filenames (e.g. "Armor.m4b"), not a generic "book.m4b"
-        # placeholder, so the {filename}/{original} tokens demonstrate the
-        # actual name a user would get instead of an uninformative stub.
-        resp = client.post(
-            "/api/organizer/naming-template/example-preview",
-            json={"template": "{author}/{original} [{asin}]"},
-        )
-        self.assertEqual(resp.status_code, 200)
-        by_scenario = {p["scenario"]: p for p in resp.json()["previews"]}
-        self.assertEqual(by_scenario["No series"]["filename"], "Armor [B0B5VQ5XYF].m4b")
-        self.assertEqual(
-            by_scenario["Title matches series"]["filename"], "The Dao of Magic V [1774243989].m4b"
-        )
-        # Multi-file books never expose a template filename.
-        self.assertIsNone(by_scenario["Multi-file book"]["filename"])
-        for preview in resp.json()["previews"]:
-            self.assertNotEqual(preview["filename"], "book.m4b")
+    def test_filename_cleanup_visible_on_bundled_examples(self):
+        # The bundled single-file example books carry deliberately cluttered
+        # source names (release junk: bracketed ASIN/year/bitrate, {narrator}
+        # braces, "unabridged"/"audiobook"/"light novel" keywords, vol_NN)
+        # so {original} shows the raw name while {filename} shows the
+        # noise-cleaned result -- and never a "book.m4b" placeholder.
+        def previews(template):
+            resp = client.post(
+                "/api/organizer/naming-template/example-preview",
+                json={"template": template},
+            )
+            self.assertEqual(resp.status_code, 200)
+            return {p["scenario"]: p["filename"] for p in resp.json()["previews"]}
+
+        raw = previews("{author}/{original}")
+        cleaned = previews("{author}/{series} [{edition}]/{order} - {title}/{filename}")
+
+        # {original} preserves the clutter verbatim.
+        self.assertEqual(raw["No series"], "Armor [B0B5VQ5XYF] [2024] unabridged.m4b")
+        # {filename} strips it to the clean folder-derived name.
+        self.assertEqual(cleaned["No series"], "Armor.m4b")
+        # The two must differ for the cluttered single-file books -- proof the
+        # cleanup actually fired rather than the name being clean to begin with.
+        self.assertNotEqual(raw["No series"], cleaned["No series"])
+        self.assertNotEqual(raw["Has publisher"], cleaned["Has publisher"])
+        # Multi-file books never expose a template filename either way.
+        self.assertIsNone(raw["Multi-file book"])
+        self.assertIsNone(cleaned["Multi-file book"])
+        for filename in list(raw.values()) + list(cleaned.values()):
+            self.assertNotEqual(filename, "book.m4b")
 
     def test_invalid_template_returns_400(self):
         resp = client.post(
