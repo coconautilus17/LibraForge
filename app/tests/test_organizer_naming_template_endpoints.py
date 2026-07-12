@@ -99,7 +99,7 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         previews = resp.json()["previews"]
-        self.assertEqual(len(previews), 5)
+        self.assertEqual(len(previews), 6)
         for preview in previews:
             self.assertTrue(preview["scenario"])
 
