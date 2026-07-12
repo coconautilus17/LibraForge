@@ -60,11 +60,12 @@ class BuildTargetDirForTemplateTests(unittest.TestCase):
         self.assertIsNone(result.filename)
 
     def test_custom_template_builds_different_path(self):
-        # BASE_METADATA has an empty genre -- the bare {genre} segment
-        # collapses (dropped) rather than becoming a literal "Unknown".
+        # BASE_METADATA has an empty publisher -- the bare {publisher}
+        # segment collapses (dropped) rather than becoming a literal
+        # "Unknown".
         root = Path("/library")
         result = ORGANIZER.build_target_dir_for_template(
-            root, BASE_METADATA, "{genre}/{author}/{title}"
+            root, BASE_METADATA, "{publisher}/{author}/{title}"
         )
         self.assertEqual(result.target_dir, root / "G.D. Brooks")
         self.assertEqual(result.filename, "Bold Beginnings")
@@ -103,7 +104,7 @@ class BuildCachedTargetDirNamingTemplateTests(unittest.TestCase):
         cache = ORGANIZER.empty_structure_cache(root)
         metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
         result = ORGANIZER.build_cached_target_dir(
-            root, metadata, cache, naming_template="{author}/{title} [{edition_tag}]"
+            root, metadata, cache, naming_template="{author}/{order} [{edition}]"
         )
         self.assertEqual(result.status, "new")
         self.assertEqual(result.target_dir, root / "G.D. Brooks")

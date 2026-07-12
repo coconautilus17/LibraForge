@@ -3462,6 +3462,50 @@ def series_dir_label(metadata: dict[str, Any]) -> str:
     return series
 
 
+def title_is_redundant_with_sequence(title: str, series: str, sequence_label: str, number: str) -> bool:
+    """True when `title` carries no information beyond what series + sequence
+    number already convey -- it's literally the sequence prefix ("Book 5"),
+    the bare series name, an omnibus range restatement, or a bare-number/
+    "Book N"-phrase repeat of the number. These are the cases where stating
+    the title again next to the sequence prefix would be pure duplication
+    (e.g. "Book 5 - Book 5"), so a consumer should treat the title as if it
+    weren't there rather than render the redundant text.
+    """
+    if not series or not number:
+        return False
+    prefix = build_sequence_prefix(sequence_label, number)
+    title_key = normalize_for_compare(title)
+    if title_key in {normalize_for_compare(prefix), normalize_for_compare(series)}:
+        return True
+    series_remainder = strip_series_prefix(title, series)
+    # Omnibus/collection label ± redundant range. The range in `number`
+    # already captures the span; repeating it in the title adds no
+    # information. Only fires for range book_numbers so individual books
+    # inside a collection container (each with a single number) are never
+    # treated as redundant.
+    if _is_omnibus_descriptor(series_remainder, number):
+        return True
+    if (
+        normalize_for_compare(series_remainder) == normalize_for_compare(display_book_number(number))
+        or (
+            re.fullmatch(r"\d{1,4}(?:\.\d+)?", series_remainder)
+            and normalize_book_number(series_remainder) == normalize_book_number(number)
+        )
+    ):
+        return True
+    if (
+        detect_number_from_text(series_remainder) == normalize_book_number(number)
+        and re.fullmatch(
+            r"(?:book|volume|vol\.?|v|novel|side\s*story)\s+"
+            r"(?:" + "|".join(NUMBER_WORDS) + r"|\d{1,4}(?:\.\d+)?)",
+            clean_text(series_remainder),
+            flags=re.IGNORECASE,
+        )
+    ):
+        return True
+    return False
+
+
 def build_book_folder_name(metadata: dict[str, Any]) -> str:
     raw_title = metadata.get("title", "")
     series = metadata.get("series", "")
@@ -3476,39 +3520,7 @@ def build_book_folder_name(metadata: dict[str, Any]) -> str:
 
     if series and number:
         prefix = build_sequence_prefix(sequence_label, number)
-        title_key = normalize_for_compare(title)
-        if title_key in {
-            normalize_for_compare(prefix),
-            normalize_for_compare(series),
-        }:
-            return sanitize_path_name(prefix, "Unknown Title")
-        series_remainder = strip_series_prefix(title, series)
-        # Omnibus/collection label ± redundant range → use sequence prefix only.
-        # The range in `number` already captures the span; repeating it in the
-        # folder title ("Book 1-3 - Omnibus, Books 1-3") adds no information.
-        # Only fires for range book_numbers so individual books inside a
-        # collection container (each with a single number) are never collapsed.
-        if _is_omnibus_descriptor(series_remainder, number):
-            return sanitize_path_name(prefix, "Unknown Title")
-        if (
-            normalize_for_compare(series_remainder)
-            == normalize_for_compare(display_book_number(number))
-            or (
-                re.fullmatch(r"\d{1,4}(?:\.\d+)?", series_remainder)
-                and normalize_book_number(series_remainder)
-                == normalize_book_number(number)
-            )
-        ):
-            return sanitize_path_name(prefix, "Unknown Title")
-        if (
-            detect_number_from_text(series_remainder) == normalize_book_number(number)
-            and re.fullmatch(
-                r"(?:book|volume|vol\.?|v|novel|side\s*story)\s+"
-                r"(?:" + "|".join(NUMBER_WORDS) + r"|\d{1,4}(?:\.\d+)?)",
-                clean_text(series_remainder),
-                flags=re.IGNORECASE,
-            )
-        ):
+        if title_is_redundant_with_sequence(title, series, sequence_label, number):
             return sanitize_path_name(prefix, "Unknown Title")
         return sanitize_path_name(f"{prefix} - {title}", "Unknown Title")
     return title
@@ -3532,7 +3544,7 @@ def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -
     return destination_root / author_dir / book_folder
 
 
-DEFAULT_NAMING_TEMPLATE = "{author}/{series_dir}/{book_folder}/"
+DEFAULT_NAMING_TEMPLATE = "{author}/{series}/{order} - {title},{edition}/"
 
 
 def naming_template_filename_for_item(item: BookItem, template_filename: str | None) -> str | None:
@@ -3554,36 +3566,45 @@ def naming_template_filename_for_item(item: BookItem, template_filename: str | N
 def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
     """Build the {token} -> value map a naming template renders against.
 
-    Raw fields pass through metadata as-is (author is canonicalized the same
-    way build_default_target_dir() already canonicalizes it). {series_dir}
-    and {book_folder} are composite tokens that reuse series_dir_label() and
-    build_book_folder_name() verbatim -- including build_default_target_dir()'s
-    no-series edition-tag relocation -- so a template using them keeps the
-    existing redundant-title collapsing and tag-placement behavior exactly,
-    rather than re-deriving it from raw fields (which can't reproduce it; see
-    the design doc's "why not just {book_number} - {title}" note).
+    One flat token per real-world concept -- no distinction between a "raw"
+    field and a "composite" one; that split existed in an earlier version of
+    this feature and was scrapped as unnecessary complexity. `order` and
+    `title` still carry the same smart behavior the app has always had
+    (auto-detected "Book"/"Vol."/"Side Story" labeling, and title becoming
+    empty rather than repeating itself when it's redundant with the series
+    and sequence number, e.g. avoiding "Book 5 - Book 5") -- overhauling the
+    token *interface* doesn't mean dropping behavior the app already had,
+    it just means every token is computed correctly and exposed flatly
+    rather than needing two categories of tokens for the same thing.
+
+    Author defaults to the literal "Unknown Author" when missing (an
+    author-less book still needs *some* folder to land in); every other
+    token is simply empty when absent, and it's the renderer's job -- not
+    this function's -- to decide what an empty token means for the segment
+    it's in.
     """
-    author = sanitize_path_name(
-        canonical_author_name(metadata.get("author_primary") or metadata.get("author")),
-        "Unknown Author",
-    )
-    book_folder = build_book_folder_name(metadata)
-    if not metadata.get("series") and metadata.get("edition_tag"):
-        book_folder = sanitize_path_name(f"{book_folder} [{metadata['edition_tag']}]", book_folder)
+    author = canonical_author_name(metadata.get("author_primary") or metadata.get("author")) or "Unknown Author"
+    series = metadata.get("series", "") or ""
+    number = metadata.get("book_number", "") or ""
+    sequence_label = metadata.get("sequence_label", "") or ""
+
+    raw_title = metadata.get("title", "") or ""
+    if is_asin_like_token(raw_title):
+        raw_title = series
+    title = "" if raw_title and title_is_redundant_with_sequence(raw_title, series, sequence_label, number) else raw_title
+
+    order = build_sequence_prefix(sequence_label, number) if series and number else ""
+
     return {
         "author": author,
-        "series": metadata.get("series", "") or "",
-        "title": metadata.get("title", "") or "",
-        "book_number": metadata.get("book_number", "") or "",
-        "sequence_label": metadata.get("sequence_label", "") or "",
         "narrator": metadata.get("narrator", "") or "",
-        "edition_tag": metadata.get("edition_tag", "") or "",
-        "asin": metadata.get("asin", "") or "",
+        "series": series,
+        "title": title,
+        "order": order,
         "publisher": metadata.get("publisher", "") or "",
-        "genre": metadata.get("genre", "") or "",
         "year": metadata.get("year", "") or "",
-        "series_dir": series_dir_label(metadata) if metadata.get("series") else "",
-        "book_folder": book_folder,
+        "asin": metadata.get("asin", "") or "",
+        "edition": metadata.get("edition_tag", "") or "",
     }
 
 
@@ -3623,18 +3644,14 @@ def _render_naming_segment(segment: str, token_values: dict[str, str]) -> tuple[
 NAMING_TOKEN_NAMES = frozenset(
     {
         "author",
+        "narrator",
         "series",
         "title",
-        "book_number",
-        "sequence_label",
-        "narrator",
-        "edition_tag",
-        "asin",
+        "order",
         "publisher",
-        "genre",
         "year",
-        "series_dir",
-        "book_folder",
+        "asin",
+        "edition",
     }
 )
 
@@ -3679,6 +3696,38 @@ def preview_naming_template_for_root(
     return previews
 
 
+def folder_name_matches_naming_template(source_name: str, target_leaf_name: str) -> bool:
+    """Fuzzy-compare a folder's own current name against what the active
+    naming template would produce for it, ignoring case/punctuation/spacing
+    (normalize_for_compare(), the same fuzzy-match primitive already used
+    for author/series comparisons elsewhere in this file). A close-but-not-
+    byte-identical match still counts -- the folder already looks organized
+    per the current scheme even if its exact formatting differs slightly.
+    """
+    return normalize_for_compare(source_name) == normalize_for_compare(target_leaf_name)
+
+
+def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, root: Path) -> bool:
+    """True when `item`'s own enclosing folder name already matches what the
+    naming template computed for it -- it looks like it's already organized
+    under the current scheme, wherever it currently sits.
+
+    For a folder-kind item that's the item's own source folder. For a
+    loose-file item -- the common shape build_book_items() gives a
+    single-file book, with source_path pointing at the audio *file* itself,
+    not a folder -- it's the file's parent folder, unless that parent is
+    the scan root itself (a bare loose file with no wrapper folder has
+    nothing meaningful to compare).
+    """
+    if item.kind == "folder":
+        folder_name = item.source_path.name
+    else:
+        if item.source_path.parent == root:
+            return False
+        folder_name = item.source_path.parent.name
+    return folder_name_matches_naming_template(folder_name, computed_target_dir.name)
+
+
 def build_target_dir_for_template(
     destination_root: Path, metadata: dict[str, Any], naming_template: str
 ) -> NamingRenderResult:
@@ -3699,6 +3748,19 @@ def build_target_dir_for_template(
     tokens = resolve_naming_tokens(metadata)
     folder_segments, filename, reasons = render_naming_template(naming_template, tokens)
     return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
+
+
+def _sanitize_naming_segment(value: str) -> str:
+    """Strip illegal filesystem characters from a rendered segment/filename.
+
+    Every token used to get this for free only when it happened to be a
+    composite that delegated to a function which sanitized internally --
+    a plain token like {title} never did, which was a real bug (a title
+    containing "/" could inject an unintended extra directory level).
+    Applied here, once, to every rendered segment and the filename alike,
+    regardless of which tokens built it.
+    """
+    return sanitize_path_name(value, value) if value else value
 
 
 def render_naming_template(
@@ -3732,11 +3794,11 @@ def render_naming_template(
             distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
             if needs_review:
                 review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
-                folder_segments.append(rendered)
+                folder_segments.append(_sanitize_naming_segment(rendered))
             elif len(distinct_tokens) <= 1 and rendered == "":
                 continue
             else:
-                folder_segments.append(rendered)
+                folder_segments.append(_sanitize_naming_segment(rendered))
 
     filename: str | None = None
     if filename_template:
@@ -3744,7 +3806,7 @@ def render_naming_template(
         if needs_review:
             review_reasons.append(f"not enough data to build filename '{filename_template}'")
         elif rendered:
-            filename = rendered
+            filename = _sanitize_naming_segment(rendered)
 
     return folder_segments, filename, review_reasons
 
@@ -4691,6 +4753,17 @@ def main() -> None:
     parser.add_argument("--m4b-only", action="store_true", help="Only process items whose audio files are all .m4b.")
     parser.add_argument("--allow-unknown-author", action="store_true", help="Allow moves whose metadata has no author. Disabled by default.")
     parser.add_argument(
+        "--include-existing-book-folders",
+        action="store_true",
+        help=(
+            "Include folders whose own name already matches what the naming "
+            "template would produce for them. Disabled by default, in which "
+            "case they're skipped and counted separately. When included, "
+            "they're moved into place with their current folder name kept "
+            "as-is rather than renamed to the template's own rendering."
+        ),
+    )
+    parser.add_argument(
         "--skip-pattern",
         action="append",
         default=[],
@@ -4794,6 +4867,7 @@ def main() -> None:
     skipped_conflicts = 0
     skipped_ambiguous_structure = 0
     skipped_pattern_match = 0
+    skipped_existing_book_folders = 0
     matched_existing_structure = 0
     ambiguous_structure = 0
 
@@ -4868,6 +4942,28 @@ def main() -> None:
             ))
             print(f"SKIP: ambiguous structure | {item.source_path}", file=sys.stderr)
             continue
+
+        if is_likely_existing_book_folder(item, target_dir, root):
+            if not args.include_existing_book_folders:
+                skipped_existing_book_folders += 1
+                reason = "skipped: folder name already matches the naming template"
+                skipped_reviews.append(make_skipped_review_move(
+                    item=item,
+                    metadata=metadata,
+                    target=target_dir,
+                    reason=reason,
+                    structure="skipped_existing_book_folders",
+                ))
+                print(f"SKIP: likely existing book folder | {item.source_path}", file=sys.stderr)
+                continue
+            # Included: keep the folder's own current name rather than
+            # renaming it to the template's rendering -- it already looks
+            # organized under this scheme, so trust what's there. For a
+            # loose-file item this is its wrapper folder's name (the file's
+            # own name is decided separately, unaffected, by
+            # plan_loose_file_move below).
+            existing_folder_name = item.source_path.name if item.kind == "folder" else item.source_path.parent.name
+            target_dir = target_dir.parent / existing_folder_name
 
         if item.kind == "folder":
             can_move, reason = plan_folder_move(
@@ -4963,6 +5059,7 @@ def main() -> None:
     print(f"Matched existing structure: {matched_existing_structure}")
     print(f"Ambiguous structure matches: {ambiguous_structure}")
     print(f"Skipped ambiguous structure: {skipped_ambiguous_structure}")
+    print(f"Skipped likely existing book folders: {skipped_existing_book_folders}")
     print(f"Skipped review items: {len(skipped_reviews)}")
     print(f"Planned moves: {len(planned_moves)}")
     print(f"Mode: {mode}")

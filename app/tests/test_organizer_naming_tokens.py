@@ -33,60 +33,89 @@ class RawTokenPassthroughTests(unittest.TestCase):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["series"], "Dashing Devil")
         self.assertEqual(tokens["title"], "Bold Beginnings")
-        self.assertEqual(tokens["book_number"], "5")
         self.assertEqual(tokens["narrator"], "Some Narrator")
         self.assertEqual(tokens["asin"], "B0TESTASIN")
         self.assertEqual(tokens["publisher"], "Publisher House")
-        self.assertEqual(tokens["genre"], "Fantasy")
         self.assertEqual(tokens["year"], "2021")
 
+    def test_no_genre_or_series_dir_or_book_folder_tokens(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertNotIn("genre", tokens)
+        self.assertNotIn("series_dir", tokens)
+        self.assertNotIn("book_folder", tokens)
+        self.assertNotIn("book_number", tokens)
+        self.assertNotIn("sequence_label", tokens)
+        self.assertNotIn("edition_tag", tokens)
+
     def test_author_token_is_canonicalized(self):
-        metadata = dict(BASE_METADATA, author_primary="brooks, g.d.", author="")
+        metadata = dict(BASE_METADATA, author_primary="J. R. R. Tolkien", author="")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(
-            tokens["author"],
-            ORGANIZER.sanitize_path_name(
-                ORGANIZER.canonical_author_name("brooks, g.d."), "Unknown Author"
-            ),
-        )
+        self.assertEqual(tokens["author"], ORGANIZER.canonical_author_name("J. R. R. Tolkien"))
+
+    def test_missing_author_defaults_to_unknown_author(self):
+        metadata = dict(BASE_METADATA, author_primary="", author="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["author"], "Unknown Author")
+
+    def test_missing_narrator_is_empty_not_placeholder(self):
+        metadata = dict(BASE_METADATA, narrator="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["narrator"], "")
 
 
-class SeriesDirTokenTests(unittest.TestCase):
-    def test_series_dir_matches_series_dir_label(self):
+class EditionTokenTests(unittest.TestCase):
+    def test_edition_token_reads_edition_tag_field(self):
         metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["series_dir"], ORGANIZER.series_dir_label(metadata))
-        self.assertIn("[GraphicAudio]", tokens["series_dir"])
+        self.assertEqual(tokens["edition"], "GraphicAudio")
 
-    def test_series_dir_empty_when_no_series(self):
+    def test_edition_token_empty_when_no_edition_tag(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["edition"], "")
+
+
+class OrderTokenTests(unittest.TestCase):
+    def test_order_is_sequence_prefix_when_series_and_number_present(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["order"], ORGANIZER.build_sequence_prefix("", "5"))
+        self.assertEqual(tokens["order"], "Book 5")
+
+    def test_order_uses_detected_label_from_clues(self):
+        metadata = dict(BASE_METADATA, sequence_label="Vol.")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["order"], "Vol. 5")
+
+    def test_order_empty_when_no_series(self):
         metadata = dict(BASE_METADATA, series="")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["series_dir"], "")
+        self.assertEqual(tokens["order"], "")
+
+    def test_order_empty_when_no_number(self):
+        metadata = dict(BASE_METADATA, book_number="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["order"], "")
 
 
-class BookFolderTokenTests(unittest.TestCase):
-    def test_book_folder_matches_build_book_folder_name_when_series_present(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["book_folder"], ORGANIZER.build_book_folder_name(BASE_METADATA))
-
-    def test_book_folder_collapses_redundant_title_like_the_existing_function(self):
+class TitleRedundancyTests(unittest.TestCase):
+    def test_title_empty_when_redundant_with_order(self):
         metadata = dict(BASE_METADATA, title="Book 5")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["book_folder"], "Book 5")
-        self.assertNotIn(" - ", tokens["book_folder"])
+        self.assertEqual(tokens["title"], "")
+        self.assertEqual(tokens["order"], "Book 5")
 
-    def test_edition_tag_rides_on_book_folder_when_no_series(self):
-        metadata = dict(BASE_METADATA, series="", edition_tag="Dramatized")
+    def test_title_empty_when_equal_to_series(self):
+        metadata = dict(BASE_METADATA, title="Dashing Devil")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertIn("[Dramatized]", tokens["book_folder"])
-        # And must NOT also appear on series_dir, since there's no series folder.
-        self.assertEqual(tokens["series_dir"], "")
+        self.assertEqual(tokens["title"], "")
 
-    def test_edition_tag_does_not_ride_on_book_folder_when_series_present(self):
-        metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
+    def test_distinct_title_is_kept(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["title"], "Bold Beginnings")
+
+    def test_asin_like_title_falls_back_to_series_then_empties(self):
+        metadata = dict(BASE_METADATA, title="B07XYZ1234")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertNotIn("[GraphicAudio]", tokens["book_folder"])
-        self.assertIn("[GraphicAudio]", tokens["series_dir"])
+        self.assertEqual(tokens["title"], "")
 
 
 if __name__ == "__main__":

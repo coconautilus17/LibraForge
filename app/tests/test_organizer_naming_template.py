@@ -44,11 +44,14 @@ class MultiTokenSegmentTests(unittest.TestCase):
         self.assertIn("not enough data", reasons[0].lower())
 
     def test_partially_empty_multi_token_segment_renders_literally_no_flag(self):
+        # Sanitization (added alongside this test) trims the trailing " - "
+        # left by narrator being empty -- a nice side effect of generic
+        # path-safety cleanup, not special-cased collapsing logic.
         folders, filename, reasons = ORGANIZER.render_naming_template(
             "{author}/{title} - {narrator}/",
             {"author": "Author Name", "title": "The Title", "narrator": ""},
         )
-        self.assertEqual(folders, ["Author Name", "The Title - "])
+        self.assertEqual(folders, ["Author Name", "The Title"])
         self.assertEqual(reasons, [])
 
 
