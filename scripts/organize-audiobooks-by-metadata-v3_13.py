@@ -3622,6 +3622,7 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
 
 
 NAMING_TEMPLATE_TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_EMPTY_BRACKET_RE = re.compile(r"[\(\[]\s*[\)\]]")
 
 
 class UnknownNamingTokenError(ValueError):
@@ -3632,14 +3633,29 @@ class UnknownNamingTokenError(ValueError):
         self.token = token
 
 
+# {edition} is a special decorator token: it never counts toward "how many
+# significant tokens does this segment have" -- a segment where it's the
+# only other token besides one real field behaves as if that field were
+# alone (collapsing silently when empty, like a bare {series} always has),
+# and it never contributes toward the "2+ tokens all empty" review-flag
+# either. This reflects that most books simply have no special edition,
+# and that being unremarkable, not a data-quality problem worth flagging.
+_NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset({"edition"})
+
+
+def _significant_tokens(tokens: set[str]) -> set[str]:
+    return tokens - _NAMING_SIGNIFICANCE_EXCLUDED_TOKENS
+
+
 def _render_naming_segment(segment: str, token_values: dict[str, str]) -> tuple[str, bool]:
     """Render one literal/token segment. Returns (rendered, needs_review).
 
     needs_review is set only when the segment references two or more
-    distinct tokens and every one of them resolved to an empty value --
-    there's genuinely not enough data to build that path part, as opposed
-    to a single missing optional field (which the caller collapses
-    silently) or a partially-populated segment (which renders as-is).
+    *significant* tokens (see _significant_tokens()) and every one of them
+    resolved to an empty value -- there's genuinely not enough data to
+    build that path part, as opposed to a single missing optional field
+    (which the caller collapses silently) or a partially-populated segment
+    (which renders as-is).
     """
     tokens = NAMING_TEMPLATE_TOKEN_RE.findall(segment)
     for token in tokens:
@@ -3648,9 +3664,9 @@ def _render_naming_segment(segment: str, token_values: dict[str, str]) -> tuple[
 
     rendered = NAMING_TEMPLATE_TOKEN_RE.sub(lambda m: token_values.get(m.group(1), ""), segment)
 
-    distinct_tokens = set(tokens)
-    all_empty = bool(distinct_tokens) and all(not token_values.get(t) for t in distinct_tokens)
-    needs_review = len(distinct_tokens) >= 2 and all_empty
+    significant = _significant_tokens(set(tokens))
+    all_empty = bool(significant) and all(not token_values.get(t) for t in significant)
+    needs_review = len(significant) >= 2 and all_empty
     return rendered, needs_review
 
 
@@ -3782,6 +3798,22 @@ def title_redundant_with_order(metadata: dict[str, Any]) -> bool:
     return title_is_redundant_with_sequence(title, series, sequence_label, number)
 
 
+def _naming_segment_is_effectively_empty(value: str) -> bool:
+    """Whether a rendered segment has no real content once bracket/paren
+    pairs and stray separators are accounted for -- used only to decide
+    whether a segment should collapse (be dropped). Deliberately does NOT
+    share _sanitize_naming_segment()'s never-return-empty safety net: that
+    net exists to protect the *value actually written into the path* for a
+    segment that's being kept (e.g. one flagged for review), which is a
+    different question from "is there content here at all."
+    """
+    if not value:
+        return True
+    cleaned = sanitize_path_name(value, value)
+    without_brackets = _EMPTY_BRACKET_RE.sub("", cleaned)
+    return without_brackets.strip(" ,-") == ""
+
+
 def _sanitize_naming_segment(value: str) -> str:
     """Strip illegal filesystem characters from a rendered segment/filename.
 
@@ -3792,9 +3824,11 @@ def _sanitize_naming_segment(value: str) -> str:
     Applied here, once, to every rendered segment and the filename alike,
     regardless of which tokens built it.
 
-    Also trims leading/trailing separator noise (spaces, commas, hyphens)
-    left over when an edge token in a multi-token segment is empty -- e.g.
-    "{order} - {title},{edition}" with title and edition both empty
+    Also removes an empty bracket/paren pair left over when e.g.
+    "{series} [{edition}]" renders with edition empty ("Dao of Magic []"
+    otherwise), and trims leading/trailing separator noise (spaces, commas,
+    hyphens) left over when an edge token in a multi-token segment is empty
+    -- e.g. "{order} - {title},{edition}" with title and edition both empty
     otherwise renders "Book 1 - ,". sanitize_path_name() already strips
     " .-" but never comma. The strip only applies when it leaves something
     behind: a segment that's *entirely* separator characters (the
@@ -3806,8 +3840,17 @@ def _sanitize_naming_segment(value: str) -> str:
     if not value:
         return value
     cleaned = sanitize_path_name(value, value)
-    stripped = cleaned.strip(" ,-")
-    return stripped if stripped else cleaned
+    without_brackets = _EMPTY_BRACKET_RE.sub("", cleaned)
+    stripped = without_brackets.strip(" ,-")
+    if stripped:
+        return stripped
+    # Bracket removal and/or edge trimming fully consumed the value (e.g.
+    # two bracket-wrapped empty tokens like "[][]") -- fall back a tier at
+    # a time rather than return true emptiness, which Path would silently
+    # drop as a path component.
+    if without_brackets:
+        return without_brackets
+    return cleaned
 
 
 def _token_values_for_segment(
@@ -3853,12 +3896,13 @@ def render_naming_template(
     if folder_template:
         for raw_segment in folder_template.split("/"):
             distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
+            significant = _significant_tokens(distinct_tokens)
             segment_values = _token_values_for_segment(raw_segment, token_values, distinct_tokens, title_redundant_with_order)
             rendered, needs_review = _render_naming_segment(raw_segment, segment_values)
             if needs_review:
                 review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
                 folder_segments.append(_sanitize_naming_segment(rendered))
-            elif len(distinct_tokens) <= 1 and rendered == "":
+            elif len(significant) <= 1 and _naming_segment_is_effectively_empty(rendered):
                 continue
             else:
                 folder_segments.append(_sanitize_naming_segment(rendered))
@@ -3870,7 +3914,7 @@ def render_naming_template(
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
             review_reasons.append(f"not enough data to build filename '{filename_template}'")
-        elif rendered:
+        elif not _naming_segment_is_effectively_empty(rendered):
             filename = _sanitize_naming_segment(rendered)
 
     return folder_segments, filename, review_reasons

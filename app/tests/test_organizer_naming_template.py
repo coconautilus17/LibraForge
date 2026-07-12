@@ -12,6 +12,91 @@ sys.modules[SPEC.name] = ORGANIZER
 SPEC.loader.exec_module(ORGANIZER)
 
 
+class EditionExcludedFromSignificanceTests(unittest.TestCase):
+    """{edition} is a special decorator token: it never counts toward the
+    "2+ tokens all empty -> flag for review" rule, and a segment where it's
+    the only *other* token besides one truly-significant field behaves as
+    if that field were alone -- collapsing silently when empty, exactly
+    like a bare {series} already does, rather than being treated as a
+    2-token segment.
+    """
+
+    def test_series_and_edition_both_empty_collapses_silently_not_flagged(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series} [{edition}]/",
+            {"author": "Author Name", "series": "", "edition": ""},
+        )
+        self.assertEqual(folders, ["Author Name"])
+        self.assertEqual(reasons, [])
+
+    def test_series_present_edition_empty_collapses_brackets(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series} [{edition}]/",
+            {"author": "Author Name", "series": "Dao of Magic", "edition": ""},
+        )
+        self.assertEqual(folders, ["Author Name", "Dao of Magic"])
+        self.assertEqual(reasons, [])
+
+    def test_series_empty_edition_present_keeps_edition(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series} [{edition}]/",
+            {"author": "Author Name", "series": "", "edition": "GraphicAudio"},
+        )
+        self.assertEqual(folders, ["Author Name", "[GraphicAudio]"])
+        self.assertEqual(reasons, [])
+
+    def test_two_real_tokens_both_empty_still_flags_review(self):
+        # Edition being excluded doesn't exempt genuinely 2+-significant-
+        # token segments from the review-flag rule.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title},{asin} [{edition}]/",
+            {"author": "Author Name", "title": "", "asin": "", "edition": ""},
+        )
+        self.assertEqual(len(reasons), 1)
+
+
+class EmptyBracketCollapseTests(unittest.TestCase):
+    def test_empty_square_brackets_removed(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{series} [{edition}]/",
+            {"series": "Dao of Magic", "edition": ""},
+        )
+        self.assertEqual(folders, ["Dao of Magic"])
+
+    def test_empty_parens_removed(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{series} ({edition})/",
+            {"series": "Dao of Magic", "edition": ""},
+        )
+        self.assertEqual(folders, ["Dao of Magic"])
+
+    def test_nonempty_brackets_kept(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{series} [{edition}]/",
+            {"series": "Mistborn", "edition": "GraphicAudio"},
+        )
+        self.assertEqual(folders, ["Mistborn [GraphicAudio]"])
+
+    def test_filename_that_collapses_to_empty_via_brackets_falls_back_to_none(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/[{edition}]",
+            {"author": "Author Name", "edition": ""},
+        )
+        self.assertIsNone(filename)
+
+    def test_two_bracket_wrapped_empty_tokens_stays_flagged_not_silently_dropped(self):
+        # [{title}][{asin}] both empty: bracket removal alone empties the
+        # whole segment before the trailing strip even runs. The flagged
+        # segment must still show up as *something* non-empty, not vanish.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/[{title}][{asin}]/",
+            {"author": "Author Name", "title": "", "asin": ""},
+        )
+        self.assertEqual(len(folders), 2)
+        self.assertTrue(folders[1])
+        self.assertEqual(len(reasons), 1)
+
+
 class StraySeparatorCleanupTests(unittest.TestCase):
     def test_trailing_stray_dash_and_comma_from_empty_edge_tokens_are_trimmed(self):
         # {order} - {title},{edition} with title AND edition both empty
