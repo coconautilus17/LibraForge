@@ -53,60 +53,60 @@ class BuildTargetDirForTemplateTests(unittest.TestCase):
     def test_default_template_matches_build_default_target_dir(self):
         root = Path("/library")
         expected = ORGANIZER.build_default_target_dir(root, BASE_METADATA)
-        actual, filename, reasons = ORGANIZER.build_target_dir_for_template(
+        result = ORGANIZER.build_target_dir_for_template(
             root, BASE_METADATA, ORGANIZER.DEFAULT_NAMING_TEMPLATE
         )
-        self.assertEqual(actual, expected)
-        self.assertIsNone(filename)
+        self.assertEqual(result.target_dir, expected)
+        self.assertIsNone(result.filename)
 
     def test_custom_template_builds_different_path(self):
         # BASE_METADATA has an empty genre -- the bare {genre} segment
         # collapses (dropped) rather than becoming a literal "Unknown".
         root = Path("/library")
-        actual, filename, reasons = ORGANIZER.build_target_dir_for_template(
+        result = ORGANIZER.build_target_dir_for_template(
             root, BASE_METADATA, "{genre}/{author}/{title}"
         )
-        self.assertEqual(actual, root / "G.D. Brooks")
-        self.assertEqual(filename, "Bold Beginnings")
+        self.assertEqual(result.target_dir, root / "G.D. Brooks")
+        self.assertEqual(result.filename, "Bold Beginnings")
 
     def test_custom_template_with_asin_publisher_tokens(self):
         metadata = dict(BASE_METADATA, asin="B0TESTASIN", publisher="Publisher House")
         root = Path("/library")
-        actual, filename, reasons = ORGANIZER.build_target_dir_for_template(
+        result = ORGANIZER.build_target_dir_for_template(
             root, metadata, "{author}/{title} [{asin}] ({publisher})/"
         )
-        self.assertEqual(actual, root / "G.D. Brooks" / "Bold Beginnings [B0TESTASIN] (Publisher House)")
-        self.assertIsNone(filename)
+        self.assertEqual(result.target_dir, root / "G.D. Brooks" / "Bold Beginnings [B0TESTASIN] (Publisher House)")
+        self.assertIsNone(result.filename)
 
 
 class BuildCachedTargetDirNamingTemplateTests(unittest.TestCase):
     def test_default_template_unchanged(self):
         root = Path("/library")
         cache = ORGANIZER.empty_structure_cache(root)
-        expected, status, _ = ORGANIZER.build_cached_target_dir(root, BASE_METADATA, cache)
-        actual, actual_status, _ = ORGANIZER.build_cached_target_dir(
+        expected = ORGANIZER.build_cached_target_dir(root, BASE_METADATA, cache)
+        actual = ORGANIZER.build_cached_target_dir(
             root, BASE_METADATA, cache, naming_template=ORGANIZER.DEFAULT_NAMING_TEMPLATE
         )
-        self.assertEqual(actual, expected)
-        self.assertEqual(actual_status, status)
+        self.assertEqual(actual.target_dir, expected.target_dir)
+        self.assertEqual(actual.status, expected.status)
 
     def test_custom_template_used_on_no_cache_match_fallback(self):
         root = Path("/library")
         cache = ORGANIZER.empty_structure_cache(root)
-        target, status, _ = ORGANIZER.build_cached_target_dir(
+        result = ORGANIZER.build_cached_target_dir(
             root, BASE_METADATA, cache, naming_template="{author}/{title}"
         )
-        self.assertEqual(target, root / "G.D. Brooks")
+        self.assertEqual(result.target_dir, root / "G.D. Brooks")
 
     def test_custom_template_used_on_edition_tag_dramatized_branch(self):
         root = Path("/library")
         cache = ORGANIZER.empty_structure_cache(root)
         metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
-        target, status, _ = ORGANIZER.build_cached_target_dir(
+        result = ORGANIZER.build_cached_target_dir(
             root, metadata, cache, naming_template="{author}/{title} [{edition_tag}]"
         )
-        self.assertEqual(status, "new")
-        self.assertEqual(target, root / "G.D. Brooks")
+        self.assertEqual(result.status, "new")
+        self.assertEqual(result.target_dir, root / "G.D. Brooks")
 
     def test_existing_cache_match_branch_still_uses_book_folder_logic(self):
         # Known limitation: a book routed into an already-indexed series
@@ -127,12 +127,13 @@ class BuildCachedTargetDirNamingTemplateTests(unittest.TestCase):
                 "book_count": 3,
             }
         )
-        target, status, _ = ORGANIZER.build_cached_target_dir(
+        result = ORGANIZER.build_cached_target_dir(
             root, BASE_METADATA, cache, naming_template="{author}/{title}"
         )
-        self.assertEqual(status, "existing")
+        self.assertEqual(result.status, "existing")
+        self.assertIsNone(result.filename)
         self.assertEqual(
-            target, root / "G.D. Brooks" / "Dashing Devil" / ORGANIZER.build_book_folder_name(BASE_METADATA)
+            result.target_dir, root / "G.D. Brooks" / "Dashing Devil" / ORGANIZER.build_book_folder_name(BASE_METADATA)
         )
 
 

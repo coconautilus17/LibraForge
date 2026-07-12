@@ -168,7 +168,8 @@ class EditionRoutingTests(unittest.TestCase):
                 "book_number": "001",
                 "sequence_label": "",
             }
-            target, status, _ = ORGANIZER.build_cached_target_dir(root / "out", metadata, cache)
+            result = ORGANIZER.build_cached_target_dir(root / "out", metadata, cache)
+            target, status = result.target_dir, result.status
             self.assertEqual(status, "new")
             self.assertIn("Mistborn [GraphicAudio]", target.parts)
 

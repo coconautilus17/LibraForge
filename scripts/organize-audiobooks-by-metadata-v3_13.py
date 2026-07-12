@@ -180,6 +180,33 @@ NUMBER_WORDS = {
 
 
 @dataclass(frozen=True)
+class NamingRenderResult:
+    """What a naming template rendered for one book: where, what filename (if
+    any), and any review reasons the renderer surfaced. A named result
+    instead of a positional tuple so a caller can't silently misread which
+    element is which as this type grows.
+    """
+
+    target_dir: Path
+    filename: str | None
+    review_reasons: list[str]
+
+
+@dataclass(frozen=True)
+class TargetResolution:
+    """What build_cached_target_dir() resolved for one book: the destination
+    folder, the filename a naming template wants for a true single-file book
+    (None otherwise), the structure-cache routing status ("new"/"existing"/
+    "ambiguous"), and the metadata as corrected by that routing.
+    """
+
+    target_dir: Path
+    filename: str | None
+    status: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class BookItem:
     kind: str  # folder or loose_file
     source_path: Path
@@ -2288,7 +2315,18 @@ def build_multi_part_group_map(files: list[Path]) -> dict[Path, list[Path]]:
     return accepted
 
 
-def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
+def build_book_items(root: Path, destination_root: Path, limit: int | None = None) -> list[BookItem]:
+    """Scan `root` for book items.
+
+    `limit` stops the walk early once at least that many items have been
+    collected -- for a real run this should stay None (every item must be
+    seen), but a caller that only wants a handful of representative samples
+    (e.g. a live naming-template preview) can avoid the full per-item
+    multi-file-group detection cost across the whole tree. The result is
+    still sorted by source path, but since the walk itself may stop before
+    covering every folder, a limited call isn't guaranteed to return the
+    same items a full scan's first N (sorted) would be.
+    """
     items: list[BookItem] = []
     ignored_dir_names = {name.lower() for name in IGNORED_DIR_NAMES}
 
@@ -2298,6 +2336,8 @@ def build_book_items(root: Path, destination_root: Path) -> list[BookItem]:
         ignored_dir_names |= {name.lower() for name in STAGING_DIR_NAMES}
 
     for current_dir, dirnames, filenames in os.walk(root):
+        if limit is not None and len(items) >= limit:
+            break
         dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in ignored_dir_names]
         current_path = Path(current_dir)
         if should_ignore_path(current_path, root):
@@ -3613,9 +3653,35 @@ def validate_naming_template(template: str) -> list[str]:
     return problems
 
 
+def preview_naming_template_for_root(
+    root: Path, destination_root: Path, naming_template: str, limit: int = 3
+) -> list[dict[str, Any]]:
+    """Render a naming template against a few real sample books for a live preview.
+
+    Scans up to `limit` items from `root` and infers their metadata the same
+    way main()'s real run does, then renders each through the template
+    without planning moves or touching the structure cache -- purely for
+    showing the user what a template would produce before they run it.
+    """
+    items = build_book_items(root, destination_root, limit=limit)[:limit]
+    previews: list[dict[str, Any]] = []
+    for item in items:
+        metadata = infer_metadata(item, root)
+        result = build_target_dir_for_template(destination_root, metadata, naming_template)
+        previews.append(
+            {
+                "source": str(item.source_path),
+                "target_dir": str(result.target_dir),
+                "filename": result.filename,
+                "review_reasons": result.review_reasons,
+            }
+        )
+    return previews
+
+
 def build_target_dir_for_template(
     destination_root: Path, metadata: dict[str, Any], naming_template: str
-) -> tuple[Path, str | None, list[str]]:
+) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
     Delegates straight to the existing, unchanged build_default_target_dir()
@@ -3623,16 +3689,16 @@ def build_target_dir_for_template(
     hardcoded logic and its full existing test coverage. A custom template
     goes through resolve_naming_tokens()/render_naming_template() instead.
 
-    Returns (target_dir, filename_or_None, review_reasons) -- the caller is
-    responsible for merging review_reasons into whatever metadata dict it
-    carries forward, same as every other review-reason source in this file.
+    The caller is responsible for merging review_reasons into whatever
+    metadata dict it carries forward, same as every other review-reason
+    source in this file.
     """
     if naming_template == DEFAULT_NAMING_TEMPLATE:
-        return build_default_target_dir(destination_root, metadata), None, []
+        return NamingRenderResult(build_default_target_dir(destination_root, metadata), None, [])
 
     tokens = resolve_naming_tokens(metadata)
     folder_segments, filename, reasons = render_naming_template(naming_template, tokens)
-    return destination_root.joinpath(*folder_segments), filename, reasons
+    return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
 
 
 def render_naming_template(
@@ -3939,14 +4005,14 @@ def build_cached_target_dir(
     metadata: dict[str, Any],
     cache: dict[str, Any],
     naming_template: str = DEFAULT_NAMING_TEMPLATE,
-) -> tuple[Path, str, dict[str, Any]]:
+) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
     if metadata.get("edition_tag"):
-        target, _filename, reasons = build_target_dir_for_template(destination_root, metadata, naming_template)
-        if reasons:
-            metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, reasons))
-        return target, "new", metadata
+        result = build_target_dir_for_template(destination_root, metadata, naming_template)
+        if result.review_reasons:
+            metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
+        return TargetResolution(result.target_dir, result.filename, "new", metadata)
 
     series_dir, status, entry = resolve_series_directory(cache, metadata)
     effective_metadata = apply_cache_to_metadata(metadata, entry)
@@ -3959,13 +4025,16 @@ def build_cached_target_dir(
         # load_structure_cache), this branch only fires once a rebuild has
         # already happened, at which point book_folder still reflects the
         # built-in logic rather than the active template's own book-level
-        # segment definition.
+        # segment definition. Filename customization is scoped out of this
+        # branch for the same reason -- it's cache-routed, not rendered.
         book_folder = build_book_folder_name(effective_metadata)
-        return series_dir / book_folder, status, effective_metadata
-    target, _filename, reasons = build_target_dir_for_template(destination_root, effective_metadata, naming_template)
-    if reasons:
-        effective_metadata = dict(effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, reasons))
-    return target, status, effective_metadata
+        return TargetResolution(series_dir / book_folder, None, status, effective_metadata)
+    result = build_target_dir_for_template(destination_root, effective_metadata, naming_template)
+    if result.review_reasons:
+        effective_metadata = dict(
+            effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, result.review_reasons)
+        )
+    return TargetResolution(result.target_dir, result.filename, status, effective_metadata)
 
 
 def _merged_review_reasons(metadata: dict[str, Any], reasons: list[str]) -> list[str]:
@@ -4357,10 +4426,22 @@ def plan_loose_file_move(
     target_dir: Path,
     reserved_targets: set[Path] | None = None,
     reserved_target_dirs: set[Path] | None = None,
+    template_filename: str | None = None,
 ) -> tuple[bool, Path | None, str]:
+    """Choose the loose file's target filename.
+
+    A naming template's filename takes precedence when the item qualifies
+    (true single-file book -- always the case for a loose_file item, but
+    routed through naming_template_filename_for_item() for one shared rule
+    with the folder-kind path). Falls back to the existing noise-cleanup
+    behavior via clean_loose_audio_filename() when no template filename
+    applies, so the default template changes nothing here.
+    """
     reserved_target_dirs = reserved_target_dirs or set()
     source_file = item.source_path
-    filename = clean_loose_audio_filename(source_file, target_dir)
+    filename = naming_template_filename_for_item(item, template_filename) or clean_loose_audio_filename(
+        source_file, target_dir
+    )
     if source_file.parent == target_dir and source_file.name == filename:
         return False, None, "already in target folder"
     if target_dir in reserved_target_dirs:
@@ -4464,6 +4545,16 @@ def execute_planned_move(
                 final = target / "libraforge.json"
                 if moved.exists() and not final.exists():
                     moved.rename(final)
+        # A naming template's filename for a true single-file book (see
+        # naming_template_filename_for_item()) is applied here, after the
+        # folder itself has already landed at `target` -- multi-file books
+        # never set rename_audio_to, so this is a no-op for them.
+        rename_audio_to = move.get("rename_audio_to")
+        if rename_audio_to:
+            original_audio = target / move["original_audio_name"]
+            renamed_audio = target / rename_audio_to
+            if original_audio.exists() and not renamed_audio.exists():
+                original_audio.rename(renamed_audio)
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
@@ -4730,7 +4821,7 @@ def main() -> None:
         )
         if skip_due_to_pattern:
             skipped_pattern_match += 1
-            target_dir, _filename, _reasons = build_target_dir_for_template(destination_root, metadata, args.naming_template)
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template).target_dir
             reason = f"skipped: matched skip pattern: {skip_pattern}"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -4744,7 +4835,7 @@ def main() -> None:
 
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
-            target_dir, _filename, _reasons = build_target_dir_for_template(destination_root, metadata, args.naming_template)
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template).target_dir
             reason = "skipped unknown author"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -4756,10 +4847,12 @@ def main() -> None:
             print(f"SKIP: unknown author | {item.source_path}", file=sys.stderr)
             continue
 
-        target_dir, structure_status, effective_metadata = build_cached_target_dir(
+        resolution = build_cached_target_dir(
             destination_root, metadata, cache, naming_template=args.naming_template
         )
-        metadata = effective_metadata
+        target_dir = resolution.target_dir
+        structure_status = resolution.status
+        metadata = resolution.metadata
         if structure_status == "existing":
             matched_existing_structure += 1
         elif structure_status == "ambiguous":
@@ -4805,7 +4898,7 @@ def main() -> None:
                 )
                 if meta_sidecar.exists():
                     folder_companions.append(meta_sidecar)
-            planned_moves.append({
+            planned_move = {
                 "kind": item.kind,
                 "source": item.source_path,
                 "target": target_dir,
@@ -4815,11 +4908,17 @@ def main() -> None:
                 "structure": structure_status,
                 "partial_group": item.partial_group,
                 "leftover_files": list(item.leftover_files),
-            })
+            }
+            rename_audio_to = naming_template_filename_for_item(item, resolution.filename)
+            if rename_audio_to:
+                planned_move["original_audio_name"] = item.representative.name
+                planned_move["rename_audio_to"] = rename_audio_to
+            planned_moves.append(planned_move)
             continue
 
         can_move, target_path, reason = plan_loose_file_move(
             item, target_dir, reserved_targets, reserved_target_dirs=reserved_target_dirs,
+            template_filename=resolution.filename,
         )
         if not can_move:
             if reason == "already in target folder":
