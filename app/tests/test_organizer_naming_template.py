@@ -320,5 +320,130 @@ class NumberTokenRedundancyTests(unittest.TestCase):
         self.assertEqual(filename, "Book 5")
 
 
+class OriginalAndFilenameTokenTests(unittest.TestCase):
+    """{original} = the audio file's current stem verbatim (only mandatory
+    illegal-char sanitization); {filename} = that stem run through the
+    existing loose-file noise cleanup. Both are filename-segment tokens that
+    support additive append (e.g. `{original} [{asin}]`), and both are empty
+    when the filename part doesn't apply (multi-file books).
+    """
+
+    def _render(self, template, tokens, **kw):
+        base = {"author": "A", "series": "", "title": "", "asin": "", "original": "", "filename": ""}
+        base.update(tokens)
+        return ORGANIZER.render_naming_template(template, base, **kw)
+
+    def test_original_is_raw_stem(self):
+        _f, filename, _r = self._render(
+            "{author}/{original}",
+            {},
+            source_file=Path("/lib/messy, book 3 - auth - narr.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "messy, book 3 - auth - narr")
+
+    def test_original_append_asin_is_additive(self):
+        _f, filename, _r = self._render(
+            "{author}/{original} [{asin}]",
+            {"asin": "B0ABC12345"},
+            source_file=Path("/lib/messy, book 3 - auth - narr.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "messy, book 3 - auth - narr [B0ABC12345]")
+
+    def test_filename_keeps_a_clean_name(self):
+        _f, filename, _r = self._render(
+            "{author}/{filename}",
+            {},
+            source_file=Path("/lib/A Perfectly Clean Title.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "A Perfectly Clean Title")
+
+    def test_filename_strips_bracketed_asin_junk(self):
+        # A junky name goes through cleanup, which drops the bracketed asin.
+        _f, filename, _r = self._render(
+            "{author}/{title}/{filename}",
+            {"title": "Great Title"},
+            source_file=Path("/lib/Great Title [ASIN.B0ABC12345] [2025] [128].m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertNotIn("B0ABC12345", filename or "")
+
+    def test_tokens_empty_when_filename_does_not_apply(self):
+        _f, filename, _r = self._render(
+            "{author}/{original}",
+            {},
+            source_file=Path("/lib/messy.m4b"),
+            destination_root=Path("/audiobooks"),
+            filename_applies=False,
+        )
+        self.assertIsNone(filename)
+
+    def test_tokens_render_empty_in_folder_segment(self):
+        # {original}/{filename} are filename-only; in a folder level they are
+        # empty (single-token segment collapses).
+        folders, _filename, _r = self._render(
+            "{author}/{original}/{title}/",
+            {"title": "T"},
+            source_file=Path("/lib/messy.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(folders, ["A", "T"])
+
+
+class AsinMismatchFlagTests(unittest.TestCase):
+    """When a filename template writes {asin} but the source name/path
+    already carries a *different* identifier, that's a probable metadata
+    mismatch worth surfacing -- but never a reason to skip the move. Same or
+    absent identifiers raise nothing; the check only runs when the filename
+    actually uses {asin}.
+    """
+
+    def _render(self, template, asin, source_file):
+        base = {"author": "A", "series": "", "title": "T", "asin": asin, "original": "", "filename": ""}
+        return ORGANIZER.render_naming_template(
+            template, base, source_file=source_file, destination_root=Path("/audiobooks")
+        )
+
+    def test_different_asin_in_name_flags_but_renders(self):
+        _f, filename, reasons = self._render(
+            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/Some Title [B0ZZZZZZZZ].m4b")
+        )
+        self.assertTrue(any("differs" in r for r in reasons))
+        self.assertIsNotNone(filename)
+
+    def test_same_asin_in_name_does_not_flag(self):
+        _f, _filename, reasons = self._render(
+            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/Some Title [B0ABCDEFGH].m4b")
+        )
+        self.assertEqual(reasons, [])
+
+    def test_no_identifier_in_name_does_not_flag(self):
+        _f, _filename, reasons = self._render(
+            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/A Perfectly Clean Title.m4b")
+        )
+        self.assertEqual(reasons, [])
+
+    def test_no_flag_when_template_has_no_asin(self):
+        _f, _filename, reasons = self._render(
+            "{author}/{original}", "B0ABCDEFGH", Path("/lib/Some Title [B0ZZZZZZZZ].m4b")
+        )
+        self.assertEqual(reasons, [])
+
+    def test_isbn_style_mismatch_is_detected(self):
+        # Canonical is a 10-digit ISBN; the name carries a different B0 asin.
+        _f, _filename, reasons = self._render(
+            "{author}/{original} [{asin}]", "1774243989", Path("/lib/Some Title [B0ZZZZZZZZ].m4b")
+        )
+        self.assertTrue(any("differs" in r for r in reasons))
+
+    def test_identifier_elsewhere_in_source_path_is_checked(self):
+        _f, _filename, reasons = self._render(
+            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/Author [B0ZZZZZZZZ]/book.m4b")
+        )
+        self.assertTrue(any("differs" in r for r in reasons))
+
+
 if __name__ == "__main__":
     unittest.main()

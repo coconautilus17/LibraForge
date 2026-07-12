@@ -48,13 +48,33 @@ class ValidateNamingTemplateTests(unittest.TestCase):
         problems = ORGANIZER.validate_naming_template("{author}/{title},{asin}")
         self.assertEqual(problems, [])
 
+    def test_original_token_is_recognized(self):
+        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{original}"), [])
+
+    def test_filename_token_is_recognized(self):
+        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{filename}"), [])
+
+    def test_original_and_filename_together_is_rejected(self):
+        # The two file-name tokens are mutually exclusive -- a template picks
+        # one naming style for the file, not both.
+        problems = ORGANIZER.validate_naming_template("{author}/{original} {filename}")
+        self.assertTrue(any("original" in p and "filename" in p for p in problems))
+
+    def test_empty_template_is_rejected(self):
+        # With the default scheme now behind an explicit toggle, an empty
+        # template field is a user error, not a silent "use the default".
+        problems = ORGANIZER.validate_naming_template("")
+        self.assertTrue(problems)
+
 
 class BuildTargetDirForTemplateTests(unittest.TestCase):
-    def test_default_template_matches_build_default_target_dir(self):
+    def test_default_scheme_matches_build_default_target_dir(self):
         root = Path("/library")
         expected = ORGANIZER.build_default_target_dir(root, BASE_METADATA)
+        # use_default_scheme routes to the built-in scheme and ignores the
+        # template string entirely.
         result = ORGANIZER.build_target_dir_for_template(
-            root, BASE_METADATA, ORGANIZER.DEFAULT_NAMING_TEMPLATE
+            root, BASE_METADATA, "{author}/{title}/anything", use_default_scheme=True
         )
         self.assertEqual(result.target_dir, expected)
         self.assertIsNone(result.filename)

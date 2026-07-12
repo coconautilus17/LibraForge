@@ -58,7 +58,10 @@ class PreviewNamingTemplateForRootTests(unittest.TestCase):
             self.assertEqual(len(previews), 1)
             self.assertIn("Author Name", previews[0]["target_dir"])
             self.assertIn("The Title", previews[0]["target_dir"])
-            self.assertIsNone(previews[0]["filename"])
+            # The default template ends in {filename}, so a single-file book
+            # gets a cleaned filename (here the source stem "book", with its
+            # extension reattached by the preview).
+            self.assertEqual(previews[0]["filename"], "book.m4b")
             self.assertEqual(previews[0]["review_reasons"], [])
 
     def test_respects_limit(self):

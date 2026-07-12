@@ -88,7 +88,8 @@ class DefaultTemplateParityTests(unittest.TestCase):
             with self.subTest(case=name):
                 expected = ORGANIZER.build_default_target_dir(DESTINATION_ROOT, metadata)
                 result = ORGANIZER.build_target_dir_for_template(
-                    DESTINATION_ROOT, metadata, ORGANIZER.DEFAULT_NAMING_TEMPLATE
+                    DESTINATION_ROOT, metadata, ORGANIZER.DEFAULT_NAMING_TEMPLATE,
+                    use_default_scheme=True,
                 )
                 self.assertEqual(result.target_dir, expected)
                 self.assertIsNone(result.filename)

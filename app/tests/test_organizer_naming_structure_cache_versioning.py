@@ -77,8 +77,11 @@ class LoadStructureCacheNamingTemplateTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            # A pre-feature cache has no naming_template key; it was built
+            # under the built-in ABS scheme, so a default-scheme run (whose
+            # cache key is DEFAULT_SCHEME_KEY) must not invalidate it.
             cache = ORGANIZER.load_structure_cache(
-                cache_path, Path("/library"), naming_template=ORGANIZER.DEFAULT_NAMING_TEMPLATE
+                cache_path, Path("/library"), naming_template=ORGANIZER.DEFAULT_SCHEME_KEY
             )
             self.assertEqual(cache["entries"], [{"series_key": "cradle"}])
 

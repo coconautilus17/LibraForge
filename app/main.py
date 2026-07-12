@@ -1229,6 +1229,7 @@ class OrganizerRunRequest(BaseModel):
     skip_patterns: list[str] = Field(default_factory=list)
     acknowledge_no_sidecars: bool = False
     naming_template: str = ""
+    use_default_scheme: bool = True
 
 
 class OrganizerNamingTemplateValidateRequest(BaseModel):
@@ -3682,7 +3683,9 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
             cmd += ["--skip-pattern", pattern]
     if req.acknowledge_no_sidecars:
         cmd.append("--acknowledge-no-sidecars")
-    if req.naming_template.strip():
+    if req.use_default_scheme:
+        cmd.append("--use-default-scheme")
+    elif req.naming_template.strip():
         cmd += ["--naming-template", req.naming_template]
 
     return cmd

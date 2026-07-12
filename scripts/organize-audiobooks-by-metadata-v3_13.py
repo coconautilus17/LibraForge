@@ -388,6 +388,23 @@ def is_asin_like_token(value: str) -> bool:
     return bool(_NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token))
 
 
+# Standalone book identifiers embedded in a filename or path: an Audible-style
+# ASIN (B0 + 8) or a 10-character ISBN-10 (9 digits + digit/X check char).
+# Bounded by non-alphanumerics so it doesn't match inside a longer run.
+_EMBEDDED_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(B0[A-Z0-9]{8}|\d{9}[\dX])(?![A-Za-z0-9])", re.IGNORECASE
+)
+
+
+def find_embedded_identifiers(text: str) -> set[str]:
+    """Return the set of ASIN/ISBN-shaped identifiers found anywhere in `text`,
+    upper-cased for case-insensitive comparison. Used to spot an identifier
+    already baked into a source filename/path that disagrees with the
+    metadata ASIN a template is about to write.
+    """
+    return {match.group(1).upper() for match in _EMBEDDED_IDENTIFIER_RE.finditer(text or "")}
+
+
 def clean_asin_token(value: str) -> str:
     """Return a real ASIN as-is, or "" for the NOREALASIN placeholder/blank."""
     token = str(value or "").strip()
@@ -3582,7 +3599,17 @@ def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -
     return destination_root / author_dir / book_folder
 
 
-DEFAULT_NAMING_TEMPLATE = "{author}/{series}/{order} - {title},{edition}/"
+# The starting value of the template field. This is a normal custom template
+# rendered through the flat-token pipeline like any other -- it is NOT a
+# fast-path to the built-in ABS scheme. The built-in scheme is reached only
+# through the explicit use_default_scheme toggle (see build_target_dir_for_template).
+DEFAULT_NAMING_TEMPLATE = "{author}/{series} [{edition}]/{order} - {title}/{filename}"
+
+# Stored in the structure cache (in the naming_template slot) when a run used
+# the built-in ABS scheme, so toggling the "use default scheme" checkbox
+# invalidates the cache the same way editing the template string does. Never
+# a value a user can type -- a real template always contains "/".
+DEFAULT_SCHEME_KEY = "@@abs-default-scheme@@"
 
 
 def naming_template_filename_for_item(item: BookItem, template_filename: str | None) -> str | None:
@@ -3658,6 +3685,13 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
         "year": metadata.get("year", "") or "",
         "asin": metadata.get("asin", "") or "",
         "edition": metadata.get("edition_tag", "") or "",
+        # {original}/{filename} describe the audio file's own name and are
+        # filled in per-item by render_naming_template() (they need the
+        # source file, which this metadata-only resolver doesn't have). They
+        # stay empty here so folder segments that reference them collapse and
+        # token validation still recognizes the names.
+        "original": "",
+        "filename": "",
     }
 
 
@@ -3684,7 +3718,9 @@ class UnknownNamingTokenError(ValueError):
 # review-flag either. This reflects that a book can legitimately have no
 # known narrator/publisher/year/ASIN/edition without that being a
 # data-quality problem worth flagging -- unremarkable, not insufficient.
-_NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset({"narrator", "publisher", "year", "asin", "edition"})
+_NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset(
+    {"narrator", "publisher", "year", "asin", "edition", "original", "filename"}
+)
 
 
 def _significant_tokens(tokens: set[str]) -> set[str]:
@@ -3726,6 +3762,8 @@ NAMING_TOKEN_NAMES = frozenset(
         "year",
         "asin",
         "edition",
+        "original",
+        "filename",
     }
 )
 
@@ -3733,12 +3771,24 @@ NAMING_TOKEN_NAMES = frozenset(
 def validate_naming_template(template: str) -> list[str]:
     """Static, pre-run checks for a naming template. Returns human-readable problems."""
     problems: list[str] = []
+    if not template.strip():
+        # The built-in ABS scheme is reached via its own explicit toggle, so
+        # an empty template field is a real mistake rather than a shorthand
+        # for "use the default".
+        problems.append("Template is empty -- enter a template, or turn on the default scheme.")
+        return problems
     stripped = NAMING_TEMPLATE_TOKEN_RE.sub("", template)
     if "{" in stripped or "}" in stripped:
         problems.append("Unbalanced or malformed curly brace in template.")
-    for token in NAMING_TEMPLATE_TOKEN_RE.findall(template):
+    tokens = NAMING_TEMPLATE_TOKEN_RE.findall(template)
+    for token in tokens:
         if token not in NAMING_TOKEN_NAMES:
             problems.append(f"Unknown token: {{{token}}}")
+    if "original" in tokens and "filename" in tokens:
+        problems.append(
+            "Use either {original} or {filename}, not both -- they are two "
+            "different naming styles for the same file."
+        )
     if "/" not in template:
         problems.append("Template has no '/' -- nothing would build a destination folder.")
     return problems
@@ -3759,7 +3809,8 @@ def preview_naming_template_for_root(
     for item in items:
         metadata = infer_metadata(item, root)
         result = build_target_dir_for_template(
-            destination_root, metadata, naming_template, filename_applies=(len(item.audio_files) == 1)
+            destination_root, metadata, naming_template,
+            filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
         )
         filename = naming_template_filename_for_item(item, result.filename)
         previews.append(
@@ -3806,26 +3857,35 @@ def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, ro
 
 
 def build_target_dir_for_template(
-    destination_root: Path, metadata: dict[str, Any], naming_template: str, filename_applies: bool = True
+    destination_root: Path,
+    metadata: dict[str, Any],
+    naming_template: str,
+    filename_applies: bool = True,
+    source_file: Path | None = None,
+    use_default_scheme: bool = False,
 ) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
-    Delegates straight to the existing, unchanged build_default_target_dir()
-    when the template is the shipped default -- zero behavioral risk to the
-    hardcoded logic and its full existing test coverage. A custom template
-    goes through resolve_naming_tokens()/render_naming_template() instead.
+    When use_default_scheme is set, delegates straight to the existing,
+    unchanged build_default_target_dir() (the built-in ABS scheme) and
+    ignores naming_template entirely -- zero behavioral risk to the
+    hardcoded logic and its full existing test coverage. Otherwise a custom
+    template goes through resolve_naming_tokens()/render_naming_template().
+    The choice is now an explicit boolean rather than a magic template
+    string, so the template field is never coupled to "which scheme is this."
 
     The caller is responsible for merging review_reasons into whatever
     metadata dict it carries forward, same as every other review-reason
     source in this file.
     """
-    if naming_template == DEFAULT_NAMING_TEMPLATE:
+    if use_default_scheme:
         return NamingRenderResult(build_default_target_dir(destination_root, metadata), None, [])
 
     tokens = resolve_naming_tokens(metadata)
     redundant = title_redundant_with_order(metadata)
     folder_segments, filename, reasons = render_naming_template(
-        naming_template, tokens, redundant, filename_applies=filename_applies
+        naming_template, tokens, redundant, filename_applies=filename_applies,
+        source_file=source_file, destination_root=destination_root,
     )
     return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
 
@@ -3936,6 +3996,8 @@ def render_naming_template(
     token_values: dict[str, str],
     title_redundant_with_order: bool = False,
     filename_applies: bool = True,
+    source_file: Path | None = None,
+    destination_root: Path | None = None,
 ) -> tuple[list[str], str | None, list[str]]:
     """Render a user-defined naming template against resolved token values.
 
@@ -3955,6 +4017,14 @@ def render_naming_template(
     skipped, so it neither renders nor contributes a review reason (a
     filename template a multi-file book can't satisfy is irrelevant, not a
     data-quality problem). Folder-level review reasons still surface.
+
+    `source_file` (a single-file book's audio file) fills in the two
+    file-name tokens, which the metadata-only token map can't: {original}
+    is its stem verbatim, {filename} is that stem run through the existing
+    loose-file noise cleanup (clean_loose_audio_filename), derived against
+    the just-built folder path so its folder-fallback matches the real
+    destination. Both are filename-segment only -- in a folder segment they
+    stay empty (from the token map) and collapse.
 
     Returns (folder_segments, filename_or_None, review_reasons).
     """
@@ -3983,6 +4053,29 @@ def render_naming_template(
     if filename_template and filename_applies:
         distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(filename_template))
         segment_values = _token_values_for_segment(filename_template, token_values, distinct_tokens, title_redundant_with_order)
+        if source_file is not None:
+            if destination_root is not None:
+                target_dir = destination_root.joinpath(*folder_segments)
+            else:
+                target_dir = Path(*folder_segments) if folder_segments else Path(".")
+            segment_values = dict(
+                segment_values,
+                original=source_file.stem,
+                filename=Path(clean_loose_audio_filename(source_file, target_dir)).stem,
+            )
+            # When the template writes {asin}, an identifier already present
+            # in the source name/path that disagrees with the metadata ASIN
+            # is a probable mismatch -- flag it for review, but never skip
+            # the move over it (the metadata value still wins).
+            canonical_asin = (segment_values.get("asin") or "").upper()
+            if "asin" in distinct_tokens and canonical_asin:
+                existing = find_embedded_identifiers(" ".join(source_file.parts))
+                different = sorted(existing - {canonical_asin})
+                if different:
+                    review_reasons.append(
+                        f"existing identifier {different[0]} in the source name "
+                        f"differs from the metadata ASIN {canonical_asin}"
+                    )
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
             review_reasons.append(f"not enough data to build filename '{filename_template}'")
@@ -4018,10 +4111,11 @@ def load_structure_cache(
     if cache.get("destination_root") != str(destination_root):
         return empty_structure_cache(destination_root, naming_template)
     # A cache written before this feature existed has no naming_template key
-    # at all -- treat that as "built under the default template" rather than
-    # an automatic mismatch, so upgrading to this feature doesn't invalidate
-    # every existing user's cache the moment they update.
-    if cache.get("naming_template", DEFAULT_NAMING_TEMPLATE) != naming_template:
+    # at all -- treat that as "built under the built-in ABS scheme" (its
+    # DEFAULT_SCHEME_KEY) rather than an automatic mismatch, so a user who
+    # upgrades and keeps the default scheme doesn't have their cache
+    # invalidated the moment they update.
+    if cache.get("naming_template", DEFAULT_SCHEME_KEY) != naming_template:
         return empty_structure_cache(destination_root, naming_template)
     cache.setdefault("entries", [])
     return cache
@@ -4249,12 +4343,16 @@ def build_cached_target_dir(
     cache: dict[str, Any],
     naming_template: str = DEFAULT_NAMING_TEMPLATE,
     filename_applies: bool = True,
+    source_file: Path | None = None,
+    use_default_scheme: bool = False,
 ) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
     if metadata.get("edition_tag"):
         result = build_target_dir_for_template(
-            destination_root, metadata, naming_template, filename_applies=filename_applies
+            destination_root, metadata, naming_template,
+            filename_applies=filename_applies, source_file=source_file,
+            use_default_scheme=use_default_scheme,
         )
         if result.review_reasons:
             metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
@@ -4276,7 +4374,9 @@ def build_cached_target_dir(
         book_folder = build_book_folder_name(effective_metadata)
         return TargetResolution(series_dir / book_folder, None, status, effective_metadata)
     result = build_target_dir_for_template(
-        destination_root, effective_metadata, naming_template, filename_applies=filename_applies
+        destination_root, effective_metadata, naming_template,
+        filename_applies=filename_applies, source_file=source_file,
+        use_default_scheme=use_default_scheme,
     )
     if result.review_reasons:
         effective_metadata = dict(
@@ -4984,14 +5084,27 @@ def main() -> None:
         help=(
             "Destination folder/filename template. '/' marks a folder level, "
             "everything after the last '/' is the filename (applies only to "
-            "single-file books). Default reproduces the built-in scheme."
+            "single-file books). Ignored when --use-default-scheme is set."
         ),
+    )
+    parser.add_argument(
+        "--use-default-scheme",
+        action="store_true",
+        help="Use the built-in ABS structure scheme (author/series/title) and ignore --naming-template.",
     )
     args = parser.parse_args()
 
-    naming_template_problems = validate_naming_template(args.naming_template)
-    if naming_template_problems:
-        parser.error("Invalid --naming-template: " + "; ".join(naming_template_problems))
+    # The template only matters when a custom scheme is in play; the built-in
+    # scheme ignores it, so an empty/odd field there is not an error.
+    if not args.use_default_scheme:
+        naming_template_problems = validate_naming_template(args.naming_template)
+        if naming_template_problems:
+            parser.error("Invalid --naming-template: " + "; ".join(naming_template_problems))
+
+    # What the structure cache records as "the scheme this was built under",
+    # so toggling the default checkbox invalidates the cache like editing the
+    # template does.
+    scheme_cache_key = DEFAULT_SCHEME_KEY if args.use_default_scheme else args.naming_template
 
     root = Path(args.root).resolve()
     if not root.is_dir():
@@ -5006,11 +5119,11 @@ def main() -> None:
     cache_path = Path(args.structure_cache).resolve()
     overrides = load_overrides(Path(args.override_file).resolve() if args.override_file else None)
     if args.no_structure_cache:
-        cache = empty_structure_cache(destination_root, args.naming_template)
+        cache = empty_structure_cache(destination_root, scheme_cache_key)
     elif args.rebuild_structure_cache or args.index_only or not cache_path.is_file():
-        cache = build_structure_cache(destination_root, cache_path, args.progress_every, args.naming_template)
+        cache = build_structure_cache(destination_root, cache_path, args.progress_every, scheme_cache_key)
     else:
-        cache = load_structure_cache(cache_path, destination_root, args.naming_template)
+        cache = load_structure_cache(cache_path, destination_root, scheme_cache_key)
 
     if overrides:
         cache = apply_overrides_to_cache(cache, overrides)
@@ -5078,7 +5191,7 @@ def main() -> None:
         )
         if skip_due_to_pattern:
             skipped_pattern_match += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
             reason = f"skipped: matched skip pattern: {skip_pattern}"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -5092,7 +5205,7 @@ def main() -> None:
 
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
             reason = "skipped unknown author"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -5106,7 +5219,8 @@ def main() -> None:
 
         resolution = build_cached_target_dir(
             destination_root, metadata, cache, naming_template=args.naming_template,
-            filename_applies=(len(item.audio_files) == 1),
+            filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
+            use_default_scheme=args.use_default_scheme,
         )
         target_dir = resolution.target_dir
         structure_status = resolution.status
@@ -5291,7 +5405,7 @@ def main() -> None:
     if args.apply and not args.no_structure_cache:
         # Rebuild after apply so future _unorganized runs do not need a full ffprobe scan.
         print("Rebuilding structure cache...", flush=True)
-        build_structure_cache(destination_root, cache_path, args.progress_every)
+        build_structure_cache(destination_root, cache_path, args.progress_every, scheme_cache_key)
         print("Structure cache rebuild complete.", flush=True)
 
     if not args.apply:
