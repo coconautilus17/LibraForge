@@ -103,6 +103,26 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         for preview in previews:
             self.assertTrue(preview["scenario"])
 
+    def test_filename_token_shows_real_source_names_not_placeholder(self):
+        # The bundled single-file example books carry their real modelled-on
+        # source filenames (e.g. "Armor.m4b"), not a generic "book.m4b"
+        # placeholder, so the {filename}/{original} tokens demonstrate the
+        # actual name a user would get instead of an uninformative stub.
+        resp = client.post(
+            "/api/organizer/naming-template/example-preview",
+            json={"template": "{author}/{original} [{asin}]"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        by_scenario = {p["scenario"]: p for p in resp.json()["previews"]}
+        self.assertEqual(by_scenario["No series"]["filename"], "Armor [B0B5VQ5XYF].m4b")
+        self.assertEqual(
+            by_scenario["Title matches series"]["filename"], "The Dao of Magic V [1774243989].m4b"
+        )
+        # Multi-file books never expose a template filename.
+        self.assertIsNone(by_scenario["Multi-file book"]["filename"])
+        for preview in resp.json()["previews"]:
+            self.assertNotEqual(preview["filename"], "book.m4b")
+
     def test_invalid_template_returns_400(self):
         resp = client.post(
             "/api/organizer/naming-template/example-preview",
