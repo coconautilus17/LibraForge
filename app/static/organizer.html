@@ -86,7 +86,7 @@
       <div class="wide naming-template-section">
         <span class="field-label">Naming template <span class="info-tip" data-tooltip="Controls the destination folder path and, for single-file books only, the filename. See 'Available tokens' below for the full list and examples."></span></span>
         <div class="dryrun-notice danger" role="alert">
-          <strong>Warning:</strong> Run Fixer before Folder Forge. Multi-file (chapter/track) detection relies on clean, consistent metadata — unfixed source files can fail to group correctly and get treated as individual single-file books, exposing their filenames to this template. A book Folder Forge does correctly recognize as multi-file is never renamed at the file level, regardless of what this template says.
+          <strong>Warning:</strong> Run Fixer before Folder Forge. Multi-file (chapter/track) detection relies on clean, consistent metadata: unfixed source files can fail to group correctly and get treated as individual single-file books, exposing their filenames to this template. A book Folder Forge does correctly recognize as multi-file is never renamed at the file level, regardless of what this template says.
         </div>
         <input id="namingTemplate" value="{author}/{series}/{order} - {title},{edition}/" spellcheck="false" autocomplete="off" />
         <p id="namingTemplateStatus" class="note naming-template-status" hidden></p>
@@ -94,7 +94,7 @@
           <summary>Available tokens</summary>
           <dl class="naming-template-token-list">
             <dt><code>{author}</code></dt>
-            <dd>The book's author. Defaults to "Unknown Author" when missing — this token never leaves its folder level empty. Example: <code>Brandon Sanderson</code></dd>
+            <dd>The book's author. Defaults to "Unknown Author" when missing, so this token never leaves its folder level empty. Example: <code>Brandon Sanderson</code></dd>
             <dt><code>{narrator}</code></dt>
             <dd>The audiobook narrator, when known. Example: <code>Michael Kramer</code></dd>
             <dt><code>{series}</code></dt>
