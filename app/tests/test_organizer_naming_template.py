@@ -251,5 +251,74 @@ class UnknownTokenTests(unittest.TestCase):
         self.assertEqual(ctx.exception.token, "bogus")
 
 
+class PathTraversalSafetyTests(unittest.TestCase):
+    """A rendered segment must never reduce to a path-navigation component
+    (".", "..") -- that would escape or self-reference destination_root when
+    joined. The hardcoded default path is already safe (it substitutes
+    "Unknown Title"/"Unknown Series"); the flat-token renderer must be too.
+    """
+
+    def test_dotdot_segment_is_treated_as_empty(self):
+        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty(".."))
+
+    def test_single_dot_segment_is_treated_as_empty(self):
+        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty("."))
+
+    def test_sanitize_never_emits_dotdot(self):
+        self.assertNotIn(ORGANIZER._sanitize_naming_segment(".."), {".", ".."})
+
+    def test_sanitize_never_emits_single_dot(self):
+        self.assertNotIn(ORGANIZER._sanitize_naming_segment("."), {".", ".."})
+
+    def test_dotdot_single_token_segment_collapses(self):
+        # A title of ".." must drop its folder level, not build "/root/..".
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title}/",
+            {"author": "Author Name", "title": ".."},
+        )
+        self.assertEqual(folders, ["Author Name"])
+        self.assertNotIn("..", folders)
+
+    def test_literal_dotdot_segment_collapses(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/../{title}/",
+            {"author": "Author Name", "title": "Hi"},
+        )
+        self.assertEqual(folders, ["Author Name", "Hi"])
+        self.assertNotIn("..", folders)
+
+    def test_build_target_dir_never_escapes_root(self):
+        result = ORGANIZER.build_target_dir_for_template(
+            Path("/audiobooks"), {"author": "Bob", "title": ".."}, "{title}/"
+        )
+        self.assertNotIn("..", result.target_dir.parts)
+
+
+class NumberTokenRedundancyTests(unittest.TestCase):
+    """Title-redundancy collapse must apply within a segment that uses
+    {number} + {title}, not only {order} + {title} -- {number} is the
+    alternative numbering token, so "5 - Book 5" is just as redundant as
+    "Book 5 - Book 5".
+    """
+
+    def test_number_and_title_segment_collapses_redundant_title(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series}/{number} - {title}/",
+            {"author": "A", "series": "S", "number": "5", "title": "Book 5"},
+            title_redundant_with_order=True,
+        )
+        self.assertEqual(folders[-1], "5")
+
+    def test_standalone_title_with_number_elsewhere_keeps_full_title(self):
+        # Per-segment: a filename segment with only {title} (no {number})
+        # keeps the full title even when redundant.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series}/{number} - {title}/{title}",
+            {"author": "A", "series": "S", "number": "5", "title": "Book 5"},
+            title_redundant_with_order=True,
+        )
+        self.assertEqual(filename, "Book 5")
+
+
 if __name__ == "__main__":
     unittest.main()

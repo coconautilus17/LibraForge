@@ -933,6 +933,37 @@ def display_book_number(value: str) -> str:
     return "".join(clean_part(piece) if piece not in {"-", "+"} else piece for piece in pieces)
 
 
+_STRICT_ROMAN_RE = re.compile(
+    r"M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})", re.IGNORECASE
+)
+_ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+
+
+def roman_numeral_value(text: str) -> str:
+    """Return the arabic value of a bare, canonical roman numeral (e.g. "V"
+    -> "5", "IV" -> "4"), or "" when `text` isn't a standalone roman numeral.
+
+    Used to recognize a volume marker like "V" as a restatement of a numeric
+    sequence number (book 5) so a title like "Dao of Magic V" collapses the
+    same way "Dao of Magic 5" already does. Strict validation (no "IIII",
+    "VV", embedded words) keeps ordinary words that happen to use roman
+    letters from being misread as numbers.
+    """
+    token = clean_text(text)
+    if not token or not _STRICT_ROMAN_RE.fullmatch(token):
+        return ""
+    total = 0
+    prev = 0
+    for char in reversed(token.lower()):
+        value = _ROMAN_VALUES[char]
+        if value < prev:
+            total -= value
+        else:
+            total += value
+            prev = value
+    return str(total)
+
+
 def detect_number_from_text(value: str) -> str:
     value = clean_text(value)
     if not value:
@@ -3503,6 +3534,13 @@ def title_is_redundant_with_sequence(title: str, series: str, sequence_label: st
         )
     ):
         return True
+    # Roman-numeral volume marker restating the number, e.g. series "Dao of
+    # Magic" + book 5 with title "Dao of Magic V" (V == 5). Guarded by exact
+    # equality with the numeric sequence, so a real word using roman letters
+    # never collapses unless it also happens to equal this book's number.
+    roman_value = roman_numeral_value(series_remainder)
+    if roman_value and normalize_book_number(roman_value) == normalize_book_number(number):
+        return True
     return False
 
 
@@ -3720,7 +3758,9 @@ def preview_naming_template_for_root(
     previews: list[dict[str, Any]] = []
     for item in items:
         metadata = infer_metadata(item, root)
-        result = build_target_dir_for_template(destination_root, metadata, naming_template)
+        result = build_target_dir_for_template(
+            destination_root, metadata, naming_template, filename_applies=(len(item.audio_files) == 1)
+        )
         filename = naming_template_filename_for_item(item, result.filename)
         previews.append(
             {
@@ -3766,7 +3806,7 @@ def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, ro
 
 
 def build_target_dir_for_template(
-    destination_root: Path, metadata: dict[str, Any], naming_template: str
+    destination_root: Path, metadata: dict[str, Any], naming_template: str, filename_applies: bool = True
 ) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
@@ -3784,7 +3824,9 @@ def build_target_dir_for_template(
 
     tokens = resolve_naming_tokens(metadata)
     redundant = title_redundant_with_order(metadata)
-    folder_segments, filename, reasons = render_naming_template(naming_template, tokens, redundant)
+    folder_segments, filename, reasons = render_naming_template(
+        naming_template, tokens, redundant, filename_applies=filename_applies
+    )
     return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
 
 
@@ -3818,7 +3860,11 @@ def _naming_segment_is_effectively_empty(value: str) -> bool:
         return True
     cleaned = sanitize_path_name(value, value)
     without_brackets = _EMPTY_BRACKET_RE.sub("", cleaned)
-    return without_brackets.strip(" ,-") == ""
+    residue = without_brackets.strip(" ,-")
+    # "." and ".." carry no real content and must never become a path level
+    # (one self-references, the other escapes the destination root) -- treat
+    # them as empty so a single-token segment rendering to them collapses.
+    return residue == "" or residue in {".", ".."}
 
 
 def _sanitize_naming_segment(value: str) -> str:
@@ -3849,34 +3895,47 @@ def _sanitize_naming_segment(value: str) -> str:
     cleaned = sanitize_path_name(value, value)
     without_brackets = _EMPTY_BRACKET_RE.sub("", cleaned)
     stripped = without_brackets.strip(" ,-")
-    if stripped:
-        return stripped
-    # Bracket removal and/or edge trimming fully consumed the value (e.g.
-    # two bracket-wrapped empty tokens like "[][]") -- fall back a tier at
-    # a time rather than return true emptiness, which Path would silently
-    # drop as a path component.
-    if without_brackets:
-        return without_brackets
-    return cleaned
+    result = stripped or without_brackets or cleaned
+    # Never emit a path-navigation component: "." self-references and ".."
+    # escapes destination_root once joined. sanitize_path_name() neutralizes
+    # these only when handed a safe fallback, but here the fallback is the
+    # value itself (to guard the never-vanish case below), so guard
+    # explicitly. Returning empty lets the level collapse rather than
+    # traverse -- a single-token "." / ".." already collapses via
+    # _naming_segment_is_effectively_empty; this only catches a pathological
+    # kept/flagged segment that reduced to pure navigation dots.
+    if result in {".", ".."}:
+        return ""
+    # Otherwise the tiered fallback above guarantees non-emptiness for
+    # non-empty input: a flagged-for-review segment (e.g. two bracket-wrapped
+    # empty tokens like "[][]") must never collapse to a true empty string,
+    # which Path would silently drop as a path component.
+    return result
 
 
 def _token_values_for_segment(
     raw_segment: str, token_values: dict[str, str], distinct_tokens: set[str], title_redundant_with_order: bool
 ) -> dict[str, str]:
     """Title-redundancy collapsing only makes sense *within a segment that
-    uses {order} and {title} together* -- a segment like a standalone
-    {title},{asin} filename never contains {order} at all, so there's
-    nothing for the title to be redundant against there. Returns
+    pairs the title with a sequence-number token* -- either {order} (the
+    labeled "Book 5" form) or {number} (the bare "5" form), since both
+    already convey the sequence the redundant title would just restate. A
+    segment like a standalone {title},{asin} filename contains neither, so
+    there's nothing for the title to be redundant against there. Returns
     token_values unchanged, or a shallow copy with title blanked out, for
     this one segment's render only.
     """
-    if title_redundant_with_order and "order" in distinct_tokens and "title" in distinct_tokens:
+    pairs_title_with_number = ("order" in distinct_tokens or "number" in distinct_tokens) and "title" in distinct_tokens
+    if title_redundant_with_order and pairs_title_with_number:
         return dict(token_values, title="")
     return token_values
 
 
 def render_naming_template(
-    template: str, token_values: dict[str, str], title_redundant_with_order: bool = False
+    template: str,
+    token_values: dict[str, str],
+    title_redundant_with_order: bool = False,
+    filename_applies: bool = True,
 ) -> tuple[list[str], str | None, list[str]]:
     """Render a user-defined naming template against resolved token values.
 
@@ -3890,6 +3949,12 @@ def render_naming_template(
     follows the same rules, except an empty result falls back to `None`
     (the caller should keep the original filename) rather than being
     dropped outright.
+
+    `filename_applies` is False for multi-file books, whose internal
+    filenames this feature never touches: the entire filename segment is
+    skipped, so it neither renders nor contributes a review reason (a
+    filename template a multi-file book can't satisfy is irrelevant, not a
+    data-quality problem). Folder-level review reasons still surface.
 
     Returns (folder_segments, filename_or_None, review_reasons).
     """
@@ -3915,7 +3980,7 @@ def render_naming_template(
                 folder_segments.append(_sanitize_naming_segment(rendered))
 
     filename: str | None = None
-    if filename_template:
+    if filename_template and filename_applies:
         distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(filename_template))
         segment_values = _token_values_for_segment(filename_template, token_values, distinct_tokens, title_redundant_with_order)
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
@@ -4183,11 +4248,14 @@ def build_cached_target_dir(
     metadata: dict[str, Any],
     cache: dict[str, Any],
     naming_template: str = DEFAULT_NAMING_TEMPLATE,
+    filename_applies: bool = True,
 ) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
     if metadata.get("edition_tag"):
-        result = build_target_dir_for_template(destination_root, metadata, naming_template)
+        result = build_target_dir_for_template(
+            destination_root, metadata, naming_template, filename_applies=filename_applies
+        )
         if result.review_reasons:
             metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
         return TargetResolution(result.target_dir, result.filename, "new", metadata)
@@ -4207,7 +4275,9 @@ def build_cached_target_dir(
         # branch for the same reason -- it's cache-routed, not rendered.
         book_folder = build_book_folder_name(effective_metadata)
         return TargetResolution(series_dir / book_folder, None, status, effective_metadata)
-    result = build_target_dir_for_template(destination_root, effective_metadata, naming_template)
+    result = build_target_dir_for_template(
+        destination_root, effective_metadata, naming_template, filename_applies=filename_applies
+    )
     if result.review_reasons:
         effective_metadata = dict(
             effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, result.review_reasons)
@@ -5035,7 +5105,8 @@ def main() -> None:
             continue
 
         resolution = build_cached_target_dir(
-            destination_root, metadata, cache, naming_template=args.naming_template
+            destination_root, metadata, cache, naming_template=args.naming_template,
+            filename_applies=(len(item.audio_files) == 1),
         )
         target_dir = resolution.target_dir
         structure_status = resolution.status

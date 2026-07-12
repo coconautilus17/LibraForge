@@ -37,6 +37,32 @@ class TitleIsRedundantWithSequenceTests(unittest.TestCase):
             ORGANIZER.title_is_redundant_with_sequence("Dashing Devil 5", "Dashing Devil", "", "5")
         )
 
+    def test_roman_numeral_restatement_is_redundant(self):
+        # "Dao of Magic V" is the series name plus the roman numeral for the
+        # book number (5) -- it restates the sequence, so it's redundant the
+        # same way the arabic "Dao of Magic 5" already is.
+        self.assertTrue(
+            ORGANIZER.title_is_redundant_with_sequence("Dao of Magic V", "Dao of Magic", "", "5")
+        )
+
+    def test_roman_numeral_with_leading_article_is_redundant(self):
+        self.assertTrue(
+            ORGANIZER.title_is_redundant_with_sequence("The Dao of Magic V", "Dao of Magic", "", "5")
+        )
+
+    def test_roman_numeral_not_matching_number_is_not_redundant(self):
+        # IV is 4, not 5 -- a real mismatch must not be collapsed away.
+        self.assertFalse(
+            ORGANIZER.title_is_redundant_with_sequence("Dao of Magic IV", "Dao of Magic", "", "5")
+        )
+
+    def test_trailing_non_roman_letter_is_not_treated_as_number(self):
+        # A remainder that isn't a valid roman numeral (or doesn't equal the
+        # number) stays a distinct title -- e.g. a subtitle word.
+        self.assertFalse(
+            ORGANIZER.title_is_redundant_with_sequence("Dao of Magic Zenith", "Dao of Magic", "", "5")
+        )
+
 
 class BuildBookFolderNameStillCollapsesTests(unittest.TestCase):
     def test_refactor_preserves_existing_collapse_behavior(self):
