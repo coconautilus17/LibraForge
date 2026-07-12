@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
@@ -83,6 +84,32 @@ class PreviewNamingTemplateForRootTests(unittest.TestCase):
             )
             self.assertEqual(len(previews), 1)
             self.assertEqual(len(previews[0]["review_reasons"]), 1)
+
+    def test_multi_file_book_filename_shown_as_unchanged(self):
+        # A multi-file book must never show a rendered filename in the
+        # preview -- naming_template_filename_for_item()'s exclusion has to
+        # apply here too, not just in the real move-planning pipeline,
+        # otherwise the preview lies about what would actually happen.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "_unorganized"
+            root.mkdir()
+            book_dir = root / "Multi File Book"
+            book_dir.mkdir()
+            audio_files = [book_dir / "Chapter 1.m4b", book_dir / "Chapter 2.m4b"]
+            for f in audio_files:
+                f.touch()
+            item = ORGANIZER.BookItem("folder", book_dir, audio_files, audio_files[0])
+            with patch.object(ORGANIZER, "build_book_items", return_value=[item]):
+                with patch.object(
+                    ORGANIZER,
+                    "infer_metadata",
+                    return_value={"title": "The Title", "author": "Author", "series": ""},
+                ):
+                    previews = ORGANIZER.preview_naming_template_for_root(
+                        root, Path(tmp), "{author}/{title}"
+                    )
+            self.assertEqual(len(previews), 1)
+            self.assertIsNone(previews[0]["filename"])
 
 
 if __name__ == "__main__":

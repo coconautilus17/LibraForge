@@ -88,5 +88,28 @@ class PreviewEndpointTests(_BaseNamingTemplateEndpointTest):
             self.assertEqual(resp.status_code, 400)
 
 
+class ExamplePreviewEndpointTests(unittest.TestCase):
+    """Uses the real bundled app/example_books/ fixtures -- no AUDIOBOOKS_ROOT
+    patching needed, this endpoint takes no user-supplied path at all."""
+
+    def test_valid_template_renders_all_bundled_examples(self):
+        resp = client.post(
+            "/api/organizer/naming-template/example-preview",
+            json={"template": "{author}/{series}/{order} - {title},{edition}/{title},{asin}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        previews = resp.json()["previews"]
+        self.assertEqual(len(previews), 5)
+        for preview in previews:
+            self.assertTrue(preview["scenario"])
+
+    def test_invalid_template_returns_400(self):
+        resp = client.post(
+            "/api/organizer/naming-template/example-preview",
+            json={"template": "{bogus}/"},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

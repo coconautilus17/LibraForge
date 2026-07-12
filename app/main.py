@@ -70,6 +70,7 @@ from app.publisher_policy import load_publisher_policy, save_publisher_policy
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = APP_ROOT / "static"
 ICON_FILE = APP_ROOT / "libraforge.png"
+EXAMPLE_BOOKS_DIR = APP_ROOT / "example_books"
 SCRIPTS_DIR = Path(os.environ.get("SCRIPTS_DIR", "/app/scripts")).resolve()
 REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/app/reports")).resolve()
 AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve()
@@ -1241,6 +1242,11 @@ class OrganizerNamingTemplatePreviewRequest(BaseModel):
     destination_root: str = Field(default="/audiobooks")
     script_name: str = Field(default_factory=default_organizer_script)
     limit: int = 3
+
+
+class OrganizerNamingTemplateExamplePreviewRequest(BaseModel):
+    template: str
+    script_name: str = Field(default_factory=default_organizer_script)
 
 
 class TitleNoiseCustomPattern(BaseModel):
@@ -7045,6 +7051,37 @@ def preview_organizer_naming_template(req: OrganizerNamingTemplatePreviewRequest
     root = validate_audiobook_path(req.root_path)
     destination_root = validate_audiobook_path(req.destination_root)
     previews = organizer.preview_naming_template_for_root(root, destination_root, req.template, limit=req.limit)
+    return {"previews": previews}
+
+
+def _example_books_manifest() -> dict[str, str]:
+    manifest_path = EXAMPLE_BOOKS_DIR / "manifest.json"
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+@app.post("/api/organizer/naming-template/example-preview")
+def preview_organizer_naming_template_examples(req: OrganizerNamingTemplateExamplePreviewRequest) -> dict[str, Any]:
+    """Renders the same template against a small set of bundled, lightweight
+    example books (metadata-only sidecars + tiny silent placeholder audio,
+    not real user data) instead of the caller's own library -- a fixed,
+    always-available set of scenarios (title==series, no series, distinct
+    title, special edition, multi-file) that don't depend on what a given
+    user's library happens to contain.
+    """
+    organizer = load_organizer_module(req.script_name)
+    problems = organizer.validate_naming_template(req.template)
+    if problems:
+        raise HTTPException(status_code=400, detail="; ".join(problems))
+    manifest = _example_books_manifest()
+    previews = organizer.preview_naming_template_for_root(
+        EXAMPLE_BOOKS_DIR, AUDIOBOOKS_ROOT, req.template, limit=len(manifest) or 10
+    )
+    for preview in previews:
+        source_parts = Path(preview["source"]).parts
+        preview["scenario"] = next((manifest[key] for key in manifest if key in source_parts), "")
     return {"previews": previews}
 
 

@@ -3698,11 +3698,12 @@ def preview_naming_template_for_root(
     for item in items:
         metadata = infer_metadata(item, root)
         result = build_target_dir_for_template(destination_root, metadata, naming_template)
+        filename = naming_template_filename_for_item(item, result.filename)
         previews.append(
             {
                 "source": str(item.source_path),
                 "target_dir": str(result.target_dir),
-                "filename": result.filename,
+                "filename": filename,
                 "review_reasons": result.review_reasons,
             }
         )
