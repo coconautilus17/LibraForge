@@ -25,13 +25,15 @@ class PlanLooseFileMoveTemplateFilenameTests(unittest.TestCase):
         self.assertEqual(target_path, target_dir / "Bold Beginnings.m4b")
 
     def test_template_filename_overrides_clean_loose_audio_filename(self):
+        # template_filename is an extension-less stem; the source file's
+        # own extension must survive onto the final target filename.
         target_dir = Path("/library/G.D. Brooks/Dashing Devil/Book 5 - Bold Beginnings")
         item = ORGANIZER.BookItem(
             "loose_file", Path("/incoming/Bold Beginnings.m4b"), [Path("/incoming/Bold Beginnings.m4b")],
             Path("/incoming/Bold Beginnings.m4b"),
         )
         can_move, target_path, reason = ORGANIZER.plan_loose_file_move(
-            item, target_dir, template_filename="Custom Name.m4b"
+            item, target_dir, template_filename="Custom Name"
         )
         self.assertTrue(can_move)
         self.assertEqual(target_path, target_dir / "Custom Name.m4b")

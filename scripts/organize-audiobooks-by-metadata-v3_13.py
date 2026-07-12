@@ -3557,10 +3557,18 @@ def naming_template_filename_for_item(item: BookItem, template_filename: str | N
     per-file without destroying it. This is deliberately unconditional: it
     doesn't matter whether Fixer has already run or the names look messy,
     multi-file internals are simply out of scope for this feature.
+
+    `template_filename` is an extension-less stem -- the naming template
+    DSL has no concept of a file extension, tokens only ever produce text.
+    The item's own audio file's extension is appended here so the caller
+    always gets a real, playable filename back, never a bare stem that
+    would silently drop the file's type.
     """
     if len(item.audio_files) != 1:
         return None
-    return template_filename
+    if template_filename is None:
+        return None
+    return f"{template_filename}{item.representative.suffix}"
 
 
 def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
@@ -3568,14 +3576,19 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
 
     One flat token per real-world concept -- no distinction between a "raw"
     field and a "composite" one; that split existed in an earlier version of
-    this feature and was scrapped as unnecessary complexity. `order` and
-    `title` still carry the same smart behavior the app has always had
-    (auto-detected "Book"/"Vol."/"Side Story" labeling, and title becoming
-    empty rather than repeating itself when it's redundant with the series
-    and sequence number, e.g. avoiding "Book 5 - Book 5") -- overhauling the
-    token *interface* doesn't mean dropping behavior the app already had,
-    it just means every token is computed correctly and exposed flatly
-    rather than needing two categories of tokens for the same thing.
+    this feature and was scrapped as unnecessary complexity. `order` still
+    carries the same auto-detected "Book"/"Vol."/"Side Story" labeling the
+    app has always had.
+
+    `title` here is always the full value -- it is NOT pre-emptied for
+    redundancy with `order`. Redundancy (avoiding "Book 5 - Book 5") is only
+    meaningful *within a segment that uses both {order} and {title}
+    together*; a segment like a standalone {title},{asin} filename never
+    contains {order} at all, so there's nothing for the title to be
+    redundant against there, and a title that happens to look like
+    "Crystal Core 2" is a perfectly legitimate filename component.
+    render_naming_template() applies the redundancy check itself, per
+    segment, using title_redundant_with_order (see build_target_dir_for_template()).
 
     Author defaults to the literal "Unknown Author" when missing (an
     author-less book still needs *some* folder to land in); every other
@@ -3591,7 +3604,7 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
     raw_title = metadata.get("title", "") or ""
     if is_asin_like_token(raw_title):
         raw_title = series
-    title = "" if raw_title and title_is_redundant_with_sequence(raw_title, series, sequence_label, number) else raw_title
+    title = raw_title
 
     order = build_sequence_prefix(sequence_label, number) if series and number else ""
 
@@ -3746,8 +3759,26 @@ def build_target_dir_for_template(
         return NamingRenderResult(build_default_target_dir(destination_root, metadata), None, [])
 
     tokens = resolve_naming_tokens(metadata)
-    folder_segments, filename, reasons = render_naming_template(naming_template, tokens)
+    redundant = title_redundant_with_order(metadata)
+    folder_segments, filename, reasons = render_naming_template(naming_template, tokens, redundant)
     return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
+
+
+def title_redundant_with_order(metadata: dict[str, Any]) -> bool:
+    """Whether this book's title is redundant with its series + sequence
+    number (see title_is_redundant_with_sequence()) -- computed once here
+    so render_naming_template() can apply it only within segments that
+    actually use {order} and {title} together, not globally.
+    """
+    title = metadata.get("title", "") or ""
+    series = metadata.get("series", "") or ""
+    if is_asin_like_token(title):
+        title = series
+    if not title:
+        return False
+    number = metadata.get("book_number", "") or ""
+    sequence_label = metadata.get("sequence_label", "") or ""
+    return title_is_redundant_with_sequence(title, series, sequence_label, number)
 
 
 def _sanitize_naming_segment(value: str) -> str:
@@ -3759,12 +3790,42 @@ def _sanitize_naming_segment(value: str) -> str:
     containing "/" could inject an unintended extra directory level).
     Applied here, once, to every rendered segment and the filename alike,
     regardless of which tokens built it.
+
+    Also trims leading/trailing separator noise (spaces, commas, hyphens)
+    left over when an edge token in a multi-token segment is empty -- e.g.
+    "{order} - {title},{edition}" with title and edition both empty
+    otherwise renders "Book 1 - ,". sanitize_path_name() already strips
+    " .-" but never comma. The strip only applies when it leaves something
+    behind: a segment that's *entirely* separator characters (the
+    all-tokens-empty, flagged-for-review case) must never collapse to a
+    true empty string, since Path silently drops empty components -- that
+    would make a flagged item vanish from its own directory level instead
+    of staying visible.
     """
-    return sanitize_path_name(value, value) if value else value
+    if not value:
+        return value
+    cleaned = sanitize_path_name(value, value)
+    stripped = cleaned.strip(" ,-")
+    return stripped if stripped else cleaned
+
+
+def _token_values_for_segment(
+    raw_segment: str, token_values: dict[str, str], distinct_tokens: set[str], title_redundant_with_order: bool
+) -> dict[str, str]:
+    """Title-redundancy collapsing only makes sense *within a segment that
+    uses {order} and {title} together* -- a segment like a standalone
+    {title},{asin} filename never contains {order} at all, so there's
+    nothing for the title to be redundant against there. Returns
+    token_values unchanged, or a shallow copy with title blanked out, for
+    this one segment's render only.
+    """
+    if title_redundant_with_order and "order" in distinct_tokens and "title" in distinct_tokens:
+        return dict(token_values, title="")
+    return token_values
 
 
 def render_naming_template(
-    template: str, token_values: dict[str, str]
+    template: str, token_values: dict[str, str], title_redundant_with_order: bool = False
 ) -> tuple[list[str], str | None, list[str]]:
     """Render a user-defined naming template against resolved token values.
 
@@ -3790,8 +3851,9 @@ def render_naming_template(
     folder_segments: list[str] = []
     if folder_template:
         for raw_segment in folder_template.split("/"):
-            rendered, needs_review = _render_naming_segment(raw_segment, token_values)
             distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
+            segment_values = _token_values_for_segment(raw_segment, token_values, distinct_tokens, title_redundant_with_order)
+            rendered, needs_review = _render_naming_segment(raw_segment, segment_values)
             if needs_review:
                 review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
                 folder_segments.append(_sanitize_naming_segment(rendered))
@@ -3802,7 +3864,9 @@ def render_naming_template(
 
     filename: str | None = None
     if filename_template:
-        rendered, needs_review = _render_naming_segment(filename_template, token_values)
+        distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(filename_template))
+        segment_values = _token_values_for_segment(filename_template, token_values, distinct_tokens, title_redundant_with_order)
+        rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
             review_reasons.append(f"not enough data to build filename '{filename_template}'")
         elif rendered:
@@ -4707,18 +4771,15 @@ def print_move(move: dict[str, Any]) -> None:
     if metadata.get("book_number"):
         label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
         print(f"  Number: {label} {display_book_number(metadata['book_number'])}")
-    # Folder moves show directory paths. Loose-file moves show the actual file
-    # path so the report captures which specific file is moving (the parent
-    # directory is ambiguous when the file lives directly in the scan root).
-    # Skipped-review moves never reach plan_loose_file_move, so their "target"
-    # is always the bare directory (like folder moves) regardless of kind --
-    # only an *accepted* loose_file move's target is a full file path needing
-    # .parent to show the containing directory.
+    # Folder moves and skipped-review moves show the bare directory (a
+    # skipped review never reaches plan_loose_file_move to append a
+    # filename). An *accepted* loose-file move's target is the full file
+    # path -- shown in full, not truncated to its parent directory, so a
+    # naming template's filename half (asin/title/etc. in the actual
+    # filename, not just the folder) is visible in the report instead of
+    # silently hidden.
     source_display = move["source"]
-    if move["kind"] == "folder" or move.get("skipped"):
-        target_display = move["target"]
-    else:
-        target_display = move["target"].parent
+    target_display = move["target"]
     print("  MOVE:")
     print(f"    {source_display}")
     print("  TO:")

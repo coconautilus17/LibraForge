@@ -12,6 +12,37 @@ sys.modules[SPEC.name] = ORGANIZER
 SPEC.loader.exec_module(ORGANIZER)
 
 
+class StraySeparatorCleanupTests(unittest.TestCase):
+    def test_trailing_stray_dash_and_comma_from_empty_edge_tokens_are_trimmed(self):
+        # {order} - {title},{edition} with title AND edition both empty
+        # left "Book 1 - ," in real testing -- a real, ugly artifact, not
+        # the intentionally-accepted "stray separator" tradeoff.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{order} - {title},{edition}/",
+            {"order": "Book 1", "title": "", "edition": ""},
+        )
+        self.assertEqual(folders, ["Book 1"])
+
+    def test_leading_stray_comma_from_empty_title_is_trimmed(self):
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title},{asin}",
+            {"author": "Author Name", "title": "", "asin": "B0TEST"},
+        )
+        self.assertEqual(filename, "B0TEST")
+
+    def test_fully_separator_only_segment_is_not_stripped_to_empty(self):
+        # A flagged-for-review segment that's literally just leftover
+        # separators must never collapse to a true empty string -- Path
+        # silently drops empty components, which would make a flagged item
+        # vanish from its own directory level instead of staying visible.
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title},{asin}/",
+            {"author": "Author Name", "title": "", "asin": ""},
+        )
+        self.assertEqual(folders, ["Author Name", ","])
+        self.assertEqual(len(reasons), 1)
+
+
 class BareSingleTokenSegmentTests(unittest.TestCase):
     def test_empty_bare_token_segment_is_dropped(self):
         folders, filename, reasons = ORGANIZER.render_naming_template(

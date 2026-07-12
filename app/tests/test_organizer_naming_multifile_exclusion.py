@@ -25,9 +25,17 @@ class MultiFileExclusionTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_single_file_book_uses_template_filename(self):
+        # The rendered template value is an extension-less stem (the
+        # template DSL has no concept of a file extension) -- the item's
+        # own audio file's extension must be preserved onto it, not lost.
         item = make_item(["book.m4b"])
-        result = ORGANIZER.naming_template_filename_for_item(item, "Custom Name.m4b")
+        result = ORGANIZER.naming_template_filename_for_item(item, "Custom Name")
         self.assertEqual(result, "Custom Name.m4b")
+
+    def test_single_file_book_preserves_non_m4b_extension(self):
+        item = make_item(["book.mp3"])
+        result = ORGANIZER.naming_template_filename_for_item(item, "Custom Name")
+        self.assertEqual(result, "Custom Name.mp3")
 
     def test_single_file_book_with_no_filename_template_keeps_original(self):
         item = make_item(["book.m4b"])

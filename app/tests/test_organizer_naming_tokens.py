@@ -97,25 +97,81 @@ class OrderTokenTests(unittest.TestCase):
 
 
 class TitleRedundancyTests(unittest.TestCase):
-    def test_title_empty_when_redundant_with_order(self):
+    def test_title_stays_full_even_when_redundant_with_order(self):
         metadata = dict(BASE_METADATA, title="Book 5")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["title"], "")
+        self.assertEqual(tokens["title"], "Book 5")
         self.assertEqual(tokens["order"], "Book 5")
 
-    def test_title_empty_when_equal_to_series(self):
+    def test_title_stays_full_even_when_equal_to_series(self):
+        # resolve_naming_tokens() never pre-empties title -- redundancy is
+        # only meaningful within a segment that also uses {order}, which
+        # this function has no visibility into. See title_redundant_with_order().
         metadata = dict(BASE_METADATA, title="Dashing Devil")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["title"], "")
+        self.assertEqual(tokens["title"], "Dashing Devil")
 
     def test_distinct_title_is_kept(self):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["title"], "Bold Beginnings")
 
-    def test_asin_like_title_falls_back_to_series_then_empties(self):
+    def test_asin_like_title_falls_back_to_series_but_stays_full(self):
         metadata = dict(BASE_METADATA, title="B07XYZ1234")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["title"], "")
+        self.assertEqual(tokens["title"], "Dashing Devil")
+
+
+class TitleRedundantWithOrderTests(unittest.TestCase):
+    def test_redundant_when_title_matches_prefix(self):
+        metadata = dict(BASE_METADATA, title="Book 5")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_redundant_when_title_equals_series(self):
+        metadata = dict(BASE_METADATA, title="Dashing Devil")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_not_redundant_for_distinct_title(self):
+        self.assertFalse(ORGANIZER.title_redundant_with_order(BASE_METADATA))
+
+    def test_asin_like_title_falls_back_to_series_and_is_redundant(self):
+        metadata = dict(BASE_METADATA, title="B07XYZ1234")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_not_redundant_without_series_or_number(self):
+        metadata = dict(BASE_METADATA, title="Book 5", series="", book_number="")
+        self.assertFalse(ORGANIZER.title_redundant_with_order(metadata))
+
+
+class RenderNamingTemplateTitleRedundancyScopeTests(unittest.TestCase):
+    """The actual bug this whole redesign fixes: title-redundancy collapsing
+    must only apply within a segment that uses {order} and {title}
+    together -- a standalone {title} (e.g. in a filename with no {order})
+    must never be blanked out just because it happens to equal the series
+    name or sequence prefix. A title like "Crystal Core 2" is a perfectly
+    legitimate filename component even when the folder level collapses it.
+    """
+
+    def test_order_and_title_together_collapse_when_redundant(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Book 5"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{order} - {title}/", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(folders, ["G.D. Brooks", "Book 5"])
+
+    def test_standalone_title_segment_never_collapses(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Book 5"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title}", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(filename, "Book 5")
+
+    def test_title_and_asin_filename_keeps_full_title_even_when_redundant(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Dashing Devil", asin="B0TEST"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series}/{order} - {title}/{title},{asin}", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(folders, ["G.D. Brooks", "Dashing Devil", "Book 5"])
+        self.assertEqual(filename, "Dashing Devil,B0TEST")
 
 
 if __name__ == "__main__":
