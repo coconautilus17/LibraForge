@@ -724,6 +724,17 @@
     const ignoredFoldersInput = document.getElementById("ignoredFoldersInput");
     const ignoredFoldersAddBtn = document.getElementById("ignoredFoldersAdd");
 
+    // Fire-and-forget: an ignore-list edit can invalidate the Manual Review
+    // filesystem search index (it's built with these tokens pruned during
+    // the walk, not just post-filtered). Pinging the status endpoint here
+    // lets a rebuild start right away in the background instead of waiting
+    // for the next time someone happens to open Manual Review and search.
+    function pingManualReviewSearchIndex(folders) {
+      const params = new URLSearchParams();
+      for (const folder of folders || []) params.append("ignored_folders", folder);
+      fetch(`/api/manual-review/search-index/status?${params.toString()}`).catch(() => {});
+    }
+
     function renderIgnoredFolders() {
       if (!ignoredFoldersContainer) return;
       ignoredFoldersContainer.replaceChildren(
@@ -741,6 +752,7 @@
           remove.addEventListener("click", () => {
             preferences = { ...preferences, ignoredFolders: preferences.ignoredFolders.filter(f => f !== entry) };
             savePreferences(preferences);
+            pingManualReviewSearchIndex(preferences.ignoredFolders);
             renderIgnoredFolders();
           });
           row.append(label, remove);
@@ -756,6 +768,7 @@
         if (!val || (preferences.ignoredFolders || []).includes(val)) return;
         preferences = { ...preferences, ignoredFolders: [...(preferences.ignoredFolders || []), val] };
         savePreferences(preferences);
+        pingManualReviewSearchIndex(preferences.ignoredFolders);
         ignoredFoldersInput.value = "";
         renderIgnoredFolders();
       });

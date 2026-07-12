@@ -14,13 +14,14 @@ import time
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 import audible
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
@@ -3850,7 +3851,19 @@ def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
             runs.pop(run_id, None)
 
 
-app = FastAPI(title="LibraForge")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Kick off the Manual Review filesystem search index build immediately
+    # on startup, in the background, so it's already underway (or done, for
+    # a modest library) before anyone opens Manual Review. Referencing
+    # _ensure_manual_review_search_index_fresh here works even though it's
+    # defined later in this module -- name lookup inside a function body
+    # happens at call time, well after the whole module has loaded.
+    _ensure_manual_review_search_index_fresh([])
+    yield
+
+
+app = FastAPI(title="LibraForge", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -4248,6 +4261,144 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders) + sorted(loose_root_files)
 
 
+def _build_manual_review_search_index(
+    root: Path,
+    ignored_folders: list[str],
+    on_progress: Callable[[int], None] | None = None,
+) -> list[tuple[str, bool]]:
+    """Walk root once and return every book-level entry as (path, is_file).
+
+    Same folder-level shape as _find_book_folders (disc-subfolder collapsing,
+    loose root files as their own entries), but also prunes the user's
+    configured ignore tokens *during* the walk -- not as a post-filter --
+    since an ignored folder (e.g. a recycle bin) could itself be huge and
+    pruning at walk time avoids ever descending into it. Reimplements
+    matches_ignored_folders' case-insensitive prefix-match semantics inline
+    (checking the directory's own name is enough here: an ignored ancestor
+    is never descended into, so there's nothing further down to re-check).
+    """
+    tokens = tuple(_FS_SKIP_PREFIXES) + tuple(
+        f.strip().lower() for f in (ignored_folders or []) if f and f.strip()
+    )
+    audio_folders: set[Path] = set()
+    loose_root_files: list[Path] = []
+    count = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not any(d.lower().startswith(t) for t in tokens)
+            )
+            p = Path(dirpath)
+            if p == root:
+                loose_root_files.extend(
+                    p / f for f in sorted(filenames) if is_audio_file(p / f)
+                )
+                continue
+            if any(is_audio_file(p / f) for f in filenames):
+                audio_folders.add(p)
+                count += 1
+                if on_progress:
+                    on_progress(count)
+    except PermissionError:
+        pass
+
+    book_folders: set[Path] = set()
+    for folder in audio_folders:
+        if _DISC_RE.match(folder.name) and folder.parent != root:
+            book_folders.add(folder.parent)
+        else:
+            book_folders.add(folder)
+
+    entries = [(str(f), False) for f in sorted(book_folders)]
+    entries.extend((str(f), True) for f in sorted(loose_root_files))
+    return entries
+
+
+@dataclass
+class _ManualReviewSearchIndex:
+    """In-memory state for the Manual Review filesystem search index.
+
+    One module-level instance -- scope is always the whole AUDIOBOOKS_ROOT,
+    never a sub-path, so there's no need for the path-keyed dict _scan_cache
+    uses. entries is a flat (path, is_file) list built once per fresh index;
+    search() filters it in memory rather than re-walking or re-stat'ing.
+    """
+    status: str = "idle"  # idle | building | updating | ready | error
+    entries: list[tuple[str, bool]] = field(default_factory=list)
+    book_count: int = 0
+    fingerprint: str | None = None
+    ignored_signature: str | None = None
+    error: str | None = None
+
+
+_manual_review_search_index = _ManualReviewSearchIndex()
+_manual_review_search_lock = threading.Lock()
+
+
+def _manual_review_search_index_is_stale(
+    state: _ManualReviewSearchIndex, fingerprint: str, ignored_signature: str
+) -> bool:
+    """Whether a (re)build should be started for the given library state.
+
+    A build already in flight (building/updating) is never re-triggered --
+    the next check after it finishes will catch any newer drift. An error
+    state is always stale so the next check retries.
+    """
+    if state.status in ("building", "updating"):
+        return False
+    return (
+        state.status != "ready"
+        or state.fingerprint != fingerprint
+        or state.ignored_signature != ignored_signature
+    )
+
+
+def _run_manual_review_search_index_build(
+    state: _ManualReviewSearchIndex, root: Path, ignored_folders: list[str]
+) -> None:
+    """Synchronously (re)build the index into `state`. Callers that want this
+    off the request thread wrap the call in a background thread; this
+    function itself has no threading concerns, which keeps it directly
+    testable."""
+    state.status = "updating" if state.entries else "building"
+    state.error = None
+
+    def progress(n: int) -> None:
+        state.book_count = n
+
+    try:
+        entries = _build_manual_review_search_index(root, ignored_folders, on_progress=progress)
+        state.entries = entries
+        state.book_count = len(entries)
+        state.fingerprint = _library_fingerprint(root)
+        state.ignored_signature = _ignored_signature(ignored_folders)
+        state.status = "ready"
+    except Exception as exc:
+        state.status = "error"
+        state.error = str(exc)
+
+
+def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None:
+    """Kick off a background rebuild if the index is missing or stale.
+    Non-blocking: returns immediately whether or not a build was started."""
+    state = _manual_review_search_index
+    fingerprint = _library_fingerprint(AUDIOBOOKS_ROOT)
+    signature = _ignored_signature(ignored_folders)
+    if not _manual_review_search_index_is_stale(state, fingerprint, signature):
+        return
+    if not _manual_review_search_lock.acquire(blocking=False):
+        return
+
+    def worker() -> None:
+        try:
+            _run_manual_review_search_index_build(state, AUDIOBOOKS_ROOT, ignored_folders)
+        finally:
+            _manual_review_search_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     """Book units under ``p``, counted exactly like a real fixer run.
 
@@ -4357,10 +4508,15 @@ def _library_fingerprint(root: Path) -> str:
     return "|".join(parts)
 
 
+def _ignored_signature(ignored_folders: list[str] | None) -> str:
+    """Order/case/whitespace-independent signature of an ignore-folder list,
+    so a config change can be detected by simple string comparison."""
+    return ",".join(sorted(f.strip().lower() for f in (ignored_folders or []) if f and f.strip()))
+
+
 def _scan_cache_key(path: Path, ignored: list[str] | None = None) -> str:
     """Cache key includes the ignored-folder set so a changed filter forces a rescan."""
-    sig = ",".join(sorted(f.strip().lower() for f in (ignored or []) if f and f.strip()))
-    return f"{path}|{sig}"
+    return f"{path}|{_ignored_signature(ignored)}"
 
 
 def _store_scan_cache(
@@ -6642,6 +6798,55 @@ def audible_search(req: AudibleSearchRequest) -> dict[str, Any]:
 @app.get("/api/manual-review/browse")
 def browse_manual_review(path: str = "/audiobooks") -> dict[str, Any]:
     return browse_manual_review_path(path)
+
+
+class ManualReviewSearchIndexStatusResponse(BaseModel):
+    status: str
+    book_count: int
+    error: str | None = None
+
+
+@app.get("/api/manual-review/search-index/status")
+def manual_review_search_index_status(
+    ignored_folders: list[str] = Query(default=[]),
+) -> ManualReviewSearchIndexStatusResponse:
+    _ensure_manual_review_search_index_fresh(ignored_folders)
+    state = _manual_review_search_index
+    return ManualReviewSearchIndexStatusResponse(
+        status=state.status, book_count=state.book_count, error=state.error,
+    )
+
+
+class ManualReviewSearchRequest(BaseModel):
+    query: str = ""
+    ignored_folders: list[str] = Field(default_factory=list)
+
+
+class ManualReviewSearchResult(BaseModel):
+    name: str
+    path: str
+    is_file: bool
+
+
+class ManualReviewSearchResponse(BaseModel):
+    results: list[ManualReviewSearchResult]
+    index_status: str
+    book_count: int
+
+
+@app.post("/api/manual-review/search")
+def manual_review_search(req: ManualReviewSearchRequest) -> ManualReviewSearchResponse:
+    _ensure_manual_review_search_index_fresh(req.ignored_folders)
+    state = _manual_review_search_index
+    query = req.query.strip().lower()
+    results = [
+        ManualReviewSearchResult(name=Path(path).name, path=path, is_file=is_file)
+        for path, is_file in state.entries
+        if not query or query in path.lower()
+    ]
+    return ManualReviewSearchResponse(
+        results=results, index_status=state.status, book_count=state.book_count,
+    )
 
 
 @app.post("/api/manual-review/discover")

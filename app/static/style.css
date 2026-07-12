@@ -1787,6 +1787,70 @@ summary:focus-visible {
   margin-bottom: 5px;
 }
 
+.search-box {
+  position: relative;
+  max-width: 420px;
+  margin-top: 10px;
+}
+
+.search-box .icon {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.search-box input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.manual-fs-search-index-marker {
+  margin-top: 8px;
+}
+
+.manual-fs-search-results {
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.manual-fs-search-results:not(:empty) {
+  border: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.manual-fs-search-result-row {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface-soft);
+  transition: background 120ms ease;
+}
+
+.manual-fs-search-result-row:last-child {
+  border-bottom: none;
+}
+
+.manual-fs-search-result-row:hover {
+  background: var(--surface-hover);
+}
+
+.manual-fs-search-result-name {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.manual-fs-search-result-path {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
 .reason-badges {
   display: flex;
   gap: var(--space-sm);

@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
-  <script src="/static/ui-preferences.js?v=20260711-6"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260711-3" />
+  <script src="/static/ui-preferences.js?v=20260712-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260712-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -317,7 +317,12 @@
       <p class="note">Review skipped, `mode:none`, `series_only`, and large-duration items here. Each candidate shows the recommended mode, but you choose Full metadata or Series only before applying. For accepted grouped multi-file books, the folder path is used as the review target.</p>
       <div class="manual-loader">
         <h3>Load any book</h3>
-        <p class="note">Enter an exact audiobook file or folder path. Folder results are limited to the first 30 books.</p>
+        <div class="search-box">
+          <span class="icon" aria-hidden="true">&#8981;</span>
+          <input id="manualFsSearchInput" type="search" placeholder="Search your audiobook folders by name..." autocomplete="off" />
+        </div>
+        <p id="manualFsSearchIndexMarker" class="note manual-fs-search-index-marker" hidden></p>
+        <div id="manualFsSearchResults" class="manual-fs-search-results"></div>
         <div class="path-controls">
           <input id="manualBrowsePath" value="/audiobooks" aria-label="Audiobook file or folder path" />
           <button id="manualDiscoverBtn" class="secondary">Load Path</button>
@@ -385,7 +390,7 @@
    </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/app.js?v=20260711-9"></script>
+  <script src="/static/app.js?v=20260712-1"></script>
   <script src="/static/manual-review-edit.js?v=20260707-1"></script>
   <script src="/static/fix-series.js?v=20260709-1"></script>
 </body>

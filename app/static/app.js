@@ -482,6 +482,86 @@ async function discoverManualTargets(path = $('manualBrowsePath').value.trim()) 
   renderManualDiscovery(data);
 }
 
+function manualReviewIgnoredFolders() {
+  return (window.LibraForgePrefs?.get()?.ignoredFolders || []).map((f) => f.trim()).filter(Boolean);
+}
+
+function manualFsSearchIndexQuery() {
+  const params = new URLSearchParams();
+  for (const folder of manualReviewIgnoredFolders()) params.append('ignored_folders', folder);
+  return params.toString();
+}
+
+function renderManualFsSearchIndexMarker(data) {
+  const marker = $('manualFsSearchIndexMarker');
+  if (data.status === 'building') {
+    marker.hidden = false;
+    marker.textContent = `Building search index... ${data.book_count} books found so far. Search results may be incomplete until this finishes.`;
+  } else if (data.status === 'updating') {
+    marker.hidden = false;
+    marker.textContent = `Library change detected, updating search index... Search results may be incomplete until this finishes.`;
+  } else if (data.status === 'error') {
+    marker.hidden = false;
+    marker.textContent = `Search index failed to build${data.error ? `: ${data.error}` : ''}. Search may be empty or stale.`;
+  } else {
+    marker.hidden = true;
+    marker.textContent = '';
+  }
+}
+
+let manualFsSearchIndexPollTimer = null;
+async function pollManualFsSearchIndexStatus() {
+  const res = await fetch(`/api/manual-review/search-index/status?${manualFsSearchIndexQuery()}`).catch(() => null);
+  clearTimeout(manualFsSearchIndexPollTimer);
+  if (!res || !res.ok) {
+    manualFsSearchIndexPollTimer = setTimeout(pollManualFsSearchIndexStatus, 30000);
+    return;
+  }
+  const data = await res.json();
+  renderManualFsSearchIndexMarker(data);
+  const stillWorking = data.status === 'building' || data.status === 'updating';
+  manualFsSearchIndexPollTimer = setTimeout(pollManualFsSearchIndexStatus, stillWorking ? 3000 : 30000);
+}
+
+function renderManualFsSearchResults(data) {
+  renderManualFsSearchIndexMarker(data);
+  const container = $('manualFsSearchResults');
+  container.innerHTML = data.results.map((item) => `
+    <div class="manual-fs-search-result-row" data-path="${escapeHtml(item.path)}">
+      <div class="manual-fs-search-result-name">${escapeHtml(item.name)}</div>
+      <div class="manual-fs-search-result-path">${escapeHtml(item.path)}</div>
+    </div>
+  `).join('');
+  container.querySelectorAll('.manual-fs-search-result-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const path = row.dataset.path;
+      container.innerHTML = '';
+      $('manualFsSearchInput').value = '';
+      $('manualBrowsePath').value = path;
+      discoverManualTargets(path);
+    });
+  });
+}
+
+let manualFsSearchDebounce = null;
+$('manualFsSearchInput').addEventListener('input', (e) => {
+  clearTimeout(manualFsSearchDebounce);
+  const query = e.target.value.trim();
+  if (!query) {
+    $('manualFsSearchResults').innerHTML = '';
+    return;
+  }
+  manualFsSearchDebounce = setTimeout(async () => {
+    const res = await fetch('/api/manual-review/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, ignored_folders: manualReviewIgnoredFolders() }),
+    }).catch(() => null);
+    if (!res || !res.ok) return;
+    renderManualFsSearchResults(await res.json());
+  }, 250);
+});
+
 async function browseManualPath(path = $('manualBrowsePath').value.trim() || '/audiobooks') {
   $("manualDiscoveryMeta").textContent = "Loading folder...";
   $("manualBrowseBtn").disabled = true;
@@ -1538,6 +1618,7 @@ $('manualSearchBtn').addEventListener('click', searchManualTarget);
 $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());
 $("manualReloadCoverBtn").addEventListener("click", loadManualCurrentCover);
+pollManualFsSearchIndexStatus();
 loadScripts();
 resumeActiveRun();
 
