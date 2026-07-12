@@ -361,6 +361,14 @@ def is_asin_like_token(value: str) -> bool:
     return bool(_NOREALASIN_RE.fullmatch(token) or _ASIN_TOKEN_RE.fullmatch(token))
 
 
+def clean_asin_token(value: str) -> str:
+    """Return a real ASIN as-is, or "" for the NOREALASIN placeholder/blank."""
+    token = str(value or "").strip()
+    if not token or _NOREALASIN_RE.fullmatch(token):
+        return ""
+    return token
+
+
 def is_release_bracket_token(value: str) -> bool:
     """Return True for bracketed release metadata that should not become titles.
 
@@ -2764,6 +2772,10 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
                 "book_number": normalize_book_number(str(book.get("sequence", ""))),
                 "sequence_label": choose_sequence_label(str(book.get("sequence_label", "")), str(book.get("label", "")), str(title)),
                 "narrator": book.get("narrator", ""),
+                "asin": clean_asin_token(book.get("asin", "")),
+                "publisher": book.get("publisher", "") or "",
+                "genre": book.get("genre", "") or "",
+                "year": str(book.get("year", "") or ""),
                 "source": f"sidecar:{path.name}",
             }
 
@@ -2795,6 +2807,10 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
                 "book_number": normalize_book_number(str(audible_data.get("sequence", ""))),
                 "sequence_label": choose_sequence_label(str(audible_data.get("sequence_label", "")), str(audible_data.get("label", "")), str(audible_data.get("title", "")), str(audible_data.get("chosen_title", ""))),
                 "narrator": audible_data.get("narrator", ""),
+                "asin": clean_asin_token(audible_data.get("asin", "")),
+                "publisher": audible_data.get("publisher", "") or "",
+                "genre": audible_data.get("genre", "") or "",
+                "year": str(audible_data.get("year", "") or ""),
                 "source": f"marker:{path.name}",
             }
 
@@ -3329,6 +3345,10 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         "kind": item.kind,
         "metadata_source": tag_meta.get("source", "unknown"),
         "review_reasons": review_reasons,
+        "asin": tag_meta.get("asin", "") or "",
+        "publisher": tag_meta.get("publisher", "") or "",
+        "genre": tag_meta.get("genre", "") or "",
+        "year": tag_meta.get("year", "") or "",
     }
 
 
@@ -3472,26 +3492,228 @@ def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -
     return destination_root / author_dir / book_folder
 
 
-def empty_structure_cache(destination_root: Path) -> dict[str, Any]:
+DEFAULT_NAMING_TEMPLATE = "{author}/{series_dir}/{book_folder}/"
+
+
+def naming_template_filename_for_item(item: BookItem, template_filename: str | None) -> str | None:
+    """A template's filename segment only ever applies to true single-file books.
+
+    Multi-file (multi-chapter/track) books keep their existing filenames
+    untouched regardless of what the filename template contains -- those
+    files typically already carry meaningful structure (chapter/track
+    numbers) that a single generic template can't safely reconstruct
+    per-file without destroying it. This is deliberately unconditional: it
+    doesn't matter whether Fixer has already run or the names look messy,
+    multi-file internals are simply out of scope for this feature.
+    """
+    if len(item.audio_files) != 1:
+        return None
+    return template_filename
+
+
+def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
+    """Build the {token} -> value map a naming template renders against.
+
+    Raw fields pass through metadata as-is (author is canonicalized the same
+    way build_default_target_dir() already canonicalizes it). {series_dir}
+    and {book_folder} are composite tokens that reuse series_dir_label() and
+    build_book_folder_name() verbatim -- including build_default_target_dir()'s
+    no-series edition-tag relocation -- so a template using them keeps the
+    existing redundant-title collapsing and tag-placement behavior exactly,
+    rather than re-deriving it from raw fields (which can't reproduce it; see
+    the design doc's "why not just {book_number} - {title}" note).
+    """
+    author = sanitize_path_name(
+        canonical_author_name(metadata.get("author_primary") or metadata.get("author")),
+        "Unknown Author",
+    )
+    book_folder = build_book_folder_name(metadata)
+    if not metadata.get("series") and metadata.get("edition_tag"):
+        book_folder = sanitize_path_name(f"{book_folder} [{metadata['edition_tag']}]", book_folder)
+    return {
+        "author": author,
+        "series": metadata.get("series", "") or "",
+        "title": metadata.get("title", "") or "",
+        "book_number": metadata.get("book_number", "") or "",
+        "sequence_label": metadata.get("sequence_label", "") or "",
+        "narrator": metadata.get("narrator", "") or "",
+        "edition_tag": metadata.get("edition_tag", "") or "",
+        "asin": metadata.get("asin", "") or "",
+        "publisher": metadata.get("publisher", "") or "",
+        "genre": metadata.get("genre", "") or "",
+        "year": metadata.get("year", "") or "",
+        "series_dir": series_dir_label(metadata) if metadata.get("series") else "",
+        "book_folder": book_folder,
+    }
+
+
+NAMING_TEMPLATE_TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+class UnknownNamingTokenError(ValueError):
+    """A naming template referenced a token with no known value source."""
+
+    def __init__(self, token: str):
+        super().__init__(f"Unknown naming template token: {{{token}}}")
+        self.token = token
+
+
+def _render_naming_segment(segment: str, token_values: dict[str, str]) -> tuple[str, bool]:
+    """Render one literal/token segment. Returns (rendered, needs_review).
+
+    needs_review is set only when the segment references two or more
+    distinct tokens and every one of them resolved to an empty value --
+    there's genuinely not enough data to build that path part, as opposed
+    to a single missing optional field (which the caller collapses
+    silently) or a partially-populated segment (which renders as-is).
+    """
+    tokens = NAMING_TEMPLATE_TOKEN_RE.findall(segment)
+    for token in tokens:
+        if token not in token_values:
+            raise UnknownNamingTokenError(token)
+
+    rendered = NAMING_TEMPLATE_TOKEN_RE.sub(lambda m: token_values.get(m.group(1), ""), segment)
+
+    distinct_tokens = set(tokens)
+    all_empty = bool(distinct_tokens) and all(not token_values.get(t) for t in distinct_tokens)
+    needs_review = len(distinct_tokens) >= 2 and all_empty
+    return rendered, needs_review
+
+
+NAMING_TOKEN_NAMES = frozenset(
+    {
+        "author",
+        "series",
+        "title",
+        "book_number",
+        "sequence_label",
+        "narrator",
+        "edition_tag",
+        "asin",
+        "publisher",
+        "genre",
+        "year",
+        "series_dir",
+        "book_folder",
+    }
+)
+
+
+def validate_naming_template(template: str) -> list[str]:
+    """Static, pre-run checks for a naming template. Returns human-readable problems."""
+    problems: list[str] = []
+    stripped = NAMING_TEMPLATE_TOKEN_RE.sub("", template)
+    if "{" in stripped or "}" in stripped:
+        problems.append("Unbalanced or malformed curly brace in template.")
+    for token in NAMING_TEMPLATE_TOKEN_RE.findall(template):
+        if token not in NAMING_TOKEN_NAMES:
+            problems.append(f"Unknown token: {{{token}}}")
+    if "/" not in template:
+        problems.append("Template has no '/' -- nothing would build a destination folder.")
+    return problems
+
+
+def build_target_dir_for_template(
+    destination_root: Path, metadata: dict[str, Any], naming_template: str
+) -> tuple[Path, str | None, list[str]]:
+    """Render a naming template into a destination folder path and filename.
+
+    Delegates straight to the existing, unchanged build_default_target_dir()
+    when the template is the shipped default -- zero behavioral risk to the
+    hardcoded logic and its full existing test coverage. A custom template
+    goes through resolve_naming_tokens()/render_naming_template() instead.
+
+    Returns (target_dir, filename_or_None, review_reasons) -- the caller is
+    responsible for merging review_reasons into whatever metadata dict it
+    carries forward, same as every other review-reason source in this file.
+    """
+    if naming_template == DEFAULT_NAMING_TEMPLATE:
+        return build_default_target_dir(destination_root, metadata), None, []
+
+    tokens = resolve_naming_tokens(metadata)
+    folder_segments, filename, reasons = render_naming_template(naming_template, tokens)
+    return destination_root.joinpath(*folder_segments), filename, reasons
+
+
+def render_naming_template(
+    template: str, token_values: dict[str, str]
+) -> tuple[list[str], str | None, list[str]]:
+    """Render a user-defined naming template against resolved token values.
+
+    Splits `template` on its final "/" into a folder-path part and a
+    filename part. Each "/"-delimited folder segment collapses (is
+    dropped) when it renders empty from at most one distinct token --
+    covering both an absent optional field (e.g. no series) and a purely
+    literal empty segment (e.g. an accidental "//"). A segment built from
+    two or more distinct tokens that are all empty is kept as rendered but
+    flagged for review instead of silently guessing. The filename segment
+    follows the same rules, except an empty result falls back to `None`
+    (the caller should keep the original filename) rather than being
+    dropped outright.
+
+    Returns (folder_segments, filename_or_None, review_reasons).
+    """
+    if "/" in template:
+        folder_template, _, filename_template = template.rpartition("/")
+    else:
+        folder_template, filename_template = "", template
+
+    review_reasons: list[str] = []
+    folder_segments: list[str] = []
+    if folder_template:
+        for raw_segment in folder_template.split("/"):
+            rendered, needs_review = _render_naming_segment(raw_segment, token_values)
+            distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
+            if needs_review:
+                review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
+                folder_segments.append(rendered)
+            elif len(distinct_tokens) <= 1 and rendered == "":
+                continue
+            else:
+                folder_segments.append(rendered)
+
+    filename: str | None = None
+    if filename_template:
+        rendered, needs_review = _render_naming_segment(filename_template, token_values)
+        if needs_review:
+            review_reasons.append(f"not enough data to build filename '{filename_template}'")
+        elif rendered:
+            filename = rendered
+
+    return folder_segments, filename, review_reasons
+
+
+def empty_structure_cache(
+    destination_root: Path, naming_template: str = DEFAULT_NAMING_TEMPLATE
+) -> dict[str, Any]:
     return {
         "schema_version": STRUCTURE_CACHE_SCHEMA_VERSION,
         "destination_root": str(destination_root),
+        "naming_template": naming_template,
         "generated_at": utc_now(),
         "entries": [],
     }
 
 
-def load_structure_cache(cache_path: Path, destination_root: Path) -> dict[str, Any]:
+def load_structure_cache(
+    cache_path: Path, destination_root: Path, naming_template: str = DEFAULT_NAMING_TEMPLATE
+) -> dict[str, Any]:
     if not cache_path.is_file():
-        return empty_structure_cache(destination_root)
+        return empty_structure_cache(destination_root, naming_template)
     try:
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return empty_structure_cache(destination_root)
+        return empty_structure_cache(destination_root, naming_template)
     if cache.get("schema_version") != STRUCTURE_CACHE_SCHEMA_VERSION:
-        return empty_structure_cache(destination_root)
+        return empty_structure_cache(destination_root, naming_template)
     if cache.get("destination_root") != str(destination_root):
-        return empty_structure_cache(destination_root)
+        return empty_structure_cache(destination_root, naming_template)
+    # A cache written before this feature existed has no naming_template key
+    # at all -- treat that as "built under the default template" rather than
+    # an automatic mismatch, so upgrading to this feature doesn't invalidate
+    # every existing user's cache the moment they update.
+    if cache.get("naming_template", DEFAULT_NAMING_TEMPLATE) != naming_template:
+        return empty_structure_cache(destination_root, naming_template)
     cache.setdefault("entries", [])
     return cache
 
@@ -3516,7 +3738,12 @@ def register_structure_entry(cache: dict[str, Any], entry: dict[str, Any]) -> No
     cache["entries"].append(entry)
 
 
-def build_structure_cache(destination_root: Path, cache_path: Path, progress_every: int = 100) -> dict[str, Any]:
+def build_structure_cache(
+    destination_root: Path,
+    cache_path: Path,
+    progress_every: int = 100,
+    naming_template: str = DEFAULT_NAMING_TEMPLATE,
+) -> dict[str, Any]:
     items = build_book_items(destination_root, destination_root)
     book_items = [item for item in items if item.kind == "folder"]
     raw_records: list[dict[str, Any]] = []
@@ -3563,7 +3790,7 @@ def build_structure_cache(destination_root: Path, cache_path: Path, progress_eve
         if record["series_key"]:
             grouped[record["series_key"]].append(record)
 
-    cache = empty_structure_cache(destination_root)
+    cache = empty_structure_cache(destination_root, naming_template)
     for series_key, records in grouped.items():
         series_counts = Counter(record["series"] for record in records if record.get("series"))
         canonical_series = series_counts.most_common(1)[0][0]
@@ -3707,18 +3934,46 @@ def apply_cache_to_metadata(metadata: dict[str, Any], cache_entry: dict[str, Any
     return metadata
 
 
-def build_cached_target_dir(destination_root: Path, metadata: dict[str, Any], cache: dict[str, Any]) -> tuple[Path, str, dict[str, Any]]:
+def build_cached_target_dir(
+    destination_root: Path,
+    metadata: dict[str, Any],
+    cache: dict[str, Any],
+    naming_template: str = DEFAULT_NAMING_TEMPLATE,
+) -> tuple[Path, str, dict[str, Any]]:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
     if metadata.get("edition_tag"):
-        return build_default_target_dir(destination_root, metadata), "new", metadata
+        target, _filename, reasons = build_target_dir_for_template(destination_root, metadata, naming_template)
+        if reasons:
+            metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, reasons))
+        return target, "new", metadata
 
     series_dir, status, entry = resolve_series_directory(cache, metadata)
     effective_metadata = apply_cache_to_metadata(metadata, entry)
-    book_folder = build_book_folder_name(effective_metadata)
     if series_dir is not None:
+        # Known limitation: a book routed into an already-indexed series
+        # folder always uses build_book_folder_name() for its leaf, not the
+        # naming_template -- the structure cache only stores author/series
+        # path aliases, not a per-book rendered leaf. Since the cache is
+        # invalidated whenever naming_template changes (see
+        # load_structure_cache), this branch only fires once a rebuild has
+        # already happened, at which point book_folder still reflects the
+        # built-in logic rather than the active template's own book-level
+        # segment definition.
+        book_folder = build_book_folder_name(effective_metadata)
         return series_dir / book_folder, status, effective_metadata
-    return build_default_target_dir(destination_root, effective_metadata), status, effective_metadata
+    target, _filename, reasons = build_target_dir_for_template(destination_root, effective_metadata, naming_template)
+    if reasons:
+        effective_metadata = dict(effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, reasons))
+    return target, status, effective_metadata
+
+
+def _merged_review_reasons(metadata: dict[str, Any], reasons: list[str]) -> list[str]:
+    existing = list(metadata.get("review_reasons", []))
+    for reason in reasons:
+        if reason not in existing:
+            existing.append(reason)
+    return existing
 
 
 
@@ -4376,7 +4631,20 @@ def main() -> None:
     parser.add_argument("--max-items", type=int, default=0, help="Limit scanned book items. 0 means no limit.")
     parser.add_argument("--progress-every", type=int, default=25, help="Print progress every N items. 0 disables progress.")
     parser.add_argument("--override-file", help="Optional JSON file for manual canonical series/author overrides. Useful for cases like co-authored series where metadata order is not the desired folder author.")
+    parser.add_argument(
+        "--naming-template",
+        default=DEFAULT_NAMING_TEMPLATE,
+        help=(
+            "Destination folder/filename template. '/' marks a folder level, "
+            "everything after the last '/' is the filename (applies only to "
+            "single-file books). Default reproduces the built-in scheme."
+        ),
+    )
     args = parser.parse_args()
+
+    naming_template_problems = validate_naming_template(args.naming_template)
+    if naming_template_problems:
+        parser.error("Invalid --naming-template: " + "; ".join(naming_template_problems))
 
     root = Path(args.root).resolve()
     if not root.is_dir():
@@ -4391,11 +4659,11 @@ def main() -> None:
     cache_path = Path(args.structure_cache).resolve()
     overrides = load_overrides(Path(args.override_file).resolve() if args.override_file else None)
     if args.no_structure_cache:
-        cache = empty_structure_cache(destination_root)
+        cache = empty_structure_cache(destination_root, args.naming_template)
     elif args.rebuild_structure_cache or args.index_only or not cache_path.is_file():
-        cache = build_structure_cache(destination_root, cache_path, args.progress_every)
+        cache = build_structure_cache(destination_root, cache_path, args.progress_every, args.naming_template)
     else:
-        cache = load_structure_cache(cache_path, destination_root)
+        cache = load_structure_cache(cache_path, destination_root, args.naming_template)
 
     if overrides:
         cache = apply_overrides_to_cache(cache, overrides)
@@ -4462,7 +4730,7 @@ def main() -> None:
         )
         if skip_due_to_pattern:
             skipped_pattern_match += 1
-            target_dir = build_default_target_dir(destination_root, metadata)
+            target_dir, _filename, _reasons = build_target_dir_for_template(destination_root, metadata, args.naming_template)
             reason = f"skipped: matched skip pattern: {skip_pattern}"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -4476,7 +4744,7 @@ def main() -> None:
 
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
-            target_dir = build_default_target_dir(destination_root, metadata)
+            target_dir, _filename, _reasons = build_target_dir_for_template(destination_root, metadata, args.naming_template)
             reason = "skipped unknown author"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -4488,7 +4756,9 @@ def main() -> None:
             print(f"SKIP: unknown author | {item.source_path}", file=sys.stderr)
             continue
 
-        target_dir, structure_status, effective_metadata = build_cached_target_dir(destination_root, metadata, cache)
+        target_dir, structure_status, effective_metadata = build_cached_target_dir(
+            destination_root, metadata, cache, naming_template=args.naming_template
+        )
         metadata = effective_metadata
         if structure_status == "existing":
             matched_existing_structure += 1
