@@ -387,7 +387,7 @@ class OriginalAndFilenameTokenTests(unittest.TestCase):
         # ("Dao of Magic - Book 5") -- the descriptive title must survive.
         _f, filename, _r = self._render(
             "{author}/{series} [{edition}]/{order} - {title}/{filename}",
-            {"series": "Dao of Magic", "order": "Book 5", "title": "The Dao of Magic V", "edition": ""},
+            {"series": "Dao of Magic", "order": "Book 5", "number": "5", "title": "The Dao of Magic V", "edition": ""},
             title_redundant_with_order=True,
             source_file=Path("/lib/The Dao of Magic V - vol_05 [ENG] {Narr}.m4b"),
             destination_root=Path("/audiobooks"),
@@ -404,6 +404,54 @@ class OriginalAndFilenameTokenTests(unittest.TestCase):
             destination_root=Path("/audiobooks"),
         )
         self.assertEqual(filename, "Great Title")
+
+    def test_filename_noisy_generic_title_keeps_book_number(self):
+        # A generic title (== series, no number in it) must keep the book number:
+        # fall back to "Book N - Title", not title-only, which would collapse
+        # different books in the series to the same name.
+        _f, filename, _r = self._render(
+            "{author}/{series}/{order} - {title}/{filename}",
+            {"series": "Crystal Core", "order": "Book 4", "number": "4", "title": "Crystal Core"},
+            source_file=Path("/lib/Crystal Core [128].m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "Book 4 - Crystal Core")
+
+    def test_filename_title_that_encodes_number_drops_redundant_order(self):
+        # When the title already carries the number (roman V == book 5), the
+        # order prefix would be redundant, so use the title alone.
+        _f, filename, _r = self._render(
+            "{author}/{series}/{order} - {title}/{filename}",
+            {"series": "Dao of Magic", "order": "Book 5", "number": "5", "title": "The Dao of Magic V"},
+            title_redundant_with_order=True,
+            source_file=Path("/lib/Dao of Magic V [128].m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "The Dao of Magic V")
+
+    def test_filename_short_series_not_matched_inside_larger_words(self):
+        # A short series ("Age") must not spuriously match inside "Mage" /
+        # "Rampage" -- whole-word matching keeps a clean distinct source name
+        # (with content beyond the title) from being flagged and rebuilt.
+        _f, filename, _r = self._render(
+            "{author}/{filename}",
+            {"series": "Age", "title": "The Mage's Rampage"},
+            source_file=Path("/lib/The Mage's Rampage - Director's Cut.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "The Mage's Rampage - Director's Cut")
+
+    def test_filename_doubled_series_jumble_is_treated_as_junk(self):
+        # A source name that merely restates the metadata (series doubled) is
+        # junk even without bracketed release tags, so it must resolve to a
+        # clean metadata name rather than passing through verbatim.
+        _f, filename, _r = self._render(
+            "{author}/{series}/{order} - {title}/{filename}",
+            {"series": "Crystal Core", "order": "Book 1", "number": "1", "title": "Crystal Core"},
+            source_file=Path("/lib/Crystal_Core_Crystal_Core, Book 1.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "Book 1 - Crystal Core")
 
     def test_tokens_render_empty_in_folder_segment(self):
         # {original}/{filename} are filename-only; in a folder level they are

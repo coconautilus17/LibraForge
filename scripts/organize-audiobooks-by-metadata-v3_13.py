@@ -3991,6 +3991,68 @@ def _token_values_for_segment(
     return token_values
 
 
+def _title_encodes_sequence_number(title: str, series: str, number: str) -> bool:
+    """True when `title` already carries this book's number itself (a roman
+    numeral or bare digit equal to `number`), e.g. "The Dao of Magic V" for
+    book 5. Narrower than title_is_redundant_with_sequence(): a title that is
+    merely the bare series name (no number, e.g. "Crystal Core") is NOT
+    treated as carrying the number, so its order prefix is still kept.
+    """
+    if not number:
+        return False
+    remainder = (strip_series_prefix(title, series) if series else title).strip(" -_.:,")
+    if not remainder:
+        return False
+    if re.fullmatch(r"\d{1,4}(?:\.\d+)?", remainder) and normalize_book_number(remainder) == normalize_book_number(number):
+        return True
+    roman = roman_numeral_value(remainder)
+    return bool(roman and normalize_book_number(roman) == normalize_book_number(number))
+
+
+def _loose_name_restates_metadata(source_stem: str, token_values: dict[str, str]) -> bool:
+    """True when a loose source name is just a jumbled restatement of the
+    metadata rather than a real title -- e.g. the series (or title) name
+    appearing twice, as in "Crystal_Core_Crystal_Core, Book 1". These slip
+    past the bracket/keyword release-junk detector but carry no information
+    beyond what the metadata already has, so they should be rebuilt from
+    metadata rather than kept verbatim.
+
+    Matching is on whole words (underscores/punctuation normalized to spaces,
+    `\b`-anchored) so a short series like "Age" never spuriously matches
+    inside "Mage"/"Rampage".
+    """
+    haystack = re.sub(r"[^a-z0-9]+", " ", source_stem.lower()).strip()
+    if not haystack:
+        return False
+    for field in ("series", "title"):
+        needle = re.sub(r"[^a-z0-9]+", " ", (token_values.get(field) or "").lower()).strip()
+        if needle and len(re.findall(r"\b" + re.escape(needle) + r"\b", haystack)) >= 2:
+            return True
+    return False
+
+
+def _metadata_filename_base(
+    token_values: dict[str, str], target_dir: Path, source_file: Path
+) -> str:
+    """Build a clean filename stem from metadata when the source name is junk.
+    Keeps both the descriptive title and the book number: "Book N - Title",
+    dropping the order prefix only when the title already encodes the number
+    (see _title_encodes_sequence_number). Falls back to the folder-derived
+    cleanup, then the source stem, when there is no usable title.
+    """
+    title = (token_values.get("title") or "").strip()
+    order = (token_values.get("order") or "").strip()
+    series = (token_values.get("series") or "").strip()
+    number = (token_values.get("number") or "").strip()
+    if title:
+        if order and not _title_encodes_sequence_number(title, series, number):
+            return f"{order} - {title}"
+        return title
+    if order:
+        return order
+    return Path(clean_loose_audio_filename(source_file, target_dir)).stem
+
+
 def render_naming_template(
     template: str,
     token_values: dict[str, str],
@@ -4058,15 +4120,13 @@ def render_naming_template(
                 target_dir = destination_root.joinpath(*folder_segments)
             else:
                 target_dir = Path(*folder_segments) if folder_segments else Path(".")
-            if filename_has_cleanup_noise(source_file.name):
-                # The source name is release junk. Prefer the book's real
-                # metadata title over the destination folder leaf, which for a
-                # redundant-title book collapses to a bare "Book 5" and would
-                # otherwise drop the descriptive title. Fall back to the
-                # folder-derived cleanup (whose own last resort is the source
-                # stem) only when there is no usable title.
-                title_fallback = (token_values.get("title") or "").strip()
-                cleaned_stem = title_fallback or Path(clean_loose_audio_filename(source_file, target_dir)).stem
+            if filename_has_cleanup_noise(source_file.name) or _loose_name_restates_metadata(source_file.stem, token_values):
+                # The source name is release junk (bracket/keyword tags) or a
+                # jumbled restatement of the metadata (e.g. a doubled series
+                # name). Rebuild a clean "Book N - Title" from metadata rather
+                # than keep it or collapse to the bare "Book 5" folder leaf --
+                # so both the descriptive title and the book number survive.
+                cleaned_stem = _metadata_filename_base(token_values, target_dir, source_file)
             else:
                 cleaned_stem = source_file.stem
             segment_values = dict(
