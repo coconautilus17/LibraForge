@@ -380,6 +380,31 @@ class OriginalAndFilenameTokenTests(unittest.TestCase):
         )
         self.assertIsNone(filename)
 
+    def test_filename_noisy_source_falls_back_to_metadata_title_not_folder(self):
+        # A redundant title collapses the folder leaf to "Book 5", but when the
+        # source name is too noisy to keep, {filename} must fall back to the
+        # metadata TITLE ("The Dao of Magic V"), not the collapsed folder leaf
+        # ("Dao of Magic - Book 5") -- the descriptive title must survive.
+        _f, filename, _r = self._render(
+            "{author}/{series} [{edition}]/{order} - {title}/{filename}",
+            {"series": "Dao of Magic", "order": "Book 5", "title": "The Dao of Magic V", "edition": ""},
+            title_redundant_with_order=True,
+            source_file=Path("/lib/The Dao of Magic V - vol_05 [ENG] {Narr}.m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "The Dao of Magic V")
+
+    def test_filename_noisy_source_no_title_still_falls_back_to_folder(self):
+        # With no usable metadata title, the folder-derived cleanup remains the
+        # secondary fallback (source path stays the last resort inside it).
+        _f, filename, _r = self._render(
+            "{author}/{title}/{filename}",
+            {"title": "Great Title"},
+            source_file=Path("/lib/random junk [128] [2025].m4b"),
+            destination_root=Path("/audiobooks"),
+        )
+        self.assertEqual(filename, "Great Title")
+
     def test_tokens_render_empty_in_folder_segment(self):
         # {original}/{filename} are filename-only; in a folder level they are
         # empty (single-token segment collapses).

@@ -4058,10 +4058,21 @@ def render_naming_template(
                 target_dir = destination_root.joinpath(*folder_segments)
             else:
                 target_dir = Path(*folder_segments) if folder_segments else Path(".")
+            if filename_has_cleanup_noise(source_file.name):
+                # The source name is release junk. Prefer the book's real
+                # metadata title over the destination folder leaf, which for a
+                # redundant-title book collapses to a bare "Book 5" and would
+                # otherwise drop the descriptive title. Fall back to the
+                # folder-derived cleanup (whose own last resort is the source
+                # stem) only when there is no usable title.
+                title_fallback = (token_values.get("title") or "").strip()
+                cleaned_stem = title_fallback or Path(clean_loose_audio_filename(source_file, target_dir)).stem
+            else:
+                cleaned_stem = source_file.stem
             segment_values = dict(
                 segment_values,
                 original=source_file.stem,
-                filename=Path(clean_loose_audio_filename(source_file, target_dir)).stem,
+                filename=cleaned_stem,
             )
             # When the template writes {asin}, an identifier already present
             # in the source name/path that disagrees with the metadata ASIN
