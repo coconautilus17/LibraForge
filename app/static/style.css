@@ -1863,17 +1863,6 @@ summary:focus-visible {
   color: var(--danger);
 }
 
-.naming-template-fixer-warning {
-  margin: 0 0 10px;
-  padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  border: 1px solid var(--danger);
-  color: var(--danger);
-  font-size: var(--font-xs);
-  line-height: 1.5;
-}
-
 .naming-template-tokens {
   margin-top: 10px;
 }

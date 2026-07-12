@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-3" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-4" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -85,8 +85,8 @@
 
       <div class="wide naming-template-section">
         <span class="field-label">Naming template <span class="info-tip" data-tooltip="Controls the destination folder path and, for single-file books only, the filename. See 'Available tokens' below for the full list and examples."></span></span>
-        <div class="naming-template-fixer-warning" role="alert">
-          <strong>Run Fixer before Folder Forge.</strong> Multi-file (chapter/track) detection relies on clean, consistent metadata — unfixed source files can fail to group correctly and get treated as individual single-file books, exposing their filenames to this template. A book Folder Forge does correctly recognize as multi-file is never renamed at the file level, regardless of what this template says.
+        <div class="dryrun-notice danger" role="alert">
+          <strong>Warning:</strong> Run Fixer before Folder Forge. Multi-file (chapter/track) detection relies on clean, consistent metadata — unfixed source files can fail to group correctly and get treated as individual single-file books, exposing their filenames to this template. A book Folder Forge does correctly recognize as multi-file is never renamed at the file level, regardless of what this template says.
         </div>
         <input id="namingTemplate" value="{author}/{series}/{order} - {title},{edition}/" spellcheck="false" autocomplete="off" />
         <p id="namingTemplateStatus" class="note naming-template-status" hidden></p>
