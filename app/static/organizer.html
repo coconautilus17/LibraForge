@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -84,10 +84,37 @@
       </div>
 
       <div class="wide naming-template-section">
-        <span class="field-label">Naming template <span class="info-tip" data-tooltip="Controls the destination folder path and, for single-file books only, the filename. Use {token} for metadata (author, series, title, book_number, narrator, asin, publisher, genre, year, series_dir, book_folder), '/' to mark folder levels, and any other text literally. Everything after the last '/' is the filename; leave it blank (trailing '/') to keep the original filename."></span></span>
-        <input id="namingTemplate" value="{author}/{series_dir}/{book_folder}/" spellcheck="false" autocomplete="off" />
+        <span class="field-label">Naming template <span class="info-tip" data-tooltip="Controls the destination folder path and, for single-file books only, the filename. See 'Available tokens' below for the full list and examples."></span></span>
+        <div class="naming-template-fixer-warning" role="alert">
+          <strong>Run Fixer before Folder Forge.</strong> Multi-file (chapter/track) detection relies on clean, consistent metadata — unfixed source files can fail to group correctly and get treated as individual single-file books, exposing their filenames to this template. A book Folder Forge does correctly recognize as multi-file is never renamed at the file level, regardless of what this template says.
+        </div>
+        <input id="namingTemplate" value="{author}/{series}/{order} - {title},{edition}/" spellcheck="false" autocomplete="off" />
         <p id="namingTemplateStatus" class="note naming-template-status" hidden></p>
-        <p class="note naming-template-filename-warning">Multi-file (multi-chapter/track) books never have their internal filenames renamed by this template, even if the template sets one — those names are left exactly as-is. Run Fixer before Folder Forge so chapter/track names are already correct.</p>
+        <details class="naming-template-tokens explanation-disclosure">
+          <summary>Available tokens</summary>
+          <dl class="naming-template-token-list">
+            <dt><code>{author}</code></dt>
+            <dd>The book's author. Defaults to "Unknown Author" when missing — this token never leaves its folder level empty. Example: <code>Brandon Sanderson</code></dd>
+            <dt><code>{narrator}</code></dt>
+            <dd>The audiobook narrator, when known. Example: <code>Michael Kramer</code></dd>
+            <dt><code>{series}</code></dt>
+            <dd>The series name, when the book belongs to one. Example: <code>Mistborn</code></dd>
+            <dt><code>{title}</code></dt>
+            <dd>The book's title &mdash; left empty when it's redundant with the series and order (e.g. a title that's just "Book 3"), so a template like <code>{order} - {title}</code> doesn't produce "Book 3 - Book 3". Example: <code>The Final Empire</code></dd>
+            <dt><code>{order}</code></dt>
+            <dd>The auto-detected sequence label and number together (Book/Vol./Volume/Side Story, picked up from whatever the source data actually uses), empty when there's no series or no detected number. Examples: <code>Book 3</code>, <code>Vol. 2</code></dd>
+            <dt><code>{edition}</code></dt>
+            <dd>An auto-detected imprint tag for dramatized/audio-drama adaptations. Example: <code>GraphicAudio</code></dd>
+            <dt><code>{publisher}</code></dt>
+            <dd>The publisher, when known. Example: <code>Tor Books</code></dd>
+            <dt><code>{year}</code></dt>
+            <dd>The release year, when known. Example: <code>2006</code></dd>
+            <dt><code>{asin}</code></dt>
+            <dd>The Audible ASIN, when known. Example: <code>B002UZZDDU</code></dd>
+          </dl>
+          <p>Use <code>/</code> to mark a folder level; everything after the last <code>/</code> is the filename, which only applies to true single-file books. A folder level made of exactly one token is dropped entirely when that token is empty. A level combining two or more tokens is flagged for review only if <em>all</em> of them are empty; otherwise it renders with whatever is there.</p>
+          <p>Example: <code>{author}/{series}/{order} - {title},{edition}/</code> (the default shown above) never renames files, since it ends in <code>/</code>.</p>
+        </details>
         <div id="namingTemplatePreview" class="naming-template-preview" hidden></div>
       </div>
 
