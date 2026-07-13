@@ -36,6 +36,7 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+import app.library_index as library_index
 from app.library_index import DISC_RE as _DISC_RE
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
@@ -4309,73 +4310,46 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders) + sorted(loose_root_files)
 
 
-def _build_manual_review_search_index(
-    root: Path,
-    ignored_folders: list[str],
-    on_progress: Callable[[int], None] | None = None,
+def _filter_entries_by_ignored_folders(
+    entries: list[tuple[str, bool]], root: Path, ignored_folders: list[str]
 ) -> list[tuple[str, bool]]:
-    """Walk root once and return every book-level entry as (path, is_file).
-
-    Same folder-level shape as _find_book_folders (disc-subfolder collapsing,
-    loose root files as their own entries), but also prunes the user's
-    configured ignore tokens *during* the walk -- not as a post-filter --
-    since an ignored folder (e.g. a recycle bin) could itself be huge and
-    pruning at walk time avoids ever descending into it. Reimplements
-    matches_ignored_folders' case-insensitive prefix-match semantics inline
-    (checking the directory's own name is enough here: an ignored ancestor
-    is never descended into, so there's nothing further down to re-check).
+    """Post-filter the shared index's entries by ignored_folders: an entry
+    is dropped if any path component between root and the entry (the
+    entry's own folder name included, a loose file's own filename
+    excluded) starts with an ignore token, case-insensitively. Mirrors
+    matches_ignored_folders' semantics (fixer script) as an in-memory
+    filter over an already-built list, since the shared walker itself has
+    no concept of any single consumer's ignore list.
     """
-    tokens = tuple(_FS_SKIP_PREFIXES) + tuple(
-        f.strip().lower() for f in (ignored_folders or []) if f and f.strip()
-    )
-    audio_folders: set[Path] = set()
-    loose_root_files: list[Path] = []
-    count = 0
-    try:
-        for dirpath, dirnames, filenames in os.walk(str(root)):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not any(d.lower().startswith(t) for t in tokens)
-            )
-            p = Path(dirpath)
-            if p == root:
-                loose_root_files.extend(
-                    p / f for f in sorted(filenames) if is_audio_file(p / f)
-                )
-                continue
-            if any(is_audio_file(p / f) for f in filenames):
-                audio_folders.add(p)
-                count += 1
-                if on_progress:
-                    on_progress(count)
-    except PermissionError:
-        pass
-
-    book_folders: set[Path] = set()
-    for folder in audio_folders:
-        if _DISC_RE.match(folder.name) and folder.parent != root:
-            book_folders.add(folder.parent)
-        else:
-            book_folders.add(folder)
-
-    entries = [(str(f), False) for f in sorted(book_folders)]
-    entries.extend((str(f), True) for f in sorted(loose_root_files))
-    return entries
+    tokens = tuple(f.strip().lower() for f in (ignored_folders or []) if f and f.strip())
+    if not tokens:
+        return list(entries)
+    kept: list[tuple[str, bool]] = []
+    for path_str, is_file in entries:
+        path = Path(path_str)
+        check_path = path.parent if is_file else path
+        try:
+            rel_parts = check_path.relative_to(root).parts
+        except ValueError:
+            rel_parts = check_path.parts
+        if not any(part.lower().startswith(token) for part in rel_parts for token in tokens):
+            kept.append((path_str, is_file))
+    return kept
 
 
 @dataclass
 class _ManualReviewSearchIndex:
     """In-memory state for the Manual Review filesystem search index.
 
-    One module-level instance -- scope is always the whole AUDIOBOOKS_ROOT,
-    never a sub-path, so there's no need for the path-keyed dict _scan_cache
-    uses. entries is a flat (path, is_file) list built once per fresh index;
-    search() filters it in memory rather than re-walking or re-stat'ing.
+    Derived from the shared library_index state rather than running its own
+    walk. source_generation tracks which shared-index generation this was
+    last derived from, replacing the old root+first-level fingerprint as
+    the staleness signal.
     """
     status: str = "idle"  # idle | building | updating | ready | error
     entries: list[tuple[str, bool]] = field(default_factory=list)
     book_count: int = 0
-    fingerprint: str | None = None
+    source_generation: int = -1
     ignored_signature: str | None = None
     error: str | None = None
 
@@ -4385,19 +4359,27 @@ _manual_review_search_lock = threading.Lock()
 
 
 def _manual_review_search_index_is_stale(
-    state: _ManualReviewSearchIndex, fingerprint: str, ignored_signature: str
+    state: _ManualReviewSearchIndex, generation: int, ignored_signature: str
 ) -> bool:
-    """Whether a (re)build should be started for the given library state.
+    """Whether Manual Review's own derived entries need rebuilding from the
+    current shared index state. A build already in flight is never
+    re-triggered; an error state always retries.
 
-    A build already in flight (building/updating) is never re-triggered --
-    the next check after it finishes will catch any newer drift. An error
-    state is always stale so the next check retries.
+    source_generation == -1 with status == "ready" only happens when a
+    caller (e.g. a test fixture) marks the state ready directly, bypassing
+    _run_manual_review_search_index_build, which always records a real
+    (non-negative) generation. Real production code never produces this
+    combination, so it is safe to treat it as "trust the caller's snapshot"
+    rather than force an immediate rebuild the caller has no way to predict
+    or avoid -- the ignore-list signature is still honored either way.
     """
     if state.status in ("building", "updating"):
         return False
+    if state.status == "ready" and state.source_generation == -1:
+        return state.ignored_signature != ignored_signature
     return (
         state.status != "ready"
-        or state.fingerprint != fingerprint
+        or state.source_generation != generation
         or state.ignored_signature != ignored_signature
     )
 
@@ -4405,21 +4387,17 @@ def _manual_review_search_index_is_stale(
 def _run_manual_review_search_index_build(
     state: _ManualReviewSearchIndex, root: Path, ignored_folders: list[str]
 ) -> None:
-    """Synchronously (re)build the index into `state`. Callers that want this
-    off the request thread wrap the call in a background thread; this
-    function itself has no threading concerns, which keeps it directly
-    testable."""
+    """Synchronously derive state's entries from the current shared index
+    state. Directly testable; callers wanting this off the request thread
+    wrap it in a background thread."""
     state.status = "updating" if state.entries else "building"
     state.error = None
-
-    def progress(n: int) -> None:
-        state.book_count = n
-
     try:
-        entries = _build_manual_review_search_index(root, ignored_folders, on_progress=progress)
+        shared = library_index.get_state()
+        entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
         state.entries = entries
         state.book_count = len(entries)
-        state.fingerprint = _library_fingerprint(root)
+        state.source_generation = shared.generation
         state.ignored_signature = _ignored_signature(ignored_folders)
         state.status = "ready"
     except Exception as exc:
@@ -4428,12 +4406,16 @@ def _run_manual_review_search_index_build(
 
 
 def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None:
-    """Kick off a background rebuild if the index is missing or stale.
-    Non-blocking: returns immediately whether or not a build was started."""
+    """Kick a non-blocking background rebuild of the shared index if
+    needed, then a non-blocking rebuild of this state's own filtered
+    entries if the shared index has moved on or the ignore list changed.
+    Returns immediately whether or not a build was started."""
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+
     state = _manual_review_search_index
-    fingerprint = _library_fingerprint(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
     signature = _ignored_signature(ignored_folders)
-    if not _manual_review_search_index_is_stale(state, fingerprint, signature):
+    if not _manual_review_search_index_is_stale(state, shared.generation, signature):
         return
     if not _manual_review_search_lock.acquire(blocking=False):
         return
