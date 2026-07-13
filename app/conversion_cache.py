@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 def search_cache_key(path: Path, script_name: str) -> str:
@@ -20,6 +20,11 @@ def search_cache_key(path: Path, script_name: str) -> str:
 
 
 def load_discovery_cache(cache_path: Path) -> dict[str, Any]:
+    """Load the M4B discovery cache. A version mismatch (including cache
+    files written before CACHE_VERSION 3, which lack folder_signatures on
+    each search entry) is treated as no cache at all, forcing a fresh
+    build rather than crashing on a missing field.
+    """
     if not cache_path.is_file():
         return {"version": CACHE_VERSION, "searches": {}}
     try:

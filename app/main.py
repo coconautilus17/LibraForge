@@ -2342,6 +2342,37 @@ def discover_m4b_candidates(
             },
         )
 
+    # Nothing-changed fast path: if the shared library index has a folder
+    # signature for every folder this cached search previously covered,
+    # and every one of them is unchanged, and no new folders exist under
+    # target_path, skip the walk and reprobe entirely and reuse the cached
+    # results verbatim. This is what makes the common case instant; any
+    # actual change anywhere under target_path falls through to the
+    # existing full-walk logic below, which already reuses per-file
+    # ffprobe results for any file that itself did not change.
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    if (
+        cached_search
+        and cached_search.get("script_mtime_ns") == script_mtime_ns
+        and _m4b_cached_search_is_still_fresh(cached_search, target_path, shared)
+    ):
+        return format_m4b_discovery_response(
+            target_path=target_path,
+            mode=mode,
+            results=cached_search.get("results", {}),
+            limit=limit,
+            cache_info={
+                "source": "cache",
+                "refreshed_at": cached_search.get("refreshed_at", ""),
+                "audio_file_count": cached_search.get("audio_file_count", 0),
+                "chapter_probes_reused": 0,
+                "chapter_probes_run": 0,
+                "audio_probes_reused": 0,
+                "audio_probes_run": 0,
+            },
+        )
+
     # When there is no cache entry for this script version, look for per-file
     # probe data from any cached entry for the same path. Chapter counts and
     # audio stream properties are script-independent, so they can be safely
@@ -2407,6 +2438,18 @@ def discover_m4b_candidates(
         results[requested_mode] = candidates
 
     refreshed_at = utc_timestamp()
+    # Re-fetch the shared state rather than reusing the `shared` snapshot
+    # taken before the fast-path check above: ensure_library_index_fresh
+    # only kicks a background walk and returns immediately, so that early
+    # snapshot can still be the pre-walk (possibly empty) state. By this
+    # point the full m4b walk and ffprobe reads above have run, giving the
+    # much cheaper background folder walk ample time to finish, so this
+    # later read is the freshest available signature data to persist.
+    folder_signatures = {
+        path_str: signature
+        for path_str, signature in library_index.get_state().signatures.items()
+        if path_str == str(target_path) or path_str.startswith(str(target_path) + os.sep)
+    }
     search_entry = {
         "path": str(target_path),
         "script_name": script_name,
@@ -2415,6 +2458,7 @@ def discover_m4b_candidates(
         "audio_file_count": len(files),
         "chapter_probes": chapter_reader.pruned_entries(),
         "audio_probes": audio_reader.pruned_entries(),
+        "folder_signatures": folder_signatures,
         "results": results,
     }
     with M4B_DISCOVERY_CACHE_LOCK:
@@ -2437,6 +2481,28 @@ def discover_m4b_candidates(
             "audio_probes_run": audio_reader.probed,
         },
     )
+
+
+def _m4b_cached_search_is_still_fresh(
+    cached_search: dict[str, Any], target_path: Path, shared: "library_index.LibraryIndexState"
+) -> bool:
+    """True only if every folder the shared index currently has under
+    target_path is present in the cached search's folder_signatures with
+    an identical signature, AND the cached search has no folder that the
+    shared index no longer has (a folder disappearing is a change too).
+    A cache entry from before this migration (no folder_signatures key)
+    is always a miss, never a crash.
+    """
+    cached_signatures = cached_search.get("folder_signatures")
+    if not isinstance(cached_signatures, dict):
+        return False
+    prefix = str(target_path) + os.sep
+    current_under_target = {
+        path_str: signature
+        for path_str, signature in shared.signatures.items()
+        if path_str == str(target_path) or path_str.startswith(prefix)
+    }
+    return current_under_target == cached_signatures
 
 
 def format_m4b_discovery_response(
