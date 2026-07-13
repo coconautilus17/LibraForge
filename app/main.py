@@ -2445,11 +2445,7 @@ def discover_m4b_candidates(
     # point the full m4b walk and ffprobe reads above have run, giving the
     # much cheaper background folder walk ample time to finish, so this
     # later read is the freshest available signature data to persist.
-    folder_signatures = {
-        path_str: signature
-        for path_str, signature in library_index.get_state().signatures.items()
-        if path_str == str(target_path) or path_str.startswith(str(target_path) + os.sep)
-    }
+    folder_signatures = _m4b_folder_signatures_under(target_path, library_index.get_state())
     search_entry = {
         "path": str(target_path),
         "script_name": script_name,
@@ -2483,6 +2479,38 @@ def discover_m4b_candidates(
     )
 
 
+def _m4b_folder_signature_scope(target_path: Path) -> Path:
+    """The folder whose signature (and everything under it) determines
+    whether a cached discover_m4b_candidates search is still fresh.
+
+    discover_m4b_candidates accepts a single audio file as target_path
+    (fixer_processing_context has a dedicated branch for this: it groups
+    target_path with its siblings via target_path.parent.iterdir()), and
+    the shared library index only carries signatures for folders, not
+    individual files (see library_index.build_library_index). Using
+    target_path directly in that case would look for a signature keyed by
+    a file path that never has one, silently and permanently returning an
+    empty folder_signatures dict on both sides of every comparison --
+    trivially "unchanged" even when a sibling file is added, removed, or
+    rewritten. Scoping to the parent folder instead is what the file
+    target case actually depends on, matching fixer_processing_context's
+    own sibling-grouping behavior.
+    """
+    return target_path.parent if target_path.is_file() else target_path
+
+
+def _m4b_folder_signatures_under(
+    target_path: Path, shared: "library_index.LibraryIndexState"
+) -> dict[str, str]:
+    scope = _m4b_folder_signature_scope(target_path)
+    prefix = str(scope) + os.sep
+    return {
+        path_str: signature
+        for path_str, signature in shared.signatures.items()
+        if path_str == str(scope) or path_str.startswith(prefix)
+    }
+
+
 def _m4b_cached_search_is_still_fresh(
     cached_search: dict[str, Any], target_path: Path, shared: "library_index.LibraryIndexState"
 ) -> bool:
@@ -2496,13 +2524,7 @@ def _m4b_cached_search_is_still_fresh(
     cached_signatures = cached_search.get("folder_signatures")
     if not isinstance(cached_signatures, dict):
         return False
-    prefix = str(target_path) + os.sep
-    current_under_target = {
-        path_str: signature
-        for path_str, signature in shared.signatures.items()
-        if path_str == str(target_path) or path_str.startswith(prefix)
-    }
-    return current_under_target == cached_signatures
+    return _m4b_folder_signatures_under(target_path, shared) == cached_signatures
 
 
 def format_m4b_discovery_response(

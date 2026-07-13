@@ -130,6 +130,29 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
         self.assertIn(str(self.root / "Author" / "Book"), entry["folder_signatures"])
 
     @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
+    def test_file_target_path_scopes_signature_to_parent_folder_not_the_file(self):
+        # discover_m4b_candidates accepts a single audio file as the
+        # target_path (fixer_processing_context has a dedicated branch for
+        # this, grouping it with its siblings). The shared library index
+        # only carries signatures for folders, never individual files, so
+        # naively filtering folder_signatures by "under target_path" when
+        # target_path is itself a file always yields an empty dict on
+        # both sides of the freshness comparison -- trivially "unchanged"
+        # forever, even when a sibling part file is added. This proves
+        # the file-target case is scoped to the parent folder instead, so
+        # it is not silently and permanently treated as fresh.
+        book_file = self._touch("Author/Book/Book.mp3")
+        first = discover_m4b_candidates(path=str(book_file), mode="non_m4b", cache_action="refresh")
+        self.assertEqual(first["total"], 1)
+        self.assertEqual(first["items"][0]["file_count"], 1)
+
+        self._touch("Author/Book/Book Part 2.mp3")
+        self._settle_shared_index()
+        second = discover_m4b_candidates(path=str(book_file), mode="non_m4b", cache_action="refresh")
+        self.assertEqual(second["cache"]["source"], "refresh")
+        self.assertEqual(second["items"][0]["file_count"], 2)
+
+    @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
     def test_new_book_folder_under_existing_series_is_found_on_next_refresh(self):
         self._touch("Sanderson/Mistborn/Book 1/Book1.mp3")
         first = discover_m4b_candidates(path=str(self.root), mode="non_m4b", cache_action="refresh")
@@ -209,3 +232,34 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
             cached_search, Path("/audiobooks"), shared,
         )
         self.assertFalse(fresh)
+
+    def test_file_target_path_is_scoped_to_its_parent_folder(self):
+        # target_path.is_file() must be checked against a real path (Path
+        # objects that don't exist on disk report is_file() == False), so
+        # this uses a real temp file rather than the fabricated
+        # /audiobooks paths the other tests in this class use.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            book_folder = root / "Author" / "Book"
+            book_folder.mkdir(parents=True)
+            book_file = book_folder / "Book.mp3"
+            book_file.write_bytes(b"x")
+
+            shared = library_index.LibraryIndexState(signatures={str(book_folder): "sig1"})
+            cached_search = {
+                "path": str(book_file),
+                "folder_signatures": {str(book_folder): "sig1"},
+                "results": {},
+            }
+            fresh = main_module._m4b_cached_search_is_still_fresh(
+                cached_search, book_file, shared,
+            )
+            self.assertTrue(fresh)
+
+            shared_changed = library_index.LibraryIndexState(
+                signatures={str(book_folder): "sig2"}
+            )
+            fresh_after_change = main_module._m4b_cached_search_is_still_fresh(
+                cached_search, book_file, shared_changed,
+            )
+            self.assertFalse(fresh_after_change)
