@@ -113,10 +113,23 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
 
     @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
     def test_nothing_changed_fast_path_still_returns_correct_results(self):
+        # Targets the Author/Book subfolder rather than self.root: browsing
+        # AUDIOBOOKS_ROOT itself resolves its signature scope to
+        # AUDIOBOOKS_ROOT (see _m4b_folder_signature_scope), which
+        # _m4b_cached_search_is_still_fresh now always treats as a miss
+        # (loose files living directly in AUDIOBOOKS_ROOT never get a
+        # signature anywhere in the shared index, so trusting that
+        # comparison could report "nothing changed" forever even when a
+        # loose root file changes -- see
+        # test_scope_resolving_to_audiobooks_root_is_always_a_miss and
+        # test_loose_root_file_target_detects_sibling_change_at_root). A
+        # real subfolder target is unaffected by that root-only carve-out
+        # and still gets the fast-path speedup this test verifies.
+        book_folder = self.root / "Author" / "Book"
         self._touch("Author/Book/Book.mp3")
-        first = discover_m4b_candidates(path=str(self.root), mode="non_m4b", cache_action="refresh")
+        first = discover_m4b_candidates(path=str(book_folder), mode="non_m4b", cache_action="refresh")
         self._settle_shared_index()
-        second = discover_m4b_candidates(path=str(self.root), mode="non_m4b", cache_action="refresh")
+        second = discover_m4b_candidates(path=str(book_folder), mode="non_m4b", cache_action="refresh")
         self.assertEqual(first["items"], second["items"])
         self.assertEqual(second["cache"]["source"], "cache")
 
@@ -149,6 +162,32 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
         self._touch("Author/Book/Book Part 2.mp3")
         self._settle_shared_index()
         second = discover_m4b_candidates(path=str(book_file), mode="non_m4b", cache_action="refresh")
+        self.assertEqual(second["cache"]["source"], "refresh")
+        self.assertEqual(second["items"][0]["file_count"], 2)
+
+    @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
+    def test_loose_root_file_target_detects_sibling_change_at_root(self):
+        # target_path here is a loose file sitting directly in
+        # AUDIOBOOKS_ROOT (not inside any Author/Book subfolder), a real,
+        # UI-reachable browse mode. _m4b_folder_signature_scope resolves
+        # this to target_path.parent == AUDIOBOOKS_ROOT, and
+        # library_index.build_library_index never assigns a signature to
+        # AUDIOBOOKS_ROOT or to loose root files (see its own docstring:
+        # "Loose root files have no signature entry"). Without forcing a
+        # miss for this scope, _m4b_folder_signatures_under would return
+        # {} on both sides of the freshness comparison no matter what
+        # changes among the loose root files, so a sibling being added
+        # would be silently and permanently missed -- reproducing the
+        # exact "reports fresh forever" bug the folder-scoped fast path
+        # was meant to eliminate. This proves the second call still does
+        # a full walk (source == "refresh") and reflects the new sibling.
+        root_file = self._touch("Book.mp3")
+        first = discover_m4b_candidates(path=str(root_file), mode="non_m4b", cache_action="refresh")
+        self.assertEqual(first["items"][0]["file_count"], 1)
+
+        self._touch("Book Part 2.mp3")
+        self._settle_shared_index()
+        second = discover_m4b_candidates(path=str(root_file), mode="non_m4b", cache_action="refresh")
         self.assertEqual(second["cache"]["source"], "refresh")
         self.assertEqual(second["items"][0]["file_count"], 2)
 
@@ -196,14 +235,23 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
         self.assertFalse(fresh)
 
     def test_folder_signatures_present_and_matching_is_fresh(self):
+        # Uses "/audiobooks/A" rather than "/audiobooks" as target_path: the
+        # latter resolves its signature scope to AUDIOBOOKS_ROOT itself
+        # (default main_module.AUDIOBOOKS_ROOT, unpatched in this test
+        # class), which _m4b_cached_search_is_still_fresh now always treats
+        # as a miss regardless of matching signatures -- see
+        # test_scope_resolving_to_audiobooks_root_is_always_a_miss. A real
+        # subfolder target is unaffected by that root-only carve-out, so it
+        # is what actually exercises the "signatures present and matching"
+        # code path this test is about.
         shared = library_index.LibraryIndexState(signatures={"/audiobooks/A": "sig1"})
         cached_search = {
-            "path": "/audiobooks",
+            "path": "/audiobooks/A",
             "folder_signatures": {"/audiobooks/A": "sig1"},
             "results": {},
         }
         fresh = main_module._m4b_cached_search_is_still_fresh(
-            cached_search, Path("/audiobooks"), shared,
+            cached_search, Path("/audiobooks/A"), shared,
         )
         self.assertTrue(fresh)
 
@@ -263,3 +311,39 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
                 cached_search, book_file, shared_changed,
             )
             self.assertFalse(fresh_after_change)
+
+    def test_scope_resolving_to_audiobooks_root_is_always_a_miss(self):
+        # Loose root files (and AUDIOBOOKS_ROOT itself) never get a
+        # signature entry in the shared library index (see
+        # library_index.py's own docstring: "Loose root files have no
+        # signature entry"), so _m4b_folder_signatures_under always
+        # returns {} for this scope regardless of what actually changed
+        # among the loose root files. Trusting an empty-vs-empty
+        # comparison here would report "nothing changed" forever; this
+        # proves the freshness check is forced to miss instead whenever
+        # the resolved scope is AUDIOBOOKS_ROOT itself, whether target_path
+        # IS AUDIOBOOKS_ROOT or is a loose file sitting directly in it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            orig_root = main_module.AUDIOBOOKS_ROOT
+            main_module.AUDIOBOOKS_ROOT = root
+            try:
+                shared = library_index.LibraryIndexState(signatures={})
+                cached_search = {
+                    "path": str(root),
+                    "folder_signatures": {},
+                    "results": {},
+                }
+                self.assertFalse(
+                    main_module._m4b_cached_search_is_still_fresh(cached_search, root, shared)
+                )
+
+                loose_file = root / "Loose.mp3"
+                loose_file.write_bytes(b"x")
+                self.assertFalse(
+                    main_module._m4b_cached_search_is_still_fresh(
+                        cached_search, loose_file, shared
+                    )
+                )
+            finally:
+                main_module.AUDIOBOOKS_ROOT = orig_root

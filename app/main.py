@@ -2520,7 +2520,22 @@ def _m4b_cached_search_is_still_fresh(
     shared index no longer has (a folder disappearing is a change too).
     A cache entry from before this migration (no folder_signatures key)
     is always a miss, never a crash.
+
+    Forces a miss when the signature scope resolves to AUDIOBOOKS_ROOT
+    itself (target_path IS AUDIOBOOKS_ROOT, or target_path is a loose
+    file sitting directly in it). library_index.build_library_index never
+    assigns a signature to AUDIOBOOKS_ROOT or to loose root files (see its
+    own docstring: "Loose root files have no signature entry"), so
+    _m4b_folder_signatures_under would return {} on both sides of the
+    comparison in that case, always comparing equal regardless of what
+    actually changed among the loose root files. Falling back to the
+    existing full-walk path here is conservative: it never reports stale
+    results as fresh, it just forgoes the fast-path speedup for this one
+    narrow case.
     """
+    scope = _m4b_folder_signature_scope(target_path)
+    if scope == AUDIOBOOKS_ROOT:
+        return False
     cached_signatures = cached_search.get("folder_signatures")
     if not isinstance(cached_signatures, dict):
         return False
