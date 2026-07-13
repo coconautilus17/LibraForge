@@ -1,5 +1,6 @@
 """Tests for the shared library index walker: per-folder listing signatures
 and the folder-existence + signature-table walk."""
+import os
 import tempfile
 import threading
 import time
@@ -72,13 +73,25 @@ class FolderListingSignatureTests(unittest.TestCase):
         self.assertNotEqual(empty_sig, missing_sig)
 
     def test_order_of_children_does_not_affect_signature(self):
-        self._touch("Book/b.m4b")
-        self._touch("Book/a.m4b")
+        # The signature is deliberately mtime-sensitive, so this test must
+        # pin an identical, explicit mtime on both passes rather than rely
+        # on the two touch passes happening to land on the same wall-clock
+        # timestamp. Otherwise it proves time-independence-that-happens-to-
+        # hold instead of true order-independence.
+        fixed_time_ns = 1_700_000_000_000_000_000
+
+        def touch_with_fixed_mtime(rel):
+            p = self._touch(rel)
+            os.utime(p, ns=(fixed_time_ns, fixed_time_ns))
+            return p
+
+        touch_with_fixed_mtime("Book/b.m4b")
+        touch_with_fixed_mtime("Book/a.m4b")
         via_ba = folder_listing_signature(self.root / "Book")
         (self.root / "Book" / "a.m4b").unlink()
         (self.root / "Book" / "b.m4b").unlink()
-        self._touch("Book/a.m4b")
-        self._touch("Book/b.m4b")
+        touch_with_fixed_mtime("Book/a.m4b")
+        touch_with_fixed_mtime("Book/b.m4b")
         via_ab = folder_listing_signature(self.root / "Book")
         self.assertEqual(via_ba, via_ab)
 
