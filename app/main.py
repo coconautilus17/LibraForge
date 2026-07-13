@@ -4670,8 +4670,14 @@ def _has_cover_fast(folder: Path) -> bool:
 
 def _categorized_book_units(
     p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState"
-) -> tuple[list[tuple[Path, str]], bool]:
+) -> tuple[list[tuple[Path, Path, str]], bool]:
     """Return (book_results, all_from_cache) for scan root p.
+
+    Each book_results entry is (ref, book_dir, category): ref is the unit's
+    display path (a file for a standalone book, a folder for a grouped one),
+    while book_dir is always the real containing folder -- callers that need
+    an actual directory (e.g. a cover-presence check) must use book_dir, not
+    ref, since ref can be a plain file for a standalone unit.
 
     Per folder under p, compares the shared index's current listing
     signature against what is stored in FOLDER_SCAN_CACHE for that folder.
@@ -4747,7 +4753,7 @@ def _categorized_book_units(
         cache["scans"][cache_key] = {"folders": updated_folders}
         save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
 
-    book_results = [(unit[0], category) for unit, (_, category, _) in zip(units, resolved)]
+    book_results = [(unit[0], unit[2], category) for unit, (_, category, _) in zip(units, resolved)]
     all_from_cache = bool(resolved) and all(was_cached for _, _, was_cached in resolved)
     return book_results, all_from_cache
 
@@ -4763,10 +4769,10 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     shared = library_index.get_state()
     book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared)
 
-    needs_metadata = sum(1 for _, c in book_results if c == "needs_metadata")
-    needs_conversion = sum(1 for _, c in book_results if c == "needs_conversion")
-    ready_to_organize = sum(1 for _, c in book_results if c == "ready_to_organize")
-    organized = sum(1 for _, c in book_results if c == "organized")
+    needs_metadata = sum(1 for _, _, c in book_results if c == "needs_metadata")
+    needs_conversion = sum(1 for _, _, c in book_results if c == "needs_conversion")
+    ready_to_organize = sum(1 for _, _, c in book_results if c == "ready_to_organize")
+    organized = sum(1 for _, _, c in book_results if c == "organized")
     total = needs_metadata + needs_conversion + ready_to_organize + organized
 
     return {
@@ -4866,18 +4872,18 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     shared = library_index.get_state()
     book_results, _from_cache = _categorized_book_units(p, req.ignored_folders, shared)
     attention = [
-        (folder, category)
-        for folder, category in book_results
+        (folder, book_dir, category)
+        for folder, book_dir, category in book_results
         if category in ("needs_metadata", "needs_conversion")
     ]
 
-    def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
-        folder, category = fc
+    def fast_entry(fc: tuple[Path, Path, str]) -> dict[str, Any]:
+        folder, book_dir, category = fc
         return {
             "path": str(folder),
             "title": folder.stem if folder.is_file() else folder.name,
             "author": _book_author(folder, p),
-            "has_cover": _has_cover_fast(folder),
+            "has_cover": _has_cover_fast(book_dir),
             "category": category,
         }
 

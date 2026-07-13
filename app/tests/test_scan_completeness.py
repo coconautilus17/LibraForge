@@ -272,6 +272,23 @@ class ScanStalenessTests(unittest.TestCase):
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertEqual(second.json()["total"], first_total + 1)
 
+    def test_standalone_loose_file_with_no_real_cover_reports_has_cover_false(self):
+        # Task 6 review finding: scan_books_route's fast_entry computed has_cover
+        # from `ref` (the unit's display path), which for a standalone unit IS the
+        # audio file itself -- _has_cover_fast short-circuits to True for any file,
+        # regardless of whether the containing folder actually has a cover or
+        # sibling audio. The correct check targets book_dir (the containing
+        # folder), matching the pre-Task-6 slow-path behavior. .flac is used here
+        # because it falls outside _AUDIO_EXTS_COVER (m4b/m4a/mp3/mp4), so the
+        # folder-based check can't accidentally match the book's own file either.
+        self._touch("Author/notes.txt")
+        self._touch("Author/loose.flac")
+        resp = client.post("/api/scan/books", json={"path": str(self.root), "ignored_folders": []})
+        self.assertEqual(resp.status_code, 200)
+        books = resp.json()["books"]
+        self.assertEqual(len(books), 1)
+        self.assertFalse(books[0]["has_cover"])
+
 
 if __name__ == "__main__":
     unittest.main()
