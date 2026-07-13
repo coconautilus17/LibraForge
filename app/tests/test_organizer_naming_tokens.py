@@ -1,0 +1,198 @@
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
+SPEC = importlib.util.spec_from_file_location("organizer_v3_13_naming_tokens", SCRIPT_PATH)
+ORGANIZER = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = ORGANIZER
+SPEC.loader.exec_module(ORGANIZER)
+
+
+BASE_METADATA = {
+    "title": "Bold Beginnings",
+    "author": "G.D. Brooks",
+    "author_primary": "G.D. Brooks",
+    "series": "Dashing Devil",
+    "edition_tag": "",
+    "book_number": "5",
+    "sequence_label": "",
+    "narrator": "Some Narrator",
+    "asin": "B0TESTASIN",
+    "publisher": "Publisher House",
+    "genre": "Fantasy",
+    "year": "2021",
+}
+
+
+class RawTokenPassthroughTests(unittest.TestCase):
+    def test_raw_fields_pass_through(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["series"], "Dashing Devil")
+        self.assertEqual(tokens["title"], "Bold Beginnings")
+        self.assertEqual(tokens["narrator"], "Some Narrator")
+        self.assertEqual(tokens["asin"], "B0TESTASIN")
+        self.assertEqual(tokens["publisher"], "Publisher House")
+        self.assertEqual(tokens["year"], "2021")
+
+    def test_no_genre_or_series_dir_or_book_folder_tokens(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertNotIn("genre", tokens)
+        self.assertNotIn("series_dir", tokens)
+        self.assertNotIn("book_folder", tokens)
+        self.assertNotIn("book_number", tokens)
+        self.assertNotIn("sequence_label", tokens)
+        self.assertNotIn("edition_tag", tokens)
+
+    def test_author_token_is_canonicalized(self):
+        metadata = dict(BASE_METADATA, author_primary="J. R. R. Tolkien", author="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["author"], ORGANIZER.canonical_author_name("J. R. R. Tolkien"))
+
+    def test_missing_author_defaults_to_unknown_author(self):
+        metadata = dict(BASE_METADATA, author_primary="", author="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["author"], "Unknown Author")
+
+    def test_missing_narrator_is_empty_not_placeholder(self):
+        metadata = dict(BASE_METADATA, narrator="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["narrator"], "")
+
+
+class EditionTokenTests(unittest.TestCase):
+    def test_edition_token_reads_edition_tag_field(self):
+        metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["edition"], "GraphicAudio")
+
+    def test_edition_token_empty_when_no_edition_tag(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["edition"], "")
+
+
+class OrderTokenTests(unittest.TestCase):
+    def test_order_is_sequence_prefix_when_series_and_number_present(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["order"], ORGANIZER.build_sequence_prefix("", "5"))
+        self.assertEqual(tokens["order"], "Book 5")
+
+    def test_order_uses_detected_label_from_clues(self):
+        metadata = dict(BASE_METADATA, sequence_label="Vol.")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["order"], "Vol. 5")
+
+    def test_order_empty_when_no_series(self):
+        metadata = dict(BASE_METADATA, series="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["order"], "")
+
+    def test_order_empty_when_no_number(self):
+        metadata = dict(BASE_METADATA, book_number="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["order"], "")
+
+
+class NumberTokenTests(unittest.TestCase):
+    def test_number_is_bare_display_number_no_label(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["number"], "5")
+
+    def test_number_matches_display_book_number(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["number"], ORGANIZER.display_book_number("5"))
+
+    def test_number_empty_when_no_series(self):
+        metadata = dict(BASE_METADATA, series="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["number"], "")
+
+    def test_number_empty_when_no_book_number(self):
+        metadata = dict(BASE_METADATA, book_number="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["number"], "")
+
+
+class TitleRedundancyTests(unittest.TestCase):
+    def test_title_stays_full_even_when_redundant_with_order(self):
+        metadata = dict(BASE_METADATA, title="Book 5")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["title"], "Book 5")
+        self.assertEqual(tokens["order"], "Book 5")
+
+    def test_title_stays_full_even_when_equal_to_series(self):
+        # resolve_naming_tokens() never pre-empties title -- redundancy is
+        # only meaningful within a segment that also uses {order}, which
+        # this function has no visibility into. See title_redundant_with_order().
+        metadata = dict(BASE_METADATA, title="Dashing Devil")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["title"], "Dashing Devil")
+
+    def test_distinct_title_is_kept(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["title"], "Bold Beginnings")
+
+    def test_asin_like_title_falls_back_to_series_but_stays_full(self):
+        metadata = dict(BASE_METADATA, title="B07XYZ1234")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["title"], "Dashing Devil")
+
+
+class TitleRedundantWithOrderTests(unittest.TestCase):
+    def test_redundant_when_title_matches_prefix(self):
+        metadata = dict(BASE_METADATA, title="Book 5")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_redundant_when_title_equals_series(self):
+        metadata = dict(BASE_METADATA, title="Dashing Devil")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_not_redundant_for_distinct_title(self):
+        self.assertFalse(ORGANIZER.title_redundant_with_order(BASE_METADATA))
+
+    def test_asin_like_title_falls_back_to_series_and_is_redundant(self):
+        metadata = dict(BASE_METADATA, title="B07XYZ1234")
+        self.assertTrue(ORGANIZER.title_redundant_with_order(metadata))
+
+    def test_not_redundant_without_series_or_number(self):
+        metadata = dict(BASE_METADATA, title="Book 5", series="", book_number="")
+        self.assertFalse(ORGANIZER.title_redundant_with_order(metadata))
+
+
+class RenderNamingTemplateTitleRedundancyScopeTests(unittest.TestCase):
+    """The actual bug this whole redesign fixes: title-redundancy collapsing
+    must only apply within a segment that uses {order} and {title}
+    together -- a standalone {title} (e.g. in a filename with no {order})
+    must never be blanked out just because it happens to equal the series
+    name or sequence prefix. A title like "Crystal Core 2" is a perfectly
+    legitimate filename component even when the folder level collapses it.
+    """
+
+    def test_order_and_title_together_collapse_when_redundant(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Book 5"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{order} - {title}/", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(folders, ["G.D. Brooks", "Book 5"])
+
+    def test_standalone_title_segment_never_collapses(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Book 5"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{title}", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(filename, "Book 5")
+
+    def test_title_and_asin_filename_keeps_full_title_even_when_redundant(self):
+        tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, title="Dashing Devil", asin="B0TEST"))
+        folders, filename, reasons = ORGANIZER.render_naming_template(
+            "{author}/{series}/{order} - {title}/{title},{asin}", tokens, title_redundant_with_order=True
+        )
+        self.assertEqual(folders, ["G.D. Brooks", "Dashing Devil", "Book 5"])
+        self.assertEqual(filename, "Dashing Devil,B0TEST")
+
+
+if __name__ == "__main__":
+    unittest.main()

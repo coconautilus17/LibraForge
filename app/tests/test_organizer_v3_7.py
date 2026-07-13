@@ -458,10 +458,11 @@ class OrganizerPrintMoveTests(unittest.TestCase):
     """A skipped-review move's "target" is always the bare directory (planning
     never reaches plan_loose_file_move to append a filename), unlike an
     accepted loose_file move whose "target" is the full file path. print_move
-    must not truncate the bare directory as if it were a file path -- that
-    silently dropped the last path segment (e.g. "Book 2") for every skipped
-    loose_file review, which is exactly what made the group-vs-merged-edition
-    conflict look like it was landing on the wrong, unrelated directory."""
+    shows move["target"] in full either way -- it must not truncate the bare
+    directory as if it were a file path (that silently dropped the last path
+    segment, e.g. "Book 2", for every skipped loose_file review), and it must
+    not truncate an accepted move's filename either, since a naming
+    template's filename half needs to be visible in the report, not hidden."""
 
     def _capture(self, move):
         import io
@@ -488,7 +489,7 @@ class OrganizerPrintMoveTests(unittest.TestCase):
         self.assertIn("/library/Author/Series/Book 2", output)
         self.assertNotIn("/library/Author/Series\n", output)
 
-    def test_accepted_loose_file_move_shows_containing_directory(self):
+    def test_accepted_loose_file_move_shows_full_file_path(self):
         move = {
             "kind": "loose_file",
             "source": Path("/incoming/Book.m4b"),
@@ -500,8 +501,7 @@ class OrganizerPrintMoveTests(unittest.TestCase):
 
         output = self._capture(move)
 
-        self.assertIn("/library/Author/Series/Book 2\n", output)
-        self.assertNotIn("Book 2.m4b\n", output)
+        self.assertIn("/library/Author/Series/Book 2/Book 2.m4b\n", output)
 
 
 class OrganizerLooseFilenameTests(unittest.TestCase):
