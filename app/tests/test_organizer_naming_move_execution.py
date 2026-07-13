@@ -24,6 +24,29 @@ class PlanLooseFileMoveTemplateFilenameTests(unittest.TestCase):
         self.assertTrue(can_move)
         self.assertEqual(target_path, target_dir / "Bold Beginnings.m4b")
 
+    def test_restatement_source_name_rebuilt_from_metadata_in_builtin_scheme(self):
+        # A jumbled name that restates the metadata (doubled series) slips past
+        # clean_loose_audio_filename (kept verbatim), but with metadata the
+        # built-in scheme rebuilds it as "Book N - Title" too.
+        target_dir = Path("/library/David Burke/Crystal Core/Book 1")
+        src = Path("/incoming/Crystal_Core_Crystal_Core,_Book_1.m4b")
+        item = ORGANIZER.BookItem("loose_file", src, [src], src)
+        metadata = {"author": "David Burke", "series": "Crystal Core", "title": "Crystal Core", "book_number": "1", "sequence_label": ""}
+        can_move, target_path, reason = ORGANIZER.plan_loose_file_move(item, target_dir, metadata=metadata)
+        self.assertTrue(can_move)
+        self.assertEqual(target_path, target_dir / "Book 1 - Crystal Core.m4b")
+
+    def test_clean_source_name_untouched_in_builtin_scheme_even_with_metadata(self):
+        # A clean, non-restating source name is still kept verbatim -- metadata
+        # is only a fallback for junk, never an override of a good name.
+        target_dir = Path("/library/Andrew Rowe/The War of Broken Mirrors/Book 1 - Forging Divinity")
+        src = Path("/incoming/Forging Divinity.m4b")
+        item = ORGANIZER.BookItem("loose_file", src, [src], src)
+        metadata = {"author": "Andrew Rowe", "series": "The War of Broken Mirrors", "title": "Forging Divinity", "book_number": "1", "sequence_label": ""}
+        can_move, target_path, reason = ORGANIZER.plan_loose_file_move(item, target_dir, metadata=metadata)
+        self.assertTrue(can_move)
+        self.assertEqual(target_path, target_dir / "Forging Divinity.m4b")
+
     def test_template_filename_overrides_clean_loose_audio_filename(self):
         # template_filename is an extension-less stem; the source file's
         # own extension must survive onto the final target filename.

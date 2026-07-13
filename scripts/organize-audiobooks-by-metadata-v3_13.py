@@ -4846,6 +4846,7 @@ def plan_loose_file_move(
     reserved_targets: set[Path] | None = None,
     reserved_target_dirs: set[Path] | None = None,
     template_filename: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> tuple[bool, Path | None, str]:
     """Choose the loose file's target filename.
 
@@ -4858,9 +4859,22 @@ def plan_loose_file_move(
     """
     reserved_target_dirs = reserved_target_dirs or set()
     source_file = item.source_path
-    filename = naming_template_filename_for_item(item, template_filename) or clean_loose_audio_filename(
-        source_file, target_dir
-    )
+    filename = naming_template_filename_for_item(item, template_filename)
+    if filename is None:
+        filename = clean_loose_audio_filename(source_file, target_dir)
+        # Built-in scheme: clean_loose_audio_filename keeps a name it doesn't
+        # recognize as release junk verbatim, so a jumbled metadata restatement
+        # (doubled series, underscore rip like "Crystal_Core_Crystal_Core,_Book_1")
+        # slips through untouched. When metadata is available, rebuild a clean
+        # "Book N - Title" for those -- without touching clean_loose_audio_filename
+        # itself, and only when it left the name verbatim (a name it *did* clean
+        # already lands on its folder-derived result, which we leave alone).
+        if metadata is not None and filename == source_file.name:
+            token_values = resolve_naming_tokens(metadata)
+            if _loose_name_restates_metadata(source_file.stem, token_values):
+                base = _metadata_filename_base(token_values, target_dir, source_file)
+                if base:
+                    filename = f"{base}{source_file.suffix}"
     if source_file.parent == target_dir and source_file.name == filename:
         return False, None, "already in target folder"
     if target_dir in reserved_target_dirs:
@@ -5383,7 +5397,7 @@ def main() -> None:
 
         can_move, target_path, reason = plan_loose_file_move(
             item, target_dir, reserved_targets, reserved_target_dirs=reserved_target_dirs,
-            template_filename=resolution.filename,
+            template_filename=resolution.filename, metadata=metadata,
         )
         if not can_move:
             if reason == "already in target folder":
