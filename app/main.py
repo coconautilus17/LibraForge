@@ -36,6 +36,9 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+from app.library_index import DISC_RE as _DISC_RE
+from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
+from app.library_index import is_audio_file
 from app.enrichment import (
     compile_series_enrichment,
     fetch_all_abs_book_items,
@@ -581,18 +584,6 @@ def sanitize_filename(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip()
     return value or "output"
 
-
-def is_audio_file(path: Path) -> bool:
-    return path.suffix.lower() in {
-        ".m4b",
-        ".m4a",
-        ".mp4",
-        ".mp3",
-        ".flac",
-        ".ogg",
-        ".opus",
-        ".aac",
-    }
 
 
 def source_audio_files(path: Path) -> list[Path]:
@@ -3954,7 +3945,6 @@ def get_config() -> dict[str, Any]:
     return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
 
 
-_FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
 
 
 @app.get("/api/fs/ls")
@@ -3987,8 +3977,6 @@ _ASIN_TAG_KEYS = (
 )
 _FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
 _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
-# Folder names that are disc/part subdivisions of a single book, not separate books.
-_DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 
 
 _NOREALASIN = "NOREALASIN"
