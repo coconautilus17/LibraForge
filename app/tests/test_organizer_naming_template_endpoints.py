@@ -134,9 +134,12 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         # verbatim; and even a noisy source would now fall back to the metadata
         # title rather than the collapsed "Book 5" folder leaf.
         self.assertEqual(cleaned["Title matches series"], "The Dao of Magic V.m4b")
-        # Multi-file books never expose a template filename either way.
-        self.assertIsNone(raw["Multi-file book"])
-        self.assertIsNone(cleaned["Multi-file book"])
+        # (The multi-file book's "no template filename" guarantee is asserted
+        # by test_multi_file_book_filename_shown_as_unchanged, which mocks the
+        # grouping. It is intentionally NOT checked here: real grouping of the
+        # bundled multi-file example needs ffprobe to read chapter counts, which
+        # is present in the app's Docker image but not on the CI runner, so a
+        # live assertion here would be environment-dependent.)
         for filename in list(raw.values()) + list(cleaned.values()):
             self.assertNotEqual(filename, "book.m4b")
 
