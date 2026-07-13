@@ -36,6 +36,11 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+from app.folder_scan_cache import (
+    load_scan_cache_file,
+    save_scan_cache_file,
+    scan_cache_key as folder_scan_cache_key,
+)
 import app.library_index as library_index
 from app.library_index import DISC_RE as _DISC_RE
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
@@ -106,6 +111,9 @@ def _pick_genre(genres: list[str]) -> str:
 M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
 M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
+
+FOLDER_SCAN_CACHE = REPORTS_DIR / "folder-scan-cache.json"
+FOLDER_SCAN_CACHE_LOCK = threading.Lock()
 
 DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 # Saved Audible accounts live here, one <user_id>.json auth file plus a
@@ -4619,10 +4627,6 @@ def _categorise_book_unit(audio: list[Path], book_dir: Path, scan_root: Path) ->
 
 _COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
-# In-memory cache: path → (timestamp, fingerprint, [(folder_str, category)])
-_scan_cache: dict[str, tuple[float, str, list[tuple[str, str]]]] = {}
-_SCAN_CACHE_TTL = 3600  # 1 hour
-
 _AUDIO_EXTS_COVER = ("*.m4b", "*.m4a", "*.mp3", "*.mp4")
 
 
@@ -4647,34 +4651,6 @@ def _ignored_signature(ignored_folders: list[str] | None) -> str:
     return ",".join(sorted(f.strip().lower() for f in (ignored_folders or []) if f and f.strip()))
 
 
-def _scan_cache_key(path: Path, ignored: list[str] | None = None) -> str:
-    """Cache key includes the ignored-folder set so a changed filter forces a rescan."""
-    return f"{path}|{_ignored_signature(ignored)}"
-
-
-def _store_scan_cache(
-    path: Path, results: list[tuple[Path, str]], ignored: list[str] | None = None
-) -> None:
-    fp = _library_fingerprint(path)
-    _scan_cache[_scan_cache_key(path, ignored)] = (
-        time.monotonic(), fp, [(str(f), c) for f, c in results]
-    )
-
-
-def _load_scan_cache(
-    path: Path, ignored: list[str] | None = None
-) -> list[tuple[str, str]] | None:
-    entry = _scan_cache.get(_scan_cache_key(path, ignored))
-    if not entry:
-        return None
-    ts, cached_fp, data = entry
-    if time.monotonic() - ts >= _SCAN_CACHE_TTL:
-        return None
-    if _library_fingerprint(path) != cached_fp:
-        return None  # library changed — force rescan
-    return data
-
-
 def _has_cover_fast(folder: Path) -> bool:
     """Fast cover heuristic: file covers or any audio file presence."""
     if folder.is_file():
@@ -4692,6 +4668,90 @@ def _has_cover_fast(folder: Path) -> bool:
     return False
 
 
+def _categorized_book_units(
+    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState"
+) -> tuple[list[tuple[Path, str]], bool]:
+    """Return (book_results, all_from_cache) for scan root p.
+
+    Per folder under p, compares the shared index's current listing
+    signature against what is stored in FOLDER_SCAN_CACHE for that folder.
+    Matching folders reuse their cached category untouched; changed,
+    new, or never-seen folders are recategorized (via _categorise_book_unit,
+    which is cheap -- metadata/tag reads, no ffprobe subprocess for the
+    common case) and written back. all_from_cache is True only if every
+    folder under p was a cache hit, used by the route to report from_cache.
+
+    A folder key with no signature entry in the shared index (empty
+    string) is never trusted as a cache hit, even if a stored category
+    happens to match "" -- this is the deliberate conservative gate for
+    loose top-level audio files and AUDIOBOOKS_ROOT itself as a scan
+    target, neither of which library_index.build_library_index ever
+    assigns a real signature to (see its docstring). Treating an absent
+    signature as "unchanged" would silently freeze those categories
+    forever; treating it as "always recompute" costs nothing beyond an
+    extra _categorise_book_unit call, which is cheap.
+    """
+    cache_key = folder_scan_cache_key(p, ignored_folders)
+    with FOLDER_SCAN_CACHE_LOCK:
+        cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
+        cached_scan = cache["scans"].get(cache_key, {})
+    cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "category": str}}
+
+    units = _filter_ignored_units(_scan_book_units(p), p, ignored_folders)
+
+    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, bool]:
+        ref, audio, book_dir = unit
+        folder_key = str(book_dir if book_dir.is_dir() else book_dir.parent)
+        current_signature = shared.signatures.get(folder_key, "")
+        cached_folder = cached_folders.get(folder_key)
+        if (
+            cached_folder is not None
+            and current_signature != ""
+            and cached_folder.get("signature") == current_signature
+        ):
+            return folder_key, cached_folder["category"], True
+        try:
+            category = _categorise_book_unit(audio, book_dir, p)
+        except PermissionError:
+            category = "skip"
+        return folder_key, category, False
+
+    resolved: list[tuple[str, str, bool]] = []
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for outcome in pool.map(resolve, units):
+            resolved.append(outcome)
+
+    # Re-fetch the shared state rather than reusing the `shared` snapshot the
+    # caller passed in: ensure_library_index_fresh only kicks a background
+    # walk and returns immediately, so that snapshot (taken before the units
+    # above were even scanned) can still be the pre-walk state, with no
+    # signature for a freshly-discovered folder. Writing that stale
+    # snapshot back to the cache would permanently store signature "" for
+    # every newly-seen folder, which the read-side conservative check above
+    # then always treats as a miss -- so the fast path would never engage
+    # even when nothing actually changes on the next call. By this point the
+    # full folder walk and per-unit categorization above have run, giving
+    # the much cheaper background folder-signature walk ample time to
+    # finish, so this later read is the freshest available signature data
+    # to persist. Mirrors the identical fix in discover_m4b_candidates.
+    fresh_shared = library_index.get_state()
+    updated_folders = dict(cached_folders)
+    for folder_key, category, was_cached in resolved:
+        if not was_cached:
+            updated_folders[folder_key] = {
+                "signature": fresh_shared.signatures.get(folder_key, ""),
+                "category": category,
+            }
+    with FOLDER_SCAN_CACHE_LOCK:
+        cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
+        cache["scans"][cache_key] = {"folders": updated_folders}
+        save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
+
+    book_results = [(unit[0], category) for unit, (_, category, _) in zip(units, resolved)]
+    all_from_cache = bool(resolved) and all(was_cached for _, _, was_cached in resolved)
+    return book_results, all_from_cache
+
+
 @app.post("/api/scan")
 def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     p = Path(req.path)
@@ -4699,57 +4759,16 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
 
-    # Fast cache check: fingerprint (~100 stat calls, <500ms) before full os.walk
-    cached = _load_scan_cache(p, req.ignored_folders)
-    if cached is not None:
-        needs_metadata = sum(1 for _, c in cached if c == "needs_metadata")
-        needs_conversion = sum(1 for _, c in cached if c == "needs_conversion")
-        ready_to_organize = sum(1 for _, c in cached if c == "ready_to_organize")
-        organized = sum(1 for _, c in cached if c == "organized")
-        return {
-            "path": str(p),
-            "total": needs_metadata + needs_conversion + ready_to_organize + organized,
-            "needs_metadata": needs_metadata,
-            "needs_conversion": needs_conversion,
-            "ready_to_organize": ready_to_organize,
-            "organized": organized,
-            "scan_ms": round((time.monotonic() - t0) * 1000),
-            "from_cache": True,
-        }
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared)
 
-    # Full scan — fingerprint changed or no cache yet. Count book units the way a
-    # real run does (multi-part grouping), so a folder of several standalone books
-    # counts each separately and a folder of chapter files counts as one.
-    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
-
-    def categorise(unit: tuple[Path, list[Path], Path]) -> str:
-        _ref, audio, book_dir = unit
-        try:
-            return _categorise_book_unit(audio, book_dir, p)
-        except PermissionError:
-            return "skip"
-
-    needs_metadata = 0
-    needs_conversion = 0
-    ready_to_organize = 0
-    organized = 0
-    book_results: list[tuple[Path, str]] = []
-
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        for unit, category in zip(units, pool.map(categorise, units)):
-            book_results.append((unit[0], category))
-            if category == "needs_metadata":
-                needs_metadata += 1
-            elif category == "needs_conversion":
-                needs_conversion += 1
-            elif category == "ready_to_organize":
-                ready_to_organize += 1
-            elif category == "organized":
-                organized += 1
-
-    _store_scan_cache(p, book_results, req.ignored_folders)
-
+    needs_metadata = sum(1 for _, c in book_results if c == "needs_metadata")
+    needs_conversion = sum(1 for _, c in book_results if c == "needs_conversion")
+    ready_to_organize = sum(1 for _, c in book_results if c == "ready_to_organize")
+    organized = sum(1 for _, c in book_results if c == "organized")
     total = needs_metadata + needs_conversion + ready_to_organize + organized
+
     return {
         "path": str(p),
         "total": total,
@@ -4758,7 +4777,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         "ready_to_organize": ready_to_organize,
         "organized": organized,
         "scan_ms": round((time.monotonic() - t0) * 1000),
-        "from_cache": False,
+        "from_cache": from_cache,
     }
 
 
@@ -4843,49 +4862,27 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
 
-    cached = _load_scan_cache(p, req.ignored_folders)
-    if cached is not None:
-        # Fast path: categories already known, only do cover checks for needs-attention books
-        attention = [(Path(f), c) for f, c in cached if c in ("needs_metadata", "needs_conversion")]
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    book_results, _from_cache = _categorized_book_units(p, req.ignored_folders, shared)
+    attention = [
+        (folder, category)
+        for folder, category in book_results
+        if category in ("needs_metadata", "needs_conversion")
+    ]
 
-        def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
-            folder, category = fc
-            return {
-                "path": str(folder),
-                "title": folder.stem if folder.is_file() else folder.name,
-                "author": _book_author(folder, p),
-                "has_cover": _has_cover_fast(folder),
-                "category": category,
-            }
-
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            books = list(pool.map(fast_entry, attention))
-        books.sort(key=lambda b: (b["category"], b["title"].lower()))
-        return {"books": books, "total": len(books)}
-
-    # Slow fallback when no scan cache (user navigated directly to books without scanning first)
-    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
-
-    def make_book_entry(unit: tuple[Path, list[Path], Path]) -> dict[str, Any] | None:
-        ref, audio, book_dir = unit
-        if not audio:
-            return None
-        category = _categorise_book_unit(audio, book_dir, p)
-        if category in ("organized", "ready_to_organize", "skip"):
-            return None  # only surface books that need attention
+    def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
+        folder, category = fc
         return {
-            "path": str(ref),
-            "title": ref.stem if ref.is_file() else ref.name,
-            "author": _book_author(ref, p),
-            "has_cover": _has_cover_fast(book_dir),
+            "path": str(folder),
+            "title": folder.stem if folder.is_file() else folder.name,
+            "author": _book_author(folder, p),
+            "has_cover": _has_cover_fast(folder),
             "category": category,
         }
 
-    books = []
     with ThreadPoolExecutor(max_workers=10) as pool:
-        for entry in pool.map(make_book_entry, units):
-            if entry is not None:
-                books.append(entry)
+        books = list(pool.map(fast_entry, attention))
     books.sort(key=lambda b: (b["category"], b["title"].lower()))
     return {"books": books, "total": len(books)}
 

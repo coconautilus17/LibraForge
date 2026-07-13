@@ -9,6 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+import app.library_index as library_index
+import app.main as main_module
 from app.main import (
     _CORE_FIELDS,
     _ensure_scan_sidecar,
@@ -17,6 +21,8 @@ from app.main import (
     _scan_cache_from_sidecar,
     _scan_sidecar_target,
 )
+
+client = TestClient(main_module.app)
 
 
 class SidecarTargetTests(unittest.TestCase):
@@ -184,6 +190,87 @@ class ProbeGracefulTests(unittest.TestCase):
             res = _probe_book_metadata(p)
             self.assertEqual(res["asin"], "")
             self.assertEqual(res["fields"], {f: False for f in _CORE_FIELDS})
+
+
+class ScanStalenessTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self._orig_root = main_module.AUDIOBOOKS_ROOT
+        main_module.AUDIOBOOKS_ROOT = self.root
+        self._orig_cache_path = main_module.FOLDER_SCAN_CACHE
+        main_module.FOLDER_SCAN_CACHE = self.root / "folder-scan-cache.json"
+        library_index.reset_state_for_tests()
+
+    def tearDown(self):
+        main_module.AUDIOBOOKS_ROOT = self._orig_root
+        main_module.FOLDER_SCAN_CACHE = self._orig_cache_path
+        library_index.reset_state_for_tests()
+        self.tmp.cleanup()
+
+    def _touch(self, rel):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    def test_file_added_inside_existing_folder_two_levels_deep_is_reflected_on_next_scan(self):
+        # The bug this fixes: the old _library_fingerprint gate on
+        # scan_folder_route only sees root + first-level subdir mtimes, so a
+        # file appearing inside Author/Book (two levels down) previously
+        # kept serving the stale needs_metadata/ready_to_organize counts
+        # from _scan_cache until its 1-hour TTL expired.
+        self._touch("Author/Book1/Book1.m4b")
+        first = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertEqual(first.status_code, 200)
+        first_total = first.json()["total"]
+
+        self._touch("Author/Book2/Book2.m4b")
+        second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertEqual(second.status_code, 200)
+        self.assertGreater(second.json()["total"], first_total)
+
+    def test_new_book_folder_under_existing_series_is_counted(self):
+        self._touch("Sanderson/Mistborn/Book 1/Book1.m4b")
+        first = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        first_total = first.json()["total"]
+
+        self._touch("Sanderson/Mistborn/Book 2/Book2.m4b")
+        second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertEqual(second.json()["total"], first_total + 1)
+
+    def test_second_call_with_nothing_changed_reports_from_cache(self):
+        self._touch("Author/Book1/Book1.m4b")
+        client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertTrue(second.json()["from_cache"])
+
+    def test_cache_persists_to_disk(self):
+        self._touch("Author/Book1/Book1.m4b")
+        client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertTrue(main_module.FOLDER_SCAN_CACHE.is_file())
+        data = json.loads(main_module.FOLDER_SCAN_CACHE.read_text())
+        self.assertIn("scans", data)
+
+    def test_loose_audio_file_directly_in_scan_root_is_never_falsely_cached_as_unchanged(self):
+        # library_index.build_library_index's own docstring: loose root
+        # files (audio sitting directly in AUDIOBOOKS_ROOT, not inside any
+        # subfolder) get NO signature entry in shared.signatures, and
+        # AUDIOBOOKS_ROOT itself is never a key either. When the scan
+        # target resolves to AUDIOBOOKS_ROOT, a loose top-level file's
+        # "folder" (per _scan_book_units) is AUDIOBOOKS_ROOT itself, so a
+        # naive per-folder signature comparison would compare against a
+        # signature that structurally never exists and could misread that
+        # perpetual absence as "unchanged forever". Prove instead that a
+        # second file appearing loose at root is picked up on the very
+        # next scan, not silently missed.
+        self._touch("Loose1.m4b")
+        first = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        first_total = first.json()["total"]
+
+        self._touch("Loose2.m4b")
+        second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        self.assertEqual(second.json()["total"], first_total + 1)
 
 
 if __name__ == "__main__":
