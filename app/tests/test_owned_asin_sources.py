@@ -37,6 +37,34 @@ class AbsOwnedAsinsTests(unittest.TestCase):
              patch("app.main._abs_request", side_effect=RuntimeError("down")):
             self.assertIsNone(main._abs_owned_asins())
 
+    def test_no_libraries_at_all_returns_none(self):
+        # Regression for #243: _abs_owned_asins() now delegates its
+        # pagination walk to fetch_all_abs_book_items, which can't itself
+        # distinguish "no libraries" from "libraries with zero items" (both
+        # yield an empty item list) -- the None-vs-empty-set distinction
+        # must still be preserved so the caller correctly falls back to the
+        # filesystem scan only when ABS has no libraries at all.
+        def no_libraries(path, params):
+            if path == "/api/libraries":
+                return {"libraries": []}
+            raise AssertionError(f"unexpected path {path}")
+
+        with patch("app.main._get_abs_api_key", return_value="key"), \
+             patch("app.main._abs_request", side_effect=no_libraries):
+            self.assertIsNone(main._abs_owned_asins())
+
+    def test_libraries_exist_but_are_empty_returns_empty_set_not_none(self):
+        def empty_library(path, params):
+            if path == "/api/libraries":
+                return {"libraries": [{"id": "lib1", "name": "Books", "mediaType": "book"}]}
+            if path == "/api/libraries/lib1/items":
+                return {"total": 0, "results": []}
+            raise AssertionError(f"unexpected path {path}")
+
+        with patch("app.main._get_abs_api_key", return_value="key"), \
+             patch("app.main._abs_request", side_effect=empty_library):
+            self.assertEqual(main._abs_owned_asins(), set())
+
 
 class PersistentIndexTests(unittest.TestCase):
     def setUp(self):

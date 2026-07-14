@@ -10,6 +10,7 @@ from app import main
 
 class EnrichmentCompileEndpointFallbackTests(unittest.TestCase):
     def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
         self.tmp = tempfile.TemporaryDirectory()
         self.missing_auth = str(Path(self.tmp.name) / "missing-auth.json")
         self.books = [

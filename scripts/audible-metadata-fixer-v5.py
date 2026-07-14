@@ -1954,6 +1954,17 @@ def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     # book-level metadata is wrong. Standalone single files get direct tag writes.
     return bool(group_search.get("applied") and suffix in MULTI_PART_AUDIO_EXTENSIONS)
 
+def write_worker_wrote_output(is_sidecar: bool, only_json: bool, skip_write: bool) -> bool:
+    """Whether the write worker actually persisted metadata beyond metadata.json.
+
+    A sidecar write (grouped/multi-file books) happens unconditionally --
+    only_json never gates the sidecar branch -- so it counts as "wrote output"
+    even under --metadata-json-only. Only a non-sidecar book run with only_json
+    (nothing written beyond metadata.json) or a smart-mode-decided skip means
+    nothing was actually touched.
+    """
+    return not skip_write and (is_sidecar or not only_json)
+
 def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = False) -> None:
     """Write a non-applied marker for books that could not be matched.
 
@@ -5812,13 +5823,7 @@ def main():
 
                         # Record which fields were actually persisted this run so
                         # future runs can trust the marker and skip re-probing.
-                        # A grouped/multi-file book's json_sidecar write is just
-                        # as real a "written" event as a single file's tags --
-                        # skip_write is always False for sidecar writes (see
-                        # decide_write() above), so only --metadata-json-only
-                        # (only_json) or a smart-mode-decided tag skip means
-                        # nothing beyond metadata.json was actually touched.
-                        _wrote_output = not only_json and not skip_write
+                        _wrote_output = write_worker_wrote_output(is_sidecar, only_json, skip_write)
                         _written_fields = (
                             [f for f in FILL_FIELDS if str((effective_metadata or {}).get(f) or "").strip()]
                             if _wrote_output else None

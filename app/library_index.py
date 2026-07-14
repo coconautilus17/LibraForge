@@ -25,7 +25,8 @@ def is_audio_file(path: Path) -> bool:
 
 
 def folder_listing_signature(folder: Path) -> str:
-    """One-level-deep signature of a folder's direct children.
+    """Signature of a folder's direct children, one level deeper into any
+    disc/part subfolder (see DISC_RE).
 
     Catches any add/remove/rename/resize/rewrite of a file directly inside
     `folder`, independent of whether the OS reliably bumps the folder's own
@@ -35,12 +36,21 @@ def folder_listing_signature(folder: Path) -> str:
     also "" -- both are legitimately "nothing here", and both correctly
     invalidate any cached probe result for a folder that no longer has
     content, which is the behavior that matters).
+
+    build_library_index() collapses a disc/part subfolder's audio into its
+    parent book folder, so the parent is the only one that gets a signature
+    -- but a plain stat() of the disc subfolder's own directory entry only
+    reflects adds/removes/renames directly inside it, not an in-place
+    rewrite of a file one level further down. Folding each disc subfolder's
+    own signature into its parent's closes that gap.
     """
     try:
         parts = []
         for entry in os.scandir(folder):
             stat = entry.stat()
             parts.append(f"{entry.name}:{stat.st_size}:{stat.st_mtime_ns}")
+            if entry.is_dir() and DISC_RE.match(entry.name):
+                parts.append(f"{entry.name}/:{folder_listing_signature(Path(entry.path))}")
     except (FileNotFoundError, NotADirectoryError, PermissionError):
         return ""
     return hashlib.sha256("|".join(sorted(parts)).encode("utf-8")).hexdigest()

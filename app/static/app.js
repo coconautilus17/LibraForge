@@ -785,10 +785,7 @@ function buildCompareTable(result, mode) {
   const chosen = chosenMetadataFor(result, mode);
   const rows = COMPARE_FIELDS.map(([label, key]) => {
     const current = String(local[key] ?? '').trim();
-    // Publisher is preserved from the local file (the match never overwrites it).
-    const willWrite = key === 'publisher'
-      ? current
-      : String(chosen[key] ?? '').trim();
+    const willWrite = String(chosen[key] ?? '').trim();
     const changed = willWrite && willWrite !== current;
     return `
       <tr class="${changed ? 'changed' : ''}">

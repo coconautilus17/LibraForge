@@ -668,23 +668,28 @@ async function refreshNamingTemplatePreview() {
   }
   renderNamingTemplateStatus([]);
 
-  const previewRes = await fetch('/api/organizer/naming-template/preview', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      template,
-      root_path: $('rootPath').value.trim(),
-      destination_root: $('destinationRoot').value.trim(),
+  // The real-library preview and the bundled-example preview only share the
+  // already-validated template as an input, not each other's result, so run
+  // them concurrently instead of paying for two round trips back to back.
+  await Promise.all([
+    fetch('/api/organizer/naming-template/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template,
+        root_path: $('rootPath').value.trim(),
+        destination_root: $('destinationRoot').value.trim(),
+      }),
+    }).catch(() => null).then(async (previewRes) => {
+      if (!previewRes || !previewRes.ok) {
+        renderNamingTemplatePreview([]);
+      } else {
+        const previewBody = await previewRes.json();
+        renderNamingTemplatePreview(previewBody.previews || []);
+      }
     }),
-  }).catch(() => null);
-  if (!previewRes || !previewRes.ok) {
-    renderNamingTemplatePreview([]);
-  } else {
-    const previewBody = await previewRes.json();
-    renderNamingTemplatePreview(previewBody.previews || []);
-  }
-
-  await refreshNamingTemplateExamples(template);
+    refreshNamingTemplateExamples(template),
+  ]);
 }
 
 $('namingTemplate').addEventListener('input', () => {

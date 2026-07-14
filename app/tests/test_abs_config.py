@@ -8,6 +8,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app import main
+from app.publisher_policy import SPECIAL_PROVIDERS
 
 
 class AbsDisconnectTests(unittest.TestCase):
@@ -79,6 +80,20 @@ class MetadataProviderUrlValidationTests(unittest.TestCase):
         result = main.save_abs_tract_settings(main.AbsTractSettingsRequest(url="", kindle_region="us"))
 
         self.assertEqual(result["url"], "")
+
+
+class AbsAggProviderFallbackConsolidationTests(unittest.TestCase):
+    # Regression for #241: _ABS_AGG_PROVIDERS_FALLBACK used to hardcode its
+    # own copy of graphicaudio/soundbooththeater's display names, separate
+    # from publisher_policy.SPECIAL_PROVIDERS -- which app/fixer/scoring.py's
+    # publisher-backfill also reads -- so the two abs-agg publisher paths
+    # could silently drift apart.
+    def test_special_provider_entries_come_from_publisher_policy(self):
+        for provider_id, display_name in SPECIAL_PROVIDERS.items():
+            self.assertEqual(main._ABS_AGG_PROVIDERS_FALLBACK.get(provider_id), display_name)
+
+    def test_non_special_providers_are_still_present(self):
+        self.assertEqual(main._ABS_AGG_PROVIDERS_FALLBACK.get("librivox"), "LibriVox")
 
 
 if __name__ == "__main__":

@@ -42,7 +42,6 @@ from app.folder_scan_cache import (
     scan_cache_key as folder_scan_cache_key,
 )
 import app.library_index as library_index
-from app.library_index import DISC_RE as _DISC_RE
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
 from app.enrichment import (
@@ -74,7 +73,7 @@ from app.progress_phases import (
     terminal_phase,
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
-from app.publisher_policy import load_publisher_policy, save_publisher_policy
+from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = APP_ROOT / "static"
@@ -176,14 +175,17 @@ def _prune_reports() -> list[str]:
 
 # Fallback provider catalog used when abs-agg is unreachable.
 # IDs must match the abs-agg URL slugs exactly (verified against /providers endpoint).
+# graphicaudio/soundbooththeater come from publisher_policy.SPECIAL_PROVIDERS
+# (also read by app/fixer/scoring.py) rather than being duplicated here, so
+# the two abs-agg publisher-backfill paths (this interactive-search catalog
+# and the automated fixer's SPECIAL_PROVIDERS lookup) can't silently drift.
 _ABS_AGG_PROVIDERS_FALLBACK: dict[str, str] = {
     "librivox":          "LibriVox",
     "storytel":          "Storytel",
     "audioteka":         "Audioteka",
     "bookbeat":          "BookBeat",
     "bigfinish":         "Big Finish",
-    "graphicaudio":      "Graphic Audio",
-    "soundbooththeater": "Soundbooth Theater",
+    **SPECIAL_PROVIDERS,
     "ardaudiothek":      "ARD Audiothek",
     "dreifragezeichen":  "Die drei ???",
 }
@@ -4396,39 +4398,14 @@ def _find_book_folders(root: Path) -> list[Path]:
     Handles Author/Series/Book/file and disc-subfolder patterns.
     A folder that matches the disc naming pattern (Disc 1, CD2, Part 3…) is
     collapsed into its parent so multi-disc books count as one.
+
+    Delegates to library_index.build_library_index -- the same walk shared
+    by Manual Review search, M4B discovery, and Folder Forge scan -- instead
+    of maintaining a second, independent copy of the walk/disc-collapse
+    logic that a future fix to that shared walk wouldn't reach.
     """
-    # Walk the full tree, collect every folder that directly contains audio files.
-    # Audio files sitting loose directly inside `root` are each their own book unit
-    # (returned as file paths), so a folder of unorganized loose books is counted.
-    audio_folders: set[Path] = set()
-    loose_root_files: list[Path] = []
-    try:
-        for dirpath, dirnames, filenames in os.walk(str(root)):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not any(d.startswith(s) for s in _FS_SKIP_PREFIXES)
-            )
-            p = Path(dirpath)
-            if p == root:
-                loose_root_files.extend(
-                    p / f for f in sorted(filenames) if is_audio_file(p / f)
-                )
-                continue
-            if any(is_audio_file(Path(dirpath) / f) for f in filenames):
-                audio_folders.add(p)
-    except PermissionError:
-        pass
-
-    # Collapse disc subfolders: if a folder name looks like "Disc 1" / "CD2" etc.,
-    # use its parent as the book folder instead.
-    book_folders: set[Path] = set()
-    for folder in audio_folders:
-        if _DISC_RE.match(folder.name) and folder.parent != root:
-            book_folders.add(folder.parent)
-        else:
-            book_folders.add(folder)
-
-    return sorted(book_folders) + sorted(loose_root_files)
+    entries, _signatures = library_index.build_library_index(root)
+    return [path for path, _is_file in entries]
 
 
 def _filter_entries_by_ignored_folders(
@@ -4767,6 +4744,24 @@ def _categorized_book_units(
     # the much cheaper background folder-signature walk ample time to
     # finish, so this later read is the freshest available signature data
     # to persist. Mirrors the identical fix in discover_m4b_candidates.
+    #
+    # Deliberately NOT replaced with a direct, synchronous
+    # folder_listing_signature() call at persist time (see #238): that reads
+    # real disk state at a different moment than the async shared index's
+    # own next walk will, and _categorise_book_unit's own scan-cache sidecar
+    # write (_ensure_scan_sidecar) mutates the very folder being signed
+    # during this same request -- a synchronous read here can capture that
+    # sidecar while the shared index's background walk (started earlier in
+    # this request, racing the sidecar write) captured the folder without
+    # it. Persisting that "with sidecar" value while shared.signatures keeps
+    # reporting "without sidecar" (until some future unrelated background
+    # walk happens to run after the sidecar write) permanently desyncs the
+    # persisted signature from what the read-side check compares against,
+    # so from_cache never goes true again for that folder. Keeping both the
+    # read side (shared.signatures, above) and the write side (fresh_shared,
+    # here) sourced from the same get_state() avoids that: they can lag
+    # real disk state by one background-walk cycle, but they lag it
+    # together, so a cache hit is still reachable once that walk catches up.
     fresh_shared = library_index.get_state()
 
     # Start from the previous cache contents, but for every folder touched by
@@ -5214,12 +5209,47 @@ class EnrichmentSeriesResponse(BaseModel):
     series: list[EnrichmentSeriesRow]
 
 
+# Cached full-catalog item list: (monotonic_ts, items). The series-search box
+# debounces at 250ms and calls /api/enrichment/series on every keystroke, and
+# selecting a result immediately calls /api/enrichment/compile for the same
+# catalog -- without this, each of those re-runs fetch_all_abs_book_items's
+# full paginated ABS walk from scratch. TTL is short enough that a real
+# library change shows up within one search session, long enough to cover a
+# multi-keystroke search plus the compile call that follows it.
+_ENRICHMENT_ITEMS_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+_ENRICHMENT_ITEMS_CACHE_TTL = 30
+_ENRICHMENT_ITEMS_LOCK = threading.Lock()
+
+
+def _fetch_all_abs_book_items_cached() -> list[dict[str, Any]]:
+    global _ENRICHMENT_ITEMS_CACHE
+    now = time.monotonic()
+    with _ENRICHMENT_ITEMS_LOCK:
+        if _ENRICHMENT_ITEMS_CACHE is not None:
+            ts, items = _ENRICHMENT_ITEMS_CACHE
+            if now - ts < _ENRICHMENT_ITEMS_CACHE_TTL:
+                return items
+    items = fetch_all_abs_book_items(_abs_request)
+    with _ENRICHMENT_ITEMS_LOCK:
+        _ENRICHMENT_ITEMS_CACHE = (now, items)
+    return items
+
+
+def _reset_enrichment_items_cache_for_tests() -> None:
+    """Test-only helper: clear the cached full-catalog item list so each test
+    exercises its own _abs_request mock instead of reusing a prior test's
+    cached result. Not used by production code paths."""
+    global _ENRICHMENT_ITEMS_CACHE
+    with _ENRICHMENT_ITEMS_LOCK:
+        _ENRICHMENT_ITEMS_CACHE = None
+
+
 @app.get("/api/enrichment/series")
 def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
     review_module = load_review_module()
-    items = fetch_all_abs_book_items(_abs_request)
+    items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
     summary = list_series_summary(groups, q)
     return EnrichmentSeriesResponse(series=[EnrichmentSeriesRow(**row) for row in summary])
@@ -5267,7 +5297,7 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
 
     review_module = load_review_module()
-    items = fetch_all_abs_book_items(_abs_request)
+    items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
     books = get_series_books(groups, req.series_name, review_module.normalize_series)
     if not books:
@@ -6172,28 +6202,22 @@ def _abs_owned_asins() -> set[str] | None:
     if not _get_abs_api_key():
         return None
     try:
-        libs_raw = _abs_request("/api/libraries", {})
-        libraries = libs_raw.get("libraries", []) if isinstance(libs_raw, dict) else (libs_raw or [])
-        book_libs = [lib for lib in libraries if lib.get("mediaType") == "book"] or libraries
-        if not book_libs:
-            return None
+        items = fetch_all_abs_book_items(_abs_request)
+        if not items:
+            # fetch_all_abs_book_items can't distinguish "no libraries at
+            # all" (fall back to the filesystem scan) from "libraries exist
+            # but are genuinely empty" (trust ABS's authoritative answer of
+            # zero owned ASINs) -- check libraries directly, only in this
+            # empty-items case, to preserve that distinction.
+            libs_raw = _abs_request("/api/libraries", {})
+            libraries = libs_raw.get("libraries", []) if isinstance(libs_raw, dict) else (libs_raw or [])
+            if not libraries:
+                return None
         asins: set[str] = set()
-        for lib in book_libs:
-            lib_id = lib.get("id")
-            if not lib_id:
-                continue
-            page = 0
-            while True:
-                data = _abs_request(f"/api/libraries/{lib_id}/items", {"limit": "1000", "page": str(page)})
-                results = data.get("results", []) if isinstance(data, dict) else []
-                total = int(data.get("total", 0) or 0) if isinstance(data, dict) else 0
-                for item in results:
-                    asin = str(((item.get("media") or {}).get("metadata") or {}).get("asin") or "").strip()
-                    if asin:
-                        asins.add(asin.upper())
-                page += 1
-                if not results or page * 1000 >= total:
-                    break
+        for item in items:
+            asin = str(((item.get("media") or {}).get("metadata") or {}).get("asin") or "").strip()
+            if asin:
+                asins.add(asin.upper())
         return asins
     except Exception:
         return None
