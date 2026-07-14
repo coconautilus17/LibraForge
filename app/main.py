@@ -261,7 +261,7 @@ def search_abs_agg_candidates(
         raise HTTPException(status_code=502, detail=f"abs-agg search failed: {exc}") from exc
 
     results: list[dict[str, Any]] = []
-    for i, match in enumerate(data.get("matches", [])[:limit]):
+    for match in data.get("matches", [])[:limit]:
         series_list = match.get("series") or []
         series_name = series_list[0].get("series", "") if series_list else ""
         sequence = str(series_list[0].get("sequence", "") or "") if series_list else ""
@@ -272,7 +272,15 @@ def search_abs_agg_candidates(
         summary = match.get("description", "") or ""
         title = match.get("title", "") or ""
         subtitle = match.get("subtitle", "") or ""
-        asin = match.get("asin", "") or f"abs-agg-{provider}-{i}"
+        # No synthetic placeholder here: this asin flows straight through
+        # "Use this match" -> the ASIN form field -> save, with nothing to
+        # distinguish a real, persistable ASIN from a display-only stand-in.
+        # These dedicated-catalog sources (GraphicAudio, SoundBooth Theater,
+        # etc.) generally have no Audible ASIN at all, so it must stay blank
+        # rather than leak a fabricated "abs-agg-{provider}-{i}" string into
+        # the saved sidecar.
+        asin = match.get("asin", "") or ""
+        publisher = _ABS_AGG_PROVIDERS_FALLBACK.get(provider, provider)
         duration_seconds = match.get("duration") or 0
         duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
         genre = _pick_genre(match.get("genres") or [])
@@ -287,6 +295,7 @@ def search_abs_agg_candidates(
             "year": year,
             "cover_url": cover_url,
             "asin": asin,
+            "publisher": publisher,
             "summary": summary,
             "genre": genre,
         }
@@ -300,6 +309,7 @@ def search_abs_agg_candidates(
             "year": "",
             "cover_url": "",
             "asin": asin,
+            "publisher": publisher,
             "summary": "",
             "genre": genre,
         }
