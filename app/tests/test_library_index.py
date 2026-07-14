@@ -72,6 +72,17 @@ class FolderListingSignatureTests(unittest.TestCase):
         missing_sig = folder_listing_signature(self.root / "does-not-exist")
         self.assertNotEqual(empty_sig, missing_sig)
 
+    def test_changes_when_a_file_inside_a_disc_subfolder_is_rewritten(self):
+        # Regression: a plain stat() of "Disc 1" only reflects adds/removes/
+        # renames directly inside it, not an in-place rewrite of a file one
+        # level further down -- so a multi-disc book's parent signature must
+        # fold in each disc subfolder's own signature to catch this.
+        p = self._touch("Book/Disc 1/part1.m4b", b"x")
+        before = folder_listing_signature(self.root / "Book")
+        p.write_bytes(b"xx")
+        after = folder_listing_signature(self.root / "Book")
+        self.assertNotEqual(before, after)
+
     def test_order_of_children_does_not_affect_signature(self):
         # The signature is deliberately mtime-sensitive, so this test must
         # pin an identical, explicit mtime on both passes rather than rely
@@ -128,6 +139,15 @@ class BuildLibraryIndexTests(unittest.TestCase):
         entries, signatures = build_library_index(self.root)
         self.assertEqual(entries, [(self.root / "Author" / "Book", False)])
         self.assertIn(str(self.root / "Author" / "Book"), signatures)
+
+    def test_disc_subfolder_signature_changes_when_a_file_inside_is_rewritten(self):
+        p = self._touch("Author/Book/Disc 1/part1.m4b")
+        p.write_bytes(b"x")
+        _entries, before = build_library_index(self.root)
+        p.write_bytes(b"xx")
+        _entries, after = build_library_index(self.root)
+        book_key = str(self.root / "Author" / "Book")
+        self.assertNotEqual(before[book_key], after[book_key])
 
     def test_skips_hardcoded_hidden_and_system_prefixes(self):
         self._touch("Author/Book/Book.m4b")
