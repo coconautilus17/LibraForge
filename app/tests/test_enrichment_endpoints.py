@@ -71,6 +71,9 @@ def _abs_request(path, params):
 
 
 class EnrichmentSeriesEndpointTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
     def test_requires_abs_configured(self):
         with patch("app.main._get_abs_api_key", return_value=""):
             resp = client.get("/api/enrichment/series")
@@ -85,7 +88,62 @@ class EnrichmentSeriesEndpointTests(unittest.TestCase):
         self.assertEqual(resp.json(), {"series": [{"name": "Scholomance", "book_count": 2}]})
 
 
+class EnrichmentItemsCacheTests(unittest.TestCase):
+    # Regression for #239: /api/enrichment/series and /api/enrichment/compile
+    # each used to call fetch_all_abs_book_items's full paginated ABS walk on
+    # every request -- the series-search box debounces at 250ms and fires on
+    # every keystroke, and compile immediately re-fetched the same catalog a
+    # user's search had just paid for.
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_second_series_search_within_ttl_does_not_refetch(self):
+        calls = []
+
+        def counting_abs_request(path, params):
+            calls.append((path, dict(params)))
+            return _abs_request(path, params)
+
+        with patch("app.main._get_abs_api_key", return_value="key"), \
+             patch("app.main._abs_request", side_effect=counting_abs_request), \
+             patch("app.main.load_review_module", return_value=_FakeReviewModule):
+            first = client.get("/api/enrichment/series?q=schol")
+            calls_after_first = len(calls)
+            second = client.get("/api/enrichment/series?q=scholo")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertGreater(calls_after_first, 0)
+        self.assertEqual(len(calls), calls_after_first, "second search re-fetched the ABS catalog instead of using the cache")
+
+    def test_compile_after_series_search_reuses_cached_items(self):
+        calls = []
+
+        def counting_abs_request(path, params):
+            calls.append((path, dict(params)))
+            return _abs_request(path, params)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing_auth = str(Path(tmp_dir) / "no-auth-here.json")
+            with patch("app.main._get_abs_api_key", return_value="key"), \
+                 patch("app.main._abs_request", side_effect=counting_abs_request), \
+                 patch("app.main.load_review_module", return_value=_FakeReviewModule), \
+                 patch("app.main.search_series_abs", return_value={}), \
+                 patch("app.main.abs_tract_search", return_value=[]), \
+                 patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}):
+                client.get("/api/enrichment/series?q=schol")
+                calls_after_search = len(calls)
+                resp = client.post(
+                    "/api/enrichment/compile",
+                    json={"series_name": "Scholomance", "auth_file": missing_auth},
+                )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(calls), calls_after_search, "compile re-fetched the ABS catalog instead of reusing the search's cache")
+
+
 class EnrichmentCompileEndpointTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
     def test_requires_abs_configured(self):
         with patch("app.main._get_abs_api_key", return_value=""):
             resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance"})
