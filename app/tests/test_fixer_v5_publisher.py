@@ -122,6 +122,64 @@ class PublisherWriteTests(unittest.TestCase):
         preview = FIXER.final_metadata_preview({"title": "X", "publisher": "Tantor Audio"})
         self.assertEqual(preview.get("publisher"), "Tantor Audio")
 
+    def test_special_provider_match_writes_provider_as_publisher_even_without_local_clue(self):
+        # Root cause of issue #230: detect_special_provider figures out the
+        # provider from composer/series/title signals, but that identity was
+        # never fed back into what metadata_from_product uses to set
+        # publisher -- it only read clues["publisher"], which is exactly the
+        # field these dramatized editions typically lack (that is why they
+        # needed detection via other signals in the first place). The winning
+        # product already carries "_abs_provider" (set by _abs_match_to_product
+        # for every abs-agg/abs-tract match), and this exact signal is already
+        # read elsewhere in this file (determine_edit_mode) for a different
+        # purpose, so publisher should read it too.
+        product = self._product()
+        product["_abs_provider"] = "graphicaudio"
+        clues = {
+            "title": "The Book",
+            "author": "Jane Doe",
+            "local_duration_minutes": 600,
+            # no "publisher" clue at all, matching the real-world repro
+        }
+        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
+        self.assertEqual(meta["publisher"], "Graphic Audio")
+
+    def test_soundbooth_theater_provider_also_writes_publisher(self):
+        product = self._product()
+        product["_abs_provider"] = "soundbooththeater"
+        clues = {"title": "The Book", "author": "Jane Doe", "local_duration_minutes": 600}
+        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
+        self.assertEqual(meta["publisher"], "Soundbooth Theater")
+
+    def test_local_publisher_clue_still_wins_for_non_special_provider_matches(self):
+        # Regression guard: a normal Audible match (no _abs_provider key at
+        # all) must keep using the existing clues["publisher"] behavior,
+        # completely unaffected by this fix.
+        product = self._product()
+        clues = {
+            "title": "The Book",
+            "author": "Jane Doe",
+            "publisher": "Tantor Audio",
+            "local_duration_minutes": 600,
+        }
+        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
+        self.assertEqual(meta["publisher"], "Tantor Audio")
+
+    def test_non_special_abs_provider_still_uses_local_clue(self):
+        # An abs-agg match from a non-special provider (e.g. LibriVox) must
+        # not be misclassified as GraphicAudio/SoundBooth Theater -- only the
+        # two SPECIAL_PROVIDERS keys should trigger the override.
+        product = self._product()
+        product["_abs_provider"] = "librivox"
+        clues = {
+            "title": "The Book",
+            "author": "Jane Doe",
+            "publisher": "Some Local Tag",
+            "local_duration_minutes": 600,
+        }
+        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
+        self.assertEqual(meta["publisher"], "Some Local Tag")
+
 
 class FillMarkerHelperTests(unittest.TestCase):
     def test_merge_reports_filled_fields(self):

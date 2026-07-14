@@ -1524,6 +1524,15 @@ def metadata_from_product(
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
 
+    # A special-provider match (GraphicAudio, SoundBooth Theater) is its own
+    # publisher by definition, regardless of what clues["publisher"] holds --
+    # these dramatized editions typically have no local publisher tag at all,
+    # which is exactly why detection had to fall back to composer/series/title
+    # signals in the first place (detect_special_provider). Falling through to
+    # clues["publisher"] here silently dropped that already-known identity.
+    special_provider = SPECIAL_PROVIDERS.get(product.get("_abs_provider") or "", "")
+    publisher = special_provider or sanitize_tag(clues.get("publisher", ""))
+
     return {
         "asin": product.get("asin", ""),
         "title": title,
@@ -1534,7 +1543,7 @@ def metadata_from_product(
         "sequence": sequence_to_write,
         "year": year_to_write,
         "summary": summary_to_write,
-        "publisher": sanitize_tag(clues.get("publisher", "")),
+        "publisher": publisher,
         "genre": genre_text,
         "isbn": product.get("_abs_isbn", "") or "",
         "album": album,
