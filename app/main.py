@@ -4681,11 +4681,25 @@ def _categorized_book_units(
 
     Per folder under p, compares the shared index's current listing
     signature against what is stored in FOLDER_SCAN_CACHE for that folder.
-    Matching folders reuse their cached category untouched; changed,
-    new, or never-seen folders are recategorized (via _categorise_book_unit,
-    which is cheap -- metadata/tag reads, no ffprobe subprocess for the
-    common case) and written back. all_from_cache is True only if every
-    folder under p was a cache hit, used by the route to report from_cache.
+    A folder's cache entry is {"signature": str, "units": {ref_str: category}}
+    -- one signature per folder (the folder's listing as a whole), but a map
+    of per-unit categories, because _scan_book_units can yield more than one
+    unit for a single folder (e.g. two complete standalone books sitting
+    side by side in an _unorganized dump folder both resolve to that same
+    folder as their book_dir). Collapsing those into one shared category
+    field previously meant whichever unit's write ran last in the loop below
+    silently overwrote every sibling unit's cached category. When the
+    folder's signature is unchanged AND a given unit's own ref is present in
+    the folder's "units" map, that unit is a cache hit and reuses its own
+    stored category; any other unit is recategorized (via
+    _categorise_book_unit, which is cheap -- metadata/tag reads, no ffprobe
+    subprocess for the common case) and written back into that folder's
+    "units" map without disturbing its still-valid siblings. A folder whose
+    signature changed has its entire "units" map treated as stale and
+    replaced outright, since a signature change means something in that
+    folder changed and none of its previously cached unit categories can
+    still be trusted. all_from_cache is True only if every unit under p was
+    a cache hit, used by the route to report from_cache.
 
     A folder key with no signature entry in the shared index (empty
     string) is never trusted as a cache hit, even if a stored category
@@ -4701,13 +4715,14 @@ def _categorized_book_units(
     with FOLDER_SCAN_CACHE_LOCK:
         cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
         cached_scan = cache["scans"].get(cache_key, {})
-    cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "category": str}}
+    cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "units": {ref_str: category}}}
 
     units = _filter_ignored_units(_scan_book_units(p), p, ignored_folders)
 
-    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, bool]:
+    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool]:
         ref, audio, book_dir = unit
         folder_key = str(book_dir if book_dir.is_dir() else book_dir.parent)
+        unit_key = str(ref)
         current_signature = shared.signatures.get(folder_key, "")
         cached_folder = cached_folders.get(folder_key)
         if (
@@ -4715,14 +4730,16 @@ def _categorized_book_units(
             and current_signature != ""
             and cached_folder.get("signature") == current_signature
         ):
-            return folder_key, cached_folder["category"], True
+            cached_units = cached_folder.get("units", {})
+            if unit_key in cached_units:
+                return folder_key, unit_key, cached_units[unit_key], True
         try:
             category = _categorise_book_unit(audio, book_dir, p)
         except PermissionError:
             category = "skip"
-        return folder_key, category, False
+        return folder_key, unit_key, category, False
 
-    resolved: list[tuple[str, str, bool]] = []
+    resolved: list[tuple[str, str, str, bool]] = []
     with ThreadPoolExecutor(max_workers=10) as pool:
         for outcome in pool.map(resolve, units):
             resolved.append(outcome)
@@ -4741,20 +4758,42 @@ def _categorized_book_units(
     # finish, so this later read is the freshest available signature data
     # to persist. Mirrors the identical fix in discover_m4b_candidates.
     fresh_shared = library_index.get_state()
-    updated_folders = dict(cached_folders)
-    for folder_key, category, was_cached in resolved:
+
+    # Start from the previous cache contents, but for every folder touched by
+    # this scan, first decide whether its old "units" map is still trustworthy:
+    # if the folder's signature has not changed since it was last written,
+    # carry its old units forward as the base (siblings that were cache hits
+    # this round are never even recomputed, so their only record lives here);
+    # if the signature changed (or the folder is new), the old units map is
+    # entirely stale and is replaced with an empty one. Only after this
+    # per-folder reset do the per-unit results below get layered on top.
+    updated_folders = {
+        folder_key: {"signature": data.get("signature", ""), "units": dict(data.get("units", {}))}
+        for folder_key, data in cached_folders.items()
+    }
+    touched_folder_keys = {folder_key for folder_key, _, _, _ in resolved}
+    for folder_key in touched_folder_keys:
+        fresh_signature = fresh_shared.signatures.get(folder_key, "")
+        existing = updated_folders.get(folder_key)
+        stale = existing is None or fresh_signature == "" or existing.get("signature") != fresh_signature
+        if stale:
+            updated_folders[folder_key] = {"signature": fresh_signature, "units": {}}
+        else:
+            existing["signature"] = fresh_signature
+
+    for folder_key, unit_key, category, was_cached in resolved:
         if not was_cached:
-            updated_folders[folder_key] = {
-                "signature": fresh_shared.signatures.get(folder_key, ""),
-                "category": category,
-            }
+            updated_folders[folder_key]["units"][unit_key] = category
+
     with FOLDER_SCAN_CACHE_LOCK:
         cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
         cache["scans"][cache_key] = {"folders": updated_folders}
         save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
 
-    book_results = [(unit[0], unit[2], category) for unit, (_, category, _) in zip(units, resolved)]
-    all_from_cache = bool(resolved) and all(was_cached for _, _, was_cached in resolved)
+    book_results = [
+        (unit[0], unit[2], category) for unit, (_, _, category, _) in zip(units, resolved)
+    ]
+    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached in resolved)
     return book_results, all_from_cache
 
 

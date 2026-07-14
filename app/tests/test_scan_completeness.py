@@ -272,6 +272,59 @@ class ScanStalenessTests(unittest.TestCase):
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertEqual(second.json()["total"], first_total + 1)
 
+    def test_two_standalone_books_sharing_a_folder_keep_distinct_categories_after_cache_hit(self):
+        # Critical whole-branch review finding: _scan_book_units explicitly yields ONE
+        # UNIT PER standalone book, so a folder holding two complete standalone books
+        # (e.g. an _unorganized dump folder with a.m4b and b.mp3 side by side) produces
+        # two units sharing the same folder_key. The per-folder cache must not collapse
+        # their two distinct categories into a single stored value -- whichever unit's
+        # write happened to run last in the loop used to silently win for both on the
+        # next (cache-hit) call.
+        complete = self._touch("Unorganized/A.mp3")
+        incomplete = self._touch("Unorganized/B.m4b")
+        main_module._ensure_scan_sidecar(
+            [complete], complete.parent, complete, "B0COMPLETE1",
+            {"title": True, "author": True, "narrator": True},
+        )
+        scan_root = self.root / "Unorganized"
+
+        first = client.post("/api/scan/books", json={"path": str(scan_root), "ignored_folders": []})
+        self.assertEqual(first.status_code, 200)
+        first_by_path = {b["path"]: b["category"] for b in first.json()["books"]}
+        self.assertEqual(first_by_path.get(str(complete)), "needs_conversion")
+        self.assertEqual(first_by_path.get(str(incomplete)), "needs_metadata")
+
+        # Second call: the folder's listing signature is unchanged, so both units
+        # should be served from the cache -- but each must still resolve to its own
+        # correct category, not both collapsed to whichever one was written last.
+        second = client.post("/api/scan/books", json={"path": str(scan_root), "ignored_folders": []})
+        self.assertEqual(second.status_code, 200)
+        second_by_path = {b["path"]: b["category"] for b in second.json()["books"]}
+        self.assertEqual(second_by_path.get(str(complete)), "needs_conversion")
+        self.assertEqual(second_by_path.get(str(incomplete)), "needs_metadata")
+
+    def test_scan_counts_stay_correct_for_two_standalone_books_sharing_a_folder(self):
+        # Same bug as above, proven via /api/scan's aggregate counts: needs_conversion
+        # and needs_metadata must both stay 1 after a cached second call, not collapse
+        # onto a single category counted twice while the other silently drops to zero.
+        complete = self._touch("Dump/A.mp3")
+        self._touch("Dump/B.m4b")
+        main_module._ensure_scan_sidecar(
+            [complete], complete.parent, complete, "B0COMPLETE2",
+            {"title": True, "author": True, "narrator": True},
+        )
+        scan_root = self.root / "Dump"
+
+        first = client.post("/api/scan", json={"path": str(scan_root), "ignored_folders": []})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["needs_conversion"], 1)
+        self.assertEqual(first.json()["needs_metadata"], 1)
+
+        second = client.post("/api/scan", json={"path": str(scan_root), "ignored_folders": []})
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["needs_conversion"], 1)
+        self.assertEqual(second.json()["needs_metadata"], 1)
+
     def test_standalone_loose_file_with_no_real_cover_reports_has_cover_false(self):
         # Task 6 review finding: scan_books_route's fast_entry computed has_cover
         # from `ref` (the unit's display path), which for a standalone unit IS the

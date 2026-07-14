@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-FOLDER_SCAN_CACHE_VERSION = 1
+FOLDER_SCAN_CACHE_VERSION = 2
+# v2: each folder entry's per-folder "category" field became a "units" map of
+# {unit_ref: category}, so a folder with multiple standalone book units (each
+# possibly its own category) no longer collapses onto one shared value. Bumped
+# so a v1 cache file on disk from before this change is discarded outright
+# rather than partially read under the new shape.
 
 
 def scan_cache_key(path: Path, ignored_folders: list[str] | None) -> str:
