@@ -271,5 +271,27 @@ class CompareTagsForWriteSubtitleTests(unittest.TestCase):
         self.assertNotIn("subtitle", changed)
 
 
+class WriteWorkerWroteOutputTests(unittest.TestCase):
+    def test_sidecar_write_counts_as_output_even_under_metadata_json_only(self):
+        # Regression for the bug where a grouped/multi-file book run with
+        # --metadata-json-only wrote the real json_sidecar (unconditional for
+        # sidecar books) but _wrote_output still went False, zeroing
+        # written_fields and making marker_skip_is_clean() treat the book's
+        # real ASIN as never recorded -- reprocessing it forever.
+        self.assertTrue(FIXER.write_worker_wrote_output(is_sidecar=True, only_json=True, skip_write=False))
+
+    def test_sidecar_write_counts_as_output_without_metadata_json_only(self):
+        self.assertTrue(FIXER.write_worker_wrote_output(is_sidecar=False, only_json=False, skip_write=False))
+
+    def test_non_sidecar_metadata_json_only_writes_nothing(self):
+        # Non-sidecar book, --metadata-json-only: the tags branch never runs,
+        # so nothing beyond metadata.json was actually touched.
+        self.assertFalse(FIXER.write_worker_wrote_output(is_sidecar=False, only_json=True, skip_write=False))
+
+    def test_skip_write_means_no_output_regardless_of_sidecar_or_only_json(self):
+        self.assertFalse(FIXER.write_worker_wrote_output(is_sidecar=True, only_json=False, skip_write=True))
+        self.assertFalse(FIXER.write_worker_wrote_output(is_sidecar=False, only_json=False, skip_write=True))
+
+
 if __name__ == "__main__":
     unittest.main()
