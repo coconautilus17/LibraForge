@@ -36,6 +36,15 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+from app.folder_scan_cache import (
+    load_scan_cache_file,
+    save_scan_cache_file,
+    scan_cache_key as folder_scan_cache_key,
+)
+import app.library_index as library_index
+from app.library_index import DISC_RE as _DISC_RE
+from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
+from app.library_index import is_audio_file
 from app.enrichment import (
     compile_series_enrichment,
     fetch_all_abs_book_items,
@@ -102,6 +111,9 @@ def _pick_genre(genres: list[str]) -> str:
 M4B_TOOL_SIDECAR_SUFFIX = ".m4b-tool-metadata.json"
 M4B_DISCOVERY_CACHE = REPORTS_DIR / "m4b-discovery-cache.json"
 M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
+
+FOLDER_SCAN_CACHE = REPORTS_DIR / "folder-scan-cache.json"
+FOLDER_SCAN_CACHE_LOCK = threading.Lock()
 
 DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 # Saved Audible accounts live here, one <user_id>.json auth file plus a
@@ -581,18 +593,6 @@ def sanitize_filename(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip()
     return value or "output"
 
-
-def is_audio_file(path: Path) -> bool:
-    return path.suffix.lower() in {
-        ".m4b",
-        ".m4a",
-        ".mp4",
-        ".mp3",
-        ".flac",
-        ".ogg",
-        ".opus",
-        ".aac",
-    }
 
 
 def source_audio_files(path: Path) -> list[Path]:
@@ -2350,6 +2350,37 @@ def discover_m4b_candidates(
             },
         )
 
+    # Nothing-changed fast path: if the shared library index has a folder
+    # signature for every folder this cached search previously covered,
+    # and every one of them is unchanged, and no new folders exist under
+    # target_path, skip the walk and reprobe entirely and reuse the cached
+    # results verbatim. This is what makes the common case instant; any
+    # actual change anywhere under target_path falls through to the
+    # existing full-walk logic below, which already reuses per-file
+    # ffprobe results for any file that itself did not change.
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    if (
+        cached_search
+        and cached_search.get("script_mtime_ns") == script_mtime_ns
+        and _m4b_cached_search_is_still_fresh(cached_search, target_path, shared)
+    ):
+        return format_m4b_discovery_response(
+            target_path=target_path,
+            mode=mode,
+            results=cached_search.get("results", {}),
+            limit=limit,
+            cache_info={
+                "source": "cache",
+                "refreshed_at": cached_search.get("refreshed_at", ""),
+                "audio_file_count": cached_search.get("audio_file_count", 0),
+                "chapter_probes_reused": 0,
+                "chapter_probes_run": 0,
+                "audio_probes_reused": 0,
+                "audio_probes_run": 0,
+            },
+        )
+
     # When there is no cache entry for this script version, look for per-file
     # probe data from any cached entry for the same path. Chapter counts and
     # audio stream properties are script-independent, so they can be safely
@@ -2415,6 +2446,14 @@ def discover_m4b_candidates(
         results[requested_mode] = candidates
 
     refreshed_at = utc_timestamp()
+    # Re-fetch the shared state rather than reusing the `shared` snapshot
+    # taken before the fast-path check above: ensure_library_index_fresh
+    # only kicks a background walk and returns immediately, so that early
+    # snapshot can still be the pre-walk (possibly empty) state. By this
+    # point the full m4b walk and ffprobe reads above have run, giving the
+    # much cheaper background folder walk ample time to finish, so this
+    # later read is the freshest available signature data to persist.
+    folder_signatures = _m4b_folder_signatures_under(target_path, library_index.get_state())
     search_entry = {
         "path": str(target_path),
         "script_name": script_name,
@@ -2423,6 +2462,7 @@ def discover_m4b_candidates(
         "audio_file_count": len(files),
         "chapter_probes": chapter_reader.pruned_entries(),
         "audio_probes": audio_reader.pruned_entries(),
+        "folder_signatures": folder_signatures,
         "results": results,
     }
     with M4B_DISCOVERY_CACHE_LOCK:
@@ -2445,6 +2485,69 @@ def discover_m4b_candidates(
             "audio_probes_run": audio_reader.probed,
         },
     )
+
+
+def _m4b_folder_signature_scope(target_path: Path) -> Path:
+    """The folder whose signature (and everything under it) determines
+    whether a cached discover_m4b_candidates search is still fresh.
+
+    discover_m4b_candidates accepts a single audio file as target_path
+    (fixer_processing_context has a dedicated branch for this: it groups
+    target_path with its siblings via target_path.parent.iterdir()), and
+    the shared library index only carries signatures for folders, not
+    individual files (see library_index.build_library_index). Using
+    target_path directly in that case would look for a signature keyed by
+    a file path that never has one, silently and permanently returning an
+    empty folder_signatures dict on both sides of every comparison --
+    trivially "unchanged" even when a sibling file is added, removed, or
+    rewritten. Scoping to the parent folder instead is what the file
+    target case actually depends on, matching fixer_processing_context's
+    own sibling-grouping behavior.
+    """
+    return target_path.parent if target_path.is_file() else target_path
+
+
+def _m4b_folder_signatures_under(
+    target_path: Path, shared: "library_index.LibraryIndexState"
+) -> dict[str, str]:
+    scope = _m4b_folder_signature_scope(target_path)
+    prefix = str(scope) + os.sep
+    return {
+        path_str: signature
+        for path_str, signature in shared.signatures.items()
+        if path_str == str(scope) or path_str.startswith(prefix)
+    }
+
+
+def _m4b_cached_search_is_still_fresh(
+    cached_search: dict[str, Any], target_path: Path, shared: "library_index.LibraryIndexState"
+) -> bool:
+    """True only if every folder the shared index currently has under
+    target_path is present in the cached search's folder_signatures with
+    an identical signature, AND the cached search has no folder that the
+    shared index no longer has (a folder disappearing is a change too).
+    A cache entry from before this migration (no folder_signatures key)
+    is always a miss, never a crash.
+
+    Forces a miss when the signature scope resolves to AUDIOBOOKS_ROOT
+    itself (target_path IS AUDIOBOOKS_ROOT, or target_path is a loose
+    file sitting directly in it). library_index.build_library_index never
+    assigns a signature to AUDIOBOOKS_ROOT or to loose root files (see its
+    own docstring: "Loose root files have no signature entry"), so
+    _m4b_folder_signatures_under would return {} on both sides of the
+    comparison in that case, always comparing equal regardless of what
+    actually changed among the loose root files. Falling back to the
+    existing full-walk path here is conservative: it never reports stale
+    results as fresh, it just forgoes the fast-path speedup for this one
+    narrow case.
+    """
+    scope = _m4b_folder_signature_scope(target_path)
+    if scope == AUDIOBOOKS_ROOT:
+        return False
+    cached_signatures = cached_search.get("folder_signatures")
+    if not isinstance(cached_signatures, dict):
+        return False
+    return _m4b_folder_signatures_under(target_path, shared) == cached_signatures
 
 
 def format_m4b_discovery_response(
@@ -3954,7 +4057,6 @@ def get_config() -> dict[str, Any]:
     return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
 
 
-_FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
 
 
 @app.get("/api/fs/ls")
@@ -3987,8 +4089,6 @@ _ASIN_TAG_KEYS = (
 )
 _FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
 _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
-# Folder names that are disc/part subdivisions of a single book, not separate books.
-_DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 
 
 _NOREALASIN = "NOREALASIN"
@@ -4321,73 +4421,46 @@ def _find_book_folders(root: Path) -> list[Path]:
     return sorted(book_folders) + sorted(loose_root_files)
 
 
-def _build_manual_review_search_index(
-    root: Path,
-    ignored_folders: list[str],
-    on_progress: Callable[[int], None] | None = None,
+def _filter_entries_by_ignored_folders(
+    entries: list[tuple[str, bool]], root: Path, ignored_folders: list[str]
 ) -> list[tuple[str, bool]]:
-    """Walk root once and return every book-level entry as (path, is_file).
-
-    Same folder-level shape as _find_book_folders (disc-subfolder collapsing,
-    loose root files as their own entries), but also prunes the user's
-    configured ignore tokens *during* the walk -- not as a post-filter --
-    since an ignored folder (e.g. a recycle bin) could itself be huge and
-    pruning at walk time avoids ever descending into it. Reimplements
-    matches_ignored_folders' case-insensitive prefix-match semantics inline
-    (checking the directory's own name is enough here: an ignored ancestor
-    is never descended into, so there's nothing further down to re-check).
+    """Post-filter the shared index's entries by ignored_folders: an entry
+    is dropped if any path component between root and the entry (the
+    entry's own folder name included, a loose file's own filename
+    excluded) starts with an ignore token, case-insensitively. Mirrors
+    matches_ignored_folders' semantics (fixer script) as an in-memory
+    filter over an already-built list, since the shared walker itself has
+    no concept of any single consumer's ignore list.
     """
-    tokens = tuple(_FS_SKIP_PREFIXES) + tuple(
-        f.strip().lower() for f in (ignored_folders or []) if f and f.strip()
-    )
-    audio_folders: set[Path] = set()
-    loose_root_files: list[Path] = []
-    count = 0
-    try:
-        for dirpath, dirnames, filenames in os.walk(str(root)):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not any(d.lower().startswith(t) for t in tokens)
-            )
-            p = Path(dirpath)
-            if p == root:
-                loose_root_files.extend(
-                    p / f for f in sorted(filenames) if is_audio_file(p / f)
-                )
-                continue
-            if any(is_audio_file(p / f) for f in filenames):
-                audio_folders.add(p)
-                count += 1
-                if on_progress:
-                    on_progress(count)
-    except PermissionError:
-        pass
-
-    book_folders: set[Path] = set()
-    for folder in audio_folders:
-        if _DISC_RE.match(folder.name) and folder.parent != root:
-            book_folders.add(folder.parent)
-        else:
-            book_folders.add(folder)
-
-    entries = [(str(f), False) for f in sorted(book_folders)]
-    entries.extend((str(f), True) for f in sorted(loose_root_files))
-    return entries
+    tokens = tuple(f.strip().lower() for f in (ignored_folders or []) if f and f.strip())
+    if not tokens:
+        return list(entries)
+    kept: list[tuple[str, bool]] = []
+    for path_str, is_file in entries:
+        path = Path(path_str)
+        check_path = path.parent if is_file else path
+        try:
+            rel_parts = check_path.relative_to(root).parts
+        except ValueError:
+            rel_parts = check_path.parts
+        if not any(part.lower().startswith(token) for part in rel_parts for token in tokens):
+            kept.append((path_str, is_file))
+    return kept
 
 
 @dataclass
 class _ManualReviewSearchIndex:
     """In-memory state for the Manual Review filesystem search index.
 
-    One module-level instance -- scope is always the whole AUDIOBOOKS_ROOT,
-    never a sub-path, so there's no need for the path-keyed dict _scan_cache
-    uses. entries is a flat (path, is_file) list built once per fresh index;
-    search() filters it in memory rather than re-walking or re-stat'ing.
+    Derived from the shared library_index state rather than running its own
+    walk. source_generation tracks which shared-index generation this was
+    last derived from, replacing the old root+first-level fingerprint as
+    the staleness signal.
     """
     status: str = "idle"  # idle | building | updating | ready | error
     entries: list[tuple[str, bool]] = field(default_factory=list)
     book_count: int = 0
-    fingerprint: str | None = None
+    source_generation: int = -1
     ignored_signature: str | None = None
     error: str | None = None
 
@@ -4397,19 +4470,27 @@ _manual_review_search_lock = threading.Lock()
 
 
 def _manual_review_search_index_is_stale(
-    state: _ManualReviewSearchIndex, fingerprint: str, ignored_signature: str
+    state: _ManualReviewSearchIndex, generation: int, ignored_signature: str
 ) -> bool:
-    """Whether a (re)build should be started for the given library state.
+    """Whether Manual Review's own derived entries need rebuilding from the
+    current shared index state. A build already in flight is never
+    re-triggered; an error state always retries.
 
-    A build already in flight (building/updating) is never re-triggered --
-    the next check after it finishes will catch any newer drift. An error
-    state is always stale so the next check retries.
+    source_generation == -1 with status == "ready" only happens when a
+    caller (e.g. a test fixture) marks the state ready directly, bypassing
+    _run_manual_review_search_index_build, which always records a real
+    (non-negative) generation. Real production code never produces this
+    combination, so it is safe to treat it as "trust the caller's snapshot"
+    rather than force an immediate rebuild the caller has no way to predict
+    or avoid -- the ignore-list signature is still honored either way.
     """
     if state.status in ("building", "updating"):
         return False
+    if state.status == "ready" and state.source_generation == -1:
+        return state.ignored_signature != ignored_signature
     return (
         state.status != "ready"
-        or state.fingerprint != fingerprint
+        or state.source_generation != generation
         or state.ignored_signature != ignored_signature
     )
 
@@ -4417,21 +4498,17 @@ def _manual_review_search_index_is_stale(
 def _run_manual_review_search_index_build(
     state: _ManualReviewSearchIndex, root: Path, ignored_folders: list[str]
 ) -> None:
-    """Synchronously (re)build the index into `state`. Callers that want this
-    off the request thread wrap the call in a background thread; this
-    function itself has no threading concerns, which keeps it directly
-    testable."""
+    """Synchronously derive state's entries from the current shared index
+    state. Directly testable; callers wanting this off the request thread
+    wrap it in a background thread."""
     state.status = "updating" if state.entries else "building"
     state.error = None
-
-    def progress(n: int) -> None:
-        state.book_count = n
-
     try:
-        entries = _build_manual_review_search_index(root, ignored_folders, on_progress=progress)
+        shared = library_index.get_state()
+        entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
         state.entries = entries
         state.book_count = len(entries)
-        state.fingerprint = _library_fingerprint(root)
+        state.source_generation = shared.generation
         state.ignored_signature = _ignored_signature(ignored_folders)
         state.status = "ready"
     except Exception as exc:
@@ -4440,12 +4517,16 @@ def _run_manual_review_search_index_build(
 
 
 def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None:
-    """Kick off a background rebuild if the index is missing or stale.
-    Non-blocking: returns immediately whether or not a build was started."""
+    """Kick a non-blocking background rebuild of the shared index if
+    needed, then a non-blocking rebuild of this state's own filtered
+    entries if the shared index has moved on or the ignore list changed.
+    Returns immediately whether or not a build was started."""
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+
     state = _manual_review_search_index
-    fingerprint = _library_fingerprint(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
     signature = _ignored_signature(ignored_folders)
-    if not _manual_review_search_index_is_stale(state, fingerprint, signature):
+    if not _manual_review_search_index_is_stale(state, shared.generation, signature):
         return
     if not _manual_review_search_lock.acquire(blocking=False):
         return
@@ -4546,10 +4627,6 @@ def _categorise_book_unit(audio: list[Path], book_dir: Path, scan_root: Path) ->
 
 _COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "cover.jpeg")
 
-# In-memory cache: path → (timestamp, fingerprint, [(folder_str, category)])
-_scan_cache: dict[str, tuple[float, str, list[tuple[str, str]]]] = {}
-_SCAN_CACHE_TTL = 3600  # 1 hour
-
 _AUDIO_EXTS_COVER = ("*.m4b", "*.m4a", "*.mp3", "*.mp4")
 
 
@@ -4574,34 +4651,6 @@ def _ignored_signature(ignored_folders: list[str] | None) -> str:
     return ",".join(sorted(f.strip().lower() for f in (ignored_folders or []) if f and f.strip()))
 
 
-def _scan_cache_key(path: Path, ignored: list[str] | None = None) -> str:
-    """Cache key includes the ignored-folder set so a changed filter forces a rescan."""
-    return f"{path}|{_ignored_signature(ignored)}"
-
-
-def _store_scan_cache(
-    path: Path, results: list[tuple[Path, str]], ignored: list[str] | None = None
-) -> None:
-    fp = _library_fingerprint(path)
-    _scan_cache[_scan_cache_key(path, ignored)] = (
-        time.monotonic(), fp, [(str(f), c) for f, c in results]
-    )
-
-
-def _load_scan_cache(
-    path: Path, ignored: list[str] | None = None
-) -> list[tuple[str, str]] | None:
-    entry = _scan_cache.get(_scan_cache_key(path, ignored))
-    if not entry:
-        return None
-    ts, cached_fp, data = entry
-    if time.monotonic() - ts >= _SCAN_CACHE_TTL:
-        return None
-    if _library_fingerprint(path) != cached_fp:
-        return None  # library changed — force rescan
-    return data
-
-
 def _has_cover_fast(folder: Path) -> bool:
     """Fast cover heuristic: file covers or any audio file presence."""
     if folder.is_file():
@@ -4619,6 +4668,135 @@ def _has_cover_fast(folder: Path) -> bool:
     return False
 
 
+def _categorized_book_units(
+    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState"
+) -> tuple[list[tuple[Path, Path, str]], bool]:
+    """Return (book_results, all_from_cache) for scan root p.
+
+    Each book_results entry is (ref, book_dir, category): ref is the unit's
+    display path (a file for a standalone book, a folder for a grouped one),
+    while book_dir is always the real containing folder -- callers that need
+    an actual directory (e.g. a cover-presence check) must use book_dir, not
+    ref, since ref can be a plain file for a standalone unit.
+
+    Per folder under p, compares the shared index's current listing
+    signature against what is stored in FOLDER_SCAN_CACHE for that folder.
+    A folder's cache entry is {"signature": str, "units": {ref_str: category}}
+    -- one signature per folder (the folder's listing as a whole), but a map
+    of per-unit categories, because _scan_book_units can yield more than one
+    unit for a single folder (e.g. two complete standalone books sitting
+    side by side in an _unorganized dump folder both resolve to that same
+    folder as their book_dir). Collapsing those into one shared category
+    field previously meant whichever unit's write ran last in the loop below
+    silently overwrote every sibling unit's cached category. When the
+    folder's signature is unchanged AND a given unit's own ref is present in
+    the folder's "units" map, that unit is a cache hit and reuses its own
+    stored category; any other unit is recategorized (via
+    _categorise_book_unit, which is cheap -- metadata/tag reads, no ffprobe
+    subprocess for the common case) and written back into that folder's
+    "units" map without disturbing its still-valid siblings. A folder whose
+    signature changed has its entire "units" map treated as stale and
+    replaced outright, since a signature change means something in that
+    folder changed and none of its previously cached unit categories can
+    still be trusted. all_from_cache is True only if every unit under p was
+    a cache hit, used by the route to report from_cache.
+
+    A folder key with no signature entry in the shared index (empty
+    string) is never trusted as a cache hit, even if a stored category
+    happens to match "" -- this is the deliberate conservative gate for
+    loose top-level audio files and AUDIOBOOKS_ROOT itself as a scan
+    target, neither of which library_index.build_library_index ever
+    assigns a real signature to (see its docstring). Treating an absent
+    signature as "unchanged" would silently freeze those categories
+    forever; treating it as "always recompute" costs nothing beyond an
+    extra _categorise_book_unit call, which is cheap.
+    """
+    cache_key = folder_scan_cache_key(p, ignored_folders)
+    with FOLDER_SCAN_CACHE_LOCK:
+        cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
+        cached_scan = cache["scans"].get(cache_key, {})
+    cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "units": {ref_str: category}}}
+
+    units = _filter_ignored_units(_scan_book_units(p), p, ignored_folders)
+
+    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool]:
+        ref, audio, book_dir = unit
+        folder_key = str(book_dir if book_dir.is_dir() else book_dir.parent)
+        unit_key = str(ref)
+        current_signature = shared.signatures.get(folder_key, "")
+        cached_folder = cached_folders.get(folder_key)
+        if (
+            cached_folder is not None
+            and current_signature != ""
+            and cached_folder.get("signature") == current_signature
+        ):
+            cached_units = cached_folder.get("units", {})
+            if unit_key in cached_units:
+                return folder_key, unit_key, cached_units[unit_key], True
+        try:
+            category = _categorise_book_unit(audio, book_dir, p)
+        except PermissionError:
+            category = "skip"
+        return folder_key, unit_key, category, False
+
+    resolved: list[tuple[str, str, str, bool]] = []
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for outcome in pool.map(resolve, units):
+            resolved.append(outcome)
+
+    # Re-fetch the shared state rather than reusing the `shared` snapshot the
+    # caller passed in: ensure_library_index_fresh only kicks a background
+    # walk and returns immediately, so that snapshot (taken before the units
+    # above were even scanned) can still be the pre-walk state, with no
+    # signature for a freshly-discovered folder. Writing that stale
+    # snapshot back to the cache would permanently store signature "" for
+    # every newly-seen folder, which the read-side conservative check above
+    # then always treats as a miss -- so the fast path would never engage
+    # even when nothing actually changes on the next call. By this point the
+    # full folder walk and per-unit categorization above have run, giving
+    # the much cheaper background folder-signature walk ample time to
+    # finish, so this later read is the freshest available signature data
+    # to persist. Mirrors the identical fix in discover_m4b_candidates.
+    fresh_shared = library_index.get_state()
+
+    # Start from the previous cache contents, but for every folder touched by
+    # this scan, first decide whether its old "units" map is still trustworthy:
+    # if the folder's signature has not changed since it was last written,
+    # carry its old units forward as the base (siblings that were cache hits
+    # this round are never even recomputed, so their only record lives here);
+    # if the signature changed (or the folder is new), the old units map is
+    # entirely stale and is replaced with an empty one. Only after this
+    # per-folder reset do the per-unit results below get layered on top.
+    updated_folders = {
+        folder_key: {"signature": data.get("signature", ""), "units": dict(data.get("units", {}))}
+        for folder_key, data in cached_folders.items()
+    }
+    touched_folder_keys = {folder_key for folder_key, _, _, _ in resolved}
+    for folder_key in touched_folder_keys:
+        fresh_signature = fresh_shared.signatures.get(folder_key, "")
+        existing = updated_folders.get(folder_key)
+        stale = existing is None or fresh_signature == "" or existing.get("signature") != fresh_signature
+        if stale:
+            updated_folders[folder_key] = {"signature": fresh_signature, "units": {}}
+        else:
+            existing["signature"] = fresh_signature
+
+    for folder_key, unit_key, category, was_cached in resolved:
+        if not was_cached:
+            updated_folders[folder_key]["units"][unit_key] = category
+
+    with FOLDER_SCAN_CACHE_LOCK:
+        cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
+        cache["scans"][cache_key] = {"folders": updated_folders}
+        save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
+
+    book_results = [
+        (unit[0], unit[2], category) for unit, (_, _, category, _) in zip(units, resolved)
+    ]
+    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached in resolved)
+    return book_results, all_from_cache
+
+
 @app.post("/api/scan")
 def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
     p = Path(req.path)
@@ -4626,57 +4804,16 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
 
-    # Fast cache check: fingerprint (~100 stat calls, <500ms) before full os.walk
-    cached = _load_scan_cache(p, req.ignored_folders)
-    if cached is not None:
-        needs_metadata = sum(1 for _, c in cached if c == "needs_metadata")
-        needs_conversion = sum(1 for _, c in cached if c == "needs_conversion")
-        ready_to_organize = sum(1 for _, c in cached if c == "ready_to_organize")
-        organized = sum(1 for _, c in cached if c == "organized")
-        return {
-            "path": str(p),
-            "total": needs_metadata + needs_conversion + ready_to_organize + organized,
-            "needs_metadata": needs_metadata,
-            "needs_conversion": needs_conversion,
-            "ready_to_organize": ready_to_organize,
-            "organized": organized,
-            "scan_ms": round((time.monotonic() - t0) * 1000),
-            "from_cache": True,
-        }
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared)
 
-    # Full scan — fingerprint changed or no cache yet. Count book units the way a
-    # real run does (multi-part grouping), so a folder of several standalone books
-    # counts each separately and a folder of chapter files counts as one.
-    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
-
-    def categorise(unit: tuple[Path, list[Path], Path]) -> str:
-        _ref, audio, book_dir = unit
-        try:
-            return _categorise_book_unit(audio, book_dir, p)
-        except PermissionError:
-            return "skip"
-
-    needs_metadata = 0
-    needs_conversion = 0
-    ready_to_organize = 0
-    organized = 0
-    book_results: list[tuple[Path, str]] = []
-
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        for unit, category in zip(units, pool.map(categorise, units)):
-            book_results.append((unit[0], category))
-            if category == "needs_metadata":
-                needs_metadata += 1
-            elif category == "needs_conversion":
-                needs_conversion += 1
-            elif category == "ready_to_organize":
-                ready_to_organize += 1
-            elif category == "organized":
-                organized += 1
-
-    _store_scan_cache(p, book_results, req.ignored_folders)
-
+    needs_metadata = sum(1 for _, _, c in book_results if c == "needs_metadata")
+    needs_conversion = sum(1 for _, _, c in book_results if c == "needs_conversion")
+    ready_to_organize = sum(1 for _, _, c in book_results if c == "ready_to_organize")
+    organized = sum(1 for _, _, c in book_results if c == "organized")
     total = needs_metadata + needs_conversion + ready_to_organize + organized
+
     return {
         "path": str(p),
         "total": total,
@@ -4685,7 +4822,7 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         "ready_to_organize": ready_to_organize,
         "organized": organized,
         "scan_ms": round((time.monotonic() - t0) * 1000),
-        "from_cache": False,
+        "from_cache": from_cache,
     }
 
 
@@ -4770,49 +4907,27 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
 
-    cached = _load_scan_cache(p, req.ignored_folders)
-    if cached is not None:
-        # Fast path: categories already known, only do cover checks for needs-attention books
-        attention = [(Path(f), c) for f, c in cached if c in ("needs_metadata", "needs_conversion")]
+    library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    shared = library_index.get_state()
+    book_results, _from_cache = _categorized_book_units(p, req.ignored_folders, shared)
+    attention = [
+        (folder, book_dir, category)
+        for folder, book_dir, category in book_results
+        if category in ("needs_metadata", "needs_conversion")
+    ]
 
-        def fast_entry(fc: tuple[Path, str]) -> dict[str, Any]:
-            folder, category = fc
-            return {
-                "path": str(folder),
-                "title": folder.stem if folder.is_file() else folder.name,
-                "author": _book_author(folder, p),
-                "has_cover": _has_cover_fast(folder),
-                "category": category,
-            }
-
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            books = list(pool.map(fast_entry, attention))
-        books.sort(key=lambda b: (b["category"], b["title"].lower()))
-        return {"books": books, "total": len(books)}
-
-    # Slow fallback when no scan cache (user navigated directly to books without scanning first)
-    units = _filter_ignored_units(_scan_book_units(p), p, req.ignored_folders)
-
-    def make_book_entry(unit: tuple[Path, list[Path], Path]) -> dict[str, Any] | None:
-        ref, audio, book_dir = unit
-        if not audio:
-            return None
-        category = _categorise_book_unit(audio, book_dir, p)
-        if category in ("organized", "ready_to_organize", "skip"):
-            return None  # only surface books that need attention
+    def fast_entry(fc: tuple[Path, Path, str]) -> dict[str, Any]:
+        folder, book_dir, category = fc
         return {
-            "path": str(ref),
-            "title": ref.stem if ref.is_file() else ref.name,
-            "author": _book_author(ref, p),
+            "path": str(folder),
+            "title": folder.stem if folder.is_file() else folder.name,
+            "author": _book_author(folder, p),
             "has_cover": _has_cover_fast(book_dir),
             "category": category,
         }
 
-    books = []
     with ThreadPoolExecutor(max_workers=10) as pool:
-        for entry in pool.map(make_book_entry, units):
-            if entry is not None:
-                books.append(entry)
+        books = list(pool.map(fast_entry, attention))
     books.sort(key=lambda b: (b["category"], b["title"].lower()))
     return {"books": books, "total": len(books)}
 
