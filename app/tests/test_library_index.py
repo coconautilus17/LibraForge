@@ -218,6 +218,35 @@ class EnsureLibraryIndexFreshTests(unittest.TestCase):
         self.assertEqual(len(get_state().entries), 1)
         self.assertEqual(get_state().generation, 1)
 
+    def test_subsequent_call_with_nothing_changed_does_not_bump_generation(self):
+        # Regression: ensure_library_index_fresh has no cheap pre-check
+        # gating how often a walk runs (by design), so a consumer that polls
+        # it on a timer (Manual Review's search-index status) would see
+        # generation advance on every walk cycle even when nothing on disk
+        # changed, misreporting "library change detected" repeatedly.
+        self._touch("Author/Book1/Book1.m4b")
+        ensure_library_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and get_state().status != "ready":
+            time.sleep(0.02)
+        first_generation = get_state().generation
+
+        completed = threading.Event()
+        import app.library_index as li_module
+        real_run_build = li_module._run_build
+
+        def tracked_run_build(root):
+            real_run_build(root)
+            completed.set()
+
+        li_module._run_build = tracked_run_build
+        try:
+            ensure_library_index_fresh(self.root)
+            self.assertTrue(completed.wait(timeout=2))
+        finally:
+            li_module._run_build = real_run_build
+        self.assertEqual(get_state().generation, first_generation)
+
     def test_subsequent_call_after_a_change_bumps_generation(self):
         self._touch("Author/Book1/Book1.m4b")
         ensure_library_index_fresh(self.root)

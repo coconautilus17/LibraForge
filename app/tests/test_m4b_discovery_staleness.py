@@ -4,6 +4,7 @@ nothing-changed fast path does not skip a real change."""
 import json
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -42,8 +43,8 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
         return p
 
     def _settle_shared_index(self):
-        """Wait for a fresh background library-index walk to finish and
-        bump the shared generation past whatever it is right now.
+        """Wait for a fresh background library-index walk targeting
+        self.root, triggered by this call, to actually finish.
 
         ensure_library_index_fresh is deliberately non-blocking (see
         library_index.py: "the correction from THIS trigger lands on the
@@ -54,30 +55,38 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
         here: _run_build reassigns _state to a new ready LibraryIndexState
         only once the walk completes, with no intermediate "building"
         status, so status can already read "ready" (from the previous
-        walk) for the entire duration of a newly triggered walk. Polling
-        for the generation counter to advance (the same pattern
-        test_library_index.py's EnsureLibraryIndexFreshTests uses) is what
-        actually detects that THIS trigger's walk has finished. This
-        mimics the real wall-clock time that always separates two actual
-        user actions, so these tests exercise the steady-state behavior
-        discover_m4b_candidates is actually meant to provide rather than a
-        sub-millisecond race that would not occur outside of two calls
-        issued from the same Python statement.
+        walk) for the entire duration of a newly triggered walk.
+
+        Does NOT poll the generation counter: _run_build only bumps it
+        when a walk's result actually differs from the previous state
+        (see library_index.py's _run_build), so a walk that correctly
+        finds nothing changed would never satisfy a "generation advanced"
+        wait. Instead, wraps _run_build to signal completion of a walk
+        for self.root specifically, and retries the trigger until one
+        actually runs -- handles the shared lock being momentarily held
+        by an unrelated walk from another test's root (a daemon thread
+        outliving the test that started it), where the first trigger
+        here would otherwise be a silent no-op.
         """
-        starting_generation = library_index.get_state().generation
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            # Retried every iteration rather than once: if the shared lock
-            # is momentarily held by an unrelated walk from another test's
-            # root (a daemon thread outliving the test that started it),
-            # the first trigger here is a silent no-op, so retrying is
-            # what actually gets a walk scheduled for self.root once the
-            # lock frees up.
-            library_index.ensure_library_index_fresh(self.root)
-            if library_index.get_state().generation > starting_generation:
-                return
-            time.sleep(0.005)
-        raise AssertionError("shared library index did not settle in time")
+        import app.library_index as li_module
+        real_run_build = li_module._run_build
+        completed_for_root = threading.Event()
+
+        def tracked_run_build(root):
+            real_run_build(root)
+            if root == self.root:
+                completed_for_root.set()
+
+        li_module._run_build = tracked_run_build
+        try:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                library_index.ensure_library_index_fresh(self.root)
+                if completed_for_root.wait(timeout=0.05):
+                    return
+            raise AssertionError("shared library index did not settle in time")
+        finally:
+            li_module._run_build = real_run_build
 
     @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
     def test_new_non_m4b_file_added_to_an_already_cached_folder_is_detected(self):

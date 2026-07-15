@@ -2,6 +2,7 @@ let currentRun = null;
 let pollTimer = null;
 let loadedState = null;
 let discoveryCache = null;
+let m4bDiscoveryIndexPollTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, loadAbsAggProviders, getAbsAggProviderParamHint, isAbsAggReachable, checkAbsReachable, loadAbsAggSettings, saveAbsAggUrl, searchAbsAgg, scoreBadge, initFolderBrowser } = window.UiCommon;
@@ -341,6 +342,65 @@ async function refreshMultipartAudioProfiles() {
   }
 }
 
+function renderM4bDiscoveryIndexMarker(data) {
+  const marker = $('m4bDiscoveryIndexMarker');
+  if (!marker) return;
+  marker.classList.remove('index-status-marker-ready', 'index-status-marker-stale');
+  const count = data.audio_file_count || 0;
+  const when = data.refreshed_at ? ` Refreshed ${new Date(data.refreshed_at).toLocaleString()}.` : '';
+  if (data.status === 'building') {
+    marker.hidden = false;
+    marker.textContent = 'Building discovery index... walking the library and probing files. This can take a while for a large library.';
+  } else if (data.status === 'updating') {
+    marker.hidden = false;
+    marker.textContent = 'Library or fixer script changed, updating discovery index... existing results stay visible until this finishes.';
+  } else if (data.status === 'stale') {
+    marker.hidden = false;
+    marker.classList.add('index-status-marker-stale');
+    marker.textContent = `Discovery index: ${count} file${count === 1 ? '' : 's'}, but the fixer script changed since then -- the next search will do a full walk.${when}`;
+  } else if (data.status === 'ready') {
+    marker.hidden = false;
+    marker.classList.add('index-status-marker-ready');
+    marker.textContent = `Discovery index: ${count} file${count === 1 ? '' : 's'}.${when}`;
+  } else if (data.status === 'never') {
+    marker.hidden = false;
+    marker.textContent = 'No discovery index yet for this root and fixer. Click Find to build one.';
+  } else {
+    marker.hidden = true;
+    marker.textContent = '';
+  }
+}
+
+async function fetchAndRenderM4bDiscoveryIndexStatus() {
+  try {
+    const res = await fetch('/api/m4b/discover/cache-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: $('discoveryRoot').value.trim(),
+        script_name: $('searchScript').value,
+      }),
+    });
+    if (!res.ok) return null;
+    const status = await res.json();
+    renderM4bDiscoveryIndexMarker({
+      status: status.stale ? 'stale' : status.available ? 'ready' : 'never',
+      audio_file_count: status.audio_file_count,
+      refreshed_at: status.refreshed_at,
+    });
+    return status;
+  } catch (error) {
+    return null;
+  }
+}
+
+function pollM4bDiscoveryIndexStatus() {
+  clearTimeout(m4bDiscoveryIndexPollTimer);
+  fetchAndRenderM4bDiscoveryIndexStatus().finally(() => {
+    m4bDiscoveryIndexPollTimer = setTimeout(pollM4bDiscoveryIndexStatus, 30000);
+  });
+}
+
 async function discoverConversionCandidates(mode, forceRefresh = false) {
   const cacheKey = JSON.stringify({
     path: $('discoveryRoot').value.trim(),
@@ -351,21 +411,10 @@ async function discoverConversionCandidates(mode, forceRefresh = false) {
     return;
   }
 
+  const priorStatus = await fetchAndRenderM4bDiscoveryIndexStatus();
   let cacheAction = forceRefresh ? 'refresh' : 'load';
-  if (!forceRefresh) {
-    try {
-      const statusResponse = await fetch('/api/m4b/discover/cache-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: cacheKey,
-      });
-      const status = await statusResponse.json();
-      if (!statusResponse.ok || !status.available) {
-        cacheAction = 'refresh';
-      }
-    } catch (error) {
-      cacheAction = 'refresh';
-    }
+  if (!forceRefresh && (!priorStatus || !priorStatus.available)) {
+    cacheAction = 'refresh';
   }
 
   const buttons = [$('findMultipartBtn'), $('findNonM4bBtn'), $('refreshDiscoveryBtn')];
@@ -375,6 +424,9 @@ async function discoverConversionCandidates(mode, forceRefresh = false) {
     (mode === 'multipart' ? buttons[0] : buttons[1]).textContent = 'Loading...';
   } else {
     buttons[2].textContent = 'Refreshing...';
+    renderM4bDiscoveryIndexMarker({
+      status: priorStatus && (priorStatus.available || priorStatus.stale) ? 'updating' : 'building',
+    });
   }
   $('discoveryMeta').textContent = cacheAction === 'load'
     ? 'Loading saved discovery search...'
@@ -397,13 +449,20 @@ async function discoverConversionCandidates(mode, forceRefresh = false) {
     if (!res.ok) {
       alert(data.detail || 'Discovery scan failed');
       $('discoveryMeta').textContent = data.detail || 'Discovery scan failed.';
+      await fetchAndRenderM4bDiscoveryIndexStatus();
       return;
     }
     discoveryCache = { key: cacheKey, results: data.results, info: data.cache || {} };
     $('refreshAudioProfilesBtn').disabled = !(data.results.multipart?.total > 0);
     renderDiscoveryResults(data.results[mode]);
+    renderM4bDiscoveryIndexMarker({
+      status: 'ready',
+      audio_file_count: data.cache?.audio_file_count ?? 0,
+      refreshed_at: data.cache?.refreshed_at ?? '',
+    });
   } catch (error) {
     $('discoveryMeta').textContent = `Discovery scan failed: ${error.message}`;
+    await fetchAndRenderM4bDiscoveryIndexStatus();
   } finally {
     buttons.forEach((button, index) => {
       button.disabled = false;
@@ -615,6 +674,8 @@ $('findMultipartBtn').addEventListener('click', () => discoverConversionCandidat
 $('findNonM4bBtn').addEventListener('click', () => discoverConversionCandidates('non_m4b'));
 $('refreshDiscoveryBtn').addEventListener('click', () => discoverConversionCandidates('multipart', true));
 $('refreshAudioProfilesBtn').addEventListener('click', refreshMultipartAudioProfiles);
+$('discoveryRoot').addEventListener('change', pollM4bDiscoveryIndexStatus);
+$('searchScript').addEventListener('change', pollM4bDiscoveryIndexStatus);
 $('searchBtn').addEventListener('click', searchMetadata);
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
@@ -634,7 +695,7 @@ $('metadataSectionToggle')?.addEventListener('click', () => {
 });
 
 syncAdvancedRunSettings();
-loadScripts();
+loadScripts().then(() => pollM4bDiscoveryIndexStatus());
 initProviderSelector();
 updateCommandPreview();
 

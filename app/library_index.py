@@ -145,11 +145,21 @@ def _run_build(root: Path) -> None:
     previous = _state
     try:
         entries, signatures = build_library_index(root)
+        new_entries = [(str(p), is_file) for p, is_file in entries]
+        # generation is the coarse "did the library actually change" signal
+        # consumers (Manual Review search) key their own staleness off of --
+        # bump it only when this walk's result differs from the previous
+        # one. ensure_library_index_fresh has no cheap pre-check gating how
+        # often a walk runs (by design, see its docstring), so a consumer
+        # that polls this on a timer would otherwise see generation advance
+        # on every walk cycle regardless of whether anything on disk
+        # changed, reporting a false "library change detected" each time.
+        changed = new_entries != previous.entries or signatures != previous.signatures
         _state = LibraryIndexState(
             status="ready",
-            entries=[(str(p), is_file) for p, is_file in entries],
+            entries=new_entries,
             signatures=signatures,
-            generation=previous.generation + 1,
+            generation=previous.generation + 1 if changed else previous.generation,
         )
     except Exception as exc:
         _state = LibraryIndexState(

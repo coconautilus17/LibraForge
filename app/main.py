@@ -4492,6 +4492,23 @@ def _run_manual_review_search_index_build(
     state.error = None
     try:
         shared = library_index.get_state()
+        if shared.status == "idle":
+            # The shared walker has never completed a single walk yet (cold
+            # start), not just "stale" -- deriving now would mark this
+            # index "ready" with an empty/incomplete result, which is worse
+            # than staying in the already-set building/updating status a
+            # bit longer. ensure_library_index_fresh already triggered a
+            # walk before this worker was scheduled; wait for it here
+            # (off the request thread, so blocking is harmless) instead of
+            # reporting a false-ready empty index. The first cold walk of a
+            # large library over a network mount can genuinely take tens of
+            # seconds with no per-folder progress signal to poll on, so the
+            # bound here is a safety valve against a truly hung walk, not a
+            # normal-case timeout -- it should never fire in practice.
+            deadline = time.monotonic() + 600
+            while shared.status == "idle" and time.monotonic() < deadline:
+                time.sleep(0.05)
+                shared = library_index.get_state()
         entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
         state.entries = entries
         state.book_count = len(entries)

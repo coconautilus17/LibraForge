@@ -1,6 +1,8 @@
 """Tests for the Manual Review filesystem search index: the shared-walker
 backed entry filter, and the staleness/rebuild logic layered on top of it."""
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -156,6 +158,34 @@ class RunManualReviewSearchIndexBuildTests(unittest.TestCase):
         state = _ManualReviewSearchIndex(status="ready", entries=[("/stale/path", False)], book_count=1)
         _run_manual_review_search_index_build(state, self.root, [])
         self.assertNotIn(("/stale/path", False), state.entries)
+
+    def test_waits_for_shared_walk_instead_of_reporting_ready_empty_while_idle(self):
+        # Regression: deriving from a shared index that has never
+        # completed a walk (still "idle", the cold-start default) used to
+        # mark this index "ready" with an empty/incomplete result -- a
+        # false-ready state that only self-corrected on some later poll.
+        # Simulate the shared walk completing shortly after this call
+        # starts (mirrors ensure_library_index_fresh's non-blocking
+        # trigger already being in flight) and confirm the derive waits
+        # for it instead of reporting ready-with-zero immediately.
+        self._touch("Author/Book/Book.m4b")
+        shared_entries, _ = library_index.build_library_index(self.root)
+        library_index._state = library_index.LibraryIndexState(status="idle")
+
+        def finish_shared_walk_shortly():
+            time.sleep(0.1)
+            library_index._state = library_index.LibraryIndexState(
+                status="ready",
+                entries=[(str(p), f) for p, f in shared_entries],
+                signatures={},
+                generation=1,
+            )
+
+        threading.Thread(target=finish_shared_walk_shortly, daemon=True).start()
+        state = _ManualReviewSearchIndex()
+        _run_manual_review_search_index_build(state, self.root, [])
+        self.assertEqual(state.status, "ready")
+        self.assertEqual(state.book_count, 1)
 
 
 class EnsureManualReviewSearchIndexFreshEndToEndTests(unittest.TestCase):
