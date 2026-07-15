@@ -6,6 +6,98 @@ onward is tracked here going forward.
 
 ---
 
+## v0.2.4 (2026-07-15)
+
+### 2026-07-14 to 07-15 (PR #233-249)
+- Unified library index: Manual Review's "Load any book" search, the M4B Tool's
+  multipart/non-M4B discovery, and Folder Forge's dashboard scan now share one
+  folder-existence + per-folder-signature index instead of three separate,
+  inconsistent staleness checks. Fixed two real bugs this uncovered: Folder Forge's
+  too-coarse fingerprint could keep serving stale dashboard tiles for up to an hour
+  after a real change, and it was blind to a book added or changed in a deep
+  subfolder; Folder Forge's scan results now also persist to disk across restarts.
+  GraphicAudio/SoundBooth Theater matches losing publisher, or getting a fake
+  placeholder ASIN, fixed on both the automated fixer path and interactive search,
+  plus a separate copy of the same bug in the metadata comparison table.
+  Release-review hardening pass: grouped-book sidecar writes losing their
+  written_fields record under `--metadata-json-only`, the M4B discovery cache
+  serving stale results for multi-disc books, Enrichment Forge's catalog fetch now
+  cached (30s TTL) instead of re-fetched on every search keystroke, and internal
+  de-duplication of the book-folder walk and the abs-agg provider fallback table.
+  Manual Review search index: fixed a false "library change detected" report on
+  every background walk cycle even when nothing changed, the persistent "Search
+  index: N books" marker disappearing on every search (it read the wrong field
+  from the response), and a cold-start race that could briefly report the index
+  "ready" with 0 books before the first walk finished. Added a persistent
+  discovery-cache status indicator (ready/stale/building) to the M4B Tool.
+  Start Here's tool nav cards de-boxed and enlarged to match how the same icons
+  look on their own tool pages.
+- Docs: overhauled the README into a short overview plus `docs/features.md` and
+  `docs/development.md`; fixed Enrichment Forge being entirely undocumented,
+  "Suspect Report" being used throughout when the UI actually says "Suspicion
+  Report," and Fix Series being unmentioned; added a Credits section; swapped in
+  an optimized icon set.
+
+### 2026-07-13 (PR #232)
+- Organizer: shipped a customizable naming template (12 tokens including
+  author/series/order/title/edition/narrator/publisher/year/ASIN, an ASIN-detect
+  flag, and `{filename}`/`{original}` tokens for tidying a loose single-file name
+  without a full scheme change), with a live preview and worked examples,
+  defaulting to the existing ABS structure scheme unchanged.
+
+### 2026-07-12 (PR #223-228)
+- Settings redirect for a missing Audible/ABS connection now explains what's
+  missing and auto-switches to whichever provider is actually connected when one
+  exists as a fallback.
+- Fixed Enrichment Forge's genre fallback (local genres union, removed a
+  debug-mode bypass) and removed a "Show developer links" debug toggle that
+  silently disabled connection/auth gating across the whole app.
+- Manual Review: added a search box backed by a background-built filesystem
+  index, so any book in the library can be found and opened by name instead of
+  only the ones in the current report.
+
+### 2026-07-11 (PR #207-222)
+- Enrichment Forge: several rounds of mockup-parity and field-structure fixes
+  (genre field click bug, narrator/sequence/explicit field grouping, sequence
+  range, genre add, source-search progress, provider fallbacks, search-collapse
+  and book ordering) bringing the page to its approved visual design.
+- Style crispness pass: tightened border-radius, spacing, and type scale onto
+  shared design tokens; recolored the default dark/light theme; added a "Wood"
+  dark surface option; audited every theme x surface x accent combination for
+  contrast.
+- Collapsible advanced run settings on Metadata Forge and Folder Forge, and side
+  navigation on the M4B Tool matching the other tool pages.
+- Fixed Match Report's series-grouping cards vanishing after changing the status
+  filter (added a dedicated "Series groups" filter), and reworked/completed the
+  Start Here badge legend (fixed a stale cross-reference, added
+  previously-undocumented badges, added missing "critical" severity styling).
+
+### 2026-07-10 (PR #202-206)
+- Patched known Alpine/Python CVEs.
+- Added the Fix Series cross-book bulk-edit dialog (name, author, genre,
+  narrator, explicit, language) with two series-detection passes (title-pattern
+  and normalized-tag-variant grouping), surfaced in both the Suspicion Report and
+  Match Report.
+- Hardened file and URL handling: cover lookups restricted to the configured
+  library, `file://` cover URLs only accepted from LibraForge-managed uploads,
+  covers capped at 10 MiB and validated as real JPEG/PNG, service URLs must use
+  `http://`/`https://`.
+- Shipped the Enrichment Forge page: ABS series discovery, two-phase concurrent
+  Audible/Goodreads search, genre/narrator union compilation with
+  explicit-content evidence, and a partial-merge metadata.json writer.
+
+### 2026-07-09 (PR #187-199)
+- Fixed organizer title corruption from bracketed narrator/series annotations
+  (3-segment bracketed filenames, redundant "(Series Book N)" parentheticals,
+  nested parentheticals, bare "(Book N)"/"(Vol. N)" annotations) and a stray
+  ampersand-truncation regression from the same pass.
+- Fixed batch runs silently reprocessing manually-applied books (an incomplete
+  written_fields list was trusted for grouped/JSON-sidecar books).
+- Fixed grouped books' recovery flow resolving the wrong meta_target.
+- Docs: fixed the v0.2.3 CHANGELOG format.
+
+---
+
 ## v0.2.3 (2026-07-09)
 
 ### 2026-07-08 to 07-09 (PR #177-185)
