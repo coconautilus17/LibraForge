@@ -1808,12 +1808,16 @@ summary:focus-visible {
   padding-left: 32px;
 }
 
-.manual-fs-search-index-marker {
+.index-status-marker {
   margin-top: 8px;
 }
 
-.manual-fs-search-index-marker-ready {
+.index-status-marker-ready {
   opacity: 0.7;
+}
+
+.index-status-marker-stale {
+  color: var(--warning);
 }
 
 .manual-fs-search-results {

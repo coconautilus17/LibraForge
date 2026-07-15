@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - M4B Tool</title>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260714-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260715-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -141,6 +141,7 @@
           <button id="refreshAudioProfilesBtn" class="secondary" disabled>Update multipart sidecars</button>
         </div>
         <p class="action-explanation"><strong>Find</strong> loads the persistent saved inventory without scanning when one is available. <strong>Refresh search</strong> walks the selected root and probes only new or changed files. <strong>Update multipart sidecars</strong> stores cached all-file audio profiles without changing audio or contacting Audible.</p>
+        <p id="m4bDiscoveryIndexMarker" class="note index-status-marker" hidden></p>
         <p id="discoveryMeta" class="note">No discovery scan run yet.</p>
         <div id="discoveryResults" class="file-list"></div>
       </div>
@@ -304,6 +305,6 @@
    </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/m4b-tool.js?v=20260711-5"></script>
+  <script src="/static/m4b-tool.js?v=20260715-1"></script>
 </body>
 </html>

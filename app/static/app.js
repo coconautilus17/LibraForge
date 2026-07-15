@@ -496,26 +496,26 @@ function renderManualFsSearchIndexMarker(data) {
   const marker = $('manualFsSearchIndexMarker');
   if (data.status === 'building') {
     marker.hidden = false;
-    marker.classList.remove('manual-fs-search-index-marker-ready');
+    marker.classList.remove('index-status-marker-ready');
     marker.textContent = `Building search index... ${data.book_count} books found so far. Search results may be incomplete until this finishes.`;
   } else if (data.status === 'updating') {
     marker.hidden = false;
-    marker.classList.remove('manual-fs-search-index-marker-ready');
+    marker.classList.remove('index-status-marker-ready');
     marker.textContent = `Library change detected, updating search index... Search results may be incomplete until this finishes.`;
   } else if (data.status === 'error') {
     marker.hidden = false;
-    marker.classList.remove('manual-fs-search-index-marker-ready');
+    marker.classList.remove('index-status-marker-ready');
     marker.textContent = `Search index failed to build${data.error ? `: ${data.error}` : ''}. Search may be empty or stale.`;
   } else if (data.status === 'ready') {
     // Persistent, low-key confirmation instead of hiding entirely once
     // ready -- otherwise a fast (or already-finished) build gives no
     // feedback at all that the index exists or how many books it covers.
     marker.hidden = false;
-    marker.classList.add('manual-fs-search-index-marker-ready');
+    marker.classList.add('index-status-marker-ready');
     marker.textContent = `Search index: ${data.book_count} book${data.book_count === 1 ? '' : 's'}.`;
   } else {
     marker.hidden = true;
-    marker.classList.remove('manual-fs-search-index-marker-ready');
+    marker.classList.remove('index-status-marker-ready');
     marker.textContent = '';
   }
 }
