@@ -496,15 +496,26 @@ function renderManualFsSearchIndexMarker(data) {
   const marker = $('manualFsSearchIndexMarker');
   if (data.status === 'building') {
     marker.hidden = false;
+    marker.classList.remove('manual-fs-search-index-marker-ready');
     marker.textContent = `Building search index... ${data.book_count} books found so far. Search results may be incomplete until this finishes.`;
   } else if (data.status === 'updating') {
     marker.hidden = false;
+    marker.classList.remove('manual-fs-search-index-marker-ready');
     marker.textContent = `Library change detected, updating search index... Search results may be incomplete until this finishes.`;
   } else if (data.status === 'error') {
     marker.hidden = false;
+    marker.classList.remove('manual-fs-search-index-marker-ready');
     marker.textContent = `Search index failed to build${data.error ? `: ${data.error}` : ''}. Search may be empty or stale.`;
+  } else if (data.status === 'ready') {
+    // Persistent, low-key confirmation instead of hiding entirely once
+    // ready -- otherwise a fast (or already-finished) build gives no
+    // feedback at all that the index exists or how many books it covers.
+    marker.hidden = false;
+    marker.classList.add('manual-fs-search-index-marker-ready');
+    marker.textContent = `Search index: ${data.book_count} book${data.book_count === 1 ? '' : 's'}.`;
   } else {
     marker.hidden = true;
+    marker.classList.remove('manual-fs-search-index-marker-ready');
     marker.textContent = '';
   }
 }
@@ -524,7 +535,12 @@ async function pollManualFsSearchIndexStatus() {
 }
 
 function renderManualFsSearchResults(data) {
-  renderManualFsSearchIndexMarker(data);
+  // The search response's field is index_status, not status (a different
+  // shape than the search-index/status endpoint) -- renderManualFsSearchIndexMarker
+  // expects `status`, so passing `data` through unchanged always fell into
+  // its default (hidden) branch and made the index marker vanish on every
+  // search, including the persistent "ready" count.
+  renderManualFsSearchIndexMarker({ status: data.index_status, book_count: data.book_count });
   const container = $('manualFsSearchResults');
   container.innerHTML = data.results.map((item) => `
     <div class="manual-fs-search-result-row" data-path="${escapeHtml(item.path)}">

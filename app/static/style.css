@@ -1812,6 +1812,10 @@ summary:focus-visible {
   margin-top: 8px;
 }
 
+.manual-fs-search-index-marker-ready {
+  opacity: 0.7;
+}
+
 .manual-fs-search-results {
   margin-top: 8px;
   overflow: hidden;
