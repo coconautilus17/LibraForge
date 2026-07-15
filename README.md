@@ -5,8 +5,9 @@
 > across code, tests, and documentation, under human review and direction throughout.
 
 Self-hosted Audible metadata matching, M4B conversion, Audiobookshelf-style library
-organisation, and direct Audible downloading - four tools in one Docker container, with
-a vanilla-JS web UI. Every write operation defaults to a dry run.
+organisation, series-wide metadata enrichment, and direct Audible downloading - five
+tools in one Docker container, with a vanilla-JS web UI. Every write operation defaults
+to a dry run.
 
 ![LibraForge Start Here](docs/start-here.png)
 
@@ -14,96 +15,50 @@ a vanilla-JS web UI. Every write operation defaults to a dry run.
 
 ## Features
 
-### Start Here (`/`)
-Pick a folder and get a one-glance scan summary: how many books need metadata, need
-conversion, and are ready to organise. Links through to the right tool for each stage.
-A collapsible guide explains Edit and Write modes, Match badges, `metadata.json` vs the
-Audiobookshelf Scanner, Report types, the Owned badge, and a suggested end-to-end
-workflow through Metadata Forge and Folder Forge.
+Five tools plus a home dashboard, sharing one container and a common view of your
+library. See [docs/features.md](docs/features.md) for full detail on every tool,
+provider, and setting - this is the short version.
 
-### Metadata Forge (`/forge`)
-Searches Audible (or another provider) and writes matched metadata to your files.
+- **Start Here** (`/`) - a one-glance scan of your library: how many books need
+  metadata, need conversion, or are ready to organise, with links straight into the
+  right tool for each stage and a collapsible guide to the badges and modes you'll see
+  elsewhere in the app.
+- **Metadata Forge** (`/forge`) - searches Audible (or another provider) and writes
+  matched metadata to your files, dry-run first, with a Match Report of every result.
+  A Manual Review mode with a live filesystem search lets you load and fix any single
+  book by hand; Fix Series bulk-corrects a whole detected series at once; and a
+  rule-based Suspicion Report flags likely-wrong matches for a second look, no LLM
+  involved.
+- **M4B Tool** (`/m4b-tool`) - converts or merges audio into a single M4B. Discovers
+  multipart and non-M4B conversion candidates automatically, with results cached on
+  disk and a status indicator showing whether that cache is fresh, stale, or still
+  building. Flags when `No conversion` (a lossless stream-copy) is safe versus when a
+  real re-encode is needed.
+- **Folder Forge** (`/organizer`) - plans and applies `Author/Series/Book N - Title`
+  destination moves with a dry-run preview and structured review reasons per book. The
+  destination layout is driven by a configurable naming template rather than a fixed
+  scheme, skip patterns exclude books from a run entirely, and a failed move never
+  aborts the rest of the run.
+- **Enrichment Forge** (`/enrichment-forge`) - finds a series already in your
+  Audiobookshelf library and compiles genre and narrator across every book in it from
+  Audible and Goodreads at once, instead of fixing each book one at a time. Explicit
+  content evidence is shown but never pre-checked, since neither provider proves a book
+  is clean on its own.
+- **Library Downloader** (`/library`) - browses your Audible library and downloads
+  purchases straight into your library folder, decrypted to standard M4B with chapters,
+  metadata, cover, and ASIN intact - no external tooling. Already-owned books are
+  flagged, with a per-run or per-book duplicate-handling rule.
+- **Settings** (`/settings`) - one page for accounts (multi-account Audible sign-in,
+  switch/rename/disconnect), providers (Audiobookshelf, abs-agg, abs-tract), appearance,
+  and everything else global.
 
-- **Dry-run first**, then enable **Apply** to write. **Backup and cache** on the first
-  apply preserves originals and speeds up later runs.
-- **Concurrent workers** (v5): parallel Audible search with a per-thread client pool,
-  per-query de-duplication, and a persistent chapter-count cache that makes repeat
-  discovery near-instant.
-- **Write modes:** `smart` (skip the write when embedded tags already match),
-  `fill-missing` (only write currently-empty fields), `overwrite` (always write).
-- **ASIN aware:** the matched ASIN is embedded in every file; if a file already carries
-  an ASIN (tags or `[B0XXXXXXXX]` in the name) it is looked up directly first, and an
-  ASIN mismatch flags the book for manual review.
-- **Manual Review:** load any book or folder, search Audible manually, and apply per
-  book with an explicit `Full metadata` or `Series only` mode.
-- **Suspect Report:** a rule-based script pass over completed write matches that flags
-  likely-wrong ones (bitrate leaked into a title, duplicated title brackets, redundant
-  series prefixes, generic omnibus titles, and more) for a quick second look - no LLM
-  involved, cheap enough to run after every apply.
-- **Providers:** Audible (direct), **Audiobookshelf** (via its own search API),
-  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads /
-  Kindle** (via `abs-tract`) as an opt-in fallback for no-match, series-only, or
-  low-score books. Goodreads rate-limits aggressively; a circuit breaker opens after
-  repeated failures and skips Goodreads/Kindle lookups for a cooldown window rather than
-  hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
-  the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
-  popup warns if you enabled the fallback with more than 5 search workers, since that's
-  what usually trips it.
+**Providers:** Audible (direct), Audiobookshelf, abs-agg (LibriVox, Storytel, BookBeat,
+Big Finish, and others), and Goodreads/Kindle via abs-tract.
 
-### M4B Tool (`/m4b-tool`)
-Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
-scans for multipart / non-M4B conversion candidates, and exposes codec, bitrate, and job
-count. `No conversion` is safe only when all source streams are AAC with matching sample
-rate and channel layout.
+---
 
-### Folder Forge (`/organizer`)
-Plans and applies `Author/Series/Book N - Title` destination moves with a dry-run
-preview and structured review reasons. **Index library and exit** rebuilds the
-destination-structure cache on its own. Shares the same Suspect Report widget as
-Metadata Forge (shown above the planned moves) to flag moves worth a second look.
+## Roadmap
 
-- **Skip patterns:** one pattern per line, matched case-insensitively against the source
-  path or inferred metadata; matching books are excluded from the plan entirely.
-- **Per-move failure isolation:** a blocked path, permission error, or vanished source no
-  longer aborts the whole run - each move fails independently, and a "Moves
-  succeeded/failed" summary with a Failed Moves list shows exactly what didn't land.
-- **No-sidecars warning:** if a scan finds zero fixer sidecars, Folder Forge asks
-  "Fixer was not applied - Continue anyway?" before planning, since move quality for
-  multi-file books leans on fixer-written sidecar metadata.
-
-### Library Downloader (`/library`)
-Browse your Audible library and download purchases straight into a mounted folder,
-decrypted to standard **M4B** with chapters, metadata, embedded cover, and ASIN intact -
-no external tooling. Supports AAX (`activation_bytes`) and AAXC (per-file voucher).
-Books already in your library are flagged as **Owned**; a per-run or per-book rule
-controls duplicate handling (Keep both / Replace), and an optional pass auto-organises
-the downloads when finished.
-
-> **Known issue:** downloads can currently fail due to a temporary issue with Amazon's
-> activation API (`activation_bytes`). This is on Amazon's side, not LibraForge's - if a
-> download fails, wait a bit and try again.
-
-### Settings (`/settings`)
-One consolidated page for everything global: Appearance, Title noise, Publishers,
-Library, Reports (retention policy), Accounts, Audiobookshelf, Goodreads/Kindle,
-Developer, and sidecar cleanup. The gear icon in the header links here from every page;
-the old `/auth-setup` URL still works and redirects to the Accounts section.
-
-**Accounts:** guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**,
-each with a recognisable name, and **switch between them in one click**, rename them, or
-**disconnect** cleanly (deregisters the device with Audible, then removes the login;
-offers retry or local-only delete if Audible is unreachable). The active account is
-shared by every tool.
-
-**Audiobookshelf / abs-agg:** paste an Audiobookshelf API key (create one in ABS
-Settings → Users → API Keys) into the masked field and click **Save and verify**; the
-key is stored server-side and never shown back in the browser. Use **Remove key** to
-delete it with one click. ABS is also what makes the Library Downloader's "already
-owned" detection instant. The key can alternatively be set once via the `ABS_API_KEY`
-environment variable (an env-set key is managed by the operator and cannot be removed
-from the UI).
-
-### Planned
 - **Script modularisation** - complex functions split out of `app.js` and `main.py` into
   dedicated, standardised modules with clean interface contracts (the fixer itself is
   already split into `app/fixer/{scoring,parsing,clues,tagging,search}.py`).
@@ -111,6 +66,11 @@ from the UI).
   are usable on a phone.
 - **Pipeline unification** - persistent stage stepper across pages, and an optional
   "run full pipeline" mode chaining fixer -> m4b-tool -> organizer automatically.
+- **Incremental M4B discovery caching** - today, any change anywhere under a discovery
+  root (one new book, one rewritten file) invalidates the *entire* cached search for
+  that root, forcing a full re-walk even though per-file probe results still get reused.
+  A per-folder diff against the shared library index (already tracked, just not used for
+  partial invalidation here) would let an update to one folder skip re-walking the rest.
 - **Full provider validation** - end-to-end tests for the abs-agg sources that don't
   have dedicated tests yet: **LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD
   Audiothek, Die drei ???**. Confirmed working today: Audible, Audiobookshelf, and (via
@@ -118,16 +78,11 @@ from the UI).
   plus Goodreads and Kindle via abs-tract. The untested ones only go through abs-agg's
   generic keyword search path, with no confirmation that every response shape
   normalises to the shared metadata schema without silent field drops.
-- ~~Local agent advisory review (read-only LLM suggestions, no automatic writes)~~ -
-  redacted. Superseded by the **Suspect Report** (see Metadata Forge and Folder Forge
-  below): a plain, resource-friendly script that iterates over write matches and flags
-  likely-wrong ones by rule, with no LLM in the loop.
 - Chapter detection via speech recognition before M4B conversion.
 - Unraid Community Apps package.
 
-Debug tracing already exists today (opt-in, `app/debug_trace.py`, toggleable in
-Settings) and writes to a log file/stderr - a raw log is the intended form for this,
-not a UI feature, so no further work is planned there.
+See [docs/features.md](docs/features.md) for the Suspicion Report, which superseded an
+earlier local-LLM advisory review idea, and for the debug tracing already shipped today.
 
 ---
 
@@ -194,10 +149,9 @@ Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade lat
 |---|---|---|
 | [Audiobookshelf](https://www.audiobookshelf.org/) | Metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and add it under Settings → Accounts. | No |
 | [abs-agg](https://github.com/Vito0912/abs-agg) | Aggregates metadata from LibriVox, Storytel, BookBeat, Big Finish, and others. Deploy on the same Docker network; set the URL in provider settings. | No |
+| [abs-tract](https://github.com/ahobsonsayers/abs-tract) | Goodreads/Kindle metadata fallback for no-match, series-only, or low-score books. Deploy on the same Docker network; set its URL in provider settings. | No |
 
----
-
-## Container paths
+### Container paths
 
 | Purpose | Path |
 |---|---|
@@ -205,6 +159,8 @@ Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade lat
 | Audible auth directory | `/auth` - active account `/auth/audible-metadata.json`; saved accounts `/auth/accounts/` |
 | Scripts | `/app/scripts` |
 | Reports and caches | `/app/reports` |
+
+---
 
 ## Safety
 
@@ -223,6 +179,8 @@ authentication - anyone who can reach the port has full access. Run it behind
 (e.g. Caddy `basicauth`, Authelia). The default `127.0.0.1` binding keeps it
 localhost-only; do not change this without adding access control.
 
+---
+
 ## Reporting issues
 
 Found a bug? See [docs/reporting-issues.md](docs/reporting-issues.md): enable debug,
@@ -230,19 +188,31 @@ reproduce, attach the JSON report + debug log, and point out the specific failur
 
 ## Development
 
-```bash
-# Run tests (inside the container, where dependencies are installed)
-make test
+See [docs/development.md](docs/development.md) for running tests, restarting after
+backend changes, and other local-dev notes. Static files (`app/static`, `scripts/`) are
+bind-mounted - HTML, CSS, and JS edits are live without a restart.
 
-# Restart after backend (app/main.py) changes
-make restart
+---
 
-# Rebuild after Dockerfile or dependency changes
-make rebuild
-```
+## Credits
 
-Static files (`app/static`, `scripts/`) are bind-mounted - HTML, CSS, and JS edits are
-live without a restart.
+LibraForge wraps and builds on:
 
-LibraForge is licensed under [AGPL-3.0-or-later](LICENSE). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licence information.
+- **[FastAPI](https://fastapi.tiangolo.com/)** and **[Uvicorn](https://www.uvicorn.org/)**
+  - the web framework and ASGI server the whole app runs on.
+- **[audible](https://github.com/mkb79/Audible)** (mkb79) - the Audible API client
+  behind account sign-in, catalog search, and the Library Downloader's decryption.
+- **[mutagen](https://github.com/quodlibet/mutagen)** (quodlibet) - reads and writes
+  every audio tag format LibraForge touches.
+- **[FFmpeg](https://ffmpeg.org/)** - powers conversion and merging in the M4B Tool.
+- **[Audiobookshelf](https://www.audiobookshelf.org/)** - the library server LibraForge
+  is designed to complement; the ABS metadata provider, owned-book detection, and
+  Enrichment Forge all integrate with it directly.
+- **[abs-agg](https://github.com/Vito0912/abs-agg)** (Vito0912) - the optional companion
+  service behind the LibriVox / Storytel / BookBeat / Big Finish and other providers.
+- **[abs-tract](https://github.com/ahobsonsayers/abs-tract)** (ahobsonsayers) - the
+  optional companion service behind the Goodreads/Kindle metadata fallback.
+
+Full dependency list and license details: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+LibraForge itself is licensed under [AGPL-3.0-or-later](LICENSE).
