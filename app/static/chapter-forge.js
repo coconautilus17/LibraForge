@@ -6,6 +6,9 @@ let activeEtaSeconds = 0;
 let activeRunStartedAt = 0;
 let evidencePlaybackSyncInstalled = false;
 let showOnlyFlagged = false;
+let lastRemoved = null;
+let toastTimer = null;
+let playAllState = null;
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, initFolderBrowser } = window.UiCommon;
@@ -58,6 +61,41 @@ function stampToSeconds(value) {
 
 function getBackend() {
   return document.querySelector('input[name="backend"]:checked')?.value || 'hybrid-sos-focused';
+}
+
+function showToast(message, { actionLabel = '', onAction = null, duration = 8000 } = {}) {
+  let toast = document.getElementById('cfToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'cfToast';
+    toast.className = 'cf-toast';
+    document.body.appendChild(toast);
+  }
+  clearTimeout(toastTimer);
+  toast.innerHTML = '';
+  const text = document.createElement('span');
+  text.textContent = message;
+  toast.appendChild(text);
+  if (actionLabel && onAction) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ghost';
+    btn.textContent = actionLabel;
+    btn.addEventListener('click', () => {
+      onAction();
+      toast.classList.remove('visible');
+    });
+    toast.appendChild(btn);
+  }
+  toast.classList.add('visible');
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), duration);
+}
+
+function cleanTitleText(chapter) {
+  const kind = String(chapter?.marker_kind || '').trim();
+  if (!kind) return null;
+  const number = chapter?.number;
+  return number != null && number !== '' ? `${kind} ${number}` : kind;
 }
 
 function syncFieldVisibility() {
@@ -143,6 +181,56 @@ function playRange(start, end) {
     }
   };
   audio.addEventListener('timeupdate', onTime);
+}
+
+const PLAY_ALL_CLIP_SECONDS = 6;
+
+function stopPlayAll() {
+  if (!playAllState) return;
+  clearTimeout(playAllState.timer);
+  playAllState = null;
+  $('audioPreview').pause();
+  const btn = $('playAllBtn');
+  if (btn) {
+    btn.textContent = 'Play all';
+    btn.classList.remove('active');
+  }
+  document.querySelectorAll('.chapter-row.playing-all').forEach((row) => row.classList.remove('playing-all'));
+}
+
+function playAllStep() {
+  if (!playAllState) return;
+  if (playAllState.index >= chapters.length) {
+    stopPlayAll();
+    return;
+  }
+  document.querySelectorAll('.chapter-row.playing-all').forEach((row) => row.classList.remove('playing-all'));
+  const chapter = chapters[playAllState.index];
+  const row = document.getElementById(`chapter-row-${chapter.id}`);
+  if (row) {
+    row.classList.add('playing-all');
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  const start = Number(chapter.start || 0);
+  const end = Math.min(Number(chapter.end || start + PLAY_ALL_CLIP_SECONDS), start + PLAY_ALL_CLIP_SECONDS);
+  playRange(start, end);
+  playAllState.index += 1;
+  playAllState.timer = setTimeout(playAllStep, PLAY_ALL_CLIP_SECONDS * 1000);
+}
+
+function togglePlayAll() {
+  if (playAllState) {
+    stopPlayAll();
+    return;
+  }
+  if (!chapters.length) return;
+  playAllState = { index: 0, timer: null };
+  const btn = $('playAllBtn');
+  if (btn) {
+    btn.textContent = 'Stop';
+    btn.classList.add('active');
+  }
+  playAllStep();
 }
 
 function installEvidencePlaybackSync() {
@@ -527,6 +615,8 @@ function renderChapters() {
       : isFlagged
         ? `<span class="conf-flag">&#9888; ${Math.round(Number(chapter.confidence) * 100)}%</span>`
         : `<span class="conf-clean">${Math.round(Number(chapter.confidence) * 100)}%</span>`;
+    const cleanTitle = cleanTitleText(chapter);
+    const showCleanBtn = cleanTitle && cleanTitle !== (chapter.title || '').trim();
     tr.innerHTML = `
       <td class="idx">${index + 1}</td>
       <td class="time">
@@ -534,12 +624,16 @@ function renderChapters() {
         <span class="time-arrow">&rarr;</span>
         <span class="time-end">${escapeHtml(secondsToStamp(chapter.end))}</span>
       </td>
-      <td><input data-field="title" value="${escapeHtml(chapter.title || `Chapter ${index + 1}`)}" title="${escapeHtml(chapter.source_text || '')}" /></td>
+      <td class="title-cell">
+        <input data-field="title" value="${escapeHtml(chapter.title || `Chapter ${index + 1}`)}" title="${escapeHtml(chapter.source_text || '')}" />
+        ${showCleanBtn ? `<button class="icon-button small clean-title" type="button" title="Strip to just “${escapeHtml(cleanTitle)}”, discarding the rest of the text">&#9986;</button>` : ''}
+      </td>
       <td>${confidenceCell}</td>
       <td>
         <div class="row-actions">
           <button class="icon-button small preview-start" type="button" title="Preview">&#9654;</button>
           <button class="icon-button small expand" type="button" aria-expanded="false" title="Inspect evidence">&#9662;</button>
+          <button class="icon-button small insert-after" type="button" title="Insert a chapter after this one">&#43;</button>
           <button class="icon-button small danger delete-row" type="button" title="Delete">&times;</button>
         </div>
       </td>
@@ -554,21 +648,65 @@ function renderChapters() {
         renderChapters();
       });
     });
-    tr.querySelector('.expand').addEventListener('click', (event) => {
+    const expandBtn = tr.querySelector('.expand');
+    const toggleEvidence = () => {
       const open = evidenceTr.classList.contains('collapsed');
+      if (open) {
+        document.querySelectorAll('#chapterRows tr.evidence-row:not(.collapsed)').forEach((row) => {
+          row.classList.add('collapsed');
+        });
+        document.querySelectorAll('#chapterRows .icon-button.expand[aria-expanded="true"]').forEach((btn) => {
+          btn.setAttribute('aria-expanded', 'false');
+        });
+      }
       evidenceTr.classList.toggle('collapsed', !open);
-      event.currentTarget.setAttribute('aria-expanded', open ? 'true' : 'false');
+      expandBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    expandBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleEvidence();
     });
-    tr.querySelector('.preview-start').addEventListener('click', () => {
+    tr.addEventListener('click', (event) => {
+      if (event.target.closest('input, button, a')) return;
+      toggleEvidence();
+    });
+    tr.querySelector('.clean-title')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const titleInput = tr.querySelector('[data-field="title"]');
+      titleInput.value = cleanTitle;
+      collectRows();
+      renderChapters();
+    });
+    tr.querySelector('.preview-start').addEventListener('click', (event) => {
+      event.stopPropagation();
       collectRows();
       const current = chapters.find((c) => c.id === chapter.id) || chapter;
       playRange(current.start, current.start + 8);
     });
-    tr.querySelector('.delete-row').addEventListener('click', () => {
+    tr.querySelector('.insert-after').addEventListener('click', (event) => {
+      event.stopPropagation();
+      collectRows();
+      insertChapterAfter(chapter.id);
+    });
+    tr.querySelector('.delete-row').addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (!confirm(`Delete "${chapter.title || `Chapter ${index + 1}`}"?`)) return;
       collectRows();
       const removeIndex = chapters.findIndex((c) => c.id === chapter.id);
-      if (removeIndex >= 0) chapters.splice(removeIndex, 1);
+      if (removeIndex < 0) return;
+      const [removed] = chapters.splice(removeIndex, 1);
       renderChapters();
+      lastRemoved = { chapter: removed, index: removeIndex };
+      showToast(`Deleted "${removed.title || 'chapter'}".`, {
+        actionLabel: 'Undo',
+        onAction: () => {
+          if (!lastRemoved) return;
+          collectRows();
+          chapters.splice(Math.min(lastRemoved.index, chapters.length), 0, lastRemoved.chapter);
+          lastRemoved = null;
+          renderChapters();
+        },
+      });
     });
 
     tbody.appendChild(tr);
@@ -601,6 +739,21 @@ function renderChapters() {
 
   $('saveBtn').disabled = !loaded || !chapters.length;
   $('addChapterBtn').disabled = !loaded;
+  $('playAllBtn').disabled = !chapters.length;
+}
+
+function cleanAllTitles() {
+  collectRows();
+  let changed = 0;
+  chapters.forEach((chapter) => {
+    const clean = cleanTitleText(chapter);
+    if (clean && clean !== (chapter.title || '').trim()) {
+      chapter.title = clean;
+      changed += 1;
+    }
+  });
+  if (changed) renderChapters();
+  showToast(changed ? `Cleaned ${changed} title${changed === 1 ? '' : 's'}.` : 'No titles needed cleaning.');
 }
 
 function renderArtifacts(artifacts = {}) {
@@ -671,6 +824,7 @@ function applyResult(data) {
 }
 
 async function loadChapters() {
+  stopPlayAll();
   const res = await fetch('/api/chaptering/load', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -693,6 +847,7 @@ async function loadChapters() {
 }
 
 async function startDetection() {
+  stopPlayAll();
   const body = {
     source_path: $('sourcePath').value.trim(),
     backend: getBackend(),
@@ -944,6 +1099,28 @@ function addChapter() {
   renderChapters();
 }
 
+function insertChapterAfter(afterId) {
+  const index = chapters.findIndex((c) => c.id === afterId);
+  if (index < 0) return;
+  const current = chapters[index];
+  const next = chapters[index + 1];
+  const currentEnd = Number(current.end || current.start || 0);
+  const nextStart = next ? Number(next.start || 0) : currentEnd + 300;
+  const start = next && nextStart > currentEnd
+    ? currentEnd + Math.max(1, (nextStart - currentEnd) / 2)
+    : currentEnd + 60;
+  chapters.splice(index + 1, 0, {
+    id: 0,
+    start,
+    end: next ? nextStart : start + 300,
+    title: 'New chapter',
+    confidence: null,
+    reasons: ['manual'],
+    manual: true,
+  });
+  renderChapters();
+}
+
 async function init() {
   const prefs = window.LibraForgePrefs?.get() || {};
   const libraryRoot = prefs.defaultRootPath || '/audiobooks';
@@ -979,6 +1156,8 @@ async function init() {
   $('cancelBtn').addEventListener('click', cancelRun);
   $('saveBtn').addEventListener('click', saveEdits);
   $('addChapterBtn').addEventListener('click', addChapter);
+  $('playAllBtn').addEventListener('click', togglePlayAll);
+  $('cleanAllTitlesBtn').addEventListener('click', cleanAllTitles);
   $('flagFilterChip').addEventListener('click', () => {
     showOnlyFlagged = !showOnlyFlagged;
     renderChapters();

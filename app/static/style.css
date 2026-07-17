@@ -4194,6 +4194,19 @@ button.ghost:hover:not(:disabled) {
   font-variant-numeric: tabular-nums;
 }
 
+.cf-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cf-audio-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
 .cf-filter-chip {
   display: inline-flex;
   align-items: center;
@@ -4309,6 +4322,20 @@ button.ghost:hover:not(:disabled) {
   background: var(--warning-soft);
 }
 
+.chapter-row.playing-all {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.chapter-row {
+  cursor: pointer;
+}
+
+.chapter-row input,
+.chapter-row button {
+  cursor: auto;
+}
+
 .chapter-row .idx {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -4341,7 +4368,15 @@ button.ghost:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .chapter-row input[data-field="title"] {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: 1px solid transparent;
   padding: 5px 6px;
@@ -4352,6 +4387,10 @@ button.ghost:hover:not(:disabled) {
 .chapter-row input[data-field="title"]:focus-visible {
   border-color: var(--border);
   background: var(--surface);
+}
+
+.title-cell .clean-title {
+  flex: none;
 }
 
 .conf-clean {
@@ -4447,6 +4486,37 @@ button.ghost:hover:not(:disabled) {
   font-weight: 600;
   font-size: var(--font-2xs);
   margin: 6px 0 0;
+}
+
+.cf-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 16px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--surface-raised, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 30%));
+  font-size: var(--font-xs);
+  color: var(--text);
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.cf-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.cf-toast button {
+  flex: none;
 }
 
 .file-row {

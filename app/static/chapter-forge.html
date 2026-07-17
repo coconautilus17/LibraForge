@@ -240,10 +240,16 @@
             <button id="addChapterBtn" class="secondary" type="button" disabled>+ Add chapter</button>
           </div>
           <audio id="audioPreview" controls preload="metadata"></audio>
+          <div class="cf-audio-actions">
+            <button id="playAllBtn" class="secondary" type="button" disabled>Play all</button>
+          </div>
 
           <div class="cf-summary-strip">
             <div class="cf-summary-stats" id="chapterStats">No chapters loaded.</div>
-            <button id="flagFilterChip" class="cf-filter-chip" type="button" hidden>Show only flagged <span class="count" id="flagFilterCount">0</span></button>
+            <div class="cf-summary-actions">
+              <button id="cleanAllTitlesBtn" class="ghost" type="button">Clean all titles</button>
+              <button id="flagFilterChip" class="cf-filter-chip" type="button" hidden>Show only flagged <span class="count" id="flagFilterCount">0</span></button>
+            </div>
           </div>
 
           <div id="gapBanner" class="cf-gap-banner" hidden></div>
