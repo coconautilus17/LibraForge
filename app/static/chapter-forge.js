@@ -783,6 +783,64 @@ function cleanAllTitles() {
   showToast(changed ? `Cleaned ${changed} title${changed === 1 ? '' : 's'}.` : 'No titles needed cleaning.');
 }
 
+function renderAiReview() {
+  const body = $('aiReviewBody');
+  if (!body) return;
+  const review = loaded?.result?.hybrid?.llm_review;
+  if (!review || !review.assessment) {
+    body.innerHTML = '<p class="note">No AI review data. Enable "LLM review names" under Advanced settings and re-run detection to see one here.</p>';
+    return;
+  }
+  const corrections = review.accepted_corrections || [];
+  const issues = review.unresolved_issues || [];
+  const rules = review.validator_rules_to_apply || [];
+  const notes = Array.isArray(review.notes) ? review.notes : (review.notes ? [review.notes] : []);
+  const assessment = String(review.assessment || '');
+  const tone = { clean: 'success', resolved_by_focused_asr: 'success' }[assessment] || (
+    assessment === 'llm_unavailable' ? 'muted' : 'warning'
+  );
+  const meta = [review._model, review._ollama_duration_seconds != null ? `${review._ollama_duration_seconds}s` : '']
+    .filter(Boolean).join(' · ');
+  body.innerHTML = `
+    <div class="cf-review-head">
+      <span class="cf-llm-badge cf-llm-badge-${tone}">${escapeHtml(assessment.replace(/_/g, ' '))}${review.confidence ? ` (${escapeHtml(review.confidence)})` : ''}</span>
+      ${meta ? `<span class="cf-review-meta">${escapeHtml(meta)}</span>` : ''}
+    </div>
+    ${review._error ? `<p class="note" style="color:var(--danger)">${escapeHtml(review._error)}</p>` : ''}
+    <div class="cf-review-block">
+      <h4>Accepted corrections <span class="n">${corrections.length}</span></h4>
+      ${corrections.length ? corrections.map((c) => `
+        <div class="cf-review-item">
+          <b>${escapeHtml(c.action || '')}</b> chapter ${escapeHtml(String(c.number ?? ''))} at ${escapeHtml(c.timestamp || '')}: ${escapeHtml(c.title || '')}
+          ${c.reason ? `<div class="cf-review-item-note">${escapeHtml(c.reason)}</div>` : ''}
+        </div>
+      `).join('') : '<p class="note">None.</p>'}
+    </div>
+    <div class="cf-review-block">
+      <h4>Unresolved issues <span class="n">${issues.length}</span></h4>
+      ${issues.length ? issues.map((item) => `
+        <div class="cf-review-item">
+          <b>${escapeHtml(item.type || '')}</b>
+          <span class="cf-review-severity cf-review-severity-${escapeHtml(item.severity || 'low')}">${escapeHtml(item.severity || '')}</span>
+          <div class="cf-review-item-note">${escapeHtml(item.details || '')}${item.recommended_action ? ` &mdash; ${escapeHtml(item.recommended_action)}` : ''}</div>
+        </div>
+      `).join('') : '<p class="note">None.</p>'}
+    </div>
+    ${rules.length ? `
+      <div class="cf-review-block">
+        <h4>Validator rules to apply</h4>
+        ${rules.map((r) => `<div class="cf-review-item">${escapeHtml(r)}</div>`).join('')}
+      </div>
+    ` : ''}
+    ${notes.length ? `
+      <div class="cf-review-block">
+        <h4>Notes</h4>
+        ${notes.map((n) => `<div class="cf-review-item">${escapeHtml(n)}</div>`).join('')}
+      </div>
+    ` : ''}
+  `;
+}
+
 function renderArtifacts(artifacts = {}) {
   const list = $('artifactList');
   const entries = Object.entries(artifacts);
@@ -849,6 +907,7 @@ function applyResult(data) {
   markSaved();
   renderChapters();
   renderArtifacts(data?.stats?.artifacts || data?.artifacts || {});
+  renderAiReview();
 }
 
 async function loadChapters() {
@@ -869,6 +928,7 @@ async function loadChapters() {
   markSaved();
   renderChapters();
   renderArtifacts({});
+  renderAiReview();
   $('loadStatus').textContent = data.result
     ? `Loaded existing chapters for ${data.source_path}`
     : `Source loaded with ${data.audio_files.length} audio file(s). No chapter artifact found.`;
