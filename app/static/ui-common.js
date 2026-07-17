@@ -537,6 +537,9 @@
     const evidence = (item.reasons[0] && item.reasons[0].evidence) || {};
     const members = evidence.members || [];
     const isPassOne = item.reasons[0].code === 'series_group_missing';
+    const hasDrift = !isPassOne && !!evidence.has_drift;
+    const badgeCls = isPassOne ? 'sev-low' : (hasDrift ? 'badge-series-drift' : 'badge-series-clean');
+    const badgeLabel = isPassOne ? 'no series' : (hasDrift ? 'series drift' : 'series');
 
     const article = document.createElement('article');
     article.className = 'mrep-card suspect-mrep-card sev-low series-group-card';
@@ -556,7 +559,7 @@
     const summary = document.createElement('summary');
     summary.className = 'mrep-head';
     summary.innerHTML = `
-      <span class="suspect-sev-badge sev-low">${isPassOne ? 'no series' : 'series drift'}</span>
+      <span class="suspect-sev-badge ${badgeCls}">${badgeLabel}</span>
       <span class="mrep-title">${escapeHtml(evidence.suggested_series || '(series group)')}</span>
       <div class="mrep-badges">
         <span class="suspect-trigger-badge">${members.length} books</span>
@@ -708,7 +711,15 @@
   }
 
   function renderSuspectReport(data, btnEl, widgetEl, listEl) {
-    const suspects = data.suspects || [];
+    // Clean series groups (no naming-variant or author mismatch) aren't
+    // suspects -- they belong only in the main Match Report's inline
+    // grouped view (ensureSeriesGroupsForMatchReport in app.js reads the
+    // same payload unfiltered), not in this review-focused widget.
+    const suspects = (data.suspects || []).filter((item) => {
+      if (item.status !== 'series_group') return true;
+      if (item.reasons?.[0]?.code === 'series_group_missing') return true;
+      return !!item.reasons?.[0]?.evidence?.has_drift;
+    });
     const summary = data.summary || {};
 
     widgetEl.hidden = false;

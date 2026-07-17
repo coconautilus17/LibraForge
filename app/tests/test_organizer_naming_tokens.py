@@ -25,6 +25,7 @@ BASE_METADATA = {
     "publisher": "Publisher House",
     "genre": "Fantasy",
     "year": "2021",
+    "subtitle": "",
 }
 
 
@@ -72,6 +73,27 @@ class EditionTokenTests(unittest.TestCase):
     def test_edition_token_empty_when_no_edition_tag(self):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["edition"], "")
+
+
+class SubtitleTokenTests(unittest.TestCase):
+    def test_subtitle_token_reads_subtitle_field(self):
+        metadata = dict(BASE_METADATA, subtitle="A Reckoners Novel")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        self.assertEqual(tokens["subtitle"], "A Reckoners Novel")
+
+    def test_subtitle_token_empty_when_no_subtitle(self):
+        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
+        self.assertEqual(tokens["subtitle"], "")
+
+    def test_subtitle_is_decoration_not_core(self):
+        # A segment combining {subtitle} with only one other (core) token
+        # must not be flagged for review just because both are empty --
+        # subtitle never counts toward the "2+ significant tokens empty"
+        # check, same as narrator/publisher/year/asin/edition.
+        metadata = dict(BASE_METADATA, series="", subtitle="")
+        tokens = ORGANIZER.resolve_naming_tokens(metadata)
+        _, needs_review = ORGANIZER._render_naming_segment("{series} - {subtitle}", tokens)
+        self.assertFalse(needs_review)
 
 
 class OrderTokenTests(unittest.TestCase):

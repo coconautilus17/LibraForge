@@ -2864,6 +2864,7 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
                 "publisher": book.get("publisher", "") or "",
                 "genre": book.get("genre", "") or "",
                 "year": str(book.get("year", "") or ""),
+                "subtitle": book.get("subtitle", "") or "",
                 "source": f"sidecar:{path.name}",
             }
 
@@ -2899,6 +2900,7 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
                 "publisher": audible_data.get("publisher", "") or "",
                 "genre": audible_data.get("genre", "") or "",
                 "year": str(audible_data.get("year", "") or ""),
+                "subtitle": audible_data.get("subtitle", "") or "",
                 "source": f"marker:{path.name}",
             }
 
@@ -2927,6 +2929,7 @@ def metadata_from_tags(item: BookItem) -> dict[str, Any]:
     narrator = first_tag(tags, ["composer", "narrator", "performer"], default="")
     series = first_tag(tags, ["mvnm", "series", "series title", "series-title", "grouping", "contentgroup", "content group"], default="")
     sequence = first_tag(tags, ["mvin", "series-part", "series_part", "series sequence", "series_sequence", "part", "track", "tracknumber", "trck", "disc", "discnumber"], default="")
+    subtitle = first_tag(tags, ["subtitle"], default="")
 
     if item.kind == "folder" and is_generic_track_title(title):
         title = source_name
@@ -2938,6 +2941,7 @@ def metadata_from_tags(item: BookItem) -> dict[str, Any]:
         "book_number": normalize_book_number(detect_number_from_text(sequence)),
         "sequence_label": choose_sequence_label(title, source_name, filename_title, sequence),
         "narrator": narrator,
+        "subtitle": subtitle,
         "source": "ffprobe",
         "tags": tags,
     }
@@ -3437,6 +3441,7 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         "publisher": tag_meta.get("publisher", "") or "",
         "genre": tag_meta.get("genre", "") or "",
         "year": tag_meta.get("year", "") or "",
+        "subtitle": tag_meta.get("subtitle", "") or "",
     }
 
 
@@ -3685,6 +3690,7 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
         "year": metadata.get("year", "") or "",
         "asin": metadata.get("asin", "") or "",
         "edition": metadata.get("edition_tag", "") or "",
+        "subtitle": metadata.get("subtitle", "") or "",
         # {original}/{filename} describe the audio file's own name and are
         # filled in per-item by render_naming_template() (they need the
         # source file, which this metadata-only resolver doesn't have). They
@@ -3719,7 +3725,7 @@ class UnknownNamingTokenError(ValueError):
 # known narrator/publisher/year/ASIN/edition without that being a
 # data-quality problem worth flagging -- unremarkable, not insufficient.
 _NAMING_SIGNIFICANCE_EXCLUDED_TOKENS = frozenset(
-    {"narrator", "publisher", "year", "asin", "edition", "original", "filename"}
+    {"narrator", "publisher", "year", "asin", "edition", "original", "filename", "subtitle"}
 )
 
 
@@ -3764,6 +3770,7 @@ NAMING_TOKEN_NAMES = frozenset(
         "edition",
         "original",
         "filename",
+        "subtitle",
     }
 )
 

@@ -177,8 +177,12 @@
               <td>A group of books share strong identity signals (author, narrator, publisher) but have no series tag at all. Opens the Fix Series dialog.</td>
             </tr>
             <tr>
-              <td><span class="suspect-sev-badge sev-low">series drift</span></td>
-              <td>A group of books already tagged with a series have inconsistent or drifting series data across the group. Opens the Fix Series dialog.</td>
+              <td><span class="suspect-sev-badge badge-series-clean">series</span></td>
+              <td>A group of books already tagged with the same series, cleanly and consistently. Informational only &mdash; shown in the main Match Report's grouped view, not flagged as a suspect. Opens the Fix Series dialog.</td>
+            </tr>
+            <tr>
+              <td><span class="suspect-sev-badge badge-series-drift">series drift</span></td>
+              <td>A group of books already tagged with a series where the raw series tag actually varies across members (whitespace, capitalization, reading-order qualifiers, etc.) and/or the author diverges within the group. Opens the Fix Series dialog.</td>
             </tr>
           </tbody>
         </table>

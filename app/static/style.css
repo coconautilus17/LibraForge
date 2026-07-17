@@ -3684,6 +3684,11 @@ button.danger:hover:not(:disabled) {
 .suspect-sev-badge.sev-medium { background: var(--warning-soft); color: var(--warning); }
 .suspect-sev-badge.sev-low    { background: var(--surface-raised); color: var(--muted); }
 .suspect-sev-badge.sev-info   { background: var(--surface-raised); color: var(--muted); }
+/* Series-group cards reuse .suspect-sev-badge but aren't severity levels --
+   "series" is a clean, informational grouping; "series drift" flags an
+   actual naming-variant or author mismatch worth reviewing. */
+.suspect-sev-badge.badge-series-clean { background: var(--accent-soft); color: var(--accent); }
+.suspect-sev-badge.badge-series-drift { background: var(--warning-soft); color: var(--warning); }
 
 .suspect-trigger-badge {
   display: inline-block;

@@ -403,6 +403,7 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertEqual(group["suggested_series"], "Dungeon Core")
         self.assertIn("Dungeon Core ", group["context_note"])
         self.assertIn("Dungeon Core, Book 2", group["context_note"])
+        self.assertTrue(group["has_drift"])  # raw tags vary -> drift
 
     def test_context_note_does_not_claim_variance_when_raw_tags_are_identical(self):
         # Regression: the message used to always say "raw tags vary" even
@@ -417,6 +418,7 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         self.assertNotIn("vary", note)
         self.assertIn("share series", note)
         self.assertIn("Heartstrikers", note)
+        self.assertFalse(groups[0]["has_drift"])  # identical raw tags, same author -> clean
 
     def test_context_note_still_reports_variance_when_raw_tags_differ(self):
         items = [
@@ -426,6 +428,24 @@ class GroupExistingSeriesByNormalizedTagTests(unittest.TestCase):
         groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
         note = groups[0]["context_note"]
         self.assertIn("raw tags vary", note)
+        self.assertTrue(groups[0]["has_drift"])
+
+    def test_has_drift_true_for_identical_raw_tags_but_differing_authors(self):
+        # The core case this fix exists for: a series with a single, perfectly
+        # consistent raw tag is NOT "clean" if a member's author diverges --
+        # that's genuine drift, previously invisible since has_drift didn't
+        # exist and the badge was unconditionally "series drift" anyway.
+        items = [
+            self._item("/lib/I1.m4b", "Heartstrikers 1", "Rachel Aaron", "Heartstrikers"),
+            self._item("/lib/I2.m4b", "Heartstrikers 2", "Rachel Aaron", "Heartstrikers"),
+            self._item("/lib/I3.m4b", "Heartstrikers 3", "Someone Else", "Heartstrikers"),
+        ]
+        groups = REVIEW.group_existing_series_by_normalized_tag(items, claimed_paths=set())
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertNotIn("vary", group["context_note"])  # raw tags are identical
+        self.assertIsNotNone(group["author_note"])
+        self.assertTrue(group["has_drift"])
 
     def test_chronological_and_publication_order_variants_collapse_to_one_group(self):
         # Audible frequently publishes two series entries for the same books
@@ -580,7 +600,18 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         ]
         suspects: list = []
         REVIEW.add_series_group_suspects(suspects, report_items, make_args())
-        self.assertEqual(suspects[0]["reasons"][0]["code"], "series_group_normalize")
+        self.assertEqual(suspects[0]["reasons"][0]["code"], "series_group_tagged")
+        self.assertTrue(suspects[0]["reasons"][0]["evidence"]["has_drift"])  # raw tags vary
+
+    def test_pass_two_clean_group_has_drift_false_in_evidence(self):
+        report_items = [
+            self._item("/lib/B1.m4b", "Heartstrikers 1", "Rachel Aaron", series="Heartstrikers"),
+            self._item("/lib/B2.m4b", "Heartstrikers 2", "Rachel Aaron", series="Heartstrikers"),
+        ]
+        suspects: list = []
+        REVIEW.add_series_group_suspects(suspects, report_items, make_args())
+        self.assertEqual(suspects[0]["reasons"][0]["code"], "series_group_tagged")
+        self.assertFalse(suspects[0]["reasons"][0]["evidence"]["has_drift"])
 
     def test_genre_and_narrator_are_deduped_across_tagged_siblings(self):
         # Two books with no series (the group) plus one already-tagged
@@ -655,7 +686,7 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         ]
         suspects: list = []
         REVIEW.add_series_group_suspects(suspects, report_items, make_args())
-        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_normalize")
+        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_tagged")
         evidence = normalize_suspect["reasons"][0]["evidence"]
         self.assertEqual(evidence["suggested_genre"], "LitRPG, Fantasy")
         self.assertEqual(evidence["suggested_narrator"], "JD Tanner")
@@ -676,7 +707,7 @@ class AddSeriesGroupSuspectsTests(unittest.TestCase):
         ]
         suspects: list = []
         REVIEW.add_series_group_suspects(suspects, report_items, make_args())
-        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_normalize")
+        normalize_suspect = next(s for s in suspects if s["reasons"][0]["code"] == "series_group_tagged")
         evidence = normalize_suspect["reasons"][0]["evidence"]
         self.assertEqual(evidence["suggested_genre"], "Fantasy")
         by_path = {m["path"]: m for m in evidence["members"]}
