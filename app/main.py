@@ -1355,7 +1355,7 @@ class ChapteringRunRequest(BaseModel):
     backend: str = "faster-whisper"
     remote_endpoint: str = ""
     llm_review: bool = False
-    llm_endpoint: str = "http://10.0.0.4:11434"
+    llm_endpoint: str = "http://192.168.1.50:11434"
     llm_model: str = "gemma4:latest"
     model: str = "small"
     device: str = "auto"
