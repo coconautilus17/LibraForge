@@ -1241,7 +1241,6 @@ def _sos_script_path() -> Path:
     candidates = [
         root / "tools/ABS-scripts/SoundOfSilence.py",
         Path("/app/tools/ABS-scripts/SoundOfSilence.py"),
-        Path("/home/tamir/dockers/libraforge-chapter-forge-test/tools/ABS-scripts/SoundOfSilence.py"),
     ]
     for path in candidates:
         if path.exists():

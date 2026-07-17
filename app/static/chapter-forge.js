@@ -15,6 +15,10 @@ const CONFIDENCE_FLAG_THRESHOLD = 0.85;
 // medium/int8 focused gap recovery) -- not extrapolated from vendor numbers.
 const CPU_MINUTES_PER_AUDIO_MINUTE_BASELINE = 0.158;
 const CPU_MINUTES_PER_FOCUSED_GAP = { medium: 2.47, 'large-v2': 4.43, 'large-v3': 4.16 };
+// SoS silence+keyword scan only (tiny.en); averaged across 6 benchmarked books
+// ranging 0.0017-0.0067 min/audio-min. Does not include evidence transcription
+// or focused-gap recovery, which run afterward and aren't duration-driven.
+const HYBRID_SOS_MINUTES_PER_AUDIO_MINUTE = 0.0035;
 
 function secondsToStamp(value) {
   const total = Math.max(0, Number(value) || 0);
@@ -763,11 +767,11 @@ function estimateRunMinutes() {
   const durationMinutes = Math.max(0, Number(loaded?.duration || 0) / 60);
   if (!durationMinutes) return { minutes: 0, label: 'ETA appears after loading a source.', caveat: '' };
   if (getBackend() === 'hybrid-sos-focused') {
-    const minutes = Math.max(2, durationMinutes * 0.004 + 5);
+    const minutes = Math.max(0.1, durationMinutes * HYBRID_SOS_MINUTES_PER_AUDIO_MINUTE);
     return {
       minutes,
-      label: `Estimated hybrid runtime: ${formatMinutes(minutes)} before focused-gap work.`,
-      caveat: 'basis: silence + keyword scan time plus focused ASR only where gaps are found',
+      label: `Estimated silence + keyword scan: ${formatMinutes(minutes)}.`,
+      caveat: 'excludes per-chapter evidence transcription, which always runs after detection (roughly 5-6s per chapter found) and any focused-gap recovery -- actual runtime is typically longer, especially for books with many chapters',
     };
   }
   const limit = Number($('maxAudioMinutes')?.value || 0);
