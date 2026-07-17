@@ -1,0 +1,34 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SCRIPTS_DIR=/app/scripts \
+    REPORTS_DIR=/app/reports \
+    AUDIOBOOKS_ROOT=/audiobooks \
+    HF_HOME=/models \
+    XDG_CACHE_HOME=/models \
+    PATH=/opt/venv/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv
+
+WORKDIR /app
+COPY requirements.txt requirements-chaptering.txt /app/
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt \
+    && pip install --no-cache-dir -r /app/requirements-chaptering.txt
+
+COPY app /app/app
+COPY scripts /app/scripts
+COPY config /app/config
+
+RUN mkdir -p /app/reports /auth /models \
+    && chmod -R 0777 /app/reports /auth /app/config /models
+
+USER 1000:1000
+
+EXPOSE 5056
+ENTRYPOINT []
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5056"]

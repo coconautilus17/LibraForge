@@ -1,0 +1,5 @@
+# Optional Chapter Forge ASR dependencies.
+# These are intentionally not included by requirements.txt or the default Dockerfile.
+# Install only when you want local transcription-based chapter detection.
+faster-whisper==1.1.1
+requests==2.32.5
