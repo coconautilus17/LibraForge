@@ -92,9 +92,10 @@
             <button id="loadBtn">Load chapters</button>
             <button id="findCandidateBtn" class="secondary">Find a book without chapters</button>
             <button id="saveBtn" class="secondary" disabled>Save edits</button>
+            <span id="saveDirtyNote" class="cf-dirty-note" hidden>&#9679; Unsaved changes</span>
           </div>
           <div id="candidateList" class="file-list" hidden></div>
-          <p class="note">Load reads existing chapter artifacts if present. Save writes the edited chapter JSON and CUE next to the selected source.</p>
+          <p class="note">Load reads existing chapter artifacts if present. Editing rows in the table below only changes what's in the browser -- nothing is written to disk until you click <b>Save edits</b>, which writes the sidecar JSON, the CUE sheet, and (if enabled) the SRT transcript next to the source file.</p>
           <p id="loadStatus" class="note">No source loaded.</p>
         </section>
 
@@ -162,6 +163,14 @@
             </label>
             <label id="llmModelRow" class="chapter-advanced-setting cf-hybrid-only" hidden><span class="field-label">LLM model <span class="info-tip" data-tooltip="Model tag sent to the LLM endpoint, for example gemma4:latest."></span></span>
               <input id="llmModel" value="gemma4:latest" />
+            </label>
+            <label id="llmExtraRow" class="chapter-advanced-setting cf-hybrid-only" hidden style="grid-column: 1 / -1">
+              <span class="field-label">Extra instructions for AI review (optional) <span class="info-tip" data-tooltip="Added on top of the default review prompt, not a replacement for it. The default prompt still controls the required JSON output shape."></span></span>
+              <textarea id="llmExtraInstructions" rows="2" placeholder="Leave blank to use the default prompt only."></textarea>
+              <details class="cf-default-prompt">
+                <summary>Show default prompt</summary>
+                <pre id="llmDefaultPrompt" class="cf-default-prompt-text">Loading&hellip;</pre>
+              </details>
             </label>
 
             <div class="cf-group-heading chapter-advanced-setting">Silence &amp; timing</div>
@@ -247,6 +256,13 @@
           <div class="cf-summary-strip">
             <div class="cf-summary-stats" id="chapterStats">No chapters loaded.</div>
             <div class="cf-summary-actions">
+              <label class="cf-confidence-mode"><span class="field-label">Confidence display</span>
+                <select id="confidenceMode">
+                  <option value="heuristic">Heuristic only</option>
+                  <option value="llm-book">+ book-level LLM</option>
+                  <option value="llm-chapter" disabled>+ per-chapter LLM (coming soon)</option>
+                </select>
+              </label>
               <button id="cleanAllTitlesBtn" class="ghost" type="button">Clean all titles</button>
               <button id="flagFilterChip" class="cf-filter-chip" type="button" hidden>Show only flagged <span class="count" id="flagFilterCount">0</span></button>
             </div>

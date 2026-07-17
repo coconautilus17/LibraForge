@@ -77,6 +77,7 @@ from app.title_noise_policy import load_title_noise_policy, save_title_noise_pol
 from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
 from app.chaptering import (
     ChapterDetectionCancelled,
+    HYBRID_LLM_REVIEW_INSTRUCTIONS,
     load_existing_result as load_existing_chapter_result,
     save_result as save_chapter_result,
     write_cue as write_chapter_cue,
@@ -1357,6 +1358,7 @@ class ChapteringRunRequest(BaseModel):
     llm_review: bool = False
     llm_endpoint: str = "http://192.168.1.50:11434"
     llm_model: str = "gemma4:latest"
+    llm_extra_instructions: str = Field(default="", max_length=4000)
     model: str = "small"
     device: str = "auto"
     compute_type: str = "float32"
@@ -4334,6 +4336,7 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
                     "llm_review": req.llm_review,
                     "llm_endpoint": req.llm_endpoint,
                     "llm_model": req.llm_model,
+                    "llm_extra_instructions": req.llm_extra_instructions,
                     "model": req.model,
                     "device": req.device,
                     "compute_type": req.compute_type,
@@ -7513,6 +7516,11 @@ def load_chaptering(req: ChapteringLoadRequest) -> dict[str, Any]:
         "duration": sum(probe_audio_file_duration(path) for path in audio),
         "result": existing,
     }
+
+
+@app.get("/api/chaptering/llm-default-prompt")
+def chaptering_llm_default_prompt() -> dict[str, Any]:
+    return {"instructions": HYBRID_LLM_REVIEW_INSTRUCTIONS}
 
 
 @app.get("/api/chaptering/resources")

@@ -4201,10 +4201,83 @@ button.ghost:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+.cf-confidence-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cf-confidence-mode .field-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.cf-confidence-mode select {
+  width: auto;
+}
+
+.cf-llm-badge {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  font-variant-numeric: normal;
+  border-radius: 999px;
+  padding: 2px 9px;
+  text-transform: capitalize;
+}
+
+.cf-llm-badge-success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.cf-llm-badge-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.cf-llm-badge-muted {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
 .cf-audio-actions {
   display: flex;
   gap: 8px;
   margin: 8px 0 4px;
+}
+
+.cf-dirty-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-xs);
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.cf-default-prompt {
+  margin-top: 8px;
+}
+
+.cf-default-prompt summary {
+  cursor: pointer;
+  font-size: var(--font-2xs);
+  color: var(--muted);
+}
+
+.cf-default-prompt-text {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .cf-filter-chip {

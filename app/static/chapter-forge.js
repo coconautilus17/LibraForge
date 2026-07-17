@@ -9,6 +9,28 @@ let showOnlyFlagged = false;
 let lastRemoved = null;
 let toastTimer = null;
 let playAllState = null;
+let savedSnapshot = null;
+let confidenceMode = 'heuristic';
+
+function llmConfidenceBadge() {
+  const review = loaded?.result?.hybrid?.llm_review;
+  if (confidenceMode !== 'llm-book' || !review || !review.assessment) return '';
+  const assessment = String(review.assessment || '');
+  const confidence = String(review.confidence || '');
+  const tone = { clean: 'success', resolved_by_focused_asr: 'success' }[assessment] || (
+    assessment === 'llm_unavailable' ? 'muted' : 'warning'
+  );
+  const label = assessment.replace(/_/g, ' ');
+  return `<span class="cf-llm-badge cf-llm-badge-${tone}" title="Book-level assessment from the optional LLM review step">LLM: ${escapeHtml(label)}${confidence ? ` (${escapeHtml(confidence)})` : ''}</span>`;
+}
+
+function chapterSnapshot() {
+  return JSON.stringify(chapters.map((c) => ({ start: c.start, end: c.end, title: c.title })));
+}
+
+function markSaved() {
+  savedSnapshot = chapterSnapshot();
+}
 
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, initFolderBrowser } = window.UiCommon;
@@ -722,6 +744,7 @@ function renderChapters() {
       <span><b>${chapters.length - flagged.length}</b> clean</span>
       ${flagged.length ? `<span style="color:var(--warning)"><b>${flagged.length}</b> need review</span>` : ''}
       ${gapCount ? `<span style="color:var(--danger)"><b>${gapCount}</b> sequence gap${gapCount === 1 ? '' : 's'}</span>` : ''}
+      ${llmConfidenceBadge()}
     `;
   }
 
@@ -740,6 +763,10 @@ function renderChapters() {
   $('saveBtn').disabled = !loaded || !chapters.length;
   $('addChapterBtn').disabled = !loaded;
   $('playAllBtn').disabled = !chapters.length;
+
+  const dirty = savedSnapshot !== null && chapters.length && chapterSnapshot() !== savedSnapshot;
+  const dirtyEl = $('saveDirtyNote');
+  if (dirtyEl) dirtyEl.hidden = !dirty;
 }
 
 function cleanAllTitles() {
@@ -819,6 +846,7 @@ function applyResult(data) {
   };
   chapters = (result.chapters || []).map((chapter) => ({ ...chapter }));
   setAudioPreview(loaded.source_path);
+  markSaved();
   renderChapters();
   renderArtifacts(data?.stats?.artifacts || data?.artifacts || {});
 }
@@ -838,6 +866,7 @@ async function loadChapters() {
   loaded = data;
   chapters = (data.result?.chapters || []).map((chapter) => ({ ...chapter }));
   setAudioPreview(data.source_path);
+  markSaved();
   renderChapters();
   renderArtifacts({});
   $('loadStatus').textContent = data.result
@@ -855,6 +884,7 @@ async function startDetection() {
     llm_review: $('llmReview')?.checked || false,
     llm_endpoint: $('llmEndpoint')?.value.trim() || '',
     llm_model: $('llmModel')?.value.trim() || 'gemma4:latest',
+    llm_extra_instructions: $('llmExtraInstructions')?.value.trim() || '',
     model: $('model').value.trim() || 'small',
     device: $('device').value,
     compute_type: $('computeType').value,
@@ -1020,6 +1050,18 @@ async function loadResourceStatus() {
   }
 }
 
+async function loadLlmDefaultPrompt() {
+  const el = $('llmDefaultPrompt');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/chaptering/llm-default-prompt');
+    const data = await res.json();
+    el.textContent = res.ok ? (data.instructions || '(empty)') : 'Failed to load default prompt.';
+  } catch (_error) {
+    el.textContent = 'Failed to load default prompt.';
+  }
+}
+
 async function pollRun() {
   if (!currentRun) return;
   const res = await fetch(`/api/runs/${currentRun}`);
@@ -1158,6 +1200,10 @@ async function init() {
   $('addChapterBtn').addEventListener('click', addChapter);
   $('playAllBtn').addEventListener('click', togglePlayAll);
   $('cleanAllTitlesBtn').addEventListener('click', cleanAllTitles);
+  $('confidenceMode').addEventListener('change', (event) => {
+    confidenceMode = event.target.value;
+    renderChapters();
+  });
   $('flagFilterChip').addEventListener('click', () => {
     showOnlyFlagged = !showOnlyFlagged;
     renderChapters();
@@ -1174,6 +1220,7 @@ async function init() {
   renderArtifacts({});
   updateEtaStatus();
   loadResourceStatus();
+  loadLlmDefaultPrompt();
 }
 
 document.addEventListener('DOMContentLoaded', init);

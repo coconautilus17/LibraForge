@@ -1610,7 +1610,29 @@ def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
     return parsed
 
 
-def _build_hybrid_llm_prompt(result: dict[str, Any]) -> str:
+HYBRID_LLM_REVIEW_INSTRUCTIONS = (
+    "You are the text-only parser/reviewer in a cascade audiobook chapter detection pipeline. "
+    "STT means speech-to-text; audio has already been transcribed. "
+    "Review only the supplied text evidence. Prefer focused ASR evidence over noisy SoS snippets. "
+    "Do not invent timestamps or names. Do not output every chapter. "
+    "Do not claim a chapter is missing if it appears in chapters_under_review or focused_asr_evidence. "
+    "Only emit corrections that affect chapter identity, number parsing, or obvious repeated ASR garbage. "
+    "A title is bled narrative text, not a real chapter name, when it runs on past the marker into "
+    'ordinary prose (for example "Chapter 3 the darkness disappeared and ruin stood on a cliff") -- '
+    'flag these with action "clean_title" and a title trimmed to just the marker and number '
+    '(for example "Chapter 3"), not a rewritten summary. Only do this when the source_text clearly '
+    "shows narration continuing past the marker; do not clean_title a genuinely spoken chapter name. "
+    "Return JSON only with this shape: "
+    '{"assessment":"clean|resolved_by_focused_asr|needs_manual_review|poor","confidence":"low|medium|high",'
+    '"accepted_corrections":[{"action":"add_missing_chapter|correct_number|clean_title|keep",'
+    '"number":1,"timestamp":"HH:MM:SS","title":"supported title","evidence":"short supplied text","reason":"short"}],'
+    '"unresolved_issues":[{"type":"missing_chapter|parse_error|title_noise|sequence_conflict|needs_audio",'
+    '"severity":"low|medium|high","details":"short","recommended_action":"short"}],'
+    '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"]}.'
+)
+
+
+def _build_hybrid_llm_prompt(result: dict[str, Any], extra_instructions: str = "") -> str:
     all_chapters = [
         {
             "id": chapter.get("id"),
@@ -1662,20 +1684,11 @@ def _build_hybrid_llm_prompt(result: dict[str, Any]) -> str:
         "chapter_count": len(all_chapters),
         "focused_asr_evidence": focused,
     }
+    extra_block = ""
+    if extra_instructions and extra_instructions.strip():
+        extra_block = f" Additional reviewer instructions from the user: {extra_instructions.strip()}"
     return (
-        "You are the text-only parser/reviewer in a cascade audiobook chapter detection pipeline. "
-        "STT means speech-to-text; audio has already been transcribed. "
-        "Review only the supplied text evidence. Prefer focused ASR evidence over noisy SoS snippets. "
-        "Do not invent timestamps or names. Do not output every chapter. "
-        "Do not claim a chapter is missing if it appears in chapters_under_review or focused_asr_evidence. "
-        "Only emit corrections that affect chapter identity, number parsing, or obvious repeated ASR garbage. "
-        "Return JSON only with this shape: "
-        '{"assessment":"clean|resolved_by_focused_asr|needs_manual_review|poor","confidence":"low|medium|high",'
-        '"accepted_corrections":[{"action":"add_missing_chapter|correct_number|clean_title|keep",'
-        '"number":1,"timestamp":"HH:MM:SS","title":"supported title","evidence":"short supplied text","reason":"short"}],'
-        '"unresolved_issues":[{"type":"missing_chapter|parse_error|title_noise|sequence_conflict|needs_audio",'
-        '"severity":"low|medium|high","details":"short","recommended_action":"short"}],'
-        '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"]}. '
+        f"{HYBRID_LLM_REVIEW_INSTRUCTIONS}{extra_block} "
         f"Book data: {json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -1732,6 +1745,7 @@ def detect_chapters_hybrid(
     llm_review: bool = False,
     llm_endpoint: str = DEFAULT_OLLAMA_ENDPOINT,
     llm_model: str = "gemma4:latest",
+    llm_extra_instructions: str = "",
     progress: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -1808,6 +1822,7 @@ def detect_chapters_hybrid(
             "llm_review": llm_review,
             "llm_endpoint": llm_endpoint,
             "llm_model": llm_model,
+            "llm_extra_instructions": llm_extra_instructions,
         },
         "chapters": chapters,
         "segments": [asdict(segment) for segment in focused_segments + evidence_segments_remote],
@@ -1827,7 +1842,7 @@ def detect_chapters_hybrid(
             review = _call_ollama_json(
                 llm_endpoint or DEFAULT_OLLAMA_ENDPOINT,
                 llm_model or "gemma4:latest",
-                _build_hybrid_llm_prompt(result),
+                _build_hybrid_llm_prompt(result, llm_extra_instructions),
             )
         except Exception as exc:
             review = {

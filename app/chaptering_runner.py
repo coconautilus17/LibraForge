@@ -32,6 +32,7 @@ def main() -> int:
             llm_review=bool(config.get("llm_review")),
             llm_endpoint=str(config.get("llm_endpoint") or ""),
             llm_model=str(config.get("llm_model") or "gemma4:latest"),
+            llm_extra_instructions=str(config.get("llm_extra_instructions") or ""),
             progress=progress,
         )
     else:
