@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import importlib.util
 import json
 import os
@@ -74,6 +75,12 @@ from app.progress_phases import (
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
 from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
+from app.chaptering import (
+    ChapterDetectionCancelled,
+    load_existing_result as load_existing_chapter_result,
+    save_result as save_chapter_result,
+    write_cue as write_chapter_cue,
+)
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = APP_ROOT / "static"
@@ -113,6 +120,8 @@ M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
 
 FOLDER_SCAN_CACHE = REPORTS_DIR / "folder-scan-cache.json"
 FOLDER_SCAN_CACHE_LOCK = threading.Lock()
+
+AUDIO_PREVIEW_CACHE_DIR = REPORTS_DIR / "chapter-preview-cache"
 
 DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 # Saved Audible accounts live here, one <user_id>.json auth file plus a
@@ -660,6 +669,124 @@ def probe_audio_file(audio_file: Path) -> dict[str, Any]:
         "channels": int(stream["channels"]) if stream.get("channels") else None,
         "sample_rate_hz": int(stream["sample_rate"]) if stream.get("sample_rate") else None,
     }
+
+
+def probe_audio_file_duration(audio_file: Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(audio_file),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    try:
+        return max(0.0, float((result.stdout or "0").strip()))
+    except ValueError:
+        return 0.0
+
+
+_CPU_SAMPLE_LOCK = threading.Lock()
+_CPU_SAMPLE_PREVIOUS: tuple[int, int] | None = None
+
+
+def _read_meminfo() -> dict[str, int]:
+    values: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            parts = raw.strip().split()
+            if parts:
+                values[key] = int(parts[0]) * 1024
+    except Exception:
+        return {}
+    return values
+
+
+def _read_cpu_totals() -> tuple[int, int] | None:
+    try:
+        first = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+        parts = [int(value) for value in first.split()[1:]]
+    except Exception:
+        return None
+    idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+    total = sum(parts)
+    return total, idle
+
+
+def system_resource_snapshot() -> dict[str, Any]:
+    meminfo = _read_meminfo()
+    mem_total = meminfo.get("MemTotal", 0)
+    mem_available = meminfo.get("MemAvailable", 0)
+    swap_total = meminfo.get("SwapTotal", 0)
+    swap_free = meminfo.get("SwapFree", 0)
+    memory_percent = (
+        round(((mem_total - mem_available) / mem_total) * 100, 1)
+        if mem_total > 0
+        else 0.0
+    )
+    swap_percent = (
+        round(((swap_total - swap_free) / swap_total) * 100, 1)
+        if swap_total > 0
+        else 0.0
+    )
+
+    cpu_percent = 0.0
+    current_cpu = _read_cpu_totals()
+    if current_cpu is not None:
+        global _CPU_SAMPLE_PREVIOUS
+        with _CPU_SAMPLE_LOCK:
+            previous = _CPU_SAMPLE_PREVIOUS
+            _CPU_SAMPLE_PREVIOUS = current_cpu
+        if previous is not None:
+            total_delta = current_cpu[0] - previous[0]
+            idle_delta = current_cpu[1] - previous[1]
+            if total_delta > 0:
+                cpu_percent = round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
+
+    return {
+        "cpu_cores": os.cpu_count() or 1,
+        "cpu_percent": cpu_percent,
+        "memory_percent": memory_percent,
+        "memory_total_gb": round(mem_total / (1024 ** 3), 2) if mem_total else 0.0,
+        "memory_available_gb": round(mem_available / (1024 ** 3), 2) if mem_available else 0.0,
+        "swap_percent": swap_percent,
+        "swap_total_gb": round(swap_total / (1024 ** 3), 2) if swap_total else 0.0,
+        "swap_free_gb": round(swap_free / (1024 ** 3), 2) if swap_total else 0.0,
+    }
+
+
+def resource_guard_message(
+    snapshot: dict[str, Any],
+    req: Any,
+    baseline: dict[str, Any] | None = None,
+) -> str:
+    breaches: list[str] = []
+    if snapshot.get("memory_available_gb", 0.0) <= req.min_memory_available_gb:
+        breaches.append(
+            f"available RAM {snapshot.get('memory_available_gb')} GB <= {req.min_memory_available_gb} GB"
+        )
+    baseline_swap = float((baseline or {}).get("swap_percent", 0.0) or 0.0)
+    swap_growth = max(0.0, snapshot.get("swap_percent", 0.0) - baseline_swap)
+    if swap_growth >= req.max_swap_growth_percent:
+        breaches.append(
+            f"swap grew {round(swap_growth, 1)}% >= {req.max_swap_growth_percent}%"
+        )
+    if snapshot.get("swap_percent", 0.0) >= req.max_swap_percent:
+        breaches.append(f"critical swap {snapshot.get('swap_percent')}% >= {req.max_swap_percent}%")
+    if req.max_cpu_percent < 100.0 and snapshot.get("cpu_percent", 0.0) >= req.max_cpu_percent:
+        breaches.append(
+            f"CPU {snapshot.get('cpu_percent')}% >= {req.max_cpu_percent}%"
+        )
+    return "; ".join(breaches)
 
 
 def probe_audio_summary(
@@ -1221,6 +1348,59 @@ class M4BRunRequest(BaseModel):
     audio_bitrate: str = "128k"
     audio_samplerate: int = 44100
     audio_channels: int | None = None
+
+
+class ChapteringRunRequest(BaseModel):
+    source_path: str = Field(default="/audiobooks")
+    backend: str = "faster-whisper"
+    remote_endpoint: str = ""
+    llm_review: bool = False
+    llm_endpoint: str = "http://10.0.0.4:11434"
+    llm_model: str = "gemma4:latest"
+    model: str = "small"
+    device: str = "auto"
+    compute_type: str = "float32"
+    cpu_threads: int = Field(default=4, ge=0, le=32)
+    vad_filter: bool = False
+    language: str = "en"
+    condition_on_previous_text: bool = False
+    beam_size: int = Field(default=5, ge=1, le=10)
+    silence_snap: bool = True
+    silence_window: float = Field(default=4.0, ge=0.0, le=20.0)
+    silence_marker_lead_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
+    stable_ts: bool = False
+    save_full_transcript: bool = False
+    focused_rescan: bool = True
+    focused_model: str = "medium"
+    focused_compute_type: str = "int8"
+    focused_beam_size: int = Field(default=5, ge=1, le=10)
+    max_gap_rescans: int = Field(default=8, ge=0, le=40)
+    max_audio_minutes: float = Field(default=0.0, ge=0.0, le=1440.0)
+    chunk_minutes: float = Field(default=20.0, ge=1.0, le=120.0)
+    resource_guard: bool = True
+    max_memory_percent: float = Field(default=97.0, ge=10.0, le=99.0)
+    min_memory_available_gb: float = Field(default=2.0, ge=0.0, le=128.0)
+    max_swap_percent: float = Field(default=90.0, ge=0.0, le=99.0)
+    max_swap_growth_percent: float = Field(default=10.0, ge=0.0, le=99.0)
+    max_cpu_percent: float = Field(default=100.0, ge=10.0, le=100.0)
+
+
+class ChapteringLoadRequest(BaseModel):
+    source_path: str
+
+
+class ChapteringCandidateRequest(BaseModel):
+    root_path: str = Field(default="/audiobooks")
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class ChapteringSaveRequest(BaseModel):
+    source_path: str
+    duration: float = 0.0
+    chapters: list[dict[str, Any]] = Field(default_factory=list)
+    segments: list[dict[str, Any]] = Field(default_factory=list)
+    save_full_transcript: bool = False
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class OrganizerRunRequest(BaseModel):
@@ -3983,6 +4163,302 @@ def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
                 temp_file.unlink(missing_ok=True)
             except OSError:
                 pass
+        with runs_lock:
+            runs.pop(run_id, None)
+
+
+def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
+    state = runs[run_id]
+    guard_stop = threading.Event()
+    state.run_type = "chaptering"
+    state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
+    state.command = [
+        "chapter-forge",
+        f"--source={req.source_path}",
+        f"--backend={req.backend}",
+        f"--model={req.model}",
+        f"--device={req.device}",
+        f"--compute-type={req.compute_type}",
+        f"--cpu-threads={req.cpu_threads}",
+        f"--beam-size={req.beam_size}",
+    ]
+    if req.resource_guard:
+        state.command.extend([
+            f"--max-memory-percent={req.max_memory_percent}",
+            f"--min-memory-available-gb={req.min_memory_available_gb}",
+            f"--max-swap-percent={req.max_swap_percent}",
+            f"--max-swap-growth-percent={req.max_swap_growth_percent}",
+            f"--max-cpu-percent={req.max_cpu_percent}",
+        ])
+    if req.stable_ts:
+        state.command.append("--stable-ts")
+    if req.silence_snap:
+        state.command.append("--silence-snap")
+        state.command.append(f"--silence-marker-lead-seconds={req.silence_marker_lead_seconds}")
+    if req.focused_rescan:
+        state.command.extend([
+            f"--focused-model={req.focused_model or req.model}",
+            f"--focused-compute-type={req.focused_compute_type or req.compute_type}",
+            f"--focused-beam-size={req.focused_beam_size}",
+            f"--max-gap-rescans={req.max_gap_rescans}",
+        ])
+    if req.max_audio_minutes > 0:
+        state.command.append(f"--max-audio-minutes={req.max_audio_minutes}")
+    state.command.append(f"--chunk-minutes={req.chunk_minutes}")
+
+    try:
+        if req.backend == "hybrid-sos-focused":
+            require_http_base_url(req.remote_endpoint, field_name="Remote ASR endpoint")
+            if req.llm_review:
+                require_http_base_url(req.llm_endpoint, field_name="LLM endpoint")
+        elif req.backend != "faster-whisper":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported chaptering backend: {req.backend}",
+            )
+        source = validate_audiobook_path(req.source_path)
+        initial_resources = system_resource_snapshot()
+        initial_breach = (
+            resource_guard_message(initial_resources, req, initial_resources)
+            if req.resource_guard
+            else ""
+        )
+        if initial_breach:
+            raise RuntimeError(f"Resource guard refused to start: {initial_breach}")
+        state.status = "running"
+        state.current_file = str(source)
+        set_run_phase(state, "preparing", "Preparing chapter run", str(source))
+        state.percent = 2.0
+        state.stats = {
+            "source_path": str(source),
+            "model": req.model,
+            "backend": req.backend,
+            "chapters": 0,
+            "resource_guard": req.resource_guard,
+            "resource_limits": {
+                "max_memory_percent": req.max_memory_percent,
+                "min_memory_available_gb": req.min_memory_available_gb,
+                "max_swap_percent": req.max_swap_percent,
+                "max_swap_growth_percent": req.max_swap_growth_percent,
+                "max_cpu_percent": req.max_cpu_percent,
+            },
+            "resources": initial_resources,
+        }
+
+        def resource_guard_loop() -> None:
+            breach_count = 0
+            while not guard_stop.wait(2.0):
+                if state.status not in {"queued", "running"}:
+                    return
+                snapshot = system_resource_snapshot()
+                state.stats["resources"] = snapshot
+                breach = resource_guard_message(snapshot, req, initial_resources)
+                if breach:
+                    breach_count += 1
+                    state.lines_tail.append(f"Resource guard warning {breach_count}/2: {breach}")
+                    state.lines_tail = state.lines_tail[-80:]
+                    if breach_count >= 2:
+                        state.error = f"Resource guard halted chapter detection: {breach}"
+                        state.status = "cancelled"
+                        state.phase_detail = state.error
+                        if state.process and state.process.poll() is None:
+                            try:
+                                os.killpg(os.getpgid(state.process.pid), signal.SIGTERM)
+                            except Exception:
+                                state.process.terminate()
+                        return
+                else:
+                    breach_count = 0
+
+        guard_thread: threading.Thread | None = None
+        if req.resource_guard:
+            guard_thread = threading.Thread(target=resource_guard_loop, daemon=True)
+            guard_thread.start()
+
+        def progress(message: str) -> None:
+            if state.status == "cancelled":
+                raise ChapterDetectionCancelled("Chapter detection cancelled")
+            state.lines_tail.append(message)
+            state.lines_tail = state.lines_tail[-80:]
+            state.phase_detail = message
+            progress_match = re.search(r"\bprogress=([0-9]+(?:\.[0-9]+)?)\b", message)
+            if message.startswith("Loading faster-whisper"):
+                set_run_phase(state, "loading-model", "Loading ASR model", message)
+                state.percent = max(state.percent, 5.0)
+            elif message.startswith("Running SoundOfSilence"):
+                set_run_phase(state, "sos-scan", "Scanning silence candidates", message)
+                state.percent = max(state.percent, 15.0)
+            elif message.startswith("Focused remote ASR") or message.startswith("Transcribing focused hybrid"):
+                set_run_phase(state, "focused-asr", "Focused ASR recovery", message)
+                state.percent = max(state.percent, 62.0)
+            elif message.startswith("Transcribing evidence context"):
+                set_run_phase(state, "evidence-asr", "Building transcript evidence", message)
+                state.percent = max(state.percent, 74.0)
+            elif message.startswith("Reviewing hybrid"):
+                set_run_phase(state, "llm-review", "Reviewing chapter names", message)
+                state.percent = max(state.percent, 86.0)
+            elif message.startswith("Transcribing"):
+                set_run_phase(state, "transcribing", "Transcribing audio", message)
+                if progress_match:
+                    transcription_percent = float(progress_match.group(1))
+                    state.percent = max(
+                        state.percent,
+                        round(15.0 + min(100.0, transcription_percent) * 0.55, 1),
+                    )
+                else:
+                    state.percent = max(state.percent, 15.0)
+            elif "Detecting" in message:
+                set_run_phase(state, "detecting", "Detecting markers", message)
+                state.percent = max(state.percent, 72.0)
+            elif message.startswith("Focused rescan"):
+                set_run_phase(state, "rescanning", "Rescanning gaps", message)
+                state.percent = max(state.percent, 78.0)
+            elif "Snapping" in message:
+                set_run_phase(state, "snapping", "Snapping to silence", message)
+                state.percent = max(state.percent, 84.0)
+
+        if state.log_path:
+            state.log_path.write_text(
+                "COMMAND:\n" + " ".join(shlex.quote(part) for part in state.command) + "\n\n",
+                encoding="utf-8",
+            )
+        run_tmp = Path(tempfile.mkdtemp(prefix=f"{run_id}-chaptering-", dir=str(REPORTS_DIR)))
+        config_path = run_tmp / "config.json"
+        result_path = run_tmp / "result.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "source_path": str(source),
+                    "backend": req.backend,
+                    "remote_endpoint": req.remote_endpoint,
+                    "llm_review": req.llm_review,
+                    "llm_endpoint": req.llm_endpoint,
+                    "llm_model": req.llm_model,
+                    "model": req.model,
+                    "device": req.device,
+                    "compute_type": req.compute_type,
+                    "cpu_threads": req.cpu_threads,
+                    "vad_filter": req.vad_filter,
+                    "language": req.language.strip() or "en",
+                    "condition_on_previous_text": req.condition_on_previous_text,
+                    "beam_size": req.beam_size,
+                    "silence_snap": req.silence_snap,
+                    "silence_window": req.silence_window,
+                    "silence_marker_lead_seconds": req.silence_marker_lead_seconds,
+                    "stable_ts": req.stable_ts,
+                    "save_full_transcript": req.save_full_transcript,
+                    "focused_rescan": req.focused_rescan,
+                    "focused_model": req.focused_model,
+                    "focused_compute_type": req.focused_compute_type,
+                    "focused_beam_size": req.focused_beam_size,
+                    "max_gap_rescans": req.max_gap_rescans,
+                    "max_audio_seconds": req.max_audio_minutes * 60.0,
+                    "chunk_seconds": req.chunk_minutes * 60.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        cmd = [sys.executable, "-u", "-m", "app.chaptering_runner", str(config_path), str(result_path)]
+        state.command = cmd
+        if state.log_path:
+            with state.log_path.open("a", encoding="utf-8", errors="replace") as log:
+                log.write("RUNNER:\n" + " ".join(shlex.quote(part) for part in cmd) + "\n\n")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+            start_new_session=True,
+        )
+        state.process = proc
+        assert proc.stdout is not None
+        with state.log_path.open("a", encoding="utf-8", errors="replace") if state.log_path else open(os.devnull, "w") as log:
+            for line in proc.stdout:
+                stripped = line.rstrip("\n")
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    event = {}
+                if event.get("type") == "progress":
+                    progress(str(event.get("message", "")))
+                else:
+                    state.lines_tail.append(stripped)
+                    state.lines_tail = state.lines_tail[-80:]
+                log.write(line)
+                log.flush()
+                if state.status == "cancelled" and proc.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    except Exception:
+                        proc.terminate()
+        state.returncode = proc.wait()
+        if state.status == "cancelled":
+            raise ChapterDetectionCancelled("Chapter detection cancelled")
+        if state.returncode != 0:
+            raise RuntimeError(f"Chapter detection runner exited with code {state.returncode}")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        set_run_phase(state, "saving", "Saving chapter files", "Writing JSON, CUE, and SRT artifacts")
+        srt_text = ""
+        transcript_text = ""
+        try:
+            from app.chaptering import TranscriptSegment, write_srt, write_transcript_text
+
+            transcript_segments = [TranscriptSegment(**segment) for segment in result.get("segments", [])]
+            srt_text = write_srt(transcript_segments)
+            if req.save_full_transcript:
+                transcript_text = write_transcript_text(transcript_segments)
+        except Exception:
+            srt_text = ""
+            transcript_text = ""
+        artifacts = save_chapter_result(source, result, srt=srt_text, transcript=transcript_text)
+        state.stats.update({
+            "chapters": len(result.get("chapters", [])),
+            "duration": result.get("duration", 0),
+            "artifacts": artifacts,
+            "chaptering_result": result,
+        })
+        state.percent = 100.0
+        state.returncode = 0
+        state.finished_at = time.time()
+        if state.status != "cancelled":
+            state.status = "completed"
+        set_terminal_phase(state)
+        write_final_report(state)
+    except ChapterDetectionCancelled:
+        state.returncode = -15
+        state.finished_at = time.time()
+        state.status = "cancelled"
+        state.lines_tail.append("Chapter detection cancelled.")
+        state.lines_tail = state.lines_tail[-80:]
+        set_terminal_phase(state)
+        try:
+            if state.log_path:
+                with state.log_path.open("a", encoding="utf-8", errors="replace") as log:
+                    log.write("\nCANCELLED\n")
+            write_final_report(state)
+        except Exception:
+            pass
+    except Exception as exc:
+        state.error = str(exc)
+        state.returncode = 1
+        state.finished_at = time.time()
+        state.status = "failed"
+        set_terminal_phase(state)
+        try:
+            if state.log_path:
+                with state.log_path.open("a", encoding="utf-8", errors="replace") as log:
+                    log.write(f"\nERROR: {exc}\n")
+            write_final_report(state)
+        except Exception:
+            pass
+    finally:
+        try:
+            guard_stop.set()
+        except Exception:
+            pass
         with runs_lock:
             runs.pop(run_id, None)
 
@@ -6796,6 +7272,11 @@ def m4b_tool_page() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "m4b-tool.html").read_text(encoding="utf-8"))
 
 
+@app.get("/chapter-forge", response_class=HTMLResponse)
+def chapter_forge_page() -> HTMLResponse:
+    return HTMLResponse((STATIC_DIR / "chapter-forge.html").read_text(encoding="utf-8"))
+
+
 @app.get("/organizer", response_class=HTMLResponse)
 def organizer_page() -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / "organizer.html").read_text(encoding="utf-8"))
@@ -7019,6 +7500,190 @@ def audible_search(req: AudibleSearchRequest) -> dict[str, Any]:
         limit=req.limit,
         script_name=req.script_name,
     )
+
+
+@app.post("/api/chaptering/load")
+def load_chaptering(req: ChapteringLoadRequest) -> dict[str, Any]:
+    source = validate_audiobook_path(req.source_path)
+    existing = load_existing_chapter_result(source)
+    audio = source_audio_files(source)
+    return {
+        "source_path": str(source),
+        "audio_files": [str(path) for path in audio],
+        "duration": sum(probe_audio_file_duration(path) for path in audio),
+        "result": existing,
+    }
+
+
+@app.get("/api/chaptering/resources")
+def chaptering_resources() -> dict[str, Any]:
+    snapshot = system_resource_snapshot()
+    models: list[dict[str, Any]] = []
+    cached_names: set[str] = set()
+    try:
+        model_root = Path(os.environ.get("HF_HOME") or os.environ.get("XDG_CACHE_HOME") or "/models")
+        for repo_dir in model_root.rglob("models--Systran--faster-whisper-*"):
+            if repo_dir.is_dir() and (repo_dir / "snapshots").exists():
+                cached_names.add(repo_dir.name.removeprefix("models--Systran--faster-whisper-"))
+    except Exception:
+        cached_names = set()
+    try:
+        from faster_whisper import available_models
+
+        names = list(available_models())
+    except Exception:
+        names = []
+    for name in names:
+        models.append({
+            "name": name,
+            "cached": name in cached_names,
+            "recommended_first_pass": name == "small",
+            "recommended_focused": name == "medium",
+        })
+    snapshot["asr_models"] = models
+    snapshot["asr_model_source"] = "faster_whisper.available_models"
+    return snapshot
+
+
+@app.post("/api/chaptering/candidates")
+def chaptering_candidates(req: ChapteringCandidateRequest) -> dict[str, Any]:
+    root = validate_audiobook_path(req.root_path)
+    candidate_exts = {".mp3"}
+    candidates: list[dict[str, Any]] = []
+
+    cache_action = "load"
+    try:
+        discovery = discover_m4b_candidates(
+            path=str(root),
+            mode="non_m4b",
+            limit=max(req.limit * 4, req.limit),
+            cache_action=cache_action,
+        )
+    except HTTPException as exc:
+        if exc.status_code not in {404, 409}:
+            raise
+        cache_action = "refresh"
+        discovery = discover_m4b_candidates(
+            path=str(root),
+            mode="non_m4b",
+            limit=max(req.limit * 4, req.limit),
+            cache_action=cache_action,
+        )
+
+    for item in discovery.get("items", []):
+        if item.get("file_count") != 1:
+            continue
+        path = Path(str(item.get("representative_path") or item.get("path") or "")).resolve()
+        if path.suffix.lower() not in candidate_exts or not path.is_file():
+            continue
+        candidates.append({
+            "path": str(path),
+            "name": path.name,
+            "folder": str(path.parent),
+            "size_mb": round(path.stat().st_size / (1024 * 1024), 1),
+            "source": f"m4b-discovery-{discovery.get('cache', {}).get('source') or cache_action}",
+            "cache_refreshed_at": discovery.get("cache", {}).get("refreshed_at", ""),
+        })
+        if len(candidates) >= req.limit:
+            break
+
+    source = f"m4b-discovery-{discovery.get('cache', {}).get('source') or cache_action}"
+    return {"root_path": str(root), "items": candidates, "source": source}
+
+
+@app.post("/api/chaptering/runs")
+def start_chaptering_run(req: ChapteringRunRequest) -> dict[str, Any]:
+    if req.backend not in {"faster-whisper", "hybrid-sos-focused"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported chaptering backend: {req.backend}")
+    validate_audiobook_path(req.source_path)
+    run_id = datetime_id()
+    state = RunState(id=run_id)
+    with runs_lock:
+        runs[run_id] = state
+    thread = threading.Thread(target=run_chaptering_worker, args=(run_id, req), daemon=True)
+    thread.start()
+    return {"id": run_id}
+
+
+@app.post("/api/chaptering/save")
+def save_chaptering(req: ChapteringSaveRequest) -> dict[str, Any]:
+    source = validate_audiobook_path(req.source_path)
+    chapters = []
+    for index, chapter in enumerate(sorted(req.chapters, key=lambda c: float(c.get("start", 0))), start=1):
+        start = max(0.0, float(chapter.get("start", 0.0)))
+        end = max(start, float(chapter.get("end", req.duration or start)))
+        chapters.append({
+            **chapter,
+            "id": index,
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "title": str(chapter.get("title", "") or f"Chapter {index}").strip() or f"Chapter {index}",
+            "manual": True,
+        })
+    payload = {
+        "schema_version": 1,
+        "source_path": str(source),
+        "duration": req.duration,
+        "settings": req.settings,
+        "chapters": chapters,
+        "segments": req.segments,
+    }
+    transcript_text = ""
+    if req.save_full_transcript and req.segments:
+        try:
+            from app.chaptering import TranscriptSegment, write_transcript_text
+
+            transcript_text = write_transcript_text([TranscriptSegment(**segment) for segment in req.segments])
+        except Exception:
+            transcript_text = ""
+    artifacts = save_chapter_result(source, payload, transcript=transcript_text)
+    return {"result": payload, "artifacts": artifacts, "cue": write_chapter_cue(chapters, source.name)}
+
+
+@app.get("/api/chaptering/audio")
+def chaptering_audio(path: str) -> FileResponse:
+    source = validate_audiobook_path(path)
+    if not source.is_file() or not is_audio_file(source):
+        raise HTTPException(status_code=400, detail="Audio preview requires a single audio file")
+    return FileResponse(source)
+
+
+@app.get("/api/chaptering/audio-clip")
+def chaptering_audio_clip(path: str, start: float = 0.0, duration: float = 20.0) -> FileResponse:
+    source = validate_audiobook_path(path)
+    if not source.is_file() or not is_audio_file(source):
+        raise HTTPException(status_code=400, detail="Audio preview requires a single audio file")
+    clip_start = max(0.0, float(start or 0.0))
+    clip_duration = min(180.0, max(1.0, float(duration or 20.0)))
+    AUDIO_PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(f"{source}:{source.stat().st_mtime_ns}:{clip_start:.3f}:{clip_duration:.3f}".encode("utf-8")).hexdigest()[:24]
+    clip_path = AUDIO_PREVIEW_CACHE_DIR / f"{key}.wav"
+    if not clip_path.exists():
+        pre_seek = max(0.0, clip_start - 5.0)
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "fatal",
+            "-y",
+            "-ss",
+            str(pre_seek),
+            "-i",
+            str(source),
+            "-ss",
+            str(min(5.0, clip_start - pre_seek)),
+            "-t",
+            str(clip_duration),
+            "-ac",
+            "1",
+            "-ar",
+            "22050",
+            str(clip_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+        if result.returncode != 0 or not clip_path.exists():
+            raise HTTPException(status_code=500, detail="Failed to render audio preview clip")
+    return FileResponse(clip_path, media_type="audio/wav")
 
 
 @app.get("/api/manual-review/browse")
