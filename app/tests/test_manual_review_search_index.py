@@ -336,7 +336,7 @@ class EnsureEbookMetadataFilledTests(unittest.TestCase):
             "summary": "...", "isbn": "",
         }
         with patch("app.main.search_ebook_candidates", return_value=candidate) as search_mock:
-            _ensure_ebook_metadata_filled(self.root)
+            _ensure_ebook_metadata_filled()
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline and search_mock.call_count == 0:
                 time.sleep(0.02)
@@ -352,6 +352,81 @@ class EnsureEbookMetadataFilledTests(unittest.TestCase):
             first_call_count = search_mock.call_count
             self.assertGreaterEqual(first_call_count, 1)
 
-            _ensure_ebook_metadata_filled(self.root)
+            _ensure_ebook_metadata_filled()
+            time.sleep(0.3)
+            self.assertEqual(search_mock.call_count, first_call_count)
+
+    def test_one_units_exception_does_not_stop_the_rest_of_the_pass(self):
+        # Unit ordering is alphabetical by path (see build_ebook_index), so
+        # "first-bad-book" is processed before "second-good-book" -- this
+        # proves the second unit's sidecar still gets written even though
+        # the first unit's lookup blows up with a non-HTTPException error
+        # (the kind search_ebook_candidates's own post-processing can raise
+        # on malformed provider data, which it does NOT catch itself).
+        self._touch("Linux/EPUB/first-bad-book.epub")
+        self._touch("Linux/EPUB/second-good-book.epub")
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and library_index.get_ebook_state().status != "ready":
+            time.sleep(0.02)
+
+        good_candidate = {
+            "title": "Second Good Book", "subtitle": "", "authors": ["Some Author"],
+            "series": "", "sequence": "", "year": "2020", "cover_url": "https://x/y.jpg",
+            "summary": "...", "isbn": "",
+        }
+
+        def fake_search(*, title, author="", limit=5):
+            if "first" in title.lower():
+                raise ValueError("malformed provider data")
+            return good_candidate
+
+        import app.main as main_module
+        fixer_module = main_module.load_fixer_module(main_module.default_fixer_script())
+        second_path = self.root / "Linux" / "EPUB" / "second-good-book.epub"
+
+        with patch("app.main.search_ebook_candidates", side_effect=fake_search):
+            _ensure_ebook_metadata_filled()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and fixer_module.read_book_sidecar(second_path) is None:
+                time.sleep(0.02)
+
+        sidecar = fixer_module.read_book_sidecar(second_path)
+        self.assertIsNotNone(sidecar)
+        self.assertEqual(sidecar["title"], "Second Good Book")
+
+    def test_unresolvable_unit_gets_an_attempted_marker_and_is_not_requeried(self):
+        # A unit whose lookup returns no candidate (e.g. a filename stem
+        # that can't be recovered into a real title) must still be marked
+        # "already attempted" -- otherwise it gets re-queried against Open
+        # Library/Goodreads on every single manual-review search keystroke,
+        # risking the Goodreads circuit breaker.
+        self._touch("Linux/EPUB/efficientlinuxatthecommandline.epub")
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and library_index.get_ebook_state().status != "ready":
+            time.sleep(0.02)
+
+        import app.main as main_module
+        fixer_module = main_module.load_fixer_module(main_module.default_fixer_script())
+        unit_path = self.root / "Linux" / "EPUB" / "efficientlinuxatthecommandline.epub"
+
+        with patch("app.main.search_ebook_candidates", return_value=None) as search_mock:
+            _ensure_ebook_metadata_filled()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and search_mock.call_count == 0:
+                time.sleep(0.02)
+            time.sleep(0.1)  # let the worker thread finish its single-unit pass
+
+            first_call_count = search_mock.call_count
+            self.assertGreaterEqual(first_call_count, 1)
+
+            attempted_at = fixer_module.read_ebook_fill_attempted_at(unit_path)
+            self.assertIsNotNone(attempted_at)
+            # No real title was found, so read_book_sidecar (title-truthy
+            # semantics) must still report "no applied metadata".
+            self.assertIsNone(fixer_module.read_book_sidecar(unit_path))
+
+            _ensure_ebook_metadata_filled()
             time.sleep(0.3)
             self.assertEqual(search_mock.call_count, first_call_count)

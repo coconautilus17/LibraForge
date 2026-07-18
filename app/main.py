@@ -4518,8 +4518,11 @@ def _run_manual_review_search_index_build(
         raw_ebook_entries = [(str(unit.path), True) for unit in ebook_shared.units]
         ebook_entries = _filter_entries_by_ignored_folders(raw_ebook_entries, root, ignored_folders)
         state.entries = audio_entries + ebook_entries
+        ebook_entry_paths = {path for path, _ in ebook_entries}
         state.ebook_formats = {
-            str(unit.path): sorted(unit.formats.keys()) for unit in ebook_shared.units
+            str(unit.path): sorted(unit.formats.keys())
+            for unit in ebook_shared.units
+            if str(unit.path) in ebook_entry_paths
         }
         state.book_count = len(state.entries)
         state.source_generation = shared.generation
@@ -4538,7 +4541,7 @@ def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None
     Returns immediately whether or not a build was started."""
     library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
     library_index.ensure_ebook_index_fresh(AUDIOBOOKS_ROOT)
-    _ensure_ebook_metadata_filled(AUDIOBOOKS_ROOT)
+    _ensure_ebook_metadata_filled()
 
     state = _manual_review_search_index
     shared = library_index.get_state()
@@ -5647,7 +5650,7 @@ def _ebook_query_from_stem(stem: str) -> str:
     return re.sub(r"[_\-\.]+", " ", stem).strip()
 
 
-def _ensure_ebook_metadata_filled(root: Path) -> None:
+def _ensure_ebook_metadata_filled() -> None:
     """Kick a non-blocking background pass that auto-fills libraforge.json
     for any ebook unit that doesn't already have a filled sidecar.
 
@@ -5655,6 +5658,20 @@ def _ensure_ebook_metadata_filled(root: Path) -> None:
     lock) so a slow Goodreads fallback lookup never delays search results:
     items appear in search immediately at discovery, metadata fills in on
     a later poll once this pass reaches them.
+
+    Takes no root argument: it walks library_index.get_ebook_state().units,
+    which is already scoped to AUDIOBOOKS_ROOT by the ebook discovery walk
+    that populates it (library_index.ensure_ebook_index_fresh) -- there is
+    no second root this pass could meaningfully use.
+
+    Each unit's lookup-and-write is independently try/excepted so one
+    unit's failure (e.g. a provider returning malformed data that a search
+    helper's post-processing doesn't handle) can never stop the pass from
+    reaching the rest of the units -- see _run_build/_run_ebook_build in
+    library_index.py and _run_manual_review_search_index_build below for
+    this codebase's existing convention of catching broadly around a
+    background pass's unit of work and recording rather than propagating
+    the failure.
     """
     if not _ebook_metadata_fill_lock.acquire(blocking=False):
         return
@@ -5663,39 +5680,84 @@ def _ensure_ebook_metadata_filled(root: Path) -> None:
         try:
             fixer_module = load_fixer_module(default_fixer_script())
             for unit in library_index.get_ebook_state().units:
-                existing = fixer_module.read_book_sidecar(unit.path)
-                if existing and existing.get("title"):
-                    continue
-                query = _ebook_query_from_stem(unit.path.stem)
-                if not query:
-                    continue
-                candidate = search_ebook_candidates(title=query)
-                if not candidate:
-                    continue
-                authors = candidate.get("authors") or []
-                book = {
-                    "title": candidate.get("title", ""),
-                    "subtitle": candidate.get("subtitle", ""),
-                    "author": authors[0] if authors else "",
-                    "narrator": "",
-                    "series": candidate.get("series", ""),
-                    "sequence": candidate.get("sequence", ""),
-                    "year": candidate.get("year", ""),
-                    "summary": candidate.get("summary", ""),
-                    "genre": "",
-                    "isbn": candidate.get("isbn", ""),
-                    "cover_url": candidate.get("cover_url", ""),
-                }
-                fixer_module.write_ebook_sidecar(
-                    unit.path,
-                    source_formats=sorted(unit.formats.keys()),
-                    source_files={ext: str(p) for ext, p in unit.formats.items()},
-                    book=book,
-                )
+                try:
+                    _fill_one_ebook_unit(fixer_module, unit)
+                except Exception as exc:
+                    print(
+                        f"_ensure_ebook_metadata_filled: skipping {unit.path} after error: {exc}",
+                        file=sys.stderr,
+                    )
         finally:
             _ebook_metadata_fill_lock.release()
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _fill_one_ebook_unit(fixer_module, unit) -> None:
+    """Auto-fill (or record a failed attempt for) a single ebook unit.
+
+    Split out of _ensure_ebook_metadata_filled's worker loop so each unit's
+    exception can be caught around one call, keeping one unit's failure
+    from stopping the rest of the pass.
+    """
+    existing = fixer_module.read_book_sidecar(unit.path)
+    if existing and existing.get("title"):
+        return
+    if fixer_module.read_ebook_fill_attempted_at(unit.path):
+        # Already tried and found nothing on a previous pass -- re-querying
+        # every pass would repeatedly hit Open Library/Goodreads for a
+        # title that's known unresolvable, risking the Goodreads circuit
+        # breaker for no benefit.
+        return
+    query = _ebook_query_from_stem(unit.path.stem)
+    if not query:
+        return
+    candidate = search_ebook_candidates(title=query)
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    source_formats = sorted(unit.formats.keys())
+    source_files = {ext: str(p) for ext, p in unit.formats.items()}
+    if not candidate:
+        blank_book = {
+            "title": "",
+            "subtitle": "",
+            "author": "",
+            "narrator": "",
+            "series": "",
+            "sequence": "",
+            "year": "",
+            "summary": "",
+            "genre": "",
+            "isbn": "",
+            "cover_url": "",
+        }
+        fixer_module.write_ebook_sidecar(
+            unit.path,
+            source_formats=source_formats,
+            source_files=source_files,
+            book=blank_book,
+            attempted_at=attempted_at,
+        )
+        return
+    authors = candidate.get("authors") or []
+    book = {
+        "title": candidate.get("title", ""),
+        "subtitle": candidate.get("subtitle", ""),
+        "author": authors[0] if authors else "",
+        "narrator": "",
+        "series": candidate.get("series", ""),
+        "sequence": candidate.get("sequence", ""),
+        "year": candidate.get("year", ""),
+        "summary": candidate.get("summary", ""),
+        "genre": "",
+        "isbn": candidate.get("isbn", ""),
+        "cover_url": candidate.get("cover_url", ""),
+    }
+    fixer_module.write_ebook_sidecar(
+        unit.path,
+        source_formats=source_formats,
+        source_files=source_files,
+        book=book,
+    )
 
 
 class AbsSearchRequest(BaseModel):

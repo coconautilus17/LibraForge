@@ -543,7 +543,7 @@ function renderManualFsSearchResults(data) {
   renderManualFsSearchIndexMarker({ status: data.index_status, book_count: data.book_count });
   const container = $('manualFsSearchResults');
   container.innerHTML = data.results.map((item) => {
-    const ebookBadge = item.media_type === 'ebook'
+    const ebookBadge = item.media_type === 'ebook' && item.formats && item.formats.length
       ? ` <span class="badge">${escapeHtml(item.formats.map((f) => f.toUpperCase()).join('+'))}</span>`
       : '';
     return `
