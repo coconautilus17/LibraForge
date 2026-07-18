@@ -11,6 +11,7 @@ let toastTimer = null;
 let playAllState = null;
 let savedSnapshot = null;
 let confidenceMode = 'heuristic';
+let promptMode = 'append';
 
 function llmConfidenceBadge() {
   const review = loaded?.result?.hybrid?.llm_review;
@@ -1292,6 +1293,9 @@ async function init() {
   $('confidenceMode').addEventListener('change', (event) => {
     confidenceMode = event.target.value;
     renderChapters();
+  });
+  $('promptMode').addEventListener('change', (event) => {
+    promptMode = event.target.value;
   });
   $('flagFilterChip').addEventListener('click', () => {
     showOnlyFlagged = !showOnlyFlagged;

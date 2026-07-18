@@ -166,7 +166,14 @@
               <input id="llmModel" value="gemma4:latest" />
             </label>
             <label id="llmExtraRow" class="chapter-advanced-setting cf-hybrid-only" hidden style="grid-column: 1 / -1">
-              <span class="field-label">Extra instructions for AI review (optional) <span class="info-tip" data-tooltip="Added on top of the default review prompt, not a replacement for it. The default prompt still controls the required JSON output shape."></span></span>
+              <span class="field-label">Extra instructions for AI review (optional) <span class="info-tip" data-tooltip="How your text combines with the default review prompt below."></span></span>
+              <div class="cf-prompt-mode">
+                <span class="field-label">Prompt mode</span>
+                <select id="promptMode">
+                  <option value="append">Append to default prompt</option>
+                  <option value="replace" disabled>Replace default prompt entirely (coming soon)</option>
+                </select>
+              </div>
               <textarea id="llmExtraInstructions" rows="2" placeholder="Leave blank to use the default prompt only."></textarea>
               <details class="cf-default-prompt">
                 <summary>Show default prompt</summary>

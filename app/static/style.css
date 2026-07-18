@@ -4216,6 +4216,22 @@ button.ghost:hover:not(:disabled) {
   width: auto;
 }
 
+.cf-prompt-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.cf-prompt-mode .field-label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.cf-prompt-mode select {
+  width: auto;
+}
+
 .cf-llm-badge {
   display: inline-flex;
   align-items: center;
