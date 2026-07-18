@@ -4203,6 +4203,7 @@ button.ghost:hover:not(:disabled) {
 
 .cf-confidence-mode {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
 }
@@ -4218,6 +4219,7 @@ button.ghost:hover:not(:disabled) {
 
 .cf-prompt-mode {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   margin-bottom: 6px;
