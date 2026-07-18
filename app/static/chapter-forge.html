@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Chapter Forge</title>
   <script src="/static/ui-preferences.js?v=20260711-6"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260718-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260718-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -59,7 +59,6 @@
         <a href="#editor">Chapter editor</a>
         <a href="#live-output">Live output</a>
         <a href="#audibleCompare">Compare to Audible</a>
-        <a href="#methodCompare">Compare methods</a>
         <a href="#aiReview">AI review</a>
         <a href="#artifacts">Artifacts</a>
       </aside>
@@ -124,11 +123,33 @@
               <span class="seg-title">Audible chapters</span>
               <span class="seg-note">One API lookup, no audio processing. Instant, but only as good as Audible's own chapter data for this ASIN.</span>
             </label>
+            <label class="cf-seg-option" data-value="compare-methods">
+              <input type="radio" name="backend" value="compare-methods" />
+              <span class="seg-title">Compare methods</span>
+              <span class="seg-note">Runs 2 methods back to back (never at once) against this source and shows a side-by-side diff. Doesn't save or change the chapters loaded below.</span>
+            </label>
           </div>
 
           <div id="audibleAsinRow" class="grid" hidden>
             <label style="grid-column: 1 / -1"><span class="field-label">ASIN <span class="info-tip" data-tooltip="Auto-filled from this book's existing sidecar (Fixer/Manual Review) when available. Type or paste one if it's blank or wrong."></span></span>
               <input id="audibleAsin" placeholder="e.g. B017V4IM1G" />
+            </label>
+          </div>
+
+          <div id="compareMethodsRow" class="grid" hidden>
+            <label><span class="field-label">Method A</span>
+              <select id="compareMethodA">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters">Audible chapters</option>
+              </select>
+            </label>
+            <label><span class="field-label">Method B</span>
+              <select id="compareMethodB">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters" selected>Audible chapters</option>
+              </select>
             </label>
           </div>
 
@@ -245,11 +266,11 @@
           </div>
           <p id="etaStatus" class="note">ETA appears after loading a source.</p>
 
-          <div class="actions">
+          <div class="actions" id="detectActionsRow">
             <button id="detectBtn">Detect chapters</button>
             <button id="cancelBtn" class="secondary" disabled>Cancel</button>
           </div>
-          <div class="progress-wrap">
+          <div class="progress-wrap" id="detectProgressWrap">
             <div class="ring" id="ring" style="--pct: 0"><span id="percent">0%</span></div>
             <div>
               <h2 id="phaseLabel">Idle</h2>
@@ -257,6 +278,12 @@
               <p id="etaCountdown" class="eta-countdown">ETA not calculated.</p>
             </div>
           </div>
+
+          <div id="compareMethodsActions" class="actions" hidden>
+            <button id="runMethodComparisonBtn" type="button">Run comparison</button>
+          </div>
+          <p id="compareMethodsStatus" class="note"></p>
+          <div id="compareMethodsResult"></div>
         </section>
 
         <section id="live-output" class="card side-nav-card">
@@ -313,32 +340,6 @@
           <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p></div>
         </section>
 
-        <section id="methodCompare" class="card side-nav-card">
-          <h2>Compare methods</h2>
-          <p class="note">Runs two detection methods back to back (never at the same time, to avoid contending for the same CPU/ASR resources) against the currently loaded source, without saving either result, then shows a side-by-side diff. Neither run affects the chapters currently loaded in the editor above.</p>
-          <div class="grid" style="margin-top: var(--space-md)">
-            <label><span class="field-label">Method A</span>
-              <select id="compareMethodA">
-                <option value="hybrid-sos-focused">Hybrid</option>
-                <option value="faster-whisper">Full transcription</option>
-                <option value="audible-chapters">Audible chapters</option>
-              </select>
-            </label>
-            <label><span class="field-label">Method B</span>
-              <select id="compareMethodB">
-                <option value="hybrid-sos-focused">Hybrid</option>
-                <option value="faster-whisper">Full transcription</option>
-                <option value="audible-chapters" selected>Audible chapters</option>
-              </select>
-            </label>
-          </div>
-          <div class="actions">
-            <button id="runMethodComparisonBtn" type="button">Run comparison</button>
-          </div>
-          <p id="compareMethodsStatus" class="note"></p>
-          <div id="compareMethodsResult"></div>
-        </section>
-
         <section id="aiReview" class="card side-nav-card">
           <h2>AI review</h2>
           <div id="aiReviewBody"><p class="note">No AI review data. Enable "LLM review names" under Advanced settings and re-run detection to see one here.</p></div>
@@ -352,6 +353,6 @@
     </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-6"></script>
-  <script src="/static/chapter-forge.js?v=20260718-1"></script>
+  <script src="/static/chapter-forge.js?v=20260718-2"></script>
 </body>
 </html>

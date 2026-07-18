@@ -136,6 +136,8 @@ function syncFieldVisibility() {
   const backend = getBackend();
   const hybrid = backend === 'hybrid-sos-focused';
   const audible = backend === 'audible-chapters';
+  const compareMethods = backend === 'compare-methods';
+  const noLocalControls = audible || compareMethods;
   document.querySelectorAll('.chapter-advanced-setting').forEach((el) => {
     const hybridOnly = el.classList.contains('cf-hybrid-only');
     el.hidden = !advancedOpen || (hybridOnly && !hybrid);
@@ -143,10 +145,16 @@ function syncFieldVisibility() {
   document.querySelectorAll('.cf-hybrid-only:not(.chapter-advanced-setting)').forEach((el) => {
     el.hidden = !hybrid;
   });
-  $('audibleAsinRow').hidden = !audible;
-  $('localDetectionGrid').hidden = audible;
-  $('localDetectionChecks').hidden = audible;
-  $('advancedRunToggle').hidden = audible;
+  $('audibleAsinRow').hidden = !noLocalControls;
+  $('localDetectionGrid').hidden = noLocalControls;
+  $('localDetectionChecks').hidden = noLocalControls;
+  $('advancedRunToggle').hidden = noLocalControls;
+  $('compareMethodsRow').hidden = !compareMethods;
+  $('statusStrip').hidden = compareMethods;
+  $('etaStatus').hidden = compareMethods;
+  $('detectActionsRow').hidden = compareMethods;
+  $('detectProgressWrap').hidden = compareMethods;
+  $('compareMethodsActions').hidden = !compareMethods;
 }
 
 function normalizeChapters() {
