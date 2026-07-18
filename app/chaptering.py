@@ -1309,7 +1309,7 @@ def _run_sound_of_silence(
     config.SNIPPET_DURATION = 5
     config.TARGET_NUMBERS_ONLY = False
     config.TARGET_FIRST_WORD_ONLY = True
-    config.TARGET_WORDS = ["chapter", "part", "section"]
+    config.TARGET_WORDS = list(MARKER_WORDS)
     config.FILE_OUTPUT = False
     config.FILE_OUTPUT_TEXT = False
     config.TEXT_FIXUP = True
