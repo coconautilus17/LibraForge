@@ -1914,14 +1914,27 @@ def write_cue(chapters: list[dict[str, Any]], file_name: str = "audiobook") -> s
     return "\n".join(lines) + "\n"
 
 
-def chapter_sidecar_path(source: Path) -> Path:
+def _companion_path(source: Path, shared_name: str, loose_suffix: str) -> Path:
+    """Resolve a companion-file path for `source`: books living alone in
+    their own folder share one file named `shared_name`; an audio file
+    sharing a folder with siblings gets its own `<file><loose_suffix>` file
+    next to it instead.
+    """
     if source.is_dir():
-        return source / "libraforge.json"
+        return source / shared_name
     folder = source.parent
     audio_count = len([path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS])
     if audio_count <= 1:
-        return folder / "libraforge.json"
-    return source.with_name(source.name + ".libraforge.json")
+        return folder / shared_name
+    return source.with_name(source.name + loose_suffix)
+
+
+def chapter_sidecar_path(source: Path) -> Path:
+    return _companion_path(source, "libraforge.json", ".libraforge.json")
+
+
+def metadata_json_path(source: Path) -> Path:
+    return _companion_path(source, "metadata.json", ".metadata.json")
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

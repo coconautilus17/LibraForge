@@ -81,6 +81,7 @@ from app.chaptering import (
     HYBRID_LLM_REVIEW_INSTRUCTIONS,
     chapter_sidecar_path,
     load_existing_result as load_existing_chapter_result,
+    metadata_json_path as chapter_metadata_json_path,
     save_result as save_chapter_result,
     write_cue as write_chapter_cue,
 )
@@ -4196,24 +4197,40 @@ def resolve_asin_for_chaptering(source: Path, override: str = "") -> str:
     else whatever the book's existing sidecar (Fixer/Manual Review) already
     recorded -- book.asin (the curated location) or marker.audible.asin
     (Fixer's raw marker), the same fallback chain sidecar_to_form() uses.
+
+    Books that only ever went through Folder Forge/library-scan (never the
+    Fixer) have no `book`/`marker` section in libraforge.json at all -- their
+    ASIN lives only in the sibling Audiobookshelf metadata.json instead, so
+    that's checked as a last resort. Confirmed live on ~15.6% of the real
+    library (468/2992 organized single-file books).
     """
     override = (override or "").strip()
     if override:
         return override.upper()
     sidecar_path = chapter_sidecar_path(source)
-    if not sidecar_path.exists():
-        return ""
-    try:
-        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
-        sidecar = sidecar["sidecar"]
-    book = sidecar.get("book", {}) or {}
-    marker = sidecar.get("marker", {}) or {}
-    audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
-    asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
-    return asin.upper()
+    if sidecar_path.exists():
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            sidecar = {}
+        if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
+            sidecar = sidecar["sidecar"]
+        book = sidecar.get("book", {}) or {}
+        marker = sidecar.get("marker", {}) or {}
+        audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
+        asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
+        if asin:
+            return asin.upper()
+    metadata_path = chapter_metadata_json_path(source)
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = {}
+        asin = str(metadata.get("asin") or "").strip()
+        if asin:
+            return asin.upper()
+    return ""
 
 
 def run_audible_chapters_backend(run_id: str, req: ChapteringRunRequest) -> None:

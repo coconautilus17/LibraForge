@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.main import ChapteringRunRequest, RunState, resolve_asin_for_chaptering, run_audible_chapters_backend
+from app.chaptering import metadata_json_path
 
 client = TestClient(main_module.app)
 
@@ -57,6 +58,71 @@ class ResolveAsinForChapteringTests(unittest.TestCase):
                 json.dumps({"book": {"title": "Some Book"}}), encoding="utf-8"
             )
             self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
+
+    def test_falls_back_to_sibling_metadata_json_when_sidecar_has_no_book_section(self):
+        # Real-world bug found live on Divine Apostasy Book 2: books that
+        # only ever went through Folder Forge/library-scan (never the
+        # Fixer) have no book/marker section in libraforge.json at all --
+        # only an unrelated scan_cache.asin sentinel ("HAS_ASIN", not a real
+        # ASIN). The real ASIN sits in the sibling Audiobookshelf
+        # metadata.json instead. Confirmed on 468/2992 real library books.
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "libraforge.json").write_text(
+                json.dumps({"schema_version": 1, "scan_cache": {"asin": "HAS_ASIN"}}),
+                encoding="utf-8",
+            )
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"title": "Some Book", "asin": "B0METAJSON"}), encoding="utf-8"
+            )
+            self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0METAJSON")
+
+    def test_sidecar_book_asin_wins_over_metadata_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "libraforge.json").write_text(
+                json.dumps({"book": {"asin": "B0FROMSIDECAR"}}), encoding="utf-8"
+            )
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"asin": "B0FROMMETADATA"}), encoding="utf-8"
+            )
+            self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0FROMSIDECAR")
+
+    def test_no_sidecar_falls_back_to_metadata_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"asin": "B0NOSIDECAR"}), encoding="utf-8"
+            )
+            self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0NOSIDECAR")
+
+    def test_neither_sidecar_nor_metadata_json_has_asin_returns_empty(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "libraforge.json").write_text(
+                json.dumps({"scan_cache": {"asin": "HAS_ASIN"}}), encoding="utf-8"
+            )
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"title": "Some Book"}), encoding="utf-8"
+            )
+            self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
+
+    def test_metadata_json_path_matches_chapter_sidecar_folder_rule(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            self.assertEqual(metadata_json_path(source), Path(root) / "metadata.json")
+
+    def test_metadata_json_path_uses_loose_suffix_for_multi_file_folders(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "part1.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "part2.mp3").write_bytes(b"")
+            self.assertEqual(metadata_json_path(source), Path(root) / "part1.mp3.metadata.json")
 
 
 class RunAudibleChaptersBackendTests(unittest.TestCase):
