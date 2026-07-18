@@ -542,12 +542,17 @@ function renderManualFsSearchResults(data) {
   // search, including the persistent "ready" count.
   renderManualFsSearchIndexMarker({ status: data.index_status, book_count: data.book_count });
   const container = $('manualFsSearchResults');
-  container.innerHTML = data.results.map((item) => `
+  container.innerHTML = data.results.map((item) => {
+    const ebookBadge = item.media_type === 'ebook'
+      ? ` <span class="badge">${escapeHtml(item.formats.map((f) => f.toUpperCase()).join('+'))}</span>`
+      : '';
+    return `
     <div class="manual-fs-search-result-row" data-path="${escapeHtml(item.path)}">
-      <div class="manual-fs-search-result-name">${escapeHtml(item.name)}</div>
+      <div class="manual-fs-search-result-name">${escapeHtml(item.name)}${ebookBadge}</div>
       <div class="manual-fs-search-result-path">${escapeHtml(item.path)}</div>
     </div>
-  `).join('');
+  `;
+  }).join('');
   container.querySelectorAll('.manual-fs-search-result-row').forEach((row) => {
     row.addEventListener('click', () => {
       const path = row.dataset.path;
