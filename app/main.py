@@ -1408,6 +1408,11 @@ class ChapteringSaveRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChapteringAudibleCompareRequest(BaseModel):
+    source_path: str
+    asin: str = Field(default="", max_length=32)
+
+
 class OrganizerRunRequest(BaseModel):
     root_path: str = Field(default="/audiobooks/_unorganized")
     destination_root: str = Field(default="/audiobooks")
@@ -7823,6 +7828,43 @@ def save_chaptering(req: ChapteringSaveRequest) -> dict[str, Any]:
             transcript_text = ""
     artifacts = save_chapter_result(source, payload, transcript=transcript_text)
     return {"result": payload, "artifacts": artifacts, "cue": write_chapter_cue(chapters, source.name)}
+
+
+@app.post("/api/chaptering/audible-compare")
+def audible_compare_chapters(req: ChapteringAudibleCompareRequest) -> dict[str, Any]:
+    """Read-only lookup for the "Compare to Audible" panel -- fetches
+    Audible's chapter list for comparison against whatever's currently
+    loaded in the editor, without saving or mutating the sidecar. Distinct
+    from the audible-chapters detection backend, which does save.
+    """
+    source = validate_audiobook_path(req.source_path)
+    asin = resolve_asin_for_chaptering(source, req.asin)
+    if not asin:
+        raise HTTPException(
+            status_code=400,
+            detail="No ASIN found in the existing sidecar and none provided.",
+        )
+    auth = audible.Authenticator.from_file(DEFAULT_AUTH_FILE)
+    client = audible.Client(auth=auth)
+    raw_chapters = audible_lookup_chapters(client, asin)
+    if raw_chapters is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Audible has no verified chapter data for ASIN {asin}.",
+        )
+    chapters = []
+    for index, raw in enumerate(raw_chapters, start=1):
+        start = raw["start_ms"] / 1000.0
+        end = start + raw["length_ms"] / 1000.0
+        chapters.append(
+            {
+                "id": index,
+                "title": raw["title"] or f"Chapter {index}",
+                "start": round(start, 3),
+                "end": round(end, 3),
+            }
+        )
+    return {"asin": asin, "chapters": chapters}
 
 
 @app.get("/api/chaptering/audio")

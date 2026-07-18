@@ -4333,6 +4333,56 @@ button.ghost:hover:not(:disabled) {
   background: var(--danger-soft);
 }
 
+.cf-compare-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cf-compare-item {
+  display: grid;
+  grid-template-columns: 36px 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  font-size: var(--font-xs);
+}
+
+.cf-compare-idx {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cf-compare-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cf-compare-label {
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.cf-compare-time {
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--text-soft);
+}
+
+.cf-compare-diff {
+  color: var(--warning);
+  font-weight: 600;
+}
+
 .cf-run-log-toggle {
   margin-top: 10px;
 }
@@ -4628,6 +4678,17 @@ button.ghost:hover:not(:disabled) {
   border-radius: 999px;
   padding: 3px 8px;
   font-variant-numeric: tabular-nums;
+}
+
+.conf-audible {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+  font-size: var(--font-2xs);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 3px 8px;
 }
 
 .row-actions {

@@ -58,6 +58,7 @@
         <a href="#run">Detection</a>
         <a href="#editor">Chapter editor</a>
         <a href="#live-output">Live output</a>
+        <a href="#audibleCompare">Compare to Audible</a>
         <a href="#aiReview">AI review</a>
         <a href="#artifacts">Artifacts</a>
       </aside>
@@ -301,6 +302,14 @@
               <tbody id="chapterRows"></tbody>
             </table>
           </div>
+        </section>
+
+        <section id="audibleCompare" class="card side-nav-card">
+          <div class="run-settings-heading">
+            <h2>Compare to Audible</h2>
+            <button id="compareAudibleBtn" class="secondary" type="button">Compare to Audible</button>
+          </div>
+          <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p></div>
         </section>
 
         <section id="aiReview" class="card side-nav-card">

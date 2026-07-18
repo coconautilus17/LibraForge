@@ -167,5 +167,62 @@ class ChapteringRunsAcceptsAudibleBackendTests(unittest.TestCase):
                 mock_thread.assert_called_once()
 
 
+class AudibleCompareEndpointTests(unittest.TestCase):
+    """The read-only /api/chaptering/audible-compare endpoint used by the
+    "Compare to Audible" panel -- must never save/mutate the sidecar, unlike
+    the audible-chapters detection backend."""
+
+    def test_returns_chapters_without_writing_sidecar(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "book.mp3"
+            source.write_bytes(b"")
+            raw_chapters = [
+                {"title": "Ch 1", "start_ms": 0, "length_ms": 60000},
+                {"title": "Ch 2", "start_ms": 60000, "length_ms": 30000},
+            ]
+            with patch.object(main_module, "AUDIOBOOKS_ROOT", root_path), \
+                 patch.object(main_module.audible.Authenticator, "from_file", return_value=MagicMock()), \
+                 patch.object(main_module.audible, "Client", return_value=MagicMock()), \
+                 patch.object(main_module, "audible_lookup_chapters", return_value=raw_chapters):
+                response = client.post(
+                    "/api/chaptering/audible-compare",
+                    json={"source_path": str(source), "asin": "B0COMPARETEST"},
+                )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["asin"], "B0COMPARETEST")
+            self.assertEqual(len(data["chapters"]), 2)
+            self.assertEqual(data["chapters"][0], {"id": 1, "title": "Ch 1", "start": 0.0, "end": 60.0})
+            self.assertFalse((root_path / "libraforge.json").exists())
+
+    def test_no_asin_returns_400(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "book.mp3"
+            source.write_bytes(b"")
+            with patch.object(main_module, "AUDIOBOOKS_ROOT", root_path):
+                response = client.post(
+                    "/api/chaptering/audible-compare",
+                    json={"source_path": str(source)},
+                )
+            self.assertEqual(response.status_code, 400)
+
+    def test_no_verified_chapter_data_returns_404(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            source = root_path / "book.mp3"
+            source.write_bytes(b"")
+            with patch.object(main_module, "AUDIOBOOKS_ROOT", root_path), \
+                 patch.object(main_module.audible.Authenticator, "from_file", return_value=MagicMock()), \
+                 patch.object(main_module.audible, "Client", return_value=MagicMock()), \
+                 patch.object(main_module, "audible_lookup_chapters", return_value=None):
+                response = client.post(
+                    "/api/chaptering/audible-compare",
+                    json={"source_path": str(source), "asin": "B0NOTFOUND"},
+                )
+            self.assertEqual(response.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

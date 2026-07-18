@@ -648,11 +648,13 @@ function renderChapters() {
     tr.className = `chapter-row${isFlagged ? ' flagged' : ''}`;
     tr.id = `chapter-row-${chapter.id}`;
     tr.hidden = shouldHide;
-    const confidenceCell = chapter.confidence == null
-      ? '<span class="conf-clean">manual</span>'
-      : isFlagged
-        ? `<span class="conf-flag">&#9888; ${Math.round(Number(chapter.confidence) * 100)}%</span>`
-        : `<span class="conf-clean">${Math.round(Number(chapter.confidence) * 100)}%</span>`;
+    const confidenceCell = chapter.source === 'audible'
+      ? '<span class="conf-audible" title="From Audible&#8217;s own chapter data, not detected or hand-edited">Audible</span>'
+      : chapter.confidence == null
+        ? '<span class="conf-clean">manual</span>'
+        : isFlagged
+          ? `<span class="conf-flag">&#9888; ${Math.round(Number(chapter.confidence) * 100)}%</span>`
+          : `<span class="conf-clean">${Math.round(Number(chapter.confidence) * 100)}%</span>`;
     const cleanTitle = cleanTitleText(chapter);
     const showCleanBtn = cleanTitle && cleanTitle !== (chapter.title || '').trim();
     tr.innerHTML = `
@@ -820,6 +822,91 @@ function renderRunLog(entries) {
   `).join('');
 }
 
+async function compareToAudible() {
+  const btn = $('compareAudibleBtn');
+  const body = $('audibleCompareBody');
+  if (!loaded?.source_path) {
+    body.innerHTML = '<p class="note">Load a source first.</p>';
+    return;
+  }
+  collectRows();
+  btn.disabled = true;
+  btn.textContent = 'Comparing…';
+  try {
+    const res = await fetch('/api/chaptering/audible-compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: loaded.source_path, asin: $('audibleAsin').value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      body.innerHTML = `<p class="note" style="color:var(--danger)">${escapeHtml(data.detail || 'Comparison failed.')}</p>`;
+      return;
+    }
+    renderAudibleCompareResult(data);
+  } catch (err) {
+    body.innerHTML = `<p class="note" style="color:var(--danger)">${escapeHtml(String(err))}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Compare to Audible';
+  }
+}
+
+function renderAudibleCompareResult(data) {
+  const body = $('audibleCompareBody');
+  const current = chapters;
+  const audibleChapters = data.chapters || [];
+  const maxLen = Math.max(current.length, audibleChapters.length);
+  const rows = [];
+  const timeToleranceSeconds = 2;
+
+  for (let i = 0; i < maxLen; i += 1) {
+    const cur = current[i];
+    const aud = audibleChapters[i];
+    if (!cur || !aud) {
+      rows.push({ index: i + 1, cur, aud, titleDiffers: true, timeDiffers: true });
+      continue;
+    }
+    const titleDiffers = (cur.title || '').trim().toLowerCase() !== (aud.title || '').trim().toLowerCase();
+    const timeDiffers = Math.abs(Number(cur.start || 0) - Number(aud.start || 0)) > timeToleranceSeconds;
+    if (titleDiffers || timeDiffers) {
+      rows.push({ index: i + 1, cur, aud, titleDiffers, timeDiffers });
+    }
+  }
+
+  const countLine = current.length === audibleChapters.length
+    ? `<b>${current.length}</b> chapters in both.`
+    : `<b>${current.length}</b> currently loaded vs <b>${audibleChapters.length}</b> from Audible (ASIN ${escapeHtml(data.asin || '')}).`;
+
+  if (rows.length === 0) {
+    body.innerHTML = `<p class="note">${countLine} Every chapter matches Audible's data (titles and start times within ${timeToleranceSeconds}s).</p>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <p class="note">${countLine} <b>${rows.length}</b> chapter(s) differ from Audible, matched by position (chapter 1 vs chapter 1, and so on -- a count mismatch will misalign the rest).</p>
+    <div class="cf-compare-list">
+      ${rows.map((row) => `
+        <div class="cf-compare-item">
+          <div class="cf-compare-idx">#${row.index}</div>
+          <div class="cf-compare-side">
+            <span class="cf-compare-label">Current</span>
+            ${row.cur
+    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.cur.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.cur.start))}</span>`
+    : '<span class="cf-compare-diff">missing</span>'}
+          </div>
+          <div class="cf-compare-side">
+            <span class="cf-compare-label">Audible</span>
+            ${row.aud
+    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.aud.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.aud.start))}</span>`
+    : '<span class="cf-compare-diff">missing</span>'}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 function renderAiReview() {
   const body = $('aiReviewBody');
   if (!body) return;
@@ -946,6 +1033,11 @@ function applyResult(data) {
   renderArtifacts(data?.stats?.artifacts || data?.artifacts || {});
   renderAiReview();
   renderRunLog();
+  resetAudibleCompare();
+}
+
+function resetAudibleCompare() {
+  $('audibleCompareBody').innerHTML = '<p class="note">Compares whatever\'s currently loaded in the chapter editor above against Audible\'s own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p>';
 }
 
 async function loadChapters() {
@@ -969,6 +1061,7 @@ async function loadChapters() {
   renderArtifacts({});
   renderAiReview();
   renderRunLog();
+  resetAudibleCompare();
   $('loadStatus').textContent = data.result
     ? `Loaded existing chapters for ${data.source_path}`
     : `Source loaded with ${data.audio_files.length} audio file(s). No chapter artifact found.`;
@@ -1302,6 +1395,7 @@ async function init() {
   $('addChapterBtn').addEventListener('click', addChapter);
   $('playAllBtn').addEventListener('click', togglePlayAll);
   $('cleanAllTitlesBtn').addEventListener('click', cleanAllTitles);
+  $('compareAudibleBtn').addEventListener('click', compareToAudible);
   $('confidenceMode').addEventListener('change', (event) => {
     confidenceMode = event.target.value;
     renderChapters();
