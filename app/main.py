@@ -5571,6 +5571,50 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
     return {"queries": [title], "results": results}
 
 
+def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> dict[str, Any] | None:
+    """Open-Library-primary, Goodreads-backfill metadata lookup for an ebook.
+
+    Open Library is used first. A missing result, or a top result with a
+    blank cover_url/summary, is backfilled from Goodreads via abs-tract --
+    live-testing (see docs/superpowers/specs/2026-07-18-ebook-support-design.md)
+    showed Goodreads fills exactly those two fields far more consistently
+    than Open Library does. Only descriptive fields are backfilled: title/
+    author identity always stays whatever Open Library reported when it
+    reported anything at all. Returns None if both sources come back empty.
+    """
+    try:
+        primary = search_abs_candidates(title=title, author=author, provider="openlibrary", limit=limit)
+    except HTTPException:
+        primary = {"results": []}
+    top = primary["results"][0] if primary["results"] else None
+
+    needs_backfill = top is None or not top.get("cover_url") or not top.get("summary")
+    if needs_backfill:
+        abs_tract_config = _load_abs_tract_config()
+        if abs_tract_config.get("url"):
+            try:
+                fallback = search_abs_tract_candidates(
+                    query=title,
+                    author=author,
+                    base_url=abs_tract_config["url"],
+                    provider="goodreads",
+                    kindle_region=abs_tract_config.get("kindle_region", "us"),
+                    limit=limit,
+                )
+                fallback_results = fallback["results"]
+            except HTTPException:
+                fallback_results = []
+            fb_top = fallback_results[0] if fallback_results else None
+            if fb_top:
+                if top is None:
+                    top = fb_top
+                else:
+                    for field_name in ("cover_url", "summary"):
+                        if not top.get(field_name) and fb_top.get(field_name):
+                            top[field_name] = fb_top[field_name]
+    return top
+
+
 class AbsSearchRequest(BaseModel):
     query: str
     author: str = ""
