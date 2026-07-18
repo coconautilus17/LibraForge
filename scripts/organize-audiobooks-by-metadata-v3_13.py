@@ -118,6 +118,9 @@ COMPANION_SUFFIXES = (
     ".cover-backup.png",
     ".m4b-tool-metadata.json",
     ".metadata.json",
+    ".libraforge-chapters.srt",
+    ".libraforge-chapters.cue",
+    ".libraforge-ai-review.md",
 )
 
 # Optional ebook/sidecar companions when they clearly share the audio stem.
