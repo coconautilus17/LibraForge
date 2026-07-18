@@ -1,0 +1,73 @@
+# Unified image: m4b-tool's real CLI (normally Alpine-only) + faster-whisper
+# (normally Debian-only, no manylinux/musl wheels for ctranslate2). m4b-tool
+# itself is a portable PHP phar with no libc dependency of its own, so the
+# Debian base just needs a PHP runtime + the phar. The one native-binary gap
+# is mp4v2 (mp4chaps/mp4art/mp4info/mp4tags) plus fdkaac and tone, which have
+# no Debian package (mp4v2 was dropped from Debian's repos) -- those are
+# copied from the upstream Alpine image along with the musl libs they need,
+# isolated under /opt/musl-* so they don't collide with Debian's own glibc
+# libraries of the same name.
+
+FROM sandreas/m4b-tool@sha256:3154399019ed6a2d26fd477f71a1367e4c60e605d0188699028ad3444afd3c70 AS m4btool-source
+
+FROM m4btool-source AS m4btool-patch
+COPY scripts/patch-m4b-tool-cuesheet.php /tmp/patch-m4b-tool-cuesheet.php
+RUN cp /usr/local/bin/m4b-tool /tmp/m4b-tool.phar \
+    && php -d phar.readonly=0 /tmp/patch-m4b-tool-cuesheet.php /tmp/m4b-tool.phar
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SCRIPTS_DIR=/app/scripts \
+    REPORTS_DIR=/app/reports \
+    AUDIOBOOKS_ROOT=/audiobooks \
+    HF_HOME=/models \
+    XDG_CACHE_HOME=/models \
+    PATH=/opt/venv/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg libgomp1 \
+        php-cli php-xml php-mbstring php-curl php-zip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv
+
+# musl loader must land at this exact absolute path -- it's the ELF
+# interpreter baked into the Alpine binaries' headers, not something PATH or
+# LD_LIBRARY_PATH can redirect.
+COPY --from=m4btool-source /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+
+RUN mkdir -p /opt/musl-libs /opt/musl-bin
+COPY --from=m4btool-source /usr/local/lib/libmp4v2.so.2 /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /lib/libz.so.1 /opt/musl-libs/
+COPY --from=m4btool-source \
+    /usr/local/bin/mp4chaps /usr/local/bin/mp4art /usr/local/bin/mp4info \
+    /usr/local/bin/mp4tags /usr/local/bin/fdkaac /usr/local/bin/tone \
+    /opt/musl-bin/
+COPY --from=m4btool-patch /tmp/m4b-tool.phar /usr/local/bin/m4b-tool.phar
+
+RUN for bin in mp4chaps mp4art mp4info mp4tags fdkaac tone; do \
+        printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/opt/musl-libs /opt/musl-bin/%s "$@"\n' "$bin" > /usr/local/bin/$bin; \
+        chmod +x /usr/local/bin/$bin /opt/musl-bin/$bin; \
+    done \
+    && printf '#!/bin/sh\nexec php /usr/local/bin/m4b-tool.phar "$@"\n' > /usr/local/bin/m4b-tool \
+    && chmod +x /usr/local/bin/m4b-tool
+
+WORKDIR /app
+COPY requirements.txt requirements-chaptering.txt /app/
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt \
+    && pip install --no-cache-dir -r /app/requirements-chaptering.txt
+
+COPY app /app/app
+COPY scripts /app/scripts
+COPY config /app/config
+
+RUN mkdir -p /app/reports /auth /models \
+    && chmod -R 0777 /app/reports /auth /app/config /models
+
+USER 1000:1000
+
+EXPOSE 5056
+ENTRYPOINT []
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5056"]
