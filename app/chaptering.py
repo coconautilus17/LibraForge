@@ -1890,14 +1890,24 @@ def detect_chapters_hybrid(
     return result
 
 
+def cue_timecode(seconds: float) -> str:
+    """mm:ss:mmm as expected by the CUE INDEX field (no hours component)."""
+    seconds = max(0.0, float(seconds))
+    whole = int(seconds)
+    ms = int(round((seconds - whole) * 1000))
+    if ms >= 1000:
+        whole += 1
+        ms -= 1000
+    minutes, sec = divmod(whole, 60)
+    return f"{minutes:02}:{sec:02}:{ms:03}"
+
+
 def write_cue(chapters: list[dict[str, Any]], file_name: str = "audiobook") -> str:
     lines = [f'FILE "{file_name}" MP3']
     for chapter in chapters:
         lines.append(f"TRACK {int(chapter['id']):02d} AUDIO")
         lines.append(f'  TITLE "{chapter.get("title", "")}"')
-        lines.append(f"  START {hms(float(chapter.get('start', 0.0)))}")
-        if chapter.get("end") is not None:
-            lines.append(f"  END {hms(float(chapter.get('end', 0.0)))}")
+        lines.append(f"  INDEX 01 {cue_timecode(float(chapter.get('start', 0.0)))}")
     return "\n".join(lines) + "\n"
 
 
