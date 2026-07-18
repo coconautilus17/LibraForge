@@ -843,7 +843,7 @@ async function compareToAudible() {
       body.innerHTML = `<p class="note" style="color:var(--danger)">${escapeHtml(data.detail || 'Comparison failed.')}</p>`;
       return;
     }
-    renderAudibleCompareResult(data);
+    renderChapterDiff(body, 'Current', chapters, `Audible (ASIN ${data.asin || ''})`, data.chapters || []);
   } catch (err) {
     body.innerHTML = `<p class="note" style="color:var(--danger)">${escapeHtml(String(err))}</p>`;
   } finally {
@@ -852,53 +852,50 @@ async function compareToAudible() {
   }
 }
 
-function renderAudibleCompareResult(data) {
-  const body = $('audibleCompareBody');
-  const current = chapters;
-  const audibleChapters = data.chapters || [];
-  const maxLen = Math.max(current.length, audibleChapters.length);
+function renderChapterDiff(container, labelA, chaptersA, labelB, chaptersB) {
+  const maxLen = Math.max(chaptersA.length, chaptersB.length);
   const rows = [];
   const timeToleranceSeconds = 2;
 
   for (let i = 0; i < maxLen; i += 1) {
-    const cur = current[i];
-    const aud = audibleChapters[i];
-    if (!cur || !aud) {
-      rows.push({ index: i + 1, cur, aud, titleDiffers: true, timeDiffers: true });
+    const a = chaptersA[i];
+    const b = chaptersB[i];
+    if (!a || !b) {
+      rows.push({ index: i + 1, a, b, titleDiffers: true, timeDiffers: true });
       continue;
     }
-    const titleDiffers = (cur.title || '').trim().toLowerCase() !== (aud.title || '').trim().toLowerCase();
-    const timeDiffers = Math.abs(Number(cur.start || 0) - Number(aud.start || 0)) > timeToleranceSeconds;
+    const titleDiffers = (a.title || '').trim().toLowerCase() !== (b.title || '').trim().toLowerCase();
+    const timeDiffers = Math.abs(Number(a.start || 0) - Number(b.start || 0)) > timeToleranceSeconds;
     if (titleDiffers || timeDiffers) {
-      rows.push({ index: i + 1, cur, aud, titleDiffers, timeDiffers });
+      rows.push({ index: i + 1, a, b, titleDiffers, timeDiffers });
     }
   }
 
-  const countLine = current.length === audibleChapters.length
-    ? `<b>${current.length}</b> chapters in both.`
-    : `<b>${current.length}</b> currently loaded vs <b>${audibleChapters.length}</b> from Audible (ASIN ${escapeHtml(data.asin || '')}).`;
+  const countLine = chaptersA.length === chaptersB.length
+    ? `<b>${chaptersA.length}</b> chapters in both.`
+    : `<b>${chaptersA.length}</b> from ${escapeHtml(labelA)} vs <b>${chaptersB.length}</b> from ${escapeHtml(labelB)}.`;
 
   if (rows.length === 0) {
-    body.innerHTML = `<p class="note">${countLine} Every chapter matches Audible's data (titles and start times within ${timeToleranceSeconds}s).</p>`;
+    container.innerHTML = `<p class="note">${countLine} Every chapter matches (titles and start times within ${timeToleranceSeconds}s).</p>`;
     return;
   }
 
-  body.innerHTML = `
-    <p class="note">${countLine} <b>${rows.length}</b> chapter(s) differ from Audible, matched by position (chapter 1 vs chapter 1, and so on -- a count mismatch will misalign the rest).</p>
+  container.innerHTML = `
+    <p class="note">${countLine} <b>${rows.length}</b> chapter(s) differ, matched by position (chapter 1 vs chapter 1, and so on -- a count mismatch will misalign the rest).</p>
     <div class="cf-compare-list">
       ${rows.map((row) => `
         <div class="cf-compare-item">
           <div class="cf-compare-idx">#${row.index}</div>
           <div class="cf-compare-side">
-            <span class="cf-compare-label">Current</span>
-            ${row.cur
-    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.cur.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.cur.start))}</span>`
+            <span class="cf-compare-label">${escapeHtml(labelA)}</span>
+            ${row.a
+    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.a.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.a.start))}</span>`
     : '<span class="cf-compare-diff">missing</span>'}
           </div>
           <div class="cf-compare-side">
-            <span class="cf-compare-label">Audible</span>
-            ${row.aud
-    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.aud.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.aud.start))}</span>`
+            <span class="cf-compare-label">${escapeHtml(labelB)}</span>
+            ${row.b
+    ? `<span class="${row.titleDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(row.b.title || '')}</span> <span class="cf-compare-time ${row.timeDiffers ? 'cf-compare-diff' : ''}">${escapeHtml(secondsToStamp(row.b.start))}</span>`
     : '<span class="cf-compare-diff">missing</span>'}
           </div>
         </div>
@@ -1068,11 +1065,11 @@ async function loadChapters() {
   updateEtaStatus();
 }
 
-async function startDetection() {
-  stopPlayAll();
-  const body = {
+function buildDetectionRequestBody(backend, noSave = false) {
+  return {
     source_path: $('sourcePath').value.trim(),
-    backend: getBackend(),
+    backend,
+    no_save: noSave,
     asin: $('audibleAsin').value.trim(),
     remote_endpoint: $('remoteEndpoint').value.trim(),
     llm_review: $('llmReview')?.checked || false,
@@ -1105,6 +1102,11 @@ async function startDetection() {
     max_swap_growth_percent: parseFloat($('maxSwapGrowthPercent').value || '10'),
     max_cpu_percent: parseFloat($('maxCpuPercent').value || '100'),
   };
+}
+
+async function startDetection() {
+  stopPlayAll();
+  const body = buildDetectionRequestBody(getBackend(), false);
   const res = await fetch('/api/chaptering/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1121,6 +1123,76 @@ async function startDetection() {
   $('detectBtn').disabled = true;
   $('cancelBtn').disabled = false;
   pollRun();
+}
+
+const BACKEND_LABELS = {
+  'hybrid-sos-focused': 'Hybrid',
+  'faster-whisper': 'Full transcription',
+  'audible-chapters': 'Audible chapters',
+};
+
+async function runDetectionForCompare(backend, onProgress) {
+  const body = buildDetectionRequestBody(backend, true);
+  const res = await fetch('/api/chaptering/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const started = await res.json();
+  if (!res.ok) {
+    throw new Error(started.detail || `Failed to start ${BACKEND_LABELS[backend] || backend}`);
+  }
+  const runId = started.id;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const pollRes = await fetch(`/api/runs/${runId}`);
+    const data = await pollRes.json();
+    if (!pollRes.ok) {
+      throw new Error(data.detail || `Lost track of the ${BACKEND_LABELS[backend] || backend} run`);
+    }
+    if (onProgress) onProgress(data);
+    if (data.status === 'completed') {
+      const result = data.stats?.chaptering_result || {};
+      return result.chapters || [];
+    }
+    if (data.status === 'failed' || data.status === 'cancelled') {
+      throw new Error(data.error || `${BACKEND_LABELS[backend] || backend} run ${data.status}`);
+    }
+  }
+}
+
+async function runMethodComparison() {
+  const methodA = $('compareMethodA').value;
+  const methodB = $('compareMethodB').value;
+  const statusEl = $('compareMethodsStatus');
+  const resultEl = $('compareMethodsResult');
+  const btn = $('runMethodComparisonBtn');
+  if (!$('sourcePath').value.trim()) {
+    statusEl.textContent = 'Load a source first.';
+    return;
+  }
+  if (methodA === methodB) {
+    statusEl.textContent = 'Pick two different methods to compare.';
+    return;
+  }
+  resultEl.innerHTML = '';
+  btn.disabled = true;
+  try {
+    statusEl.textContent = `Running ${BACKEND_LABELS[methodA]} (1 of 2)…`;
+    const chaptersA = await runDetectionForCompare(methodA, (data) => {
+      statusEl.textContent = `Running ${BACKEND_LABELS[methodA]} (1 of 2)… ${Math.round(Number(data.percent || 0))}%`;
+    });
+    statusEl.textContent = `Running ${BACKEND_LABELS[methodB]} (2 of 2)…`;
+    const chaptersB = await runDetectionForCompare(methodB, (data) => {
+      statusEl.textContent = `Running ${BACKEND_LABELS[methodB]} (2 of 2)… ${Math.round(Number(data.percent || 0))}%`;
+    });
+    statusEl.textContent = `Done. Ran sequentially, not concurrently, to avoid contending for the same CPU/ASR resources.`;
+    renderChapterDiff(resultEl, BACKEND_LABELS[methodA], chaptersA, BACKEND_LABELS[methodB], chaptersB);
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function firstPassMinutesPerAudioMinute() {
@@ -1396,6 +1468,7 @@ async function init() {
   $('playAllBtn').addEventListener('click', togglePlayAll);
   $('cleanAllTitlesBtn').addEventListener('click', cleanAllTitles);
   $('compareAudibleBtn').addEventListener('click', compareToAudible);
+  $('runMethodComparisonBtn').addEventListener('click', runMethodComparison);
   $('confidenceMode').addEventListener('change', (event) => {
     confidenceMode = event.target.value;
     renderChapters();

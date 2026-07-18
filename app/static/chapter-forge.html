@@ -59,6 +59,7 @@
         <a href="#editor">Chapter editor</a>
         <a href="#live-output">Live output</a>
         <a href="#audibleCompare">Compare to Audible</a>
+        <a href="#methodCompare">Compare methods</a>
         <a href="#aiReview">AI review</a>
         <a href="#artifacts">Artifacts</a>
       </aside>
@@ -310,6 +311,32 @@
             <button id="compareAudibleBtn" class="secondary" type="button">Compare to Audible</button>
           </div>
           <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p></div>
+        </section>
+
+        <section id="methodCompare" class="card side-nav-card">
+          <h2>Compare methods</h2>
+          <p class="note">Runs two detection methods back to back (never at the same time, to avoid contending for the same CPU/ASR resources) against the currently loaded source, without saving either result, then shows a side-by-side diff. Neither run affects the chapters currently loaded in the editor above.</p>
+          <div class="grid" style="margin-top: var(--space-md)">
+            <label><span class="field-label">Method A</span>
+              <select id="compareMethodA">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters">Audible chapters</option>
+              </select>
+            </label>
+            <label><span class="field-label">Method B</span>
+              <select id="compareMethodB">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters" selected>Audible chapters</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="runMethodComparisonBtn" type="button">Run comparison</button>
+          </div>
+          <p id="compareMethodsStatus" class="note"></p>
+          <div id="compareMethodsResult"></div>
         </section>
 
         <section id="aiReview" class="card side-nav-card">
