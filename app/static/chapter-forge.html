@@ -253,6 +253,7 @@
             <label><input id="silenceSnap" type="checkbox" checked /> Snap to nearby silence <span class="info-tip" data-tooltip="After markers are found, move starts to nearby silence boundaries when available."></span></label>
             <label><input id="saveFullTranscript" type="checkbox" /> Save transcript artifact <span class="info-tip" data-tooltip="Writes the transcript segments produced by the selected path."></span></label>
             <label><input id="focusedRescan" type="checkbox" checked /> Rescan sequence gaps <span class="info-tip" data-tooltip="Runs focused ASR around missing chapter-number gaps, on either backend."></span></label>
+            <label id="sosNumbersOnlyRow" class="cf-hybrid-only" hidden><input id="sosNumbersOnly" type="checkbox" /> Bare-number chapter markers <span class="info-tip" data-tooltip="Detect spoken numbers ('One.', 'Two.'...) as chapter starts instead of the word 'Chapter'. Use when the narrator never says 'Chapter' aloud -- check Audible's own chapter titles first to confirm this is the case."></span></label>
             <label id="llmReviewRow" class="cf-hybrid-only" hidden><input id="llmReview" type="checkbox" /> LLM review names <span class="info-tip" data-tooltip="Sends text evidence to the configured LLM to review titles and obvious parse issues. The deterministic validator still controls timestamps."></span></label>
             <label><input id="resourceGuard" type="checkbox" checked /> Stop when resources hit limits <span class="info-tip" data-tooltip="Monitors RAM, swap, and CPU during local runs and stops before the server becomes unresponsive."></span></label>
           </div>
@@ -353,6 +354,6 @@
     </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-6"></script>
-  <script src="/static/chapter-forge.js?v=20260718-2"></script>
+  <script src="/static/chapter-forge.js?v=20260718-3"></script>
 </body>
 </html>

@@ -1290,6 +1290,7 @@ def _sos_rows_to_candidates(rows: list[dict[str, Any]]) -> list[ChapterCandidate
 def _run_sound_of_silence(
     source: Path,
     *,
+    numbers_only: bool = False,
     progress: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], float, int, list[ChapterCandidate]]:
@@ -1307,7 +1308,7 @@ def _run_sound_of_silence(
     config.SILENCE_THRESHOLD = "-30dB"
     config.SILENCE_DURATION = 2.5
     config.SNIPPET_DURATION = 5
-    config.TARGET_NUMBERS_ONLY = False
+    config.TARGET_NUMBERS_ONLY = numbers_only
     config.TARGET_FIRST_WORD_ONLY = True
     config.TARGET_WORDS = list(MARKER_WORDS)
     config.FILE_OUTPUT = False
@@ -1746,6 +1747,7 @@ def detect_chapters_hybrid(
     llm_endpoint: str = DEFAULT_OLLAMA_ENDPOINT,
     llm_model: str = "gemma4:latest",
     llm_extra_instructions: str = "",
+    sos_numbers_only: bool = False,
     progress: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -1754,6 +1756,7 @@ def detect_chapters_hybrid(
         raise RuntimeError("No supported audio files found")
     rows, duration, silence_count, candidates = _run_sound_of_silence(
         source,
+        numbers_only=sos_numbers_only,
         progress=progress,
         should_cancel=should_cancel,
     )

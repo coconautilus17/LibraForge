@@ -1374,6 +1374,7 @@ class ChapteringRunRequest(BaseModel):
     silence_snap: bool = True
     silence_window: float = Field(default=4.0, ge=0.0, le=20.0)
     silence_marker_lead_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
+    sos_numbers_only: bool = False
     stable_ts: bool = False
     save_full_transcript: bool = False
     focused_rescan: bool = True
@@ -4529,6 +4530,7 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
                     "silence_snap": req.silence_snap,
                     "silence_window": req.silence_window,
                     "silence_marker_lead_seconds": req.silence_marker_lead_seconds,
+                    "sos_numbers_only": req.sos_numbers_only,
                     "stable_ts": req.stable_ts,
                     "save_full_transcript": req.save_full_transcript,
                     "focused_rescan": req.focused_rescan,

@@ -1095,6 +1095,7 @@ function buildDetectionRequestBody(backend, noSave = false) {
     silence_snap: $('silenceSnap').checked,
     silence_window: parseFloat($('silenceWindow').value || '4'),
     silence_marker_lead_seconds: parseFloat($('silenceMarkerLeadSeconds').value || '1'),
+    sos_numbers_only: $('sosNumbersOnly')?.checked || false,
     save_full_transcript: $('saveFullTranscript').checked,
     focused_rescan: $('focusedRescan').checked,
     focused_model: $('focusedModel').value.trim(),

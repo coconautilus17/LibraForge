@@ -33,6 +33,7 @@ def main() -> int:
             llm_endpoint=str(config.get("llm_endpoint") or ""),
             llm_model=str(config.get("llm_model") or "gemma4:latest"),
             llm_extra_instructions=str(config.get("llm_extra_instructions") or ""),
+            sos_numbers_only=bool(config.get("sos_numbers_only")),
             progress=progress,
         )
     else:
