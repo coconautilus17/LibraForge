@@ -62,6 +62,7 @@ from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
     audible_lookup_by_asin,
+    audible_lookup_chapters,
 )
 from app.fixer.search import audible_search as fixer_audible_search
 from app.m4b_naming import canonical_m4b_title
@@ -78,6 +79,7 @@ from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_
 from app.chaptering import (
     ChapterDetectionCancelled,
     HYBRID_LLM_REVIEW_INSTRUCTIONS,
+    chapter_sidecar_path,
     load_existing_result as load_existing_chapter_result,
     save_result as save_chapter_result,
     write_cue as write_chapter_cue,
@@ -1354,6 +1356,7 @@ class M4BRunRequest(BaseModel):
 class ChapteringRunRequest(BaseModel):
     source_path: str = Field(default="/audiobooks")
     backend: str = "faster-whisper"
+    asin: str = Field(default="", max_length=32)
     remote_endpoint: str = ""
     llm_review: bool = False
     llm_endpoint: str = "http://192.168.1.50:11434"
@@ -4181,8 +4184,149 @@ def run_m4b_worker(run_id: str, req: M4BRunRequest) -> None:
             runs.pop(run_id, None)
 
 
+def resolve_asin_for_chaptering(source: Path, override: str = "") -> str:
+    """ASIN to use for an Audible chapters lookup: an explicit override first,
+    else whatever the book's existing sidecar (Fixer/Manual Review) already
+    recorded -- book.asin (the curated location) or marker.audible.asin
+    (Fixer's raw marker), the same fallback chain sidecar_to_form() uses.
+    """
+    override = (override or "").strip()
+    if override:
+        return override.upper()
+    sidecar_path = chapter_sidecar_path(source)
+    if not sidecar_path.exists():
+        return ""
+    try:
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
+        sidecar = sidecar["sidecar"]
+    book = sidecar.get("book", {}) or {}
+    marker = sidecar.get("marker", {}) or {}
+    audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
+    asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
+    return asin.upper()
+
+
+def run_audible_chapters_backend(run_id: str, req: ChapteringRunRequest) -> None:
+    """Fast path for the "audible-chapters" backend: one Audible API lookup,
+    no audio processing, no faster-whisper subprocess. Fully self-contained
+    -- does not share run_chaptering_worker's subprocess/config/progress-line
+    machinery below, which exists to drive app.chaptering_runner and doesn't
+    apply here (there is no local detection work to run).
+    """
+    state = runs[run_id]
+    state.run_type = "chaptering"
+    state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
+    state.command = ["chapter-forge", f"--source={req.source_path}", "--backend=audible-chapters"]
+    try:
+        source = validate_audiobook_path(req.source_path)
+        state.status = "running"
+        state.current_file = str(source)
+        state.stats = {"phase_log": [], "backend": "audible-chapters"}
+
+        def log_phase(phase: str, label: str, detail: str = "") -> None:
+            changed = state.phase != phase
+            set_run_phase(state, phase, label, detail)
+            if changed:
+                state.stats.setdefault("phase_log", []).append(
+                    {
+                        "t": round(time.time() - state.started_at, 2),
+                        "phase": phase,
+                        "label": label,
+                        "detail": detail,
+                    }
+                )
+
+        log_phase("looking-up", "Looking up Audible chapters", str(source))
+        state.percent = 20.0
+
+        asin = resolve_asin_for_chaptering(source, req.asin)
+        if not asin:
+            raise RuntimeError(
+                "No ASIN found in the existing sidecar and none provided -- "
+                "enter an ASIN to look up Audible chapters."
+            )
+        state.stats["asin"] = asin
+
+        auth = audible.Authenticator.from_file(DEFAULT_AUTH_FILE)
+        client = audible.Client(auth=auth)
+        raw_chapters = audible_lookup_chapters(client, asin)
+        if raw_chapters is None:
+            raise RuntimeError(
+                f"Audible has no verified chapter data for ASIN {asin} "
+                "(not found, or not marked accurate)."
+            )
+        if not raw_chapters:
+            raise RuntimeError(f"Audible returned zero chapters for ASIN {asin}.")
+
+        state.percent = 80.0
+        log_phase("saving", "Saving chapter files", "Writing JSON")
+
+        chapters = []
+        for index, raw in enumerate(raw_chapters, start=1):
+            start = raw["start_ms"] / 1000.0
+            end = start + raw["length_ms"] / 1000.0
+            chapters.append(
+                {
+                    "id": index,
+                    "title": raw["title"] or f"Chapter {index}",
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "confidence": None,
+                    "source": "audible",
+                }
+            )
+
+        audio_files = source_audio_files(source)
+        duration = (
+            sum(probe_audio_file_duration(path) for path in audio_files)
+            if audio_files
+            else chapters[-1]["end"]
+        )
+
+        result = {
+            "chapters": chapters,
+            "duration": duration,
+            "backend": "audible-chapters",
+            "asin": asin,
+            "run_log": state.stats.get("phase_log", []),
+        }
+        artifacts = save_chapter_result(source, result, srt="", transcript="")
+        state.stats.update(
+            {
+                "chapters": len(chapters),
+                "duration": duration,
+                "artifacts": artifacts,
+                "chaptering_result": result,
+            }
+        )
+        state.percent = 100.0
+        state.returncode = 0
+        state.finished_at = time.time()
+        state.status = "completed"
+        set_terminal_phase(state)
+        write_final_report(state)
+    except Exception as exc:
+        state.error = str(exc)
+        state.finished_at = time.time()
+        state.status = "failed"
+        set_terminal_phase(state)
+        try:
+            write_final_report(state)
+        except Exception:
+            pass
+    finally:
+        with runs_lock:
+            runs.pop(run_id, None)
+
+
 def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
     state = runs[run_id]
+    if req.backend == "audible-chapters":
+        run_audible_chapters_backend(run_id, req)
+        return
     guard_stop = threading.Event()
     state.run_type = "chaptering"
     state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
@@ -7545,6 +7689,7 @@ def load_chaptering(req: ChapteringLoadRequest) -> dict[str, Any]:
         "audio_files": [str(path) for path in audio],
         "duration": sum(probe_audio_file_duration(path) for path in audio),
         "result": existing,
+        "asin": resolve_asin_for_chaptering(source),
     }
 
 
@@ -7631,7 +7776,7 @@ def chaptering_candidates(req: ChapteringCandidateRequest) -> dict[str, Any]:
 
 @app.post("/api/chaptering/runs")
 def start_chaptering_run(req: ChapteringRunRequest) -> dict[str, Any]:
-    if req.backend not in {"faster-whisper", "hybrid-sos-focused"}:
+    if req.backend not in {"faster-whisper", "hybrid-sos-focused", "audible-chapters"}:
         raise HTTPException(status_code=400, detail=f"Unsupported chaptering backend: {req.backend}")
     validate_audiobook_path(req.source_path)
     run_id = datetime_id()

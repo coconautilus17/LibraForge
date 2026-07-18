@@ -117,9 +117,20 @@
               <span class="seg-title">Full transcription</span>
               <span class="seg-note">Transcribes the whole book. Most accurate, slowest on CPU.</span>
             </label>
+            <label class="cf-seg-option" data-value="audible-chapters">
+              <input type="radio" name="backend" value="audible-chapters" />
+              <span class="seg-title">Audible chapters</span>
+              <span class="seg-note">One API lookup, no audio processing. Instant, but only as good as Audible's own chapter data for this ASIN.</span>
+            </label>
           </div>
 
-          <div class="grid">
+          <div id="audibleAsinRow" class="grid" hidden>
+            <label style="grid-column: 1 / -1"><span class="field-label">ASIN <span class="info-tip" data-tooltip="Auto-filled from this book's existing sidecar (Fixer/Manual Review) when available. Type or paste one if it's blank or wrong."></span></span>
+              <input id="audibleAsin" placeholder="e.g. B017V4IM1G" />
+            </label>
+          </div>
+
+          <div id="localDetectionGrid" class="grid">
             <label><span class="field-label">Whisper model <span class="info-tip" data-tooltip="First-pass ASR model. Hybrid mode uses this only for focused gap rescans unless full transcription is selected. ASR is optional -- LibraForge does not install faster-whisper unless the image or environment is built with it."></span></span>
               <select id="model" data-selected="small"></select>
             </label>
@@ -213,7 +224,7 @@
             </label>
           </div>
 
-          <div class="checks">
+          <div id="localDetectionChecks" class="checks">
             <label><input id="vadFilter" type="checkbox" /> VAD filter <span class="info-tip" data-tooltip="Voice activity detection for full transcription. Generally tested with VAD off because it can remove useful pauses/context."></span></label>
             <label><input id="carryContext" type="checkbox" /> Carry transcript context <span class="info-tip" data-tooltip="Lets faster-whisper condition each segment on previous text. Can improve prose continuity but may hallucinate repeated chapter text."></span></label>
             <label><input id="silenceSnap" type="checkbox" checked /> Snap to nearby silence <span class="info-tip" data-tooltip="After markers are found, move starts to nearby silence boundaries when available."></span></label>

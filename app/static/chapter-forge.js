@@ -133,7 +133,9 @@ function cleanTitleText(chapter) {
 function syncFieldVisibility() {
   const advancedOpen = $('advancedRunToggle')?.getAttribute('aria-expanded') === 'true';
   $('advancedRunToggle').textContent = advancedOpen ? 'Hide advanced' : 'Advanced';
-  const hybrid = getBackend() === 'hybrid-sos-focused';
+  const backend = getBackend();
+  const hybrid = backend === 'hybrid-sos-focused';
+  const audible = backend === 'audible-chapters';
   document.querySelectorAll('.chapter-advanced-setting').forEach((el) => {
     const hybridOnly = el.classList.contains('cf-hybrid-only');
     el.hidden = !advancedOpen || (hybridOnly && !hybrid);
@@ -141,6 +143,10 @@ function syncFieldVisibility() {
   document.querySelectorAll('.cf-hybrid-only:not(.chapter-advanced-setting)').forEach((el) => {
     el.hidden = !hybrid;
   });
+  $('audibleAsinRow').hidden = !audible;
+  $('localDetectionGrid').hidden = audible;
+  $('localDetectionChecks').hidden = audible;
+  $('advancedRunToggle').hidden = audible;
 }
 
 function normalizeChapters() {
@@ -957,6 +963,7 @@ async function loadChapters() {
   loaded = data;
   chapters = (data.result?.chapters || []).map((chapter) => ({ ...chapter }));
   setAudioPreview(data.source_path);
+  $('audibleAsin').value = data.asin || '';
   markSaved();
   renderChapters();
   renderArtifacts({});
@@ -973,6 +980,7 @@ async function startDetection() {
   const body = {
     source_path: $('sourcePath').value.trim(),
     backend: getBackend(),
+    asin: $('audibleAsin').value.trim(),
     remote_endpoint: $('remoteEndpoint').value.trim(),
     llm_review: $('llmReview')?.checked || false,
     llm_endpoint: $('llmEndpoint')?.value.trim() || '',
