@@ -66,15 +66,18 @@ class RunAudibleChaptersBackendTests(unittest.TestCase):
         self._orig_root = main_module.AUDIOBOOKS_ROOT
         main_module.AUDIOBOOKS_ROOT = self.root
         self.run_id = "test-run-1"
-        main_module.runs[self.run_id] = RunState(id=self.run_id)
+        self.state = RunState(id=self.run_id)
+        main_module.runs[self.run_id] = self.state
 
     def tearDown(self):
         main_module.AUDIOBOOKS_ROOT = self._orig_root
         main_module.runs.pop(self.run_id, None)
         self.tmp.cleanup()
 
-    def _req(self, source: Path, asin: str = "") -> ChapteringRunRequest:
-        return ChapteringRunRequest(source_path=str(source), backend="audible-chapters", asin=asin)
+    def _req(self, source: Path, asin: str = "", no_save: bool = False) -> ChapteringRunRequest:
+        return ChapteringRunRequest(
+            source_path=str(source), backend="audible-chapters", asin=asin, no_save=no_save
+        )
 
     def test_success_saves_chapters_with_audible_source_tag(self):
         source = self.root / "book.mp3"
@@ -100,6 +103,21 @@ class RunAudibleChaptersBackendTests(unittest.TestCase):
         self.assertEqual(saved[1]["end"], 105.0)
         self.assertEqual(sidecar["chapter_forge"]["backend"], "audible-chapters")
         self.assertEqual(sidecar["chapter_forge"]["asin"], "B0TESTASIN")
+
+    def test_no_save_skips_sidecar_write_but_still_populates_result(self):
+        source = self.root / "book.mp3"
+        source.write_bytes(b"")
+        raw_chapters = [{"title": "Chapter One", "start_ms": 0, "length_ms": 60000}]
+        with patch.object(main_module.audible.Authenticator, "from_file", return_value=MagicMock()), \
+             patch.object(main_module.audible, "Client", return_value=MagicMock()), \
+             patch.object(main_module, "audible_lookup_chapters", return_value=raw_chapters):
+            run_audible_chapters_backend(self.run_id, self._req(source, "B0TESTASIN", no_save=True))
+
+        self.assertFalse((self.root / "libraforge.json").exists())
+        self.assertEqual(self.state.status, "completed")
+        result = self.state.stats["chaptering_result"]
+        self.assertEqual(len(result["chapters"]), 1)
+        self.assertEqual(result["chapters"][0]["title"], "Chapter One")
 
     def test_no_asin_available_fails_the_run(self):
         source = self.root / "book.mp3"

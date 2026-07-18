@@ -1357,6 +1357,7 @@ class ChapteringRunRequest(BaseModel):
     source_path: str = Field(default="/audiobooks")
     backend: str = "faster-whisper"
     asin: str = Field(default="", max_length=32)
+    no_save: bool = False
     remote_endpoint: str = ""
     llm_review: bool = False
     llm_endpoint: str = "http://192.168.1.50:11434"
@@ -4298,7 +4299,9 @@ def run_audible_chapters_backend(run_id: str, req: ChapteringRunRequest) -> None
             "asin": asin,
             "run_log": state.stats.get("phase_log", []),
         }
-        artifacts = save_chapter_result(source, result, srt="", transcript="")
+        artifacts = (
+            {} if req.no_save else save_chapter_result(source, result, srt="", transcript="")
+        )
         state.stats.update(
             {
                 "chapters": len(chapters),
@@ -4595,7 +4598,11 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
             srt_text = ""
             transcript_text = ""
         result["run_log"] = state.stats.get("phase_log", [])
-        artifacts = save_chapter_result(source, result, srt=srt_text, transcript=transcript_text)
+        artifacts = (
+            {}
+            if req.no_save
+            else save_chapter_result(source, result, srt=srt_text, transcript=transcript_text)
+        )
         state.stats.update({
             "chapters": len(result.get("chapters", [])),
             "duration": result.get("duration", 0),
