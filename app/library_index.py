@@ -24,6 +24,77 @@ def is_audio_file(path: Path) -> bool:
     }
 
 
+def is_ebook_file(path: Path) -> bool:
+    return path.suffix.lower() in {".epub", ".pdf"}
+
+
+_EBOOK_FORMAT_BUCKET_NAMES = {"epub", "pdf"}
+
+
+@dataclass
+class EbookUnit:
+    """One logical ebook, one or more format files sharing an identity.
+
+    `path` is this unit's canonical file -- used as its manual-review
+    identity and its libraforge.json sidecar location (epub preferred over
+    pdf when both are present). `formats` maps each available extension
+    (without the dot) to its full file path.
+    """
+    path: Path
+    formats: dict[str, Path]
+
+
+def build_ebook_index(
+    root: Path, skip_prefixes: tuple[str, ...] = FS_SKIP_PREFIXES
+) -> list[EbookUnit]:
+    """Walk root for .epub/.pdf files.
+
+    A file whose immediate parent directory is literally named "epub" or
+    "pdf" (case-insensitive) is grouped with any same-stem file found in a
+    sibling bucket folder under the same grandparent -- this is the layout
+    audiobookshelf-adjacent ebook dumps commonly use (format-first, not
+    folder-per-book). Every other ebook file is its own single-format unit.
+
+    Deliberately narrow: pairing only fires for the exact bucket-folder-name
+    pattern scoped to one grandparent, so it can't misfire by matching
+    unrelated same-stem files elsewhere in the library.
+    """
+    # bucket_files[grandparent][stem_lower][ext] = path
+    bucket_files: dict[Path, dict[str, dict[str, Path]]] = {}
+    standalone: list[EbookUnit] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not any(d.startswith(s) for s in skip_prefixes)
+            )
+            p = Path(dirpath)
+            ebook_files = [p / f for f in sorted(filenames) if is_ebook_file(p / f)]
+            if not ebook_files:
+                continue
+            if p != root and p.name.lower() in _EBOOK_FORMAT_BUCKET_NAMES:
+                bucket = bucket_files.setdefault(p.parent, {})
+                for f in ebook_files:
+                    ext = f.suffix.lower().lstrip(".")
+                    bucket.setdefault(f.stem.lower(), {})[ext] = f
+            else:
+                for f in ebook_files:
+                    ext = f.suffix.lower().lstrip(".")
+                    standalone.append(EbookUnit(path=f, formats={ext: f}))
+    except PermissionError:
+        pass
+
+    paired: list[EbookUnit] = []
+    for stems in bucket_files.values():
+        for formats in stems.values():
+            canonical = formats.get("epub") or formats.get("pdf")
+            paired.append(EbookUnit(path=canonical, formats=formats))
+
+    units = paired + standalone
+    units.sort(key=lambda u: str(u.path))
+    return units
+
+
 def folder_listing_signature(folder: Path) -> str:
     """Signature of a folder's direct children, one level deeper into any
     disc/part subfolder (see DISC_RE).
@@ -188,5 +259,65 @@ def ensure_library_index_fresh(root: Path) -> None:
             _run_build(root)
         finally:
             _lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+@dataclass
+class EbookIndexState:
+    """In-memory state for the ebook discovery index. Fully independent
+    from LibraryIndexState/_state -- Folder Forge and M4B Tool only ever
+    read get_state(), never this, so ebook discovery cannot affect them."""
+    status: str = "idle"  # idle | ready | error
+    units: list[EbookUnit] = field(default_factory=list)
+    generation: int = 0
+    error: str | None = None
+
+
+_ebook_state = EbookIndexState()
+_ebook_lock = threading.Lock()
+
+
+def get_ebook_state() -> EbookIndexState:
+    return _ebook_state
+
+
+def reset_ebook_state_for_tests() -> None:
+    """Test-only helper: reset ebook index state between test cases."""
+    global _ebook_state
+    _ebook_state = EbookIndexState()
+
+
+def _run_ebook_build(root: Path) -> None:
+    global _ebook_state
+    previous = _ebook_state
+    try:
+        units = build_ebook_index(root)
+        changed = units != previous.units
+        _ebook_state = EbookIndexState(
+            status="ready",
+            units=units,
+            generation=previous.generation + 1 if changed else previous.generation,
+        )
+    except Exception as exc:
+        _ebook_state = EbookIndexState(
+            status="error",
+            units=previous.units,
+            generation=previous.generation,
+            error=str(exc),
+        )
+
+
+def ensure_ebook_index_fresh(root: Path) -> None:
+    """Kick a non-blocking background ebook walk if none is already in
+    flight. Mirrors ensure_library_index_fresh exactly, on its own lock."""
+    if not _ebook_lock.acquire(blocking=False):
+        return
+
+    def worker() -> None:
+        try:
+            _run_ebook_build(root)
+        finally:
+            _ebook_lock.release()
 
     threading.Thread(target=worker, daemon=True).start()
