@@ -3483,6 +3483,18 @@ def build_m4b_command(
     )
 
     temp_files: list[Path] = []
+    cue_source_dir = input_path if input_path.is_dir() else input_path.parent
+    if len(input_files) == 1:
+        chapter_result = load_existing_chapter_result(input_files[0])
+        chapters = (chapter_result or {}).get("chapters") or []
+        if chapters:
+            cuesheet_path = cue_source_dir / "cuesheet.cue"
+            cuesheet_path.write_text(
+                write_chapter_cue(chapters, input_files[0].name),
+                encoding="utf-8",
+            )
+            temp_files.append(cuesheet_path)
+
     cmd = [
         "m4b-tool",
         "merge",
