@@ -4557,10 +4557,13 @@ button.ghost:hover:not(:disabled) {
 }
 
 .chapter-row .time {
+  white-space: nowrap;
+}
+
+.chapter-row .time-inner {
   display: flex;
   align-items: center;
   gap: 4px;
-  white-space: nowrap;
 }
 
 .chapter-row .time input {
@@ -4583,7 +4586,7 @@ button.ghost:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.title-cell {
+.title-cell-inner {
   display: flex;
   align-items: center;
   gap: 4px;

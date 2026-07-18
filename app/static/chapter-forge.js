@@ -652,13 +652,17 @@ function renderChapters() {
     tr.innerHTML = `
       <td class="idx">${index + 1}</td>
       <td class="time">
-        <input data-field="start" value="${escapeHtml(secondsToStamp(chapter.start))}" />
-        <span class="time-arrow">&rarr;</span>
-        <span class="time-end">${escapeHtml(secondsToStamp(chapter.end))}</span>
+        <div class="time-inner">
+          <input data-field="start" value="${escapeHtml(secondsToStamp(chapter.start))}" />
+          <span class="time-arrow">&rarr;</span>
+          <span class="time-end">${escapeHtml(secondsToStamp(chapter.end))}</span>
+        </div>
       </td>
       <td class="title-cell">
-        <input data-field="title" value="${escapeHtml(chapter.title || `Chapter ${index + 1}`)}" title="${escapeHtml(chapter.source_text || '')}" />
-        ${showCleanBtn ? `<button class="icon-button small clean-title" type="button" title="Strip to just “${escapeHtml(cleanTitle)}”, discarding the rest of the text">&#9986;</button>` : ''}
+        <div class="title-cell-inner">
+          <input data-field="title" value="${escapeHtml(chapter.title || `Chapter ${index + 1}`)}" title="${escapeHtml(chapter.source_text || '')}" />
+          ${showCleanBtn ? `<button class="icon-button small clean-title" type="button" title="Strip to just “${escapeHtml(cleanTitle)}”, discarding the rest of the text">&#9986;</button>` : ''}
+        </div>
       </td>
       <td>${confidenceCell}</td>
       <td>
