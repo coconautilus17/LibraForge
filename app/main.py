@@ -4442,14 +4442,17 @@ class _ManualReviewSearchIndex:
     Derived from the shared library_index state rather than running its own
     walk. source_generation tracks which shared-index generation this was
     last derived from, replacing the old root+first-level fingerprint as
-    the staleness signal.
+    the staleness signal. ebook_source_generation is the equivalent signal
+    for the fully-independent ebook index (see app/library_index.py).
     """
     status: str = "idle"  # idle | building | updating | ready | error
     entries: list[tuple[str, bool]] = field(default_factory=list)
     book_count: int = 0
     source_generation: int = -1
+    ebook_source_generation: int = -1
     ignored_signature: str | None = None
     error: str | None = None
+    ebook_formats: dict[str, list[str]] = field(default_factory=dict)
 
 
 _manual_review_search_index = _ManualReviewSearchIndex()
@@ -4457,7 +4460,7 @@ _manual_review_search_lock = threading.Lock()
 
 
 def _manual_review_search_index_is_stale(
-    state: _ManualReviewSearchIndex, generation: int, ignored_signature: str
+    state: _ManualReviewSearchIndex, generation: int, ebook_generation: int, ignored_signature: str
 ) -> bool:
     """Whether Manual Review's own derived entries need rebuilding from the
     current shared index state. A build already in flight is never
@@ -4478,6 +4481,7 @@ def _manual_review_search_index_is_stale(
     return (
         state.status != "ready"
         or state.source_generation != generation
+        or state.ebook_source_generation != ebook_generation
         or state.ignored_signature != ignored_signature
     )
 
@@ -4509,10 +4513,17 @@ def _run_manual_review_search_index_build(
             while shared.status == "idle" and time.monotonic() < deadline:
                 time.sleep(0.05)
                 shared = library_index.get_state()
-        entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
-        state.entries = entries
-        state.book_count = len(entries)
+        ebook_shared = library_index.get_ebook_state()
+        audio_entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
+        raw_ebook_entries = [(str(unit.path), True) for unit in ebook_shared.units]
+        ebook_entries = _filter_entries_by_ignored_folders(raw_ebook_entries, root, ignored_folders)
+        state.entries = audio_entries + ebook_entries
+        state.ebook_formats = {
+            str(unit.path): sorted(unit.formats.keys()) for unit in ebook_shared.units
+        }
+        state.book_count = len(state.entries)
         state.source_generation = shared.generation
+        state.ebook_source_generation = ebook_shared.generation
         state.ignored_signature = _ignored_signature(ignored_folders)
         state.status = "ready"
     except Exception as exc:
@@ -4526,11 +4537,14 @@ def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None
     entries if the shared index has moved on or the ignore list changed.
     Returns immediately whether or not a build was started."""
     library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    library_index.ensure_ebook_index_fresh(AUDIOBOOKS_ROOT)
+    _ensure_ebook_metadata_filled(AUDIOBOOKS_ROOT)
 
     state = _manual_review_search_index
     shared = library_index.get_state()
+    ebook_shared = library_index.get_ebook_state()
     signature = _ignored_signature(ignored_folders)
-    if not _manual_review_search_index_is_stale(state, shared.generation, signature):
+    if not _manual_review_search_index_is_stale(state, shared.generation, ebook_shared.generation, signature):
         return
     if not _manual_review_search_lock.acquire(blocking=False):
         return
@@ -5613,6 +5627,75 @@ def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> 
                         if not top.get(field_name) and fb_top.get(field_name):
                             top[field_name] = fb_top[field_name]
     return top
+
+
+_ebook_metadata_fill_lock = threading.Lock()
+
+
+def _ebook_query_from_stem(stem: str) -> str:
+    """Best-effort recovery of a searchable title from a filename stem.
+
+    Filenames in ebook "format bucket" dumps are frequently
+    underscore/hyphen-joined with no further word-splitting (e.g.
+    "kubernetes_upandrunning"). Replacing separators with spaces is a
+    cheap, always-safe improvement; fully space-free stems (e.g.
+    "efficientlinuxatthecommandline") are a known, accepted gap -- both
+    Open Library and Goodreads reliably return zero results for those
+    (verified live), so search_ebook_candidates correctly returns None
+    for them rather than guessing at a wrong match.
+    """
+    return re.sub(r"[_\-\.]+", " ", stem).strip()
+
+
+def _ensure_ebook_metadata_filled(root: Path) -> None:
+    """Kick a non-blocking background pass that auto-fills libraforge.json
+    for any ebook unit that doesn't already have a filled sidecar.
+
+    Runs independently of the manual-review search index build (its own
+    lock) so a slow Goodreads fallback lookup never delays search results:
+    items appear in search immediately at discovery, metadata fills in on
+    a later poll once this pass reaches them.
+    """
+    if not _ebook_metadata_fill_lock.acquire(blocking=False):
+        return
+
+    def worker() -> None:
+        try:
+            fixer_module = load_fixer_module(default_fixer_script())
+            for unit in library_index.get_ebook_state().units:
+                existing = fixer_module.read_book_sidecar(unit.path)
+                if existing and existing.get("title"):
+                    continue
+                query = _ebook_query_from_stem(unit.path.stem)
+                if not query:
+                    continue
+                candidate = search_ebook_candidates(title=query)
+                if not candidate:
+                    continue
+                authors = candidate.get("authors") or []
+                book = {
+                    "title": candidate.get("title", ""),
+                    "subtitle": candidate.get("subtitle", ""),
+                    "author": authors[0] if authors else "",
+                    "narrator": "",
+                    "series": candidate.get("series", ""),
+                    "sequence": candidate.get("sequence", ""),
+                    "year": candidate.get("year", ""),
+                    "summary": candidate.get("summary", ""),
+                    "genre": "",
+                    "isbn": candidate.get("isbn", ""),
+                    "cover_url": candidate.get("cover_url", ""),
+                }
+                fixer_module.write_ebook_sidecar(
+                    unit.path,
+                    source_formats=sorted(unit.formats.keys()),
+                    source_files={ext: str(p) for ext, p in unit.formats.items()},
+                    book=book,
+                )
+        finally:
+            _ebook_metadata_fill_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 class AbsSearchRequest(BaseModel):
@@ -7096,6 +7179,8 @@ class ManualReviewSearchResult(BaseModel):
     name: str
     path: str
     is_file: bool
+    media_type: str = ""
+    formats: list[str] = Field(default_factory=list)
 
 
 class ManualReviewSearchResponse(BaseModel):
@@ -7110,7 +7195,13 @@ def manual_review_search(req: ManualReviewSearchRequest) -> ManualReviewSearchRe
     state = _manual_review_search_index
     query = req.query.strip().lower()
     results = [
-        ManualReviewSearchResult(name=Path(path).name, path=path, is_file=is_file)
+        ManualReviewSearchResult(
+            name=Path(path).name,
+            path=path,
+            is_file=is_file,
+            media_type="ebook" if path in state.ebook_formats else "",
+            formats=state.ebook_formats.get(path, []),
+        )
         for path, is_file in state.entries
         if not query or query in path.lower()
     ]

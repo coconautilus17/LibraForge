@@ -36,6 +36,34 @@ class _BaseIndexEndpointTest(unittest.TestCase):
         state.ignored_signature = main_module._ignored_signature(list(ignored))
 
 
+class ManualReviewSearchEbookFieldsTests(_BaseIndexEndpointTest):
+    def test_ebook_entry_reports_media_type_and_formats(self):
+        state = main_module._manual_review_search_index
+        state.status = "ready"
+        state.entries = [("/audiobooks/Linux/EPUB/kubernetes.epub", True)]
+        state.ebook_formats = {"/audiobooks/Linux/EPUB/kubernetes.epub": ["epub", "pdf"]}
+        state.book_count = 1
+        state.ignored_signature = main_module._ignored_signature([])
+
+        res = client.post("/api/manual-review/search", json={"query": ""})
+        self.assertEqual(res.status_code, 200)
+        result = res.json()["results"][0]
+        self.assertEqual(result["media_type"], "ebook")
+        self.assertEqual(sorted(result["formats"]), ["epub", "pdf"])
+
+    def test_audio_entry_reports_no_media_type(self):
+        state = main_module._manual_review_search_index
+        state.status = "ready"
+        state.entries = [("/audiobooks/Author/Book", False)]
+        state.book_count = 1
+        state.ignored_signature = main_module._ignored_signature([])
+
+        res = client.post("/api/manual-review/search", json={"query": ""})
+        result = res.json()["results"][0]
+        self.assertEqual(result["media_type"], "")
+        self.assertEqual(result["formats"], [])
+
+
 class ManualReviewSearchIndexStatusEndpointTests(_BaseIndexEndpointTest):
     def test_reports_ready_state_without_error(self):
         self._set_ready(entries=[("/audiobooks/A/Book", False)])
