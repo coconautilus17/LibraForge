@@ -4229,23 +4229,40 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
             raise RuntimeError(f"Resource guard refused to start: {initial_breach}")
         state.status = "running"
         state.current_file = str(source)
-        set_run_phase(state, "preparing", "Preparing chapter run", str(source))
+        state.stats = {"phase_log": []}
+
+        def log_phase(phase: str, label: str, detail: str = "") -> None:
+            changed = state.phase != phase
+            set_run_phase(state, phase, label, detail)
+            if changed:
+                state.stats.setdefault("phase_log", []).append(
+                    {
+                        "t": round(time.time() - state.started_at, 2),
+                        "phase": phase,
+                        "label": label,
+                        "detail": detail,
+                    }
+                )
+
+        log_phase("preparing", "Preparing chapter run", str(source))
         state.percent = 2.0
-        state.stats = {
-            "source_path": str(source),
-            "model": req.model,
-            "backend": req.backend,
-            "chapters": 0,
-            "resource_guard": req.resource_guard,
-            "resource_limits": {
-                "max_memory_percent": req.max_memory_percent,
-                "min_memory_available_gb": req.min_memory_available_gb,
-                "max_swap_percent": req.max_swap_percent,
-                "max_swap_growth_percent": req.max_swap_growth_percent,
-                "max_cpu_percent": req.max_cpu_percent,
-            },
-            "resources": initial_resources,
-        }
+        state.stats.update(
+            {
+                "source_path": str(source),
+                "model": req.model,
+                "backend": req.backend,
+                "chapters": 0,
+                "resource_guard": req.resource_guard,
+                "resource_limits": {
+                    "max_memory_percent": req.max_memory_percent,
+                    "min_memory_available_gb": req.min_memory_available_gb,
+                    "max_swap_percent": req.max_swap_percent,
+                    "max_swap_growth_percent": req.max_swap_growth_percent,
+                    "max_cpu_percent": req.max_cpu_percent,
+                },
+                "resources": initial_resources,
+            }
+        )
 
         def resource_guard_loop() -> None:
             breach_count = 0
@@ -4285,22 +4302,22 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
             state.phase_detail = message
             progress_match = re.search(r"\bprogress=([0-9]+(?:\.[0-9]+)?)\b", message)
             if message.startswith("Loading faster-whisper"):
-                set_run_phase(state, "loading-model", "Loading ASR model", message)
+                log_phase("loading-model", "Loading ASR model", message)
                 state.percent = max(state.percent, 5.0)
             elif message.startswith("Running SoundOfSilence"):
-                set_run_phase(state, "sos-scan", "Scanning silence candidates", message)
+                log_phase("sos-scan", "Scanning silence candidates", message)
                 state.percent = max(state.percent, 15.0)
             elif message.startswith("Focused remote ASR") or message.startswith("Transcribing focused hybrid"):
-                set_run_phase(state, "focused-asr", "Focused ASR recovery", message)
+                log_phase("focused-asr", "Focused ASR recovery", message)
                 state.percent = max(state.percent, 62.0)
             elif message.startswith("Transcribing evidence context"):
-                set_run_phase(state, "evidence-asr", "Building transcript evidence", message)
+                log_phase("evidence-asr", "Building transcript evidence", message)
                 state.percent = max(state.percent, 74.0)
             elif message.startswith("Reviewing hybrid"):
-                set_run_phase(state, "llm-review", "Reviewing chapter names", message)
+                log_phase("llm-review", "Reviewing chapter names", message)
                 state.percent = max(state.percent, 86.0)
             elif message.startswith("Transcribing"):
-                set_run_phase(state, "transcribing", "Transcribing audio", message)
+                log_phase("transcribing", "Transcribing audio", message)
                 if progress_match:
                     transcription_percent = float(progress_match.group(1))
                     state.percent = max(
@@ -4310,13 +4327,13 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
                 else:
                     state.percent = max(state.percent, 15.0)
             elif "Detecting" in message:
-                set_run_phase(state, "detecting", "Detecting markers", message)
+                log_phase("detecting", "Detecting markers", message)
                 state.percent = max(state.percent, 72.0)
             elif message.startswith("Focused rescan"):
-                set_run_phase(state, "rescanning", "Rescanning gaps", message)
+                log_phase("rescanning", "Rescanning gaps", message)
                 state.percent = max(state.percent, 78.0)
             elif "Snapping" in message:
-                set_run_phase(state, "snapping", "Snapping to silence", message)
+                log_phase("snapping", "Snapping to silence", message)
                 state.percent = max(state.percent, 84.0)
 
         if state.log_path:
@@ -4403,7 +4420,7 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
         if state.returncode != 0:
             raise RuntimeError(f"Chapter detection runner exited with code {state.returncode}")
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        set_run_phase(state, "saving", "Saving chapter files", "Writing JSON, CUE, and SRT artifacts")
+        log_phase("saving", "Saving chapter files", "Writing JSON, CUE, and SRT artifacts")
         srt_text = ""
         transcript_text = ""
         try:
@@ -4416,6 +4433,7 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
         except Exception:
             srt_text = ""
             transcript_text = ""
+        result["run_log"] = state.stats.get("phase_log", [])
         artifacts = save_chapter_result(source, result, srt=srt_text, transcript=transcript_text)
         state.stats.update({
             "chapters": len(result.get("chapters", [])),
@@ -7628,7 +7646,9 @@ def save_chaptering(req: ChapteringSaveRequest) -> dict[str, Any]:
             "title": str(chapter.get("title", "") or f"Chapter {index}").strip() or f"Chapter {index}",
             "manual": True,
         })
+    existing = load_existing_chapter_result(source) or {}
     payload = {
+        **existing,
         "schema_version": 1,
         "source_path": str(source),
         "duration": req.duration,

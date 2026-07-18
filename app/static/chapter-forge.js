@@ -75,6 +75,15 @@ function formatCountdown(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function formatElapsed(seconds) {
+  const rounded = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(rounded / 3600);
+  const m = Math.floor((rounded % 3600) / 60);
+  const s = rounded % 60;
+  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 function stampToSeconds(value) {
   const parts = String(value || '').trim().replace(',', '.').split(':');
   if (parts.length !== 3) return 0;
@@ -783,6 +792,23 @@ function cleanAllTitles() {
   showToast(changed ? `Cleaned ${changed} title${changed === 1 ? '' : 's'}.` : 'No titles needed cleaning.');
 }
 
+function renderRunLog(entries) {
+  const el = $('runLogBody');
+  if (!el) return;
+  const log = entries || loaded?.result?.run_log || [];
+  if (!log.length) {
+    el.innerHTML = '<p class="note">No run log recorded for this book yet.</p>';
+    return;
+  }
+  el.innerHTML = log.map((entry) => `
+    <div class="cf-runlog-item">
+      <span class="cf-runlog-time">${escapeHtml(formatElapsed(entry.t))}</span>
+      <span class="cf-runlog-label">${escapeHtml(entry.label || entry.phase || '')}</span>
+      ${entry.detail ? `<span class="cf-runlog-detail">${escapeHtml(entry.detail)}</span>` : ''}
+    </div>
+  `).join('');
+}
+
 function renderAiReview() {
   const body = $('aiReviewBody');
   if (!body) return;
@@ -908,6 +934,7 @@ function applyResult(data) {
   renderChapters();
   renderArtifacts(data?.stats?.artifacts || data?.artifacts || {});
   renderAiReview();
+  renderRunLog();
 }
 
 async function loadChapters() {
@@ -929,6 +956,7 @@ async function loadChapters() {
   renderChapters();
   renderArtifacts({});
   renderAiReview();
+  renderRunLog();
   $('loadStatus').textContent = data.result
     ? `Loaded existing chapters for ${data.source_path}`
     : `Source loaded with ${data.audio_files.length} audio file(s). No chapter artifact found.`;
@@ -1137,6 +1165,7 @@ async function pollRun() {
   $('phaseDetail').textContent = data.phase_detail || '';
   $('tail').textContent = (data.tail || []).join('\n');
   if (data.stats?.resources) renderResourceStatus(data.stats.resources);
+  if (data.stats?.phase_log) renderRunLog(data.stats.phase_log);
   updateActiveCountdown(pct);
   if (data.status === 'completed') {
     $('detectBtn').disabled = false;

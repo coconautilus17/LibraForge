@@ -4315,6 +4315,56 @@ button.ghost:hover:not(:disabled) {
   background: var(--danger-soft);
 }
 
+.cf-run-log-toggle {
+  margin-top: 10px;
+}
+
+.cf-run-log-toggle summary {
+  cursor: pointer;
+  font-size: var(--font-xs);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.cf-run-log {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.cf-runlog-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-2xs);
+}
+
+.cf-runlog-item:last-child {
+  border-bottom: none;
+}
+
+.cf-runlog-time {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  min-width: 42px;
+}
+
+.cf-runlog-label {
+  flex: none;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cf-runlog-detail {
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cf-audio-actions {
   display: flex;
   gap: 8px;
