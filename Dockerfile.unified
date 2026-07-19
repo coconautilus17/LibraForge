@@ -1,3 +1,12 @@
+# This repo ships exactly two images: the default Dockerfile (lean, no
+# chaptering ASR deps -- faster-whisper/ctranslate2 add ~825MB) and this one,
+# the opt-in "everything" image for anyone who wants Chapter Forge's Hybrid
+# or Full transcription detection. There is deliberately no third,
+# chaptering-only variant: it would have to drop m4b-tool entirely (Alpine
+# vs. Debian base conflict, see below) for a ~170MB saving over this image,
+# silently regressing M4B building for anyone who opted in expecting a
+# superset of the default image's features, not a different one.
+#
 # Unified image: m4b-tool's real CLI (normally Alpine-only) + faster-whisper
 # (normally Debian-only, no manylinux/musl wheels for ctranslate2). m4b-tool
 # itself is a portable PHP phar with no libc dependency of its own, so the
@@ -7,6 +16,13 @@
 # copied from the upstream Alpine image along with the musl libs they need,
 # isolated under /opt/musl-* so they don't collide with Debian's own glibc
 # libraries of the same name.
+#
+# Known gap: ffmpeg here comes from Debian's own package, which -- unlike
+# Alpine's -- excludes the non-free libfdk_aac encoder. M4BRunRequest's
+# default audio_codec is "libfdk_aac", so a merge will fail here unless the
+# request overrides it (e.g. to "aac", ffmpeg's built-in encoder) until this
+# is fixed the same way as the tools above: source ffmpeg from the Alpine
+# stage instead of Debian's apt package.
 
 FROM sandreas/m4b-tool@sha256:3154399019ed6a2d26fd477f71a1367e4c60e605d0188699028ad3444afd3c70 AS m4btool-source
 
@@ -62,6 +78,10 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY app /app/app
 COPY scripts /app/scripts
 COPY config /app/config
+# Chapter Forge's Hybrid backend requires this at runtime -- without it,
+# Hybrid detection fails even in this fully opted-in image, just with a
+# "script not found" error instead of an obviously wrong one.
+COPY tools /app/tools
 
 RUN mkdir -p /app/reports /auth /models \
     && chmod -R 0777 /app/reports /auth /app/config /models

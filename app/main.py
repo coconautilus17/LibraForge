@@ -4597,7 +4597,14 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
         if state.status == "cancelled":
             raise ChapterDetectionCancelled("Chapter detection cancelled")
         if state.returncode != 0:
-            raise RuntimeError(f"Chapter detection runner exited with code {state.returncode}")
+            # The runner subprocess's last printed line is normally an
+            # uncaught exception's own "ExceptionType: message" -- surface it
+            # instead of just the exit code, which on its own tells a user
+            # nothing (e.g. a missing optional dependency used to show up as
+            # only "exited with code 1").
+            detail = next((line.strip() for line in reversed(state.lines_tail) if line.strip()), "")
+            message = f"Chapter detection runner exited with code {state.returncode}"
+            raise RuntimeError(f"{message}: {detail}" if detail else message)
         result = json.loads(result_path.read_text(encoding="utf-8"))
         log_phase("saving", "Saving chapter files", "Writing JSON, CUE, and SRT artifacts")
         srt_text = ""

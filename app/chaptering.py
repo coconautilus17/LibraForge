@@ -1021,7 +1021,7 @@ def transcribe_faster_whisper(
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
-        raise RuntimeError("faster-whisper is not installed in this container") from exc
+        raise _missing_chaptering_dependency_error(exc, "Full transcription") from exc
 
     if progress:
         progress(f"Loading faster-whisper model {model_name}")
@@ -1321,6 +1321,15 @@ def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _missing_chaptering_dependency_error(exc: ImportError, feature_label: str) -> RuntimeError:
+    missing = getattr(exc, "name", None) or str(exc)
+    return RuntimeError(
+        f"{feature_label} needs the optional chaptering dependencies (missing: {missing}). "
+        "This image was built without them -- rebuild using Dockerfile.unified (or, in a dev "
+        "environment, `pip install -r requirements-chaptering.txt`) to enable it."
+    )
+
+
 def _sos_script_path() -> Path:
     root = _workspace_root()
     candidates = [
@@ -1340,7 +1349,10 @@ def _load_sos_module() -> Any:
         raise RuntimeError(f"Cannot load SoundOfSilence script: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except ImportError as exc:
+        raise _missing_chaptering_dependency_error(exc, "Hybrid detection") from exc
     return module
 
 

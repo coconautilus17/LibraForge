@@ -18,6 +18,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY app /app/app
 COPY scripts /app/scripts
 COPY config /app/config
+# Chapter Forge's Hybrid backend loads this script even when the optional
+# faster-whisper/tqdm stack (requirements-chaptering.txt) isn't installed --
+# without it, the failure is a confusing "script not found" instead of a
+# clear "chaptering dependencies aren't installed" message. It's 64KB, not
+# worth omitting from this lean image just to save the copy.
+COPY tools /app/tools
 
 # Create the writable mount points and make them world-writable so the image
 # works for any runtime UID/GID. Named volumes inherit these perms at first
