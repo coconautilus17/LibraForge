@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Chapter Forge</title>
   <script src="/static/ui-preferences.js?v=20260711-6"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260719-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260719-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -93,11 +93,9 @@
           <div class="actions">
             <button id="loadBtn">Load chapters</button>
             <button id="findCandidateBtn" class="secondary">Find a book without chapters</button>
-            <button id="saveBtn" class="secondary" disabled>Save edits</button>
-            <span id="saveDirtyNote" class="cf-dirty-note" hidden>&#9679; Unsaved changes</span>
           </div>
           <div id="candidateList" class="file-list" hidden></div>
-          <p class="note">Load reads existing chapter artifacts if present. Editing rows in the table below only changes what's in the browser -- nothing is written to disk until you click <b>Save edits</b>, which writes the sidecar JSON, the CUE sheet, and (if enabled) the SRT transcript next to the source file.</p>
+          <p class="note">Load reads existing chapter artifacts if present. Running detection below already saves its result. Editing rows in the chapter editor only changes what's in the browser -- nothing is written to disk until you click <b>Save edits</b> there, which writes the sidecar JSON, the CUE sheet, and (if enabled) the SRT transcript next to the source file.</p>
           <p id="loadStatus" class="note">No source loaded.</p>
         </section>
 
@@ -299,7 +297,11 @@
         <section id="editor" class="card side-nav-card">
           <div class="run-settings-heading">
             <h2>Chapter editor</h2>
-            <button id="addChapterBtn" class="secondary" type="button" disabled>+ Add chapter</button>
+            <div class="cf-editor-header-actions">
+              <span id="saveDirtyNote" class="cf-dirty-note" hidden>&#9679; Unsaved changes</span>
+              <button id="saveBtn" class="secondary" disabled>Save edits</button>
+              <button id="addChapterBtn" class="secondary" type="button" disabled>+ Add chapter</button>
+            </div>
           </div>
           <audio id="audioPreview" controls preload="metadata"></audio>
           <div class="cf-audio-actions">
@@ -338,7 +340,7 @@
             <h2>Compare to Audible</h2>
             <button id="compareAudibleBtn" class="secondary" type="button">Compare to Audible</button>
           </div>
-          <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p></div>
+          <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by chapter number (not raw list position) -- works no matter which backend produced the current chapters.</p></div>
         </section>
 
         <section id="aiReview" class="card side-nav-card">
@@ -354,6 +356,6 @@
     </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-6"></script>
-  <script src="/static/chapter-forge.js?v=20260719-2"></script>
+  <script src="/static/chapter-forge.js?v=20260719-3"></script>
 </body>
 </html>

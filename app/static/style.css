@@ -4482,6 +4482,13 @@ button.ghost:hover:not(:disabled) {
   font-weight: 600;
 }
 
+.cf-editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+}
+
 .cf-default-prompt {
   margin-top: 8px;
 }

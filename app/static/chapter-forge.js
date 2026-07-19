@@ -860,24 +860,69 @@ async function compareToAudible() {
   }
 }
 
+function chapterAlignmentKey(chapter, occurrenceCounters) {
+  const number = chapter?.number;
+  if (number !== null && number !== undefined && number !== '' && Number.isFinite(Number(number))) {
+    return `num:${Number(number)}`;
+  }
+  // Unnumbered rows (Opening/End Credits, Prologue, Epilogue, ...) align by
+  // marker type and appearance order instead -- both sides typically have
+  // at most one or two of each kind.
+  const kind = String(chapter?.marker_kind || chapter?.title || 'chapter').trim().toLowerCase() || 'chapter';
+  const count = occurrenceCounters[kind] || 0;
+  occurrenceCounters[kind] = count + 1;
+  return `kind:${kind}:${count}`;
+}
+
+function alignChaptersForDiff(chaptersA, chaptersB) {
+  // Real bug this replaces: aligning by raw list position (chaptersA[i] vs
+  // chaptersB[i]) meant a single missing/extra/reordered chapter on either
+  // side -- e.g. one backend synthesizing an Opening Credits row the other
+  // doesn't -- shifted every subsequent index and made the rest of the
+  // book look "different" even when the content actually matched. Aligning
+  // by chapter number (falling back to marker type + order for unnumbered
+  // rows) survives that kind of count mismatch.
+  const countersA = {};
+  const countersB = {};
+  const mapA = new Map();
+  const mapB = new Map();
+  const orderedKeys = [];
+  const seenKeys = new Set();
+  const noteKey = (key, start) => {
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    orderedKeys.push({ key, start });
+  };
+  chaptersA.forEach((chapter) => {
+    const key = chapterAlignmentKey(chapter, countersA);
+    mapA.set(key, chapter);
+    noteKey(key, Number(chapter?.start || 0));
+  });
+  chaptersB.forEach((chapter) => {
+    const key = chapterAlignmentKey(chapter, countersB);
+    mapB.set(key, chapter);
+    noteKey(key, Number(chapter?.start || 0));
+  });
+  orderedKeys.sort((x, y) => x.start - y.start);
+  return orderedKeys.map(({ key }) => ({ a: mapA.get(key) || null, b: mapB.get(key) || null }));
+}
+
 function renderChapterDiff(container, labelA, chaptersA, labelB, chaptersB) {
-  const maxLen = Math.max(chaptersA.length, chaptersB.length);
+  const pairs = alignChaptersForDiff(chaptersA, chaptersB);
   const rows = [];
   const timeToleranceSeconds = 2;
 
-  for (let i = 0; i < maxLen; i += 1) {
-    const a = chaptersA[i];
-    const b = chaptersB[i];
+  pairs.forEach(({ a, b }, index) => {
     if (!a || !b) {
-      rows.push({ index: i + 1, a, b, titleDiffers: true, timeDiffers: true });
-      continue;
+      rows.push({ index: index + 1, label: a?.number ?? b?.number ?? (index + 1), a, b, titleDiffers: true, timeDiffers: true });
+      return;
     }
     const titleDiffers = (a.title || '').trim().toLowerCase() !== (b.title || '').trim().toLowerCase();
     const timeDiffers = Math.abs(Number(a.start || 0) - Number(b.start || 0)) > timeToleranceSeconds;
     if (titleDiffers || timeDiffers) {
-      rows.push({ index: i + 1, a, b, titleDiffers, timeDiffers });
+      rows.push({ index: index + 1, label: a.number ?? b.number ?? (index + 1), a, b, titleDiffers, timeDiffers });
     }
-  }
+  });
 
   const countLine = chaptersA.length === chaptersB.length
     ? `<b>${chaptersA.length}</b> chapters in both.`
@@ -889,11 +934,11 @@ function renderChapterDiff(container, labelA, chaptersA, labelB, chaptersB) {
   }
 
   container.innerHTML = `
-    <p class="note">${countLine} <b>${rows.length}</b> chapter(s) differ, matched by position (chapter 1 vs chapter 1, and so on -- a count mismatch will misalign the rest).</p>
+    <p class="note">${countLine} <b>${rows.length}</b> chapter(s) differ, matched by chapter number where available (falling back to marker type + order for unnumbered rows like Prologue/Epilogue/Credits) -- not raw list position, so a missing or extra chapter on either side won't misalign the rest.</p>
     <div class="cf-compare-list">
       ${rows.map((row) => `
         <div class="cf-compare-item">
-          <div class="cf-compare-idx">#${row.index}</div>
+          <div class="cf-compare-idx">#${escapeHtml(String(row.label))}</div>
           <div class="cf-compare-side">
             <span class="cf-compare-label">${escapeHtml(labelA)}</span>
             ${row.a
@@ -1071,7 +1116,7 @@ function applyResult(data) {
 }
 
 function resetAudibleCompare() {
-  $('audibleCompareBody').innerHTML = '<p class="note">Compares whatever\'s currently loaded in the chapter editor above against Audible\'s own chapter data for this book, matched by position (chapter 1 vs chapter 1, and so on) -- works no matter which backend produced the current chapters.</p>';
+  $('audibleCompareBody').innerHTML = '<p class="note">Compares whatever\'s currently loaded in the chapter editor above against Audible\'s own chapter data for this book, matched by chapter number (not raw list position) -- works no matter which backend produced the current chapters.</p>';
 }
 
 async function loadChapters() {

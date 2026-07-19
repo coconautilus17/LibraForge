@@ -3499,8 +3499,13 @@ def build_m4b_command(
     if len(input_files) == 1:
         chapter_result = load_existing_chapter_result(input_files[0])
         chapters = (chapter_result or {}).get("chapters") or []
-        if chapters:
-            cuesheet_path = cue_source_dir / "cuesheet.cue"
+        cuesheet_path = cue_source_dir / "cuesheet.cue"
+        if chapters and not cuesheet_path.exists():
+            # "cuesheet.cue" is m4b-tool's own literal, documented filename
+            # for a user-supplied cue sheet -- if one is already sitting
+            # here, it's not ours to touch. Overwriting it would silently
+            # destroy the user's real file, since the cleanup below
+            # unconditionally deletes anything in temp_files afterward.
             cuesheet_path.write_text(
                 write_chapter_cue(chapters, input_files[0].name),
                 encoding="utf-8",

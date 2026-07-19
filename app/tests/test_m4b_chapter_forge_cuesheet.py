@@ -80,6 +80,30 @@ class BuildM4bCommandCuesheetTests(unittest.TestCase):
         self.assertFalse((book_dir / "cuesheet.cue").exists())
         self.assertEqual(temp_files, [])
 
+    def test_preexisting_cuesheet_is_never_overwritten_or_queued_for_deletion(self):
+        # "cuesheet.cue" is m4b-tool's own literal, documented filename for a
+        # user-supplied cue sheet. run_m4b_worker deletes everything in
+        # temp_files unconditionally after the run -- if we overwrote a real
+        # user file here, it would get silently destroyed with no backup.
+        book_dir = self.root / "Author" / "Book"
+        book_dir.mkdir(parents=True)
+        audio = book_dir / "Book.mp3"
+        audio.write_bytes(b"")
+        sidecar = book_dir / "libraforge.json"
+        sidecar.write_text(
+            json.dumps({"chapter_forge": {"chapters": [{"id": 1, "title": "Chapter One", "start": 0.0, "end": 60.0}]}}),
+            encoding="utf-8",
+        )
+        cuesheet_path = book_dir / "cuesheet.cue"
+        original_content = "FILE \"Book.mp3\" MP3\n  TRACK 01 AUDIO\n    TITLE \"user's own cue sheet\"\n"
+        cuesheet_path.write_text(original_content, encoding="utf-8")
+        output = book_dir / "Book.m4b"
+
+        cmd, temp_files = build_m4b_command(self._make_request(audio, output))
+
+        self.assertNotIn(cuesheet_path, temp_files)
+        self.assertEqual(cuesheet_path.read_text(encoding="utf-8"), original_content)
+
 
 if __name__ == "__main__":
     unittest.main()
