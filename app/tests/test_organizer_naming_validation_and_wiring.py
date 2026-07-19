@@ -129,12 +129,14 @@ class BuildCachedTargetDirNamingTemplateTests(unittest.TestCase):
         self.assertEqual(result.status, "new")
         self.assertEqual(result.target_dir, root / "G.D. Brooks")
 
-    def test_existing_cache_match_branch_still_uses_book_folder_logic(self):
-        # Known limitation: a book routed into an already-indexed series
-        # folder always uses build_book_folder_name() for its leaf, even
-        # under a custom template -- the cache only stores author/series
-        # path aliases, not a per-book rendered leaf. This test documents
-        # that boundary rather than asserting it's ideal.
+    def test_existing_cache_match_branch_uses_naming_template_for_leaf_and_filename(self):
+        # A book routed into an already-indexed series folder must render
+        # its full path -- including the book-level leaf and filename --
+        # through the active naming_template, the same as a brand-new
+        # series would. Previously this branch ignored the template
+        # entirely and always fell back to build_book_folder_name() with no
+        # filename; fixed so cache-routing only affects *which* author/
+        # series a book merges into, never how its path is rendered.
         root = Path("/library")
         cache = ORGANIZER.empty_structure_cache(root)
         cache["entries"].append(
@@ -152,10 +154,56 @@ class BuildCachedTargetDirNamingTemplateTests(unittest.TestCase):
             root, BASE_METADATA, cache, naming_template="{author}/{title}"
         )
         self.assertEqual(result.status, "existing")
-        self.assertIsNone(result.filename)
-        self.assertEqual(
-            result.target_dir, root / "G.D. Brooks" / "Dashing Devil" / ORGANIZER.build_book_folder_name(BASE_METADATA)
+        self.assertEqual(result.target_dir, root / "G.D. Brooks")
+        self.assertEqual(result.filename, "Bold Beginnings")
+
+    def test_existing_cache_match_applies_canonical_author_correction_to_template(self):
+        # apply_cache_to_metadata() corrects a variant local author spelling
+        # to the cache's canonical_author -- that correction must actually
+        # reach the rendered template output, not just the returned
+        # metadata dict.
+        root = Path("/library")
+        cache = ORGANIZER.empty_structure_cache(root)
+        cache["entries"].append(
+            {
+                "series": "Dashing Devil",
+                "series_key": ORGANIZER.normalize_series_key("Dashing Devil"),
+                "path": str(root / "G.D. Brooks" / "Dashing Devil"),
+                "canonical_author": "G.D. Brooks",
+                "author_keys": ORGANIZER.people_keys("G.D. Brooks"),
+                "series_aliases": ["Dashing Devil"],
+                "book_count": 3,
+            }
         )
+        metadata = dict(BASE_METADATA, author="G D Brooks", author_primary="G D Brooks")
+        result = ORGANIZER.build_cached_target_dir(
+            root, metadata, cache, naming_template="{author}/{title}"
+        )
+        self.assertEqual(result.status, "existing")
+        self.assertEqual(result.target_dir, root / "G.D. Brooks")
+
+    def test_existing_cache_match_with_default_scheme_matches_build_default_target_dir(self):
+        # Regression guard: the common case (default scheme, not a custom
+        # template) must be byte-identical before and after the fix.
+        root = Path("/library")
+        cache = ORGANIZER.empty_structure_cache(root)
+        cache["entries"].append(
+            {
+                "series": "Dashing Devil",
+                "series_key": ORGANIZER.normalize_series_key("Dashing Devil"),
+                "path": str(root / "G.D. Brooks" / "Dashing Devil"),
+                "canonical_author": "G.D. Brooks",
+                "author_keys": ORGANIZER.people_keys("G.D. Brooks"),
+                "series_aliases": ["Dashing Devil"],
+                "book_count": 3,
+            }
+        )
+        result = ORGANIZER.build_cached_target_dir(
+            root, BASE_METADATA, cache, naming_template="anything", use_default_scheme=True
+        )
+        self.assertEqual(result.status, "existing")
+        self.assertEqual(result.target_dir, ORGANIZER.build_default_target_dir(root, BASE_METADATA))
+        self.assertIsNone(result.filename)
 
 
 if __name__ == "__main__":
