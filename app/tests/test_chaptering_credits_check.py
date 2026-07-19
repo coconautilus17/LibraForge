@@ -10,10 +10,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.chaptering import (
+    CREDITS_CHECK_EVIDENCE_MAX_CHARS,
+    CREDITS_CHECK_LLM_INSTRUCTIONS,
+    CREDITS_EVIDENCE_BUFFER_SECONDS,
     _build_credits_check_prompt,
     _build_hybrid_llm_prompt,
     _call_ollama_json,
+    _evidence_window_for_chapter,
     _extract_json_object,
+    _recover_credits_check,
+    _time_bounded_evidence,
     detect_chapters_hybrid,
     resolve_book_credits,
 )
@@ -111,8 +117,91 @@ class BuildCreditsCheckPromptTests(unittest.TestCase):
     def test_prompt_stays_small_regardless_of_evidence_length(self):
         # This is the whole point of splitting it out: unlike the main review
         # prompt, nothing here scales with chapter count or correction count.
-        prompt = _build_credits_check_prompt("Author", "Narrator", "x" * 400)
-        self.assertLess(len(prompt), 2000)
+        # CREDITS_CHECK_EVIDENCE_MAX_CHARS is the real cap applied at the
+        # detect_chapters_hybrid call site -- assert against that plus
+        # headroom, not an arbitrary round number.
+        prompt = _build_credits_check_prompt("Author", "Narrator", "x" * CREDITS_CHECK_EVIDENCE_MAX_CHARS)
+        self.assertLess(len(prompt), 2600)
+
+    def test_instructs_omitting_fields_for_an_unknown_credit(self):
+        # Real gap found in review: the check fires whenever *either*
+        # author or narrator is known (not both), but nothing told the LLM
+        # what to do with the other, blank field. Smoke-test the guidance
+        # is actually present; actual model compliance isn't something a
+        # unit test can verify.
+        self.assertIn("empty string", CREDITS_CHECK_LLM_INSTRUCTIONS)
+        self.assertIn("omit", CREDITS_CHECK_LLM_INSTRUCTIONS.lower())
+
+
+class EvidenceWindowForChapterTests(unittest.TestCase):
+    # Real bug this covers: _remote_asr_for_chapter_evidence used a fixed
+    # +/-10s window for every chapter including the synthesized Opening/End
+    # Credits rows, which truncated the "written by ... narrated by ..."
+    # announcement mid-word on real books (live-verified on Divine Apostasy
+    # Book 2). This is the extracted, directly-testable window logic --
+    # previously a closure inside _remote_asr_for_chapter_evidence, which
+    # every existing test mocked out wholesale, leaving this math completely
+    # uncovered despite being the fix with the most real-world evidence
+    # behind it.
+    def test_opening_credits_gets_full_span_plus_buffer_not_the_fixed_window(self):
+        chapter = {"start": 0.0, "end": 16.415, "marker_kind": "Opening Credits"}
+        start, end = _evidence_window_for_chapter(chapter, duration=3000.0, before_seconds=10.0, after_seconds=10.0)
+        self.assertEqual(start, 0.0)
+        self.assertEqual(end, 16.415 + CREDITS_EVIDENCE_BUFFER_SECONDS)
+
+    def test_opening_credits_window_end_clamped_to_duration(self):
+        chapter = {"start": 0.0, "end": 16.0, "marker_kind": "Opening Credits"}
+        start, end = _evidence_window_for_chapter(chapter, duration=18.0, before_seconds=10.0, after_seconds=10.0)
+        self.assertEqual(end, 18.0)
+
+    def test_end_credits_gets_full_trailing_span_not_the_fixed_window(self):
+        chapter = {"start": 29011.807, "end": 29042.051, "marker_kind": "End Credits"}
+        start, end = _evidence_window_for_chapter(chapter, duration=29042.051, before_seconds=10.0, after_seconds=10.0)
+        self.assertEqual(start, 29011.807 - CREDITS_EVIDENCE_BUFFER_SECONDS)
+        self.assertEqual(end, 29042.051)
+
+    def test_end_credits_window_start_clamped_to_zero(self):
+        chapter = {"start": 2.0, "end": 10.0, "marker_kind": "End Credits"}
+        start, end = _evidence_window_for_chapter(chapter, duration=10.0, before_seconds=10.0, after_seconds=10.0)
+        self.assertEqual(start, 0.0)
+
+    def test_ordinary_chapter_still_gets_the_fixed_symmetric_window(self):
+        chapter = {"start": 500.0, "marker_kind": "Chapter"}
+        start, end = _evidence_window_for_chapter(chapter, duration=3000.0, before_seconds=10.0, after_seconds=10.0)
+        self.assertEqual((start, end), (490.0, 510.0))
+
+
+class TimeBoundedEvidenceTests(unittest.TestCase):
+    # Real gap this covers: the credits-check prompt used to hard-truncate
+    # source_text at a fixed 400 chars, but enrich_chapter_evidence merges
+    # evidence from a much wider 35s window than a chapter's own ASR pass
+    # actually covers -- so a credits row's source_text can include bled-in
+    # narration from the *next* chapter, which could just as easily push the
+    # actual "written by/narrated by" line past a blind character cutoff.
+    # Bounding by each line's own timestamp against the same boundary the
+    # ASR pass used is more precise than any fixed char count.
+    def test_drops_lines_starting_after_the_bound(self):
+        source_text = (
+            "[00:00:00.000 - 00:00:01.600] This is Audible.\n"
+            "[00:00:03.000 - 00:00:08.600] Written by Robert Bevan, narrated by Jonathan Sleep.\n"
+            "[00:00:15.063 - 00:00:19.483] Chapter 1 Tim stared out through the grimy front window."
+        )
+        result = _time_bounded_evidence(source_text, max_end_seconds=13.543)
+        self.assertIn("Written by Robert Bevan", result)
+        self.assertNotIn("Chapter 1 Tim stared", result)
+
+    def test_keeps_everything_within_the_bound(self):
+        source_text = "[00:00:00.000 - 00:00:01.600] This is Audible.\n[00:00:03.000 - 00:00:08.600] Written by X."
+        result = _time_bounded_evidence(source_text, max_end_seconds=20.0)
+        self.assertIn("This is Audible.", result)
+        self.assertIn("Written by X.", result)
+
+    def test_fails_open_on_unrecognized_line_format(self):
+        # Never silently drop real content just because a line doesn't
+        # match the expected "[start - end] text" shape.
+        source_text = "some unformatted evidence line with no timestamp bracket"
+        result = _time_bounded_evidence(source_text, max_end_seconds=0.0)
+        self.assertEqual(result, source_text)
 
 
 class ExtractJsonObjectTests(unittest.TestCase):
@@ -156,12 +245,17 @@ class _FakeOllamaResponse:
         return False
 
 
-class CallOllamaJsonSalvageTests(unittest.TestCase):
-    def test_salvages_credits_check_from_a_truncated_response(self):
+class CallOllamaJsonStaysGenericTests(unittest.TestCase):
+    # _call_ollama_json used to hardcode a "credits_check" salvage attempt on
+    # every parse failure, regardless of caller -- a generic HTTP/JSON
+    # utility baking in one specific caller's schema. That's now the sole
+    # responsibility of _recover_credits_check() (see below), called only by
+    # the credits-check path that actually cares. Lock in that
+    # _call_ollama_json itself no longer does this.
+    def test_does_not_salvage_anything_on_a_truncated_response(self):
         truncated_response_text = (
             '{"assessment":"high","confidence":"high",'
-            '"credits_check":{"author_match":"match","author_tag":"Dante King",'
-            '"narrator_match":"match","narrator_tag":"Alex Perone, Marissa Parness"},'
+            '"credits_check":{"author_match":"match","author_tag":"Dante King"},'
             '"accepted_corrections":[{"action":"clean_title","number":1,"timestamp":"00:00:2'
         )
 
@@ -172,8 +266,25 @@ class CallOllamaJsonSalvageTests(unittest.TestCase):
             review = _call_ollama_json("http://fake-ollama:11434", "gemma4:latest", "prompt")
 
         self.assertIn("parse_error", review)
+        self.assertNotIn("credits_check", review)
+        self.assertIn(truncated_response_text, review["raw_response"])
+
+
+class RecoverCreditsCheckTests(unittest.TestCase):
+    def test_returns_credits_check_from_a_clean_parse(self):
+        review = {"assessment": "clean", "credits_check": {"author_tag": "Dante King"}}
+        self.assertEqual(_recover_credits_check(review), {"author_tag": "Dante King"})
+
+    def test_salvages_credits_check_from_a_truncated_response(self):
+        raw_response = (
+            '{"assessment":"high","confidence":"high",'
+            '"credits_check":{"author_match":"match","author_tag":"Dante King",'
+            '"narrator_match":"match","narrator_tag":"Alex Perone, Marissa Parness"},'
+            '"accepted_corrections":[{"action":"clean_title","number":1,"timestamp":"00:00:2'
+        )
+        review = {"parse_error": "Unterminated string...", "raw_response": raw_response}
         self.assertEqual(
-            review["credits_check"],
+            _recover_credits_check(review),
             {
                 "author_match": "match",
                 "author_tag": "Dante King",
@@ -182,15 +293,15 @@ class CallOllamaJsonSalvageTests(unittest.TestCase):
             },
         )
 
-    def test_no_credits_check_key_added_when_nothing_to_recover(self):
-        def fake_urlopen(request, timeout=None):
-            return _FakeOllamaResponse({"response": '{"assessment":"clean","confidence":"high"'})
+    def test_returns_none_when_nothing_to_recover(self):
+        review = {"parse_error": "Unterminated string...", "raw_response": '{"assessment":"clean"'}
+        self.assertIsNone(_recover_credits_check(review))
 
-        with patch("urllib.request.urlopen", fake_urlopen):
-            review = _call_ollama_json("http://fake-ollama:11434", "gemma4:latest", "prompt")
-
-        self.assertIn("parse_error", review)
-        self.assertNotIn("credits_check", review)
+    def test_returns_none_when_neither_clean_nor_parse_error(self):
+        # e.g. the llm_unavailable fallback dict built when the Ollama call
+        # itself raised -- no raw_response to salvage from at all.
+        review = {"assessment": "llm_unavailable", "_error": "ConnectionError: refused"}
+        self.assertIsNone(_recover_credits_check(review))
 
 
 class DetectChaptersHybridCreditsCheckDecouplingTests(unittest.TestCase):
@@ -263,6 +374,57 @@ class DetectChaptersHybridCreditsCheckDecouplingTests(unittest.TestCase):
 
         mock_ollama.assert_called_once()
         self.assertNotIn("credits_check", result["hybrid"]["llm_review"])
+
+    def test_skips_the_second_call_when_cancellation_is_already_pending(self):
+        # The credits check is a deliberate, non-free extra ~5-25s call; if
+        # a cancellation came in while the main review was running, don't
+        # spend more time on a result that's about to be discarded anyway.
+        main_review_response = {"assessment": "clean", "confidence": "high", "accepted_corrections": [], "unresolved_issues": [], "validator_rules_to_apply": [], "notes": []}
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            with patch("app.chaptering.audio_files", return_value=[source]), \
+                 patch("app.chaptering._run_sound_of_silence", return_value=([], 100.0, 0, [])), \
+                 patch("app.chaptering.annotate_unresolved_gaps", return_value=[]), \
+                 patch("app.chaptering.finalize_chapters", side_effect=lambda *a, **k: [dict(c) for c in self._fixed_chapters()]), \
+                 patch("app.chaptering._remote_asr_for_chapter_evidence", return_value=([], [])), \
+                 patch("app.chaptering.resolve_book_credits", return_value={"author": "A. F. Kay", "narrator": "Travis Baldree"}), \
+                 patch("app.chaptering._call_ollama_json", return_value=main_review_response) as mock_ollama:
+                result = detect_chapters_hybrid(source, llm_review=True, should_cancel=lambda: True)
+
+        mock_ollama.assert_called_once()
+        self.assertNotIn("credits_check", result["hybrid"]["llm_review"])
+
+    def test_evidence_sent_to_the_credits_prompt_is_time_bounded(self):
+        # Regression guard for the 400-char blind-truncation gap found in
+        # review: the Opening Credits row's source_text can include bled-in
+        # narration from the next chapter (enrich_chapter_evidence's wider
+        # merge window); confirm the call site is actually filtering by the
+        # row's own timestamp bound, not just slicing raw characters.
+        chapters = self._fixed_chapters()
+        chapters[0]["source_text"] = (
+            "[00:00:00.000 - 00:00:01.600] This is Audible.\n"
+            "[00:00:03.000 - 00:00:08.600] Written by A. F. Kay, narrated by Travis Baldree.\n"
+            "[00:00:20.000 - 00:00:25.000] Chapter 1 bled-in narration that should not appear."
+        )
+        chapters[0]["end"] = 10.0
+        main_review_response = {"assessment": "clean", "confidence": "high", "accepted_corrections": [], "unresolved_issues": [], "validator_rules_to_apply": [], "notes": []}
+        credits_response = {"credits_check": {"author_match": "match", "author_tag": "A. F. Kay"}}
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            with patch("app.chaptering.audio_files", return_value=[source]), \
+                 patch("app.chaptering._run_sound_of_silence", return_value=([], 100.0, 0, [])), \
+                 patch("app.chaptering.annotate_unresolved_gaps", return_value=[]), \
+                 patch("app.chaptering.finalize_chapters", side_effect=lambda *a, **k: [dict(c) for c in chapters]), \
+                 patch("app.chaptering._remote_asr_for_chapter_evidence", return_value=([], [])), \
+                 patch("app.chaptering.resolve_book_credits", return_value={"author": "A. F. Kay", "narrator": "Travis Baldree"}), \
+                 patch("app.chaptering._call_ollama_json", side_effect=[main_review_response, credits_response]) as mock_ollama:
+                detect_chapters_hybrid(source, llm_review=True)
+
+        credits_prompt = mock_ollama.call_args_list[1].args[2]
+        self.assertIn("Written by A. F. Kay", credits_prompt)
+        self.assertNotIn("bled-in narration", credits_prompt)
 
 
 if __name__ == "__main__":

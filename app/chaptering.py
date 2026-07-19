@@ -827,6 +827,11 @@ END_CREDITS_SEARCH_WINDOW_SECONDS = 120.0
 # (live-verified on Divine Apostasy Book 2, where the real announcement ran
 # to 17.0s but the synthesized Opening Credits boundary landed at 16.4s).
 CREDITS_EVIDENCE_BUFFER_SECONDS = 5.0
+# Hard backstop on top of the time-bounded evidence (_time_bounded_evidence)
+# passed to the credits-check prompt -- time-bounding is the real filter,
+# this just caps worst-case prompt size if a chapter's ASR pass returns an
+# unusually large number of short lines within its window.
+CREDITS_CHECK_EVIDENCE_MAX_CHARS = 800
 
 
 def _synthesize_credits_rows(
@@ -1587,6 +1592,28 @@ def _focused_remote_asr_for_gaps(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _evidence_window_for_chapter(
+    chapter: dict[str, Any],
+    duration: float,
+    before_seconds: float,
+    after_seconds: float,
+) -> tuple[float, float]:
+    """Time window to transcribe for evidence around one chapter row.
+
+    Opening/End Credits are synthesized with a known, often-longer span (the
+    full "written by ... narrated by ..." announcement); the fixed
+    before/after window used for ordinary chapter markers was truncating
+    names mid-word, so these two rows get their full extent instead.
+    """
+    start = float(chapter.get("start") or 0.0)
+    marker_kind = chapter.get("marker_kind")
+    if marker_kind == "Opening Credits":
+        return 0.0, min(duration, float(chapter.get("end") or start) + CREDITS_EVIDENCE_BUFFER_SECONDS)
+    if marker_kind == "End Credits":
+        return max(0.0, start - CREDITS_EVIDENCE_BUFFER_SECONDS), duration
+    return max(0.0, start - before_seconds), min(duration, start + after_seconds)
+
+
 def _remote_asr_for_chapter_evidence(
     source_files: list[Path],
     chapters: list[dict[str, Any]],
@@ -1605,28 +1632,17 @@ def _remote_asr_for_chapter_evidence(
     if progress:
         progress(f"Transcribing evidence context for {len(chapters)} chapter(s)")
 
-    def _window_for(chapter: dict[str, Any]) -> tuple[float, float]:
-        start = float(chapter.get("start") or 0.0)
-        # Opening/End Credits are synthesized with a known, often-longer span
-        # (the full "written by ... narrated by ..." announcement); the fixed
-        # before/after window used for ordinary chapter markers was truncating
-        # names mid-word, so give these two rows their full extent instead.
-        marker_kind = chapter.get("marker_kind")
-        if marker_kind == "Opening Credits":
-            return 0.0, min(duration, float(chapter.get("end") or start) + CREDITS_EVIDENCE_BUFFER_SECONDS)
-        if marker_kind == "End Credits":
-            return max(0.0, start - CREDITS_EVIDENCE_BUFFER_SECONDS), duration
-        return max(0.0, start - before_seconds), min(duration, start + after_seconds)
-
-    windows = [
-        SequenceGap(
-            expected_number=int(chapter.get("number") or chapter.get("id") or index),
-            start=_window_for(chapter)[0],
-            end=_window_for(chapter)[1],
-            reason="chapter-evidence-context",
+    windows = []
+    for index, chapter in enumerate(chapters, start=1):
+        window_start, window_end = _evidence_window_for_chapter(chapter, duration, before_seconds, after_seconds)
+        windows.append(
+            SequenceGap(
+                expected_number=int(chapter.get("number") or chapter.get("id") or index),
+                start=window_start,
+                end=window_end,
+                reason="chapter-evidence-context",
+            )
         )
-        for index, chapter in enumerate(chapters, start=1)
-    ]
     clips, temp_dir, labels, offsets, expected = make_focus_clips(source_files, windows, accurate_seek=True)
     evidence_segments: list[TranscriptSegment] = []
     evidence_runs: list[dict[str, Any]] = []
@@ -1679,12 +1695,11 @@ def _remote_asr_for_chapter_evidence(
 
 def _extract_json_object(raw: str, key: str) -> dict[str, Any] | None:
     """Best-effort recovery of one top-level `"key": {...}` object out of a
-    JSON string that failed to parse as a whole. Ollama's num_predict cap
-    truncates long responses mid-document (a book needing many
-    accepted_corrections runs out of room), but an earlier field like
-    credits_check is usually still complete in the raw text even though the
-    document as a whole isn't -- this recovers just that field via brace
-    matching instead of losing it along with the truncated tail.
+    JSON string that failed to parse as a whole -- generic, no knowledge of
+    any particular schema. Useful when Ollama's num_predict cap truncates a
+    response mid-document but an earlier field is still complete in the raw
+    text; callers decide which key (if any) is worth recovering for their
+    own use case, see _recover_credits_check() for the one caller that does.
     """
     marker = f'"{key}":'
     marker_pos = raw.find(marker)
@@ -1743,9 +1758,6 @@ def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         parsed = {"parse_error": str(exc), "raw_response": raw}
-        recovered_credits_check = _extract_json_object(raw, "credits_check")
-        if recovered_credits_check is not None:
-            parsed["credits_check"] = recovered_credits_check
     parsed["_ollama_duration_seconds"] = round(time.time() - started, 3)
     parsed["_model"] = model
     return parsed
@@ -1790,10 +1802,15 @@ CREDITS_CHECK_LLM_INSTRUCTIONS = (
     '(phonetic misspellings, wrong casing, merged or split words, e.g. "Boultrie" for "Baldree", "AFK" '
     "for \"A. F. Kay\"). Judge whether the evidence plausibly names the same author/narrator despite "
     "that -- don't require an exact string match. "
+    "known_author or known_narrator in the input may be an empty string when that credit isn't known -- "
+    "in that case, omit the corresponding author_match/author_tag/author_evidence (or "
+    "narrator_match/narrator_tag/narrator_evidence) fields from your response entirely rather than "
+    "guessing or judging a credit you weren't given. "
     "The input data below is INPUT ONLY -- never copy its key names into your response. author_tag and "
     "narrator_tag in your response must be copied verbatim from the known_author/known_narrator values "
     "given in the input, never the placeholder text shown in the shape below. "
-    "Return JSON only, matching exactly this shape: "
+    "Return JSON only, matching exactly this shape (omitting author_*/narrator_* fields per the rule "
+    "above when the matching known_* value was empty): "
     '{"credits_check":{"author_match":"match|mismatch|uncertain","author_tag":"<verbatim known_author value>",'
     '"author_evidence":"the phrase in opening_credits_evidence that supports this","narrator_match":"match|mismatch|uncertain",'
     '"narrator_tag":"<verbatim known_narrator value>","narrator_evidence":"the phrase in opening_credits_evidence that supports this"}}.'
@@ -1807,6 +1824,51 @@ def _build_credits_check_prompt(known_author: str, known_narrator: str, opening_
         "opening_credits_evidence": opening_credits_evidence,
     }
     return f"{CREDITS_CHECK_LLM_INSTRUCTIONS} Input data: {json.dumps(payload, ensure_ascii=False)}"
+
+
+def _time_bounded_evidence(source_text: str, max_end_seconds: float) -> str:
+    """Keep only the "[start - end] text" lines (as formatted by
+    enrich_chapter_evidence) whose own start timestamp is at or before
+    max_end_seconds.
+
+    enrich_chapter_evidence merges evidence from a much wider window (35s)
+    than what a chapter's own dedicated ASR pass actually covers, so a
+    credits row's source_text can include bled-in narration from the *next*
+    chapter -- bounding by time (using the same boundary the ASR pass itself
+    used, see _evidence_window_for_chapter/CREDITS_EVIDENCE_BUFFER_SECONDS)
+    keeps only what's actually relevant, instead of a blind character-count
+    cutoff that could just as easily cut off the credits line itself.
+    Lines that don't match the expected timestamp format are kept as-is
+    (fail open, never silently drop real content over a formatting quirk).
+    """
+    kept_lines = []
+    for line in source_text.split("\n"):
+        match = re.match(r"^\[(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-", line)
+        if not match:
+            kept_lines.append(line)
+            continue
+        try:
+            start = parse_hms(match.group(1))
+        except ValueError:
+            kept_lines.append(line)
+            continue
+        if start <= max_end_seconds:
+            kept_lines.append(line)
+    return "\n".join(kept_lines)
+
+
+def _recover_credits_check(review: dict[str, Any]) -> dict[str, Any] | None:
+    """credits_check straight from a clean parse, or -- as a last resort --
+    salvaged from an otherwise truncated/malformed response via
+    _extract_json_object(). The dedicated credits-check prompt is small
+    (~1-2KB) and rarely truncates in practice, so this mostly matters as
+    cheap insurance rather than a load-bearing recovery path.
+    """
+    if review.get("credits_check"):
+        return review["credits_check"]
+    if review.get("parse_error"):
+        return _extract_json_object(str(review.get("raw_response") or ""), "credits_check")
+    return None
 
 
 def _build_hybrid_llm_prompt(
@@ -2054,21 +2116,31 @@ def detect_chapters_hybrid(
             None,
         )
         book_credits = resolve_book_credits(source)
-        if opening_credits_chapter and (book_credits.get("author") or book_credits.get("narrator")):
+        has_known_credits = bool(book_credits.get("author") or book_credits.get("narrator"))
+        # A second, independent Ollama call -- deliberate cost for reliability
+        # (see the module docstring on CREDITS_CHECK_LLM_INSTRUCTIONS): skip
+        # it outright if a cancellation is already pending rather than
+        # spending up to ~25s more on a result that will be discarded.
+        if opening_credits_chapter and has_known_credits and not (should_cancel and should_cancel()):
             if progress:
                 progress(f"Cross-checking author/narrator credits with {llm_model}")
             try:
+                evidence = _time_bounded_evidence(
+                    str(opening_credits_chapter.get("source_text") or ""),
+                    float(opening_credits_chapter.get("end") or 0.0) + CREDITS_EVIDENCE_BUFFER_SECONDS,
+                )
                 credits_review = _call_ollama_json(
                     llm_endpoint or DEFAULT_OLLAMA_ENDPOINT,
                     llm_model or "gemma4:latest",
                     _build_credits_check_prompt(
                         book_credits.get("author", ""),
                         book_credits.get("narrator", ""),
-                        normalize_text(str(opening_credits_chapter.get("source_text") or ""))[:400],
+                        normalize_text(evidence)[:CREDITS_CHECK_EVIDENCE_MAX_CHARS],
                     ),
                 )
-                if credits_review.get("credits_check"):
-                    review["credits_check"] = credits_review["credits_check"]
+                recovered_credits_check = _recover_credits_check(credits_review)
+                if recovered_credits_check:
+                    review["credits_check"] = recovered_credits_check
             except Exception:
                 pass
         result["hybrid"]["llm_review"] = review
@@ -2140,7 +2212,7 @@ def metadata_json_path(source: Path) -> Path:
     return _companion_path(source, "metadata.json", ".metadata.json")
 
 
-def _read_json_file(path: Path) -> dict[str, Any]:
+def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -2156,14 +2228,14 @@ def resolve_book_credits(source: Path) -> dict[str, str]:
     the sidecar's curated book.author/book.narrator first, then the sibling
     Audiobookshelf metadata.json's authors/narrators lists.
     """
-    sidecar = _read_json_file(chapter_sidecar_path(source))
+    sidecar = read_json_file(chapter_sidecar_path(source))
     if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
         sidecar = sidecar["sidecar"]
     book = sidecar.get("book", {}) or {}
     author = str(book.get("author") or "").strip()
     narrator = str(book.get("narrator") or "").strip()
     if not author or not narrator:
-        metadata = _read_json_file(metadata_json_path(source))
+        metadata = read_json_file(metadata_json_path(source))
         if not author:
             author = ", ".join(str(a).strip() for a in (metadata.get("authors") or []) if str(a).strip())
         if not narrator:
@@ -2248,7 +2320,7 @@ def save_result(source: Path, payload: dict[str, Any], srt: str = "", transcript
     max_audio_seconds = float((payload.get("settings") or {}).get("max_audio_seconds") or 0.0)
     variant = f"preview-{round(max_audio_seconds / 60)}min" if max_audio_seconds > 0 else ""
     paths = result_paths(source, variant=variant)
-    sidecar = _read_json_file(paths["sidecar"])
+    sidecar = read_json_file(paths["sidecar"])
     sidecar["chapter_forge"] = payload
     sidecar.setdefault("schema_version", 1)
     _write_json_file(paths["sidecar"], sidecar)
@@ -2265,7 +2337,7 @@ def save_result(source: Path, payload: dict[str, Any], srt: str = "", transcript
 
 def load_existing_result(source: Path) -> dict[str, Any] | None:
     paths = result_paths(source)
-    sidecar = _read_json_file(paths["sidecar"])
+    sidecar = read_json_file(paths["sidecar"])
     chapter_forge = sidecar.get("chapter_forge")
     if isinstance(chapter_forge, dict):
         return chapter_forge

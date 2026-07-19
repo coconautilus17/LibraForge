@@ -82,6 +82,7 @@ from app.chaptering import (
     chapter_sidecar_path,
     load_existing_result as load_existing_chapter_result,
     metadata_json_path as chapter_metadata_json_path,
+    read_json_file as read_chapter_json_file,
     save_result as save_chapter_result,
     write_cue as write_chapter_cue,
 )
@@ -4207,29 +4208,19 @@ def resolve_asin_for_chaptering(source: Path, override: str = "") -> str:
     override = (override or "").strip()
     if override:
         return override.upper()
-    sidecar_path = chapter_sidecar_path(source)
-    if sidecar_path.exists():
-        try:
-            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            sidecar = {}
-        if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
-            sidecar = sidecar["sidecar"]
-        book = sidecar.get("book", {}) or {}
-        marker = sidecar.get("marker", {}) or {}
-        audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
-        asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
-        if asin:
-            return asin.upper()
-    metadata_path = chapter_metadata_json_path(source)
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            metadata = {}
-        asin = str(metadata.get("asin") or "").strip()
-        if asin:
-            return asin.upper()
+    sidecar = read_chapter_json_file(chapter_sidecar_path(source))
+    if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
+        sidecar = sidecar["sidecar"]
+    book = sidecar.get("book", {}) or {}
+    marker = sidecar.get("marker", {}) or {}
+    audible_meta = sidecar.get("audible", {}) or marker.get("audible", {}) or {}
+    asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
+    if asin:
+        return asin.upper()
+    metadata = read_chapter_json_file(chapter_metadata_json_path(source))
+    asin = str(metadata.get("asin") or "").strip()
+    if asin:
+        return asin.upper()
     return ""
 
 
