@@ -13,6 +13,8 @@ import threading
 import time
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -5635,6 +5637,40 @@ def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> 
 _ebook_metadata_fill_lock = threading.Lock()
 
 
+def _extract_epub_metadata(path: Path) -> tuple[str, str]:
+    """Read (title, author) from an epub's embedded OPF metadata.
+
+    An epub is a zip archive; META-INF/container.xml points at the actual
+    package (.opf) file, which carries the publisher's own Dublin Core
+    <dc:title>/<dc:creator> fields -- not a guess derived from the
+    filename. Verified live against real books whose filenames have no
+    word separators at all (e.g. "efficientlinuxatthecommandline.epub"):
+    the embedded title/author were correct in every case checked.
+
+    Returns ("", "") on any failure (corrupt zip, missing container/opf,
+    no dc:title) -- never raises, so a malformed epub just falls back to
+    the filename-stem heuristic in the caller.
+    """
+    dc_ns = "{http://purl.org/dc/elements/1.1/}"
+    try:
+        with zipfile.ZipFile(path) as zf:
+            container = ET.fromstring(zf.read("META-INF/container.xml"))
+            rootfile = container.find(
+                ".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile"
+            )
+            opf_path = rootfile.get("full-path") if rootfile is not None else None
+            if not opf_path:
+                return "", ""
+            opf = ET.fromstring(zf.read(opf_path))
+            title_el = opf.find(f".//{dc_ns}title")
+            creator_el = opf.find(f".//{dc_ns}creator")
+            title = (title_el.text or "").strip() if title_el is not None else ""
+            author = (creator_el.text or "").strip() if creator_el is not None else ""
+            return title, author
+    except (KeyError, zipfile.BadZipFile, ET.ParseError, OSError):
+        return "", ""
+
+
 def _ebook_query_from_stem(stem: str) -> str:
     """Best-effort recovery of a searchable title from a filename stem.
 
@@ -5709,14 +5745,43 @@ def _fill_one_ebook_unit(fixer_module, unit) -> None:
         # title that's known unresolvable, risking the Goodreads circuit
         # breaker for no benefit.
         return
-    query = _ebook_query_from_stem(unit.path.stem)
+    epub_path = unit.formats.get("epub")
+    embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
+    query = embedded_title or _ebook_query_from_stem(unit.path.stem)
     if not query:
         return
-    candidate = search_ebook_candidates(title=query)
+    candidate = search_ebook_candidates(title=query, author=embedded_author)
     attempted_at = datetime.now(timezone.utc).isoformat()
     source_formats = sorted(unit.formats.keys())
     source_files = {ext: str(p) for ext, p in unit.formats.items()}
     if not candidate:
+        if embedded_title:
+            # Providers found nothing even against the real embedded
+            # title/author -- fall back to that embedded metadata itself
+            # (self-sourced, no cover/summary since an epub doesn't carry
+            # those) rather than leaving the book blank. This already has
+            # a real title, so no attempted_at marker: the existing-title
+            # check at the top of this function is what skips it on
+            # future passes, same as a provider-confirmed match.
+            fixer_module.write_ebook_sidecar(
+                unit.path,
+                source_formats=source_formats,
+                source_files=source_files,
+                book={
+                    "title": embedded_title,
+                    "subtitle": "",
+                    "author": embedded_author,
+                    "narrator": "",
+                    "series": "",
+                    "sequence": "",
+                    "year": "",
+                    "summary": "",
+                    "genre": "",
+                    "isbn": "",
+                    "cover_url": "",
+                },
+            )
+            return
         blank_book = {
             "title": "",
             "subtitle": "",

@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
 from app.main import (
@@ -430,3 +431,106 @@ class EnsureEbookMetadataFilledTests(unittest.TestCase):
             _ensure_ebook_metadata_filled()
             time.sleep(0.3)
             self.assertEqual(search_mock.call_count, first_call_count)
+
+    _CONTAINER_XML = """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+
+    def _make_epub(self, rel: str, title: str, author: str) -> Path:
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        opf = f"""<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
+  </metadata>
+</package>
+"""
+        with zipfile.ZipFile(p, "w") as zf:
+            zf.writestr("META-INF/container.xml", self._CONTAINER_XML)
+            zf.writestr("OEBPS/content.opf", opf)
+        return p
+
+    def test_search_query_uses_embedded_epub_title_and_author_over_the_mangled_stem(self):
+        # "efficientlinuxatthecommandline" has no word separators at all --
+        # the filename-stem heuristic alone can't recover it (see the
+        # unresolvable-unit test above), but the epub's own embedded
+        # metadata has the real title/author right there.
+        self._make_epub(
+            "Linux/EPUB/efficientlinuxatthecommandline.epub",
+            title="Efficient Linux at the Command Line",
+            author="Daniel J. Barrett",
+        )
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and library_index.get_ebook_state().status != "ready":
+            time.sleep(0.02)
+
+        candidate = {
+            "title": "Efficient Linux at the Command Line", "subtitle": "",
+            "authors": ["Daniel J. Barrett"], "series": "", "sequence": "",
+            "year": "2022", "cover_url": "https://x/y.jpg", "summary": "...", "isbn": "",
+        }
+        with patch("app.main.search_ebook_candidates", return_value=candidate) as search_mock:
+            _ensure_ebook_metadata_filled()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and search_mock.call_count == 0:
+                time.sleep(0.02)
+            time.sleep(0.1)
+
+        search_mock.assert_called_once_with(
+            title="Efficient Linux at the Command Line", author="Daniel J. Barrett"
+        )
+
+    def test_falls_back_to_embedded_metadata_when_providers_find_nothing(self):
+        self._make_epub(
+            "Linux/EPUB/kubernetes_upandrunning.epub",
+            title="Kubernetes: Up and Running",
+            author="Kelsey Hightower",
+        )
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and library_index.get_ebook_state().status != "ready":
+            time.sleep(0.02)
+
+        import app.main as main_module
+        fixer_module = main_module.load_fixer_module(main_module.default_fixer_script())
+        unit_path = self.root / "Linux" / "EPUB" / "kubernetes_upandrunning.epub"
+
+        with patch("app.main.search_ebook_candidates", return_value=None) as search_mock:
+            _ensure_ebook_metadata_filled()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and search_mock.call_count == 0:
+                time.sleep(0.02)
+            time.sleep(0.1)
+
+        sidecar = fixer_module.read_book_sidecar(unit_path)
+        self.assertIsNotNone(sidecar)
+        self.assertEqual(sidecar["title"], "Kubernetes: Up and Running")
+        self.assertEqual(sidecar["author"], "Kelsey Hightower")
+        # Self-sourced, not provider-confirmed: no cover/summary available.
+        self.assertEqual(sidecar.get("cover_url", ""), "")
+
+    def test_pdf_only_unit_still_uses_stem_fallback_no_epub_to_read(self):
+        # No epub present in this unit's formats -- _extract_epub_metadata
+        # has nothing to read, so this must fall back to the pre-existing
+        # stem-normalization query exactly as before this change.
+        self._touch("Linux/PDF/gitpocketguide.pdf")
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and library_index.get_ebook_state().status != "ready":
+            time.sleep(0.02)
+
+        with patch("app.main.search_ebook_candidates", return_value=None) as search_mock:
+            _ensure_ebook_metadata_filled()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and search_mock.call_count == 0:
+                time.sleep(0.02)
+            time.sleep(0.1)
+
+        search_mock.assert_called_once_with(title="gitpocketguide", author="")
