@@ -40,6 +40,14 @@ const PROVIDER_LABELS = {
   'soundbooththeater': 'SoundBooth Theater',
   'goodreads': 'Goodreads',
   'kindle': 'Kindle (cover)',
+  'librivox': 'LibriVox',
+  'storytel': 'Storytel',
+  'audioteka': 'Audioteka',
+  'bookbeat': 'BookBeat',
+  'bigfinish': 'Big Finish',
+  'ardaudiothek': 'ARD Audiothek',
+  'dreifragezeichen': 'Die drei ???',
+  'hardcover': 'Hardcover',
 };
 
 function fixerMajorVersion(scriptName) {
@@ -1507,7 +1515,7 @@ function buildMatchCard(item) {
   const { label: statusLabel, cls: statusClass } = matchStatusInfo(item);
   const local = item.local || {};
   const m = item.match || {};
-  const providerLabel = escapeHtml(item.provider || 'Match');
+  const providerLabel = escapeHtml(PROVIDER_LABELS[item.provider] || item.provider || 'Match');
   const writeAction = String(item.write_action || '').replace(/_/g, ' ');
   const writeNote = item.write_note ? ` title="${escapeHtml(item.write_note)}"` : '';
 

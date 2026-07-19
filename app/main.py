@@ -308,7 +308,20 @@ def search_abs_agg_candidates(
         # rather than leak a fabricated "abs-agg-{provider}-{i}" string into
         # the saved sidecar.
         asin = match.get("asin", "") or ""
-        publisher = _ABS_AGG_PROVIDERS_FALLBACK.get(provider, provider)
+        # Only GraphicAudio/SoundBooth Theater are confirmed to genuinely be
+        # their own publisher (PR #234) -- neither ever returns a real
+        # "publisher" field from abs-agg, so their display name is the only
+        # signal available and it's a deliberate, earned exception. Every
+        # other abs-agg provider must prefer the match's own real publisher
+        # field when the API supplies one (ARD Audiothek, Audioteka, Big
+        # Finish, and Storytel all genuinely do), and otherwise stay blank
+        # rather than fabricate the provider's own name as a publisher it
+        # was never confirmed to be (LibriVox, BookBeat, Die drei ??? etc.).
+        if provider in SPECIAL_PROVIDERS:
+            publisher = _ABS_AGG_PROVIDERS_FALLBACK.get(provider, provider)
+        else:
+            publisher = match.get("publisher", "") or ""
+        language = match.get("language", "") or ""
         duration_seconds = match.get("duration") or 0
         duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
         genre = _pick_genre(match.get("genres") or [])
@@ -326,6 +339,7 @@ def search_abs_agg_candidates(
             "publisher": publisher,
             "summary": summary,
             "genre": genre,
+            "language": language,
         }
         series_only_meta = {
             "title": "",
@@ -340,6 +354,7 @@ def search_abs_agg_candidates(
             "publisher": publisher,
             "summary": "",
             "genre": genre,
+            "language": language,
         }
         allowed_modes = ["full"] + (["series_only"] if series_name else [])
 
