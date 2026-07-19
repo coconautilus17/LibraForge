@@ -17,19 +17,38 @@
 # Unified image: m4b-tool's real CLI (normally Alpine-only) + faster-whisper
 # (normally Debian-only, no manylinux/musl wheels for ctranslate2). m4b-tool
 # itself is a portable PHP phar with no libc dependency of its own, so the
-# Debian base just needs a PHP runtime + the phar. The one native-binary gap
-# is mp4v2 (mp4chaps/mp4art/mp4info/mp4tags) plus fdkaac and tone, which have
-# no Debian package (mp4v2 was dropped from Debian's repos) -- those are
-# copied from the upstream Alpine image along with the musl libs they need,
-# isolated under /opt/musl-* so they don't collide with Debian's own glibc
-# libraries of the same name.
+# Debian base just needs a PHP runtime + the phar. The native-binary gaps --
+# mp4v2 (mp4chaps/mp4art/mp4info/mp4tags) plus fdkaac, tone, and ffmpeg/
+# ffprobe -- are all copied from the upstream Alpine image along with the
+# musl libs they need, isolated under /opt/musl-* so they don't collide with
+# Debian's own glibc libraries of the same name.
 #
-# Known gap: ffmpeg here comes from Debian's own package, which -- unlike
-# Alpine's -- excludes the non-free libfdk_aac encoder. M4BRunRequest's
-# default audio_codec is "libfdk_aac", so a merge will fail here unless the
-# request overrides it (e.g. to "aac", ffmpeg's built-in encoder) until this
-# is fixed the same way as the tools above: source ffmpeg from the Alpine
-# stage instead of Debian's apt package.
+# ffmpeg/ffprobe specifically come from Alpine, not Debian's apt package
+# (like the other tools), for two real reasons found live, not assumed:
+#   1. Debian's ffmpeg excludes the non-free libfdk_aac encoder entirely
+#      (license policy) -- Alpine's includes it, and M4BRunRequest's default
+#      audio_codec is "libfdk_aac".
+#   2. Debian's `apt-get install ffmpeg` pulls in ~250MB of transitive
+#      dependencies this app never touches -- LLVM, Mesa (GPU video
+#      accel), a text-to-speech library, an SMT solver, H.265/AV1 video
+#      codecs -- assumed necessary for a full desktop multimedia install,
+#      irrelevant for a headless audio-only server. Alpine's equivalent
+#      packages don't carry this weight even though ffprobe's own
+#      dependency *list* is just as long (X11/Vulkan/PulseAudio/etc, all
+#      unused here too) -- their combined real size is far smaller.
+# ffmpeg itself ships as a self-contained static binary in the m4b-tool
+# base image (needs only the musl loader, already copied above for the
+# other tools). ffprobe isn't bundled there, so it's installed via `apk
+# --root` into an isolated prefix instead -- this is *not* as clean as the
+# 4-library mp4v2 copy: ffprobe eagerly resolves its full dependency graph
+# at process start (confirmed live -- it refused to even print `-version`
+# without a PulseAudio *plugin* file present, `libpulsecommon-*.so`, dlopen'd
+# from a `pulseaudio/` subdirectory rather than declared as a normal ELF
+# dependency `ldd` would show), so the whole isolated root's lib directory
+# is copied wholesale rather than hand-picking files the way mp4v2's copy
+# does. Never exercises any of that unused functionality at runtime (no
+# GPU/audio-device access happens in this app), only pays for it to exist
+# on disk and to satisfy the dynamic linker's eager startup resolution.
 
 FROM sandreas/m4b-tool@sha256:3154399019ed6a2d26fd477f71a1367e4c60e605d0188699028ad3444afd3c70 AS m4btool-source
 
@@ -37,6 +56,16 @@ FROM m4btool-source AS m4btool-patch
 COPY scripts/patch-m4b-tool-cuesheet.php /tmp/patch-m4b-tool-cuesheet.php
 RUN cp /usr/local/bin/m4b-tool /tmp/m4b-tool.phar \
     && php -d phar.readonly=0 /tmp/patch-m4b-tool-cuesheet.php /tmp/m4b-tool.phar
+
+FROM m4btool-source AS alpine-ffprobe
+# Installed into an isolated root (not the live filesystem) purely to get a
+# clean, self-contained copy of ffprobe + its real dependency closure to
+# COPY --from later -- this stage itself is discarded, only its output is
+# used.
+RUN apk add --no-cache --root /alpine-ffprobe-root --initdb \
+        -X https://dl-cdn.alpinelinux.org/alpine/v3.20/main \
+        -X https://dl-cdn.alpinelinux.org/alpine/v3.20/community \
+        --allow-untrusted ffmpeg
 
 FROM python:3.12-slim
 
@@ -51,7 +80,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ffmpeg libgomp1 \
+        libgomp1 \
         php-cli php-xml php-mbstring php-curl php-zip \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv
@@ -68,9 +97,17 @@ COPY --from=m4btool-source \
     /usr/local/bin/mp4tags /usr/local/bin/fdkaac /usr/local/bin/tone \
     /opt/musl-bin/
 COPY --from=m4btool-patch /tmp/m4b-tool.phar /usr/local/bin/m4b-tool.phar
+# ffmpeg itself is a self-contained static binary in the base image (musl
+# loader only, verified via `file`/`ldd`). ffprobe needs its whole isolated
+# apk root's lib tree -- see the stage comment above for why this one can't
+# be trimmed to a handful of files the way the others were.
+COPY --from=m4btool-source /usr/local/bin/ffmpeg /opt/musl-bin/ffmpeg
+COPY --from=alpine-ffprobe /alpine-ffprobe-root/usr/bin/ffprobe /opt/musl-bin/ffprobe
+COPY --from=alpine-ffprobe /alpine-ffprobe-root/usr/lib/ /opt/musl-libs/
+COPY --from=alpine-ffprobe /alpine-ffprobe-root/lib/ /opt/musl-libs/
 
-RUN for bin in mp4chaps mp4art mp4info mp4tags fdkaac tone; do \
-        printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/opt/musl-libs /opt/musl-bin/%s "$@"\n' "$bin" > /usr/local/bin/$bin; \
+RUN for bin in mp4chaps mp4art mp4info mp4tags fdkaac tone ffmpeg ffprobe; do \
+        printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/opt/musl-libs:/opt/musl-libs/pulseaudio /opt/musl-bin/%s "$@"\n' "$bin" > /usr/local/bin/$bin; \
         chmod +x /usr/local/bin/$bin /opt/musl-bin/$bin; \
     done \
     && printf '#!/bin/sh\nexec php /usr/local/bin/m4b-tool.phar "$@"\n' > /usr/local/bin/m4b-tool \
