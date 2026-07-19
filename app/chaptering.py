@@ -1763,6 +1763,16 @@ def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
     return parsed
 
 
+# A prior version of this prompt included a sentence telling the model the
+# "Book data" JSON was input-only and not to echo its key names -- added
+# while chasing a real failure where a large "clean" book's response
+# degraded into echoing input field names instead of following the output
+# schema. That failure turned out to be caused by the (since-removed)
+# credits_check_request/credits_check schema addition bloating this prompt,
+# not by the absence of this framing sentence: A/B tested with a real
+# Ollama call against the exact real prompt that originally failed, 3 trials
+# each way, identical (clean) results with and without the sentence. Removed
+# rather than kept as unproven defensive bulk.
 HYBRID_LLM_REVIEW_INSTRUCTIONS = (
     "You are the text-only parser/reviewer in a cascade audiobook chapter detection pipeline. "
     "STT means speech-to-text; audio has already been transcribed. "
@@ -1775,8 +1785,6 @@ HYBRID_LLM_REVIEW_INSTRUCTIONS = (
     'flag these with action "clean_title" and a title trimmed to just the marker and number '
     '(for example "Chapter 3"), not a rewritten summary. Only do this when the source_text clearly '
     "shows narration continuing past the marker; do not clean_title a genuinely spoken chapter name. "
-    "The \"Book data\" JSON further below is INPUT ONLY, for you to analyze -- never copy its key names "
-    "(book, chapter_count, focused_asr_evidence, etc.) into your response. "
     "Return JSON only, matching only this OUTPUT shape: "
     '{"assessment":"clean|resolved_by_focused_asr|needs_manual_review|poor","confidence":"low|medium|high",'
     '"accepted_corrections":[{"action":"add_missing_chapter|correct_number|clean_title|keep",'
