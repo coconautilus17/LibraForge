@@ -4429,21 +4429,18 @@ def build_cached_target_dir(
             metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
         return TargetResolution(result.target_dir, result.filename, "new", metadata)
 
-    series_dir, status, entry = resolve_series_directory(cache, metadata)
+    # resolve_series_directory's Path return is used only to decide whether a
+    # match was found (folded into `status` below) -- the actual destination
+    # is always rendered through build_target_dir_for_template so an
+    # already-indexed series is placed exactly like a brand-new one. Cache
+    # routing only changes *which* author/series a book merges into (via
+    # apply_cache_to_metadata's canonical-name correction, still applied
+    # below); it must never change how the path itself is rendered, or a
+    # custom naming_template's book-level segment (and filename) would only
+    # ever apply the first time a series is seen and silently stop applying
+    # for every subsequent book in it.
+    _series_dir, status, entry = resolve_series_directory(cache, metadata)
     effective_metadata = apply_cache_to_metadata(metadata, entry)
-    if series_dir is not None:
-        # Known limitation: a book routed into an already-indexed series
-        # folder always uses build_book_folder_name() for its leaf, not the
-        # naming_template -- the structure cache only stores author/series
-        # path aliases, not a per-book rendered leaf. Since the cache is
-        # invalidated whenever naming_template changes (see
-        # load_structure_cache), this branch only fires once a rebuild has
-        # already happened, at which point book_folder still reflects the
-        # built-in logic rather than the active template's own book-level
-        # segment definition. Filename customization is scoped out of this
-        # branch for the same reason -- it's cache-routed, not rendered.
-        book_folder = build_book_folder_name(effective_metadata)
-        return TargetResolution(series_dir / book_folder, None, status, effective_metadata)
     result = build_target_dir_for_template(
         destination_root, effective_metadata, naming_template,
         filename_applies=filename_applies, source_file=source_file,
