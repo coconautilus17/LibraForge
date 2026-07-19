@@ -3,3 +3,4 @@
 # Install only when you want local transcription-based chapter detection.
 faster-whisper==1.1.1
 requests==2.32.5
+tqdm==4.68.4

@@ -800,7 +800,81 @@ def snap_to_silence(
             candidate.confidence = min(0.99, candidate.confidence + 0.08)
 
 
-def finalize_chapters(candidates: list[ChapterCandidate], duration: float) -> list[dict[str, Any]]:
+# Audible always brackets a book with "Opening Credits" (0 -> first real
+# chapter) and "End Credits" (last real chapter -> file end) entries. Our own
+# silence+keyword detection has no spoken cue to key off for either -- no one
+# says the word "credits" -- so these are synthesized structurally instead:
+# a real leading/trailing gap around the detected content, not a keyword hit.
+# Thresholds are deliberately conservative (matches SoS's own
+# SILENCE_DURATION=2.5 "this counts as a boundary-caliber silence" cutoff)
+# so a normal in-chapter pause near the very start/end of a book isn't
+# mistaken for a credits split.
+OPENING_CREDITS_MIN_GAP_SECONDS = 3.0
+END_CREDITS_MIN_SILENCE_SECONDS = 2.5
+END_CREDITS_MIN_TRAILING_SECONDS = 3.0
+# The credits reading itself has its own internal pauses between sentences,
+# often longer than the pause marking where real content actually ends --
+# live-verified on Divine Apostasy Book 2 where the *first* qualifying gap
+# after the last chapter's start landed within 2s of Audible's own End
+# Credits boundary, but the *latest* one instead caught a pause inside the
+# credits reading, 21s past the real boundary. Search only the file's own
+# tail (credits readings are always short and always at the very end,
+# regardless of book length) and take the earliest qualifying gap in it.
+END_CREDITS_SEARCH_WINDOW_SECONDS = 120.0
+
+
+def _synthesize_credits_rows(
+    chapters: list[dict[str, Any]],
+    duration: float,
+    silences: list[tuple[float, float]] | None,
+) -> list[dict[str, Any]]:
+    if not chapters:
+        return chapters
+
+    def credits_row(title: str, start: float, end: float) -> dict[str, Any]:
+        return {
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "title": title,
+            "marker_kind": title,
+            "number": None,
+            "confidence": None,
+            "reasons": ["synthesized:leading-gap" if title == "Opening Credits" else "synthesized:trailing-gap"],
+            "source_text": "",
+            "source_file": "",
+            "original_start": round(start, 3),
+        }
+
+    result = list(chapters)
+    if result[0]["start"] > OPENING_CREDITS_MIN_GAP_SECONDS:
+        result.insert(0, credits_row("Opening Credits", 0.0, result[0]["start"]))
+
+    if silences:
+        last = result[-1]
+        window_start = max(last["start"], duration - END_CREDITS_SEARCH_WINDOW_SECONDS)
+        candidates = [
+            (s_start, s_end)
+            for s_start, s_end in silences
+            if s_start >= window_start
+            and (s_end - s_start) >= END_CREDITS_MIN_SILENCE_SECONDS
+            and (duration - s_end) >= END_CREDITS_MIN_TRAILING_SECONDS
+        ]
+        if candidates:
+            split_start, split_end = min(candidates, key=lambda pair: pair[0])
+            split_point = (split_start + split_end) / 2.0
+            last["end"] = round(split_point, 3)
+            result.append(credits_row("End Credits", split_point, duration))
+
+    for index, chapter in enumerate(result):
+        chapter["id"] = index + 1
+    return result
+
+
+def finalize_chapters(
+    candidates: list[ChapterCandidate],
+    duration: float,
+    silences: list[tuple[float, float]] | None = None,
+) -> list[dict[str, Any]]:
     chapters: list[dict[str, Any]] = []
     ordered = sorted(candidates, key=lambda item: item.start)
     for index, candidate in enumerate(ordered):
@@ -820,7 +894,7 @@ def finalize_chapters(candidates: list[ChapterCandidate], duration: float) -> li
             "source_file": candidate.source_file,
             "original_start": round(candidate.original_start, 3),
         })
-    return chapters
+    return _synthesize_credits_rows(chapters, duration, silences)
 
 
 def enrich_chapter_evidence(
@@ -1786,7 +1860,7 @@ def detect_chapters_hybrid(
             window=silence_window,
             marker_lead_seconds=silence_marker_lead_seconds,
         )
-    chapters = finalize_chapters(candidates, duration)
+    chapters = finalize_chapters(candidates, duration, silences)
     evidence_segments_remote, evidence_runs = _remote_asr_for_chapter_evidence(
         original_files,
         chapters,
@@ -1794,6 +1868,8 @@ def detect_chapters_hybrid(
         endpoint=remote_endpoint or DEFAULT_REMOTE_ASR_ENDPOINT,
         model_name=focused_model_name or "medium",
         compute_type=focused_compute_type or "float16",
+        before_seconds=10.0,
+        after_seconds=10.0,
         progress=progress,
         should_cancel=should_cancel,
     )
@@ -2149,7 +2225,7 @@ def detect_chapters(
                 window=silence_window,
                 marker_lead_seconds=silence_marker_lead_seconds,
             )
-        chapters = finalize_chapters(candidates, duration)
+        chapters = finalize_chapters(candidates, duration, silences)
         enrich_chapter_evidence(chapters, segments, silences)
         return {
             "schema_version": 1,
