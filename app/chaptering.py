@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -1438,6 +1439,25 @@ def _run_sound_of_silence(
     return rows, duration, len(silences), _sos_rows_to_candidates(rows)
 
 
+class RemoteAsrUnreachableError(RuntimeError):
+    """The remote ASR server itself couldn't be reached -- a systemic
+    connectivity problem, not a per-clip content issue. Callers should fail
+    fast on this (stop retrying against a server that's already known to be
+    down) rather than catch it into the generic per-clip error handling that
+    just marks one row "failed" and silently carries on, which previously
+    let a fully-unreachable ASR server produce an apparently-successful run
+    with every single focused-gap/evidence window quietly missing.
+    """
+
+    def __init__(self, endpoint: str, cause: Exception):
+        super().__init__(
+            f"Could not reach the remote ASR server at {endpoint} ({type(cause).__name__}: {cause}). "
+            "Hybrid detection's focused gap recovery and evidence transcription both need this "
+            "reachable -- check the ASR endpoint setting under Advanced settings and confirm the "
+            "server is running and reachable from this container."
+        )
+
+
 def _post_remote_asr_audio(
     endpoint: str,
     path: Path,
@@ -1460,8 +1480,11 @@ def _post_remote_asr_audio(
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
     started = time.time()
-    with urllib.request.urlopen(request, timeout=1800) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=1800) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise RemoteAsrUnreachableError(endpoint, exc) from exc
     return payload, time.time() - started
 
 
@@ -1572,6 +1595,8 @@ def _focused_remote_asr_for_gaps(
                         ][:20],
                     }
                 )
+            except RemoteAsrUnreachableError:
+                raise
             except Exception as exc:
                 row.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         rescan_candidates = validate_sequence(dedupe_candidates(find_marker_candidates(focused_segments)))
@@ -1697,6 +1722,8 @@ def _remote_asr_for_chapter_evidence(
                         "text_preview": normalize_text(str(payload.get("text") or ""))[:1200],
                     }
                 )
+            except RemoteAsrUnreachableError:
+                raise
             except Exception as exc:
                 row.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         return evidence_segments, evidence_runs

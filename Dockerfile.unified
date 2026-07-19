@@ -7,6 +7,13 @@
 # silently regressing M4B building for anyone who opted in expecting a
 # superset of the default image's features, not a different one.
 #
+# Not published anywhere yet -- unlike the default Dockerfile (built and
+# pushed to GHCR by .github/workflows/publish-image.yml on every release),
+# this one is currently local-build-only:
+#   git clone <repo> && cd LibraForge && docker build -f Dockerfile.unified -t libraforge:chaptering .
+# See the TODO at the top of publish-image.yml for what's needed to publish
+# this alongside the default image instead.
+#
 # Unified image: m4b-tool's real CLI (normally Alpine-only) + faster-whisper
 # (normally Debian-only, no manylinux/musl wheels for ctranslate2). m4b-tool
 # itself is a portable PHP phar with no libc dependency of its own, so the

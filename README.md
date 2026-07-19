@@ -143,6 +143,13 @@ Then open **http://127.0.0.1:5056** and connect an Audible account under
 Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
 `docker pull ghcr.io/coconautilus17/libraforge:latest`.
 
+<!-- TODO: this published image is the lean default (Dockerfile) -- it doesn't
+include Chapter Forge's optional Hybrid/Full transcription ASR backends
+(faster-whisper adds ~825MB, so it's opt-in). Until a second image is
+published (see the TODO in .github/workflows/publish-image.yml), getting
+that capability means cloning the repo and building Dockerfile.unified
+yourself. Document the real command + tag here once that's live. -->
+
 ### Optional companion services
 
 | Service | Purpose | Required? |
