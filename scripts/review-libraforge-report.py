@@ -872,6 +872,7 @@ def group_existing_series_by_normalized_tag(
             })
 
         raw_variants = sorted(raw_values_by_key[key])
+        has_drift = len(raw_variants) > 1 or author_note is not None
         if len(raw_variants) > 1:
             context_note = (
                 f"{len(members)} books share normalized series {suggested_series!r} -- "
@@ -890,6 +891,7 @@ def group_existing_series_by_normalized_tag(
             "suggested_series": suggested_series,
             "suggested_author": majority_author,
             "author_note": author_note,
+            "has_drift": has_drift,
             "members": member_rows,
         })
 
@@ -1016,7 +1018,7 @@ def add_series_group_suspects(
             "id": None, "path": "", "tool": "metadata_fixer", "status": "series_group",
             "severity": "low", "recommendation": "fix_series_group",
             "reasons": [{
-                "code": "series_group_normalize", "severity": "low",
+                "code": "series_group_tagged", "severity": "low",
                 "message": group["context_note"],
                 "evidence": {
                     "suggested_series": group["suggested_series"],
@@ -1024,6 +1026,7 @@ def add_series_group_suspects(
                     "suggested_genre": _suggested_genre_string(genres),
                     "suggested_narrator": ", ".join(_dedupe_casefold(narrators)),
                     "author_note": group["author_note"],
+                    "has_drift": group["has_drift"],
                     "members": group["members"],
                     "tagged_siblings": [],
                 },

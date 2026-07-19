@@ -50,6 +50,7 @@ class BookSidecarExtendedFieldsTests(unittest.TestCase):
                     "publisher": "Publisher House",
                     "genre": "Fantasy",
                     "year": "2021",
+                    "subtitle": "A Test Novel",
                 },
             )
             meta = ORGANIZER.metadata_from_sidecar(item)
@@ -57,6 +58,7 @@ class BookSidecarExtendedFieldsTests(unittest.TestCase):
             self.assertEqual(meta["publisher"], "Publisher House")
             self.assertEqual(meta["genre"], "Fantasy")
             self.assertEqual(meta["year"], "2021")
+            self.assertEqual(meta["subtitle"], "A Test Novel")
 
     def test_norealasin_placeholder_becomes_empty_string(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,6 +86,7 @@ class BookSidecarExtendedFieldsTests(unittest.TestCase):
             self.assertEqual(meta["publisher"], "")
             self.assertEqual(meta["genre"], "")
             self.assertEqual(meta["year"], "")
+            self.assertEqual(meta["subtitle"], "")
 
 
 class MarkerSidecarExtendedFieldsTests(unittest.TestCase):
@@ -102,6 +105,7 @@ class MarkerSidecarExtendedFieldsTests(unittest.TestCase):
                     "publisher": "Marker Publisher",
                     "genre": "Sci-Fi",
                     "year": "2019",
+                    "subtitle": "A Marker Novel",
                 },
             )
             meta = ORGANIZER.metadata_from_sidecar(item)
@@ -109,6 +113,7 @@ class MarkerSidecarExtendedFieldsTests(unittest.TestCase):
             self.assertEqual(meta["publisher"], "Marker Publisher")
             self.assertEqual(meta["genre"], "Sci-Fi")
             self.assertEqual(meta["year"], "2019")
+            self.assertEqual(meta["subtitle"], "A Marker Novel")
 
 
 class InferMetadataExtendedFieldsTests(unittest.TestCase):
@@ -131,6 +136,7 @@ class InferMetadataExtendedFieldsTests(unittest.TestCase):
                 "publisher": "Publisher House",
                 "genre": "Fantasy",
                 "year": "2021",
+                "subtitle": "A Test Novel",
                 "source": "sidecar:libraforge.json",
             }
             with patch.object(ORGANIZER, "metadata_from_sidecar", return_value=sidecar):
@@ -139,6 +145,7 @@ class InferMetadataExtendedFieldsTests(unittest.TestCase):
             self.assertEqual(meta["publisher"], "Publisher House")
             self.assertEqual(meta["genre"], "Fantasy")
             self.assertEqual(meta["year"], "2021")
+            self.assertEqual(meta["subtitle"], "A Test Novel")
 
     def test_infer_metadata_defaults_extended_fields_to_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,6 +161,7 @@ class InferMetadataExtendedFieldsTests(unittest.TestCase):
             self.assertEqual(meta["publisher"], "")
             self.assertEqual(meta["genre"], "")
             self.assertEqual(meta["year"], "")
+            self.assertEqual(meta["subtitle"], "")
 
 
 if __name__ == "__main__":
