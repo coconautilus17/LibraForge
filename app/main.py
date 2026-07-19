@@ -212,6 +212,13 @@ ABS_AGG_REQUIRED_PARAMS: dict[str, tuple[str, str, str]] = {
     "bookbeat":  ("market",   "germany", "Country name, e.g. germany, sweden, united-kingdom"),
 }
 
+# Every other abs-agg provider's "duration" field is in seconds (confirmed
+# live for LibriVox, Storytel, Audioteka, Big Finish). Die drei ??? is a
+# confirmed exception: its real values (e.g. 52.4, 90, 45.65) are already in
+# minutes -- dividing those by 60 again would report a real ~52-minute
+# episode as ~1 minute.
+_ABS_AGG_DURATION_ALREADY_MINUTES = {"dreifragezeichen"}
+
 
 def _load_abs_agg_config() -> dict[str, Any]:
     try:
@@ -322,8 +329,13 @@ def search_abs_agg_candidates(
         else:
             publisher = match.get("publisher", "") or ""
         language = match.get("language", "") or ""
-        duration_seconds = match.get("duration") or 0
-        duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
+        raw_duration = match.get("duration") or 0
+        if not raw_duration:
+            duration_minutes = None
+        elif provider in _ABS_AGG_DURATION_ALREADY_MINUTES:
+            duration_minutes = round(raw_duration, 2)
+        else:
+            duration_minutes = round(raw_duration / 60, 2)
         genre = _pick_genre(match.get("genres") or [])
 
         full_meta = {
