@@ -248,6 +248,13 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
         "product_images": {"500": match.get("cover", "") or ""},
         "runtime_length_min": None,  # these sources do not return runtime
         "release_date": str(match.get("publishedYear", "") or ""),
+        # Several providers (LibriVox especially -- public-domain works are
+        # commonly read in many languages with no language filter available)
+        # genuinely return a real language value. score_product_for_metadata's
+        # language penalty already reads product.get("language") generically
+        # for any source; it was previously always inactive here since this
+        # key never existed, not because the check doesn't apply.
+        "language": match.get("language", "") or "",
         "_abs_provider": provider,
         "_abs_isbn": match.get("isbn", "") or "",
         "_abs_genres": clean_provider_genres(match.get("genres") or []),
