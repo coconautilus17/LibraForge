@@ -4259,6 +4259,40 @@ button.ghost:hover:not(:disabled) {
   background: var(--surface-soft);
 }
 
+.cf-llm-badge-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.cf-credits-check-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  font-size: var(--font-xs);
+  margin-bottom: 6px;
+}
+
+.cf-credits-check-label {
+  font-weight: 700;
+  min-width: 64px;
+}
+
+.cf-credits-check-tag {
+  color: var(--text-soft);
+}
+
+.cf-credits-check-evidence {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--font-2xs);
+  font-style: italic;
+}
+
 .cf-review-head {
   display: flex;
   align-items: center;

@@ -1697,17 +1697,30 @@ HYBRID_LLM_REVIEW_INSTRUCTIONS = (
     'flag these with action "clean_title" and a title trimmed to just the marker and number '
     '(for example "Chapter 3"), not a rewritten summary. Only do this when the source_text clearly '
     "shows narration continuing past the marker; do not clean_title a genuinely spoken chapter name. "
+    "If the book data includes a credits_check_request object (known_author, known_narrator, "
+    "opening_credits_evidence), that evidence is a rough STT transcript of the book's spoken opening "
+    "credits -- names are frequently mangled (phonetic misspellings, wrong casing, merged or split "
+    'words, e.g. "Boultrie" for "Baldree", "AFK" for "A. F. Kay"). Judge whether the evidence plausibly '
+    "names the same author/narrator despite that, don't require an exact string match. Return this as a "
+    "credits_check object; omit it entirely if no credits_check_request was supplied. "
     "Return JSON only with this shape: "
     '{"assessment":"clean|resolved_by_focused_asr|needs_manual_review|poor","confidence":"low|medium|high",'
     '"accepted_corrections":[{"action":"add_missing_chapter|correct_number|clean_title|keep",'
     '"number":1,"timestamp":"HH:MM:SS","title":"supported title","evidence":"short supplied text","reason":"short"}],'
     '"unresolved_issues":[{"type":"missing_chapter|parse_error|title_noise|sequence_conflict|needs_audio",'
     '"severity":"low|medium|high","details":"short","recommended_action":"short"}],'
-    '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"]}.'
+    '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"],'
+    '"credits_check":{"author_match":"match|mismatch|uncertain","author_tag":"known_author as given",'
+    '"author_evidence":"the phrase in opening_credits_evidence that supports this","narrator_match":"match|mismatch|uncertain",'
+    '"narrator_tag":"known_narrator as given","narrator_evidence":"the phrase in opening_credits_evidence that supports this"}}.'
 )
 
 
-def _build_hybrid_llm_prompt(result: dict[str, Any], extra_instructions: str = "") -> str:
+def _build_hybrid_llm_prompt(
+    result: dict[str, Any],
+    extra_instructions: str = "",
+    book_credits: dict[str, str] | None = None,
+) -> str:
     all_chapters = [
         {
             "id": chapter.get("id"),
@@ -1759,6 +1772,16 @@ def _build_hybrid_llm_prompt(result: dict[str, Any], extra_instructions: str = "
         "chapter_count": len(all_chapters),
         "focused_asr_evidence": focused,
     }
+    opening_credits = next(
+        (chapter for chapter in result.get("chapters", []) if chapter.get("marker_kind") == "Opening Credits"),
+        None,
+    )
+    if opening_credits and book_credits and (book_credits.get("author") or book_credits.get("narrator")):
+        payload["credits_check_request"] = {
+            "known_author": book_credits.get("author", ""),
+            "known_narrator": book_credits.get("narrator", ""),
+            "opening_credits_evidence": normalize_text(str(opening_credits.get("source_text") or ""))[:400],
+        }
     extra_block = ""
     if extra_instructions and extra_instructions.strip():
         extra_block = f" Additional reviewer instructions from the user: {extra_instructions.strip()}"
@@ -1921,7 +1944,7 @@ def detect_chapters_hybrid(
             review = _call_ollama_json(
                 llm_endpoint or DEFAULT_OLLAMA_ENDPOINT,
                 llm_model or "gemma4:latest",
-                _build_hybrid_llm_prompt(result, llm_extra_instructions),
+                _build_hybrid_llm_prompt(result, llm_extra_instructions, resolve_book_credits(source)),
             )
         except Exception as exc:
             review = {
@@ -2021,6 +2044,27 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def resolve_book_credits(source: Path) -> dict[str, str]:
+    """Author/narrator to cross-check against an Opening Credits reading --
+    same fallback chain as resolve_asin_for_chaptering() in app/main.py:
+    the sidecar's curated book.author/book.narrator first, then the sibling
+    Audiobookshelf metadata.json's authors/narrators lists.
+    """
+    sidecar = _read_json_file(chapter_sidecar_path(source))
+    if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
+        sidecar = sidecar["sidecar"]
+    book = sidecar.get("book", {}) or {}
+    author = str(book.get("author") or "").strip()
+    narrator = str(book.get("narrator") or "").strip()
+    if not author or not narrator:
+        metadata = _read_json_file(metadata_json_path(source))
+        if not author:
+            author = ", ".join(str(a).strip() for a in (metadata.get("authors") or []) if str(a).strip())
+        if not narrator:
+            narrator = ", ".join(str(n).strip() for n in (metadata.get("narrators") or []) if str(n).strip())
+    return {"author": author, "narrator": narrator}
 
 
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:

@@ -912,6 +912,29 @@ function renderChapterDiff(container, labelA, chaptersA, labelB, chaptersB) {
   `;
 }
 
+function creditsMatchTone(match) {
+  return { match: 'success', mismatch: 'danger' }[String(match || '').toLowerCase()] || 'warning';
+}
+
+function renderCreditsCheck(check) {
+  if (!check || (!check.author_tag && !check.narrator_tag)) return '';
+  const row = (label, tag, match, evidence) => `
+    <div class="cf-credits-check-row">
+      <span class="cf-credits-check-label">${escapeHtml(label)}</span>
+      <span class="cf-credits-check-tag">${escapeHtml(tag || '(not set)')}</span>
+      <span class="cf-llm-badge cf-llm-badge-${creditsMatchTone(match)}">${escapeHtml(match || 'uncertain')}</span>
+      ${evidence ? `<span class="cf-credits-check-evidence">Opening Credits said: &ldquo;${escapeHtml(evidence)}&rdquo;</span>` : ''}
+    </div>
+  `;
+  return `
+    <div class="cf-review-block">
+      <h4>Author/Narrator match <span class="info-tip" data-tooltip="Cross-checks the book's known author/narrator tags against the LLM's reading of the Opening Credits transcript. STT often mangles names, so this judges plausible matches rather than exact text."></span></h4>
+      ${check.author_tag ? row('Author', check.author_tag, check.author_match, check.author_evidence) : ''}
+      ${check.narrator_tag ? row('Narrator', check.narrator_tag, check.narrator_match, check.narrator_evidence) : ''}
+    </div>
+  `;
+}
+
 function renderAiReview() {
   const body = $('aiReviewBody');
   if (!body) return;
@@ -936,6 +959,7 @@ function renderAiReview() {
       ${meta ? `<span class="cf-review-meta">${escapeHtml(meta)}</span>` : ''}
     </div>
     ${review._error ? `<p class="note" style="color:var(--danger)">${escapeHtml(review._error)}</p>` : ''}
+    ${renderCreditsCheck(review.credits_check)}
     <div class="cf-review-block">
       <h4>Accepted corrections <span class="n">${corrections.length}</span></h4>
       ${corrections.length ? corrections.map((c) => `
