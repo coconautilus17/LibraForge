@@ -821,6 +821,12 @@ END_CREDITS_MIN_TRAILING_SECONDS = 3.0
 # tail (credits readings are always short and always at the very end,
 # regardless of book length) and take the earliest qualifying gap in it.
 END_CREDITS_SEARCH_WINDOW_SECONDS = 120.0
+# Buffer added past the synthesized Opening/End Credits boundary when
+# transcribing it for evidence: the "written by ... narrated by ..." phrase
+# regularly trails a couple seconds past the silence-derived split point
+# (live-verified on Divine Apostasy Book 2, where the real announcement ran
+# to 17.0s but the synthesized Opening Credits boundary landed at 16.4s).
+CREDITS_EVIDENCE_BUFFER_SECONDS = 5.0
 
 
 def _synthesize_credits_rows(
@@ -1598,11 +1604,25 @@ def _remote_asr_for_chapter_evidence(
         return [], []
     if progress:
         progress(f"Transcribing evidence context for {len(chapters)} chapter(s)")
+
+    def _window_for(chapter: dict[str, Any]) -> tuple[float, float]:
+        start = float(chapter.get("start") or 0.0)
+        # Opening/End Credits are synthesized with a known, often-longer span
+        # (the full "written by ... narrated by ..." announcement); the fixed
+        # before/after window used for ordinary chapter markers was truncating
+        # names mid-word, so give these two rows their full extent instead.
+        marker_kind = chapter.get("marker_kind")
+        if marker_kind == "Opening Credits":
+            return 0.0, min(duration, float(chapter.get("end") or start) + CREDITS_EVIDENCE_BUFFER_SECONDS)
+        if marker_kind == "End Credits":
+            return max(0.0, start - CREDITS_EVIDENCE_BUFFER_SECONDS), duration
+        return max(0.0, start - before_seconds), min(duration, start + after_seconds)
+
     windows = [
         SequenceGap(
             expected_number=int(chapter.get("number") or chapter.get("id") or index),
-            start=max(0.0, float(chapter.get("start") or 0.0) - before_seconds),
-            end=min(duration, float(chapter.get("start") or 0.0) + after_seconds),
+            start=_window_for(chapter)[0],
+            end=_window_for(chapter)[1],
             reason="chapter-evidence-context",
         )
         for index, chapter in enumerate(chapters, start=1)
@@ -1657,6 +1677,49 @@ def _remote_asr_for_chapter_evidence(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _extract_json_object(raw: str, key: str) -> dict[str, Any] | None:
+    """Best-effort recovery of one top-level `"key": {...}` object out of a
+    JSON string that failed to parse as a whole. Ollama's num_predict cap
+    truncates long responses mid-document (a book needing many
+    accepted_corrections runs out of room), but an earlier field like
+    credits_check is usually still complete in the raw text even though the
+    document as a whole isn't -- this recovers just that field via brace
+    matching instead of losing it along with the truncated tail.
+    """
+    marker = f'"{key}":'
+    marker_pos = raw.find(marker)
+    if marker_pos == -1:
+        return None
+    brace_start = raw.find("{", marker_pos)
+    if brace_start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(brace_start, len(raw)):
+        char = raw[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(raw[brace_start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
     request = urllib.request.Request(
         endpoint.rstrip("/") + "/api/generate",
@@ -1666,7 +1729,7 @@ def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",
-                "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 2048},
+                "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 4096},
             }
         ).encode("utf-8"),
         headers={"Content-Type": "application/json"},
@@ -1680,6 +1743,9 @@ def _call_ollama_json(endpoint: str, model: str, prompt: str) -> dict[str, Any]:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         parsed = {"parse_error": str(exc), "raw_response": raw}
+        recovered_credits_check = _extract_json_object(raw, "credits_check")
+        if recovered_credits_check is not None:
+            parsed["credits_check"] = recovered_credits_check
     parsed["_ollama_duration_seconds"] = round(time.time() - started, 3)
     parsed["_model"] = model
     return parsed
@@ -1697,29 +1763,55 @@ HYBRID_LLM_REVIEW_INSTRUCTIONS = (
     'flag these with action "clean_title" and a title trimmed to just the marker and number '
     '(for example "Chapter 3"), not a rewritten summary. Only do this when the source_text clearly '
     "shows narration continuing past the marker; do not clean_title a genuinely spoken chapter name. "
-    "If the book data includes a credits_check_request object (known_author, known_narrator, "
-    "opening_credits_evidence), that evidence is a rough STT transcript of the book's spoken opening "
-    "credits -- names are frequently mangled (phonetic misspellings, wrong casing, merged or split "
-    'words, e.g. "Boultrie" for "Baldree", "AFK" for "A. F. Kay"). Judge whether the evidence plausibly '
-    "names the same author/narrator despite that, don't require an exact string match. Return this as a "
-    "credits_check object; omit it entirely if no credits_check_request was supplied. "
-    "Return JSON only with this shape: "
+    "The \"Book data\" JSON further below is INPUT ONLY, for you to analyze -- never copy its key names "
+    "(book, chapter_count, focused_asr_evidence, etc.) into your response. "
+    "Return JSON only, matching only this OUTPUT shape: "
     '{"assessment":"clean|resolved_by_focused_asr|needs_manual_review|poor","confidence":"low|medium|high",'
     '"accepted_corrections":[{"action":"add_missing_chapter|correct_number|clean_title|keep",'
     '"number":1,"timestamp":"HH:MM:SS","title":"supported title","evidence":"short supplied text","reason":"short"}],'
     '"unresolved_issues":[{"type":"missing_chapter|parse_error|title_noise|sequence_conflict|needs_audio",'
     '"severity":"low|medium|high","details":"short","recommended_action":"short"}],'
-    '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"],'
-    '"credits_check":{"author_match":"match|mismatch|uncertain","author_tag":"known_author as given",'
-    '"author_evidence":"the phrase in opening_credits_evidence that supports this","narrator_match":"match|mismatch|uncertain",'
-    '"narrator_tag":"known_narrator as given","narrator_evidence":"the phrase in opening_credits_evidence that supports this"}}.'
+    '"validator_rules_to_apply":["short deterministic rule"],"notes":["short note"]}.'
 )
+
+# A dedicated, minimal prompt for the author/narrator credits cross-check --
+# deliberately NOT folded into HYBRID_LLM_REVIEW_INSTRUCTIONS's shared prompt.
+# Live-tested against real books: a large "clean" book (35 chapters, nothing
+# needing correction, so the full chapter list is sent verbatim) pushed the
+# combined review prompt to ~21K chars, and the model's response degraded
+# into echoing input field names instead of following the output schema --
+# a context-pressure failure distinct from and in addition to the num_predict
+# truncation that can drop a late field from a long corrections list. Keeping
+# this check on its own short prompt makes it immune to both: its size never
+# grows with the book's chapter count or correction count.
+CREDITS_CHECK_LLM_INSTRUCTIONS = (
+    "You are cross-checking an audiobook's known author/narrator credits against a rough "
+    "speech-to-text transcript of its spoken Opening Credits announcement. STT frequently mangles names "
+    '(phonetic misspellings, wrong casing, merged or split words, e.g. "Boultrie" for "Baldree", "AFK" '
+    "for \"A. F. Kay\"). Judge whether the evidence plausibly names the same author/narrator despite "
+    "that -- don't require an exact string match. "
+    "The input data below is INPUT ONLY -- never copy its key names into your response. author_tag and "
+    "narrator_tag in your response must be copied verbatim from the known_author/known_narrator values "
+    "given in the input, never the placeholder text shown in the shape below. "
+    "Return JSON only, matching exactly this shape: "
+    '{"credits_check":{"author_match":"match|mismatch|uncertain","author_tag":"<verbatim known_author value>",'
+    '"author_evidence":"the phrase in opening_credits_evidence that supports this","narrator_match":"match|mismatch|uncertain",'
+    '"narrator_tag":"<verbatim known_narrator value>","narrator_evidence":"the phrase in opening_credits_evidence that supports this"}}.'
+)
+
+
+def _build_credits_check_prompt(known_author: str, known_narrator: str, opening_credits_evidence: str) -> str:
+    payload = {
+        "known_author": known_author,
+        "known_narrator": known_narrator,
+        "opening_credits_evidence": opening_credits_evidence,
+    }
+    return f"{CREDITS_CHECK_LLM_INSTRUCTIONS} Input data: {json.dumps(payload, ensure_ascii=False)}"
 
 
 def _build_hybrid_llm_prompt(
     result: dict[str, Any],
     extra_instructions: str = "",
-    book_credits: dict[str, str] | None = None,
 ) -> str:
     all_chapters = [
         {
@@ -1772,16 +1864,6 @@ def _build_hybrid_llm_prompt(
         "chapter_count": len(all_chapters),
         "focused_asr_evidence": focused,
     }
-    opening_credits = next(
-        (chapter for chapter in result.get("chapters", []) if chapter.get("marker_kind") == "Opening Credits"),
-        None,
-    )
-    if opening_credits and book_credits and (book_credits.get("author") or book_credits.get("narrator")):
-        payload["credits_check_request"] = {
-            "known_author": book_credits.get("author", ""),
-            "known_narrator": book_credits.get("narrator", ""),
-            "opening_credits_evidence": normalize_text(str(opening_credits.get("source_text") or ""))[:400],
-        }
     extra_block = ""
     if extra_instructions and extra_instructions.strip():
         extra_block = f" Additional reviewer instructions from the user: {extra_instructions.strip()}"
@@ -1944,7 +2026,7 @@ def detect_chapters_hybrid(
             review = _call_ollama_json(
                 llm_endpoint or DEFAULT_OLLAMA_ENDPOINT,
                 llm_model or "gemma4:latest",
-                _build_hybrid_llm_prompt(result, llm_extra_instructions, resolve_book_credits(source)),
+                _build_hybrid_llm_prompt(result, llm_extra_instructions),
             )
         except Exception as exc:
             review = {
@@ -1967,6 +2049,28 @@ def detect_chapters_hybrid(
             }
             if progress:
                 progress(f"LLM review unavailable; saving chapters without AI corrections ({type(exc).__name__})")
+        opening_credits_chapter = next(
+            (chapter for chapter in chapters if chapter.get("marker_kind") == "Opening Credits"),
+            None,
+        )
+        book_credits = resolve_book_credits(source)
+        if opening_credits_chapter and (book_credits.get("author") or book_credits.get("narrator")):
+            if progress:
+                progress(f"Cross-checking author/narrator credits with {llm_model}")
+            try:
+                credits_review = _call_ollama_json(
+                    llm_endpoint or DEFAULT_OLLAMA_ENDPOINT,
+                    llm_model or "gemma4:latest",
+                    _build_credits_check_prompt(
+                        book_credits.get("author", ""),
+                        book_credits.get("narrator", ""),
+                        normalize_text(str(opening_credits_chapter.get("source_text") or ""))[:400],
+                    ),
+                )
+                if credits_review.get("credits_check"):
+                    review["credits_check"] = credits_review["credits_check"]
+            except Exception:
+                pass
         result["hybrid"]["llm_review"] = review
         if not review.get("parse_error"):
             _apply_llm_chapter_corrections(result, review)

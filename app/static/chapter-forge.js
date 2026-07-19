@@ -939,7 +939,7 @@ function renderAiReview() {
   const body = $('aiReviewBody');
   if (!body) return;
   const review = loaded?.result?.hybrid?.llm_review;
-  if (!review || !review.assessment) {
+  if (!review || (!review.assessment && !review.credits_check)) {
     body.innerHTML = '<p class="note">No AI review data. Enable "LLM review names" under Advanced settings and re-run detection to see one here.</p>';
     return;
   }
@@ -955,11 +955,15 @@ function renderAiReview() {
     .filter(Boolean).join(' · ');
   body.innerHTML = `
     <div class="cf-review-head">
-      <span class="cf-llm-badge cf-llm-badge-${tone}">${escapeHtml(assessment.replace(/_/g, ' '))}${review.confidence ? ` (${escapeHtml(review.confidence)})` : ''}</span>
+      ${assessment
+        ? `<span class="cf-llm-badge cf-llm-badge-${tone}">${escapeHtml(assessment.replace(/_/g, ' '))}${review.confidence ? ` (${escapeHtml(review.confidence)})` : ''}</span>`
+        : '<span class="cf-llm-badge cf-llm-badge-warning">review incomplete</span>'}
       ${meta ? `<span class="cf-review-meta">${escapeHtml(meta)}</span>` : ''}
     </div>
     ${review._error ? `<p class="note" style="color:var(--danger)">${escapeHtml(review._error)}</p>` : ''}
+    ${review.parse_error && !review._error ? `<p class="note" style="color:var(--danger)">The LLM response was truncated or malformed (${escapeHtml(review.parse_error)}). Chapter corrections could not be read, but any recovered sections are shown below.</p>` : ''}
     ${renderCreditsCheck(review.credits_check)}
+    ${assessment ? `
     <div class="cf-review-block">
       <h4>Accepted corrections <span class="n">${corrections.length}</span></h4>
       ${corrections.length ? corrections.map((c) => `
@@ -990,6 +994,7 @@ function renderAiReview() {
         <h4>Notes</h4>
         ${notes.map((n) => `<div class="cf-review-item">${escapeHtml(n)}</div>`).join('')}
       </div>
+    ` : ''}
     ` : ''}
   `;
 }
