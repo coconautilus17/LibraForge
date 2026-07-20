@@ -1952,7 +1952,6 @@ def write_ebook_sidecar(
     source_formats: list[str],
     source_files: dict[str, str],
     book: dict,
-    attempted_at: str | None = None,
 ) -> None:
     """Write (or update) an ebook's libraforge.json sidecar.
 
@@ -1961,15 +1960,6 @@ def write_ebook_sidecar(
     ID3/MP4 tags and audio streams that don't apply to an epub/pdf. `book`
     is stored verbatim under sidecar.book -- the same field
     read_book_sidecar() already reads for any book type, audiobook or not.
-
-    `attempted_at`, when given, records an ISO-8601 UTC timestamp under
-    sidecar.ebook_fill_attempted_at. Used for a unit whose auto-fill lookup
-    ran but found no candidate: `book` in that case has a blank title (so
-    read_book_sidecar() correctly still reports "no applied metadata"), and
-    this marker is the only record that the lookup was already tried --
-    see read_ebook_fill_attempted_at(), which the auto-fill worker checks
-    so an unresolvable unit isn't re-queried (and re-hits Open
-    Library/Goodreads) on every pass.
 
     Always writes the per-file sidecar (alone=False), never the
     folder-level one: ebook bucket folders (EPUB/, PDF/) routinely hold
@@ -1984,29 +1974,7 @@ def write_ebook_sidecar(
     payload["source_files"] = source_files
     sidecar = payload.setdefault("sidecar", {})
     sidecar["book"] = book
-    if attempted_at:
-        sidecar["ebook_fill_attempted_at"] = attempted_at
     _write_libraforge(lf_path, payload)
-
-def read_ebook_fill_attempted_at(source: Path) -> str | None:
-    """Return the ebook auto-fill attempt timestamp written by
-    write_ebook_sidecar, if a lookup was already tried for `source` but
-    found no candidate.
-
-    Distinct from read_book_sidecar(): an attempted-but-unresolved unit is
-    written with a blank book.title on purpose (so it never looks like real
-    applied metadata), which means read_book_sidecar()'s title-truthy check
-    can't tell "never looked up" from "looked up, found nothing" -- this
-    reads the raw sidecar payload directly so callers can tell them apart.
-    """
-    try:
-        lf_path, lf = _load_libraforge_raw(source)
-        if not lf_path.is_file():
-            return None
-        sidecar = lf.get("sidecar") or {}
-        return sidecar.get("ebook_fill_attempted_at") or None
-    except (json.JSONDecodeError, OSError):
-        return None
 
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     suffix = source.suffix.lower()
