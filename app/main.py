@@ -1138,6 +1138,15 @@ class ManualReviewLoadRequest(BaseModel):
     use_backup_tags: bool = False
 
 
+class ManualReviewEbookLoadRequest(BaseModel):
+    path: str
+
+
+class ManualReviewEbookApplyRequest(BaseModel):
+    path: str
+    book: dict[str, Any]
+
+
 class ManualReviewDiscoverRequest(BaseModel):
     path: str = Field(default="/audiobooks")
     script_name: str = Field(default_factory=default_fixer_script)
@@ -7306,6 +7315,66 @@ def discover_manual_review(req: ManualReviewDiscoverRequest) -> dict[str, Any]:
 @app.post("/api/manual-review/load")
 def load_manual_review_target(req: ManualReviewLoadRequest) -> dict[str, Any]:
     return inspect_manual_review_target(path=req.path, script_name=req.script_name, use_backup_tags=req.use_backup_tags)
+
+
+@app.post("/api/manual-review/ebook/load")
+def load_manual_review_ebook_target(req: ManualReviewEbookLoadRequest) -> dict[str, Any]:
+    target_path = validate_audiobook_path(req.path)
+    fixer_module = load_fixer_module(default_fixer_script())
+    local = fixer_module.read_book_sidecar(target_path) or {}
+    ebook_state = library_index.get_ebook_state()
+    unit = next((u for u in ebook_state.units if u.path == target_path), None)
+    formats = sorted(unit.formats.keys()) if unit else [target_path.suffix.lower().lstrip(".")]
+
+    epub_path = (
+        unit.formats.get("epub") if unit
+        else target_path if target_path.suffix.lower() == ".epub"
+        else None
+    )
+    embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
+    query = embedded_title or _ebook_query_from_stem(target_path.stem)
+
+    candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
+    score = None
+    match: dict[str, Any] | None = None
+    if candidate:
+        authors = candidate.get("authors") or []
+        candidate_author = authors[0] if authors else ""
+        score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
+        if score >= EBOOK_MATCH_SCORE_FLOOR:
+            match = {
+                "title": candidate.get("title", ""),
+                "subtitle": candidate.get("subtitle", ""),
+                "author": candidate_author,
+                "series": candidate.get("series", ""),
+                "sequence": candidate.get("sequence", ""),
+                "year": candidate.get("year", ""),
+                "genre": "",
+                "isbn": candidate.get("isbn", ""),
+                "cover_url": candidate.get("cover_url", ""),
+                "summary": candidate.get("summary", ""),
+            }
+        else:
+            score = None
+
+    return {
+        "path": str(target_path),
+        "local": {
+            "title": local.get("title", ""),
+            "subtitle": local.get("subtitle", ""),
+            "author": local.get("author", ""),
+            "series": local.get("series", ""),
+            "sequence": str(local.get("sequence", "") or ""),
+            "year": local.get("year", ""),
+            "genre": local.get("genre", ""),
+            "isbn": local.get("isbn", ""),
+            "summary": local.get("summary", ""),
+            "cover_url": local.get("cover_url", ""),
+        },
+        "match": match,
+        "score": score,
+        "formats": formats,
+    }
 
 
 @app.get("/api/manual-review/current-cover")
