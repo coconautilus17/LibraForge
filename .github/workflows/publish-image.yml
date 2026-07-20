@@ -3,6 +3,24 @@ name: Publish image
 # Build the self-contained image and push it to GitHub Container Registry.
 # Runs on each published GitHub release (tagged vX.Y.Z) and can be triggered
 # manually. Uses the built-in GITHUB_TOKEN, so no extra secrets are needed.
+#
+# TODO (once Chapter Forge merges, when ready to actually publish it):
+# this only builds the default Dockerfile. Dockerfile.unified (m4b-tool +
+# Chapter Forge's optional ASR stack together, see its own header comment)
+# is not published anywhere -- today the only way to get it is cloning the
+# repo and building it yourself. To publish it alongside the default image:
+#   1. Turn this job into a `strategy.matrix` with two entries (dockerfile:
+#      Dockerfile / Dockerfile.unified), each with its own tag suffix (e.g.
+#      "" and "-chaptering") passed to docker/metadata-action's `flavor`
+#      input, so releases publish both
+#      ghcr.io/<repo>:latest and ghcr.io/<repo>:latest-chaptering.
+#   2. Confirm Dockerfile.unified's multi-platform build actually works for
+#      linux/arm64 (untested) before including it in `platforms:` below --
+#      the sandreas/m4b-tool base and its cross-copied Alpine binaries may
+#      not have arm64 support; may need to publish that variant amd64-only.
+#   3. Update README.md's "Run the published image" section to document the
+#      second tag once it's live -- do not add pull instructions for a tag
+#      that doesn't exist yet.
 on:
   release:
     types: [published]

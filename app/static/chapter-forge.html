@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LibraForge - Chapter Forge</title>
+  <script src="/static/ui-preferences.js?v=20260711-6"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260719-2" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
+</head>
+<body data-page="chapter-forge">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <img class="app-logo" src="/app-icon.png?v=20260613-3" alt="" aria-hidden="true" />
+        <div class="brand-text">
+          <span class="brand-name">LibraForge</span>
+          <span class="brand-subtitle">Your Audiobookshelf companion tool to forge your library into shape.</span>
+        </div>
+      </div>
+      <nav class="site-nav" aria-label="LibraForge tools">
+        <a class="site-nav-link" href="/">Start Here</a>
+        <a class="site-nav-link" href="/forge">Metadata Forge</a>
+        <a class="site-nav-link" href="/m4b-tool">M4B Tool</a>
+        <a class="site-nav-link active" href="/chapter-forge" aria-current="page">Chapter Forge</a>
+        <a class="site-nav-link" href="/organizer">Folder Forge</a>
+        <a class="site-nav-link" href="/enrichment-forge">Enrichment Forge</a>
+        <a class="site-nav-link" href="/library">Library</a>
+      </nav>
+      <div class="topbar-actions">
+        <button id="explanationsToggle" class="header-action" type="button" aria-pressed="false">Collapse explanations</button>
+        <a id="settingsToggle" class="icon-button" href="/settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.2 7.2 0 0 0-1.63-.94L14.86 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.63.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.07.64-.07.94s.02.63.07.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.05.7 1.63.94l.36 3.18h3.84l.36-3.18c.58-.24 1.13-.55 1.63-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.94 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+        </a>
+        <a id="versionTag" class="version-tag" href="https://github.com/coconautilus17/LibraForge/releases" target="_blank" rel="noopener noreferrer" title="View changelog / release notes"></a>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell" id="main-content">
+    <div class="page-descriptor">
+      <div class="page-descriptor-icon">
+        <img src="/static/chapter-forge.png?v=20260718-5" alt="" aria-hidden="true" />
+      </div>
+      <div class="page-descriptor-copy">
+        <span class="eyebrow">Detect, audit, edit</span>
+        <h2 class="page-descriptor-title">Chapter Forge</h2>
+        <p class="page-descriptor-text">Find spoken chapter markers in single-file audiobooks using silence detection and speech-to-text, then review and correct them before saving.</p>
+      </div>
+    </div>
+
+    <div class="side-nav-layout">
+      <aside class="side-nav" aria-label="Chapter Forge sections">
+        <a href="#source">Source</a>
+        <a href="#run">Detection</a>
+        <a href="#editor">Chapter editor</a>
+        <a href="#live-output">Live output</a>
+        <a href="#audibleCompare">Compare to Audible</a>
+        <a href="#aiReview">AI review</a>
+        <a href="#artifacts">Artifacts</a>
+      </aside>
+      <div class="side-nav-content">
+
+        <section id="source" class="card side-nav-card">
+          <div class="run-settings-heading">
+            <h2>Source</h2>
+          </div>
+          <div class="grid">
+            <label style="grid-column: 1 / -1"><span class="field-label">Audio file or folder <span class="info-tip" data-tooltip="Select a single audiobook file for audio preview, or a folder to process sorted audio files as one book."></span></span>
+              <div class="search-row">
+                <input id="sourcePath" list="sourceSuggestions" value="/audiobooks" style="flex:1" />
+                <datalist id="sourceSuggestions"></datalist>
+                <button id="sourceBrowseBtn" class="secondary" type="button" aria-expanded="false" aria-controls="sourceBrowser">Browse</button>
+              </div>
+            </label>
+          </div>
+          <div id="sourceBrowser" class="folder-browser" hidden aria-label="Folder browser">
+            <div class="fb-bar">
+              <button id="sourceFbUp" class="icon-button small" type="button" aria-label="Go to parent folder">Up</button>
+              <nav id="sourceFbBreadcrumb" class="fb-breadcrumb" aria-label="Current path"></nav>
+              <button id="sourceFbHome" class="icon-button small" type="button" aria-label="Go to library root">Home</button>
+              <button id="sourceFbClose" class="icon-button small" type="button" aria-label="Close browser">x</button>
+            </div>
+            <ul id="sourceFbList" class="fb-list" role="listbox" aria-label="Subdirectories"></ul>
+            <div class="fb-footer">
+              <span id="sourceFbCurrentLabel" class="fb-current-path"></span>
+              <button id="sourceFbSelect" type="button">Select this folder</button>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="loadBtn">Load chapters</button>
+            <button id="findCandidateBtn" class="secondary">Find a book without chapters</button>
+          </div>
+          <div id="candidateList" class="file-list" hidden></div>
+          <p class="note">Load reads existing chapter artifacts if present. Running detection below already saves its result. Editing rows in the chapter editor only changes what's in the browser -- nothing is written to disk until you click <b>Save edits</b> there, which writes the sidecar JSON, the CUE sheet, and (if enabled) the SRT transcript next to the source file.</p>
+          <p id="loadStatus" class="note">No source loaded.</p>
+        </section>
+
+        <section id="run" class="card side-nav-card">
+          <div class="run-settings-heading">
+            <h2>Detection</h2>
+            <button id="advancedRunToggle" class="advanced-toggle" type="button" aria-expanded="false">Advanced</button>
+          </div>
+
+          <div class="cf-segmented" id="backendSegmented" role="radiogroup" aria-label="Detection backend">
+            <label class="cf-seg-option" data-value="hybrid-sos-focused">
+              <input type="radio" name="backend" value="hybrid-sos-focused" checked />
+              <span class="seg-title">Hybrid <span class="seg-rec">Recommended</span></span>
+              <span class="seg-note">Silence + keyword scan first, ASR only on sequence gaps. Far faster than a full pass on this host.</span>
+            </label>
+            <label class="cf-seg-option" data-value="faster-whisper">
+              <input type="radio" name="backend" value="faster-whisper" />
+              <span class="seg-title">Full transcription</span>
+              <span class="seg-note">Transcribes the whole book. Most accurate, slowest on CPU.</span>
+            </label>
+            <label class="cf-seg-option" data-value="audible-chapters">
+              <input type="radio" name="backend" value="audible-chapters" />
+              <span class="seg-title">Audible chapters</span>
+              <span class="seg-note">One API lookup, no audio processing. Instant, but only as good as Audible's own chapter data for this ASIN.</span>
+            </label>
+            <label class="cf-seg-option" data-value="compare-methods">
+              <input type="radio" name="backend" value="compare-methods" />
+              <span class="seg-title">Compare methods</span>
+              <span class="seg-note">Runs 2 methods back to back (never at once) against this source and shows a side-by-side diff. Doesn't save or change the chapters loaded below.</span>
+            </label>
+          </div>
+
+          <div id="audibleAsinRow" class="grid" hidden>
+            <label style="grid-column: 1 / -1"><span class="field-label">ASIN <span class="info-tip" data-tooltip="Auto-filled from this book's existing sidecar (Fixer/Manual Review) when available. Type or paste one if it's blank or wrong."></span></span>
+              <input id="audibleAsin" placeholder="e.g. B017V4IM1G" />
+            </label>
+          </div>
+
+          <div id="compareMethodsRow" class="grid" hidden>
+            <label><span class="field-label">Method A</span>
+              <select id="compareMethodA">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters">Audible chapters</option>
+              </select>
+            </label>
+            <label><span class="field-label">Method B</span>
+              <select id="compareMethodB">
+                <option value="hybrid-sos-focused">Hybrid</option>
+                <option value="faster-whisper">Full transcription</option>
+                <option value="audible-chapters" selected>Audible chapters</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="localDetectionGrid" class="grid">
+            <label><span class="field-label">Whisper model <span class="info-tip" data-tooltip="First-pass ASR model. Hybrid mode uses this only for focused gap rescans unless full transcription is selected. ASR is optional -- LibraForge does not install faster-whisper unless the image or environment is built with it."></span></span>
+              <select id="model" data-selected="small"></select>
+            </label>
+            <label><span class="field-label">Language <span class="info-tip" data-tooltip="Language hint for faster-whisper, usually en for English audiobooks."></span></span>
+              <input id="language" value="en" />
+            </label>
+
+            <div class="cf-group-heading cf-group-heading-first">Model &amp; compute</div>
+            <label class="chapter-advanced-setting"><span class="field-label">Local device <span class="info-tip" data-tooltip="Device for local faster-whisper. Use cpu on this server unless CUDA is installed inside the container."></span></span>
+              <select id="device"><option value="auto">auto</option><option value="cuda">cuda</option><option value="cpu">cpu</option></select>
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Local precision <span class="info-tip" data-tooltip="Compute type for local faster-whisper. float32 can be more compatible on CPU but uses more RAM; int8 uses less memory; float16 is normally for GPU."></span></span>
+              <select id="computeType"><option value="int8">int8</option><option value="float16">float16</option><option value="float32" selected>float32</option></select>
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">CPU threads <span class="info-tip" data-tooltip="Maximum local CPU threads for faster-whisper. 0 lets the library choose."></span></span>
+              <input id="cpuThreads" type="number" min="0" value="4" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Beam size <span class="info-tip" data-tooltip="ASR search breadth. Higher values may improve transcription in some cases but are slower and not consistently better for chapter detection."></span></span>
+              <input id="beamSize" type="number" min="1" max="10" step="1" value="5" />
+            </label>
+
+            <div class="cf-group-heading chapter-advanced-setting">Focused gap recovery <span class="cf-group-note">recovers chapters skipped in the first pass, either backend</span></div>
+            <label class="chapter-advanced-setting"><span class="field-label">Focused rescan model <span class="info-tip" data-tooltip="Used only around missing chapter-number gaps. Leave blank to reuse the first-pass model."></span></span>
+              <select id="focusedModel" data-selected="medium"></select>
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Focused precision <span class="info-tip" data-tooltip="Compute type used for focused gap rescans."></span></span>
+              <select id="focusedComputeType"><option value="">reuse first pass</option><option value="int8" selected>int8</option><option value="float16">float16</option><option value="float32">float32</option></select>
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Focused beam size <span class="info-tip" data-tooltip="ASR beam size for focused gap windows. Beam 5 is the tested default."></span></span>
+              <input id="focusedBeamSize" type="number" min="1" max="10" step="1" value="5" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Max gap rescans <span class="info-tip" data-tooltip="Maximum number of sequence gaps to send through focused ASR."></span></span>
+              <input id="maxGapRescans" type="number" min="0" max="40" step="1" value="8" />
+            </label>
+
+            <div class="cf-group-heading chapter-advanced-setting cf-hybrid-only" id="remoteLlmGroupHeading">ASR &amp; LLM <span class="cf-group-note">hybrid mode only</span></div>
+            <label id="remoteEndpointRow" class="chapter-advanced-setting cf-hybrid-only"><span class="field-label">ASR endpoint <span class="info-tip" data-tooltip="HTTP base URL of a reachable machine running the ASR server, used for hybrid mode's focused gap windows."></span></span>
+              <input id="remoteEndpoint" value="http://192.168.1.50:8000" />
+            </label>
+            <label id="llmEndpointRow" class="chapter-advanced-setting cf-hybrid-only" hidden><span class="field-label">LLM endpoint <span class="info-tip" data-tooltip="Ollama-compatible base URL used only when LLM review names is enabled. The LLM reviews text evidence; it does not process audio."></span></span>
+              <input id="llmEndpoint" value="http://192.168.1.50:11434" />
+            </label>
+            <label id="llmModelRow" class="chapter-advanced-setting cf-hybrid-only" hidden><span class="field-label">LLM model <span class="info-tip" data-tooltip="Model tag sent to the LLM endpoint, for example gemma4:latest."></span></span>
+              <input id="llmModel" value="gemma4:latest" />
+            </label>
+            <label id="llmExtraRow" class="chapter-advanced-setting cf-hybrid-only" hidden style="grid-column: 1 / -1">
+              <span class="field-label">Extra instructions for AI review (optional) <span class="info-tip" data-tooltip="How your text combines with the default review prompt below."></span></span>
+              <div class="cf-prompt-mode">
+                <span class="field-label">Prompt mode</span>
+                <select id="promptMode">
+                  <option value="append">Append to default prompt</option>
+                  <option value="replace" disabled>Replace default prompt entirely (coming soon)</option>
+                </select>
+              </div>
+              <textarea id="llmExtraInstructions" rows="2" placeholder="Leave blank to use the default prompt only."></textarea>
+              <details class="cf-default-prompt">
+                <summary>Show default prompt</summary>
+                <pre id="llmDefaultPrompt" class="cf-default-prompt-text">Loading&hellip;</pre>
+              </details>
+            </label>
+
+            <div class="cf-group-heading chapter-advanced-setting">Silence &amp; timing</div>
+            <label class="chapter-advanced-setting"><span class="field-label">Silence snap window <span class="info-tip" data-tooltip="Maximum seconds to move a detected marker to a nearby silence boundary."></span></span>
+              <input id="silenceWindow" type="number" min="0" max="20" step="0.5" value="4" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Marker lead-in seconds <span class="info-tip" data-tooltip="Snap the start to this many seconds before the spoken word 'chapter' if that point is inside nearby silence."></span></span>
+              <input id="silenceMarkerLeadSeconds" type="number" min="0" max="10" step="0.25" value="1" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Audio limit minutes <span class="info-tip" data-tooltip="Limits full transcription to the first N minutes for testing. 0 processes the full book."></span></span>
+              <input id="maxAudioMinutes" type="number" min="0" max="1440" step="1" value="0" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">ASR chunk minutes <span class="info-tip" data-tooltip="Splits long full-transcription runs into chunks."></span></span>
+              <input id="chunkMinutes" type="number" min="1" max="120" step="1" value="20" />
+            </label>
+
+            <div class="cf-group-heading chapter-advanced-setting">Resource guards <span class="cf-group-note">stop the run before it overloads this host</span></div>
+            <label class="chapter-advanced-setting"><span class="field-label">RAM warning % <span class="info-tip" data-tooltip="If RAM remains above this percent, the run is stopped."></span></span>
+              <input id="maxMemoryPercent" type="number" min="10" max="99" step="1" value="97" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Minimum free RAM GB <span class="info-tip" data-tooltip="The run is stopped if free memory stays below this value."></span></span>
+              <input id="minMemoryAvailableGb" type="number" min="0" max="128" step="0.5" value="2" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Critical swap % <span class="info-tip" data-tooltip="High swap use usually means the run is close to making the server unresponsive."></span></span>
+              <input id="maxSwapPercent" type="number" min="0" max="99" step="1" value="90" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Max swap growth % <span class="info-tip" data-tooltip="Stops the run if swap usage grows too much compared with run start."></span></span>
+              <input id="maxSwapGrowthPercent" type="number" min="0" max="99" step="1" value="10" />
+            </label>
+            <label class="chapter-advanced-setting"><span class="field-label">Max CPU % <span class="info-tip" data-tooltip="Optional CPU usage guard. Leave at 100 unless you need to reserve CPU for other services."></span></span>
+              <input id="maxCpuPercent" type="number" min="10" max="100" step="1" value="100" />
+            </label>
+          </div>
+
+          <div id="localDetectionChecks" class="checks">
+            <label><input id="vadFilter" type="checkbox" /> VAD filter <span class="info-tip" data-tooltip="Voice activity detection for full transcription. Generally tested with VAD off because it can remove useful pauses/context."></span></label>
+            <label><input id="carryContext" type="checkbox" /> Carry transcript context <span class="info-tip" data-tooltip="Lets faster-whisper condition each segment on previous text. Can improve prose continuity but may hallucinate repeated chapter text."></span></label>
+            <label><input id="silenceSnap" type="checkbox" checked /> Snap to nearby silence <span class="info-tip" data-tooltip="After markers are found, move starts to nearby silence boundaries when available."></span></label>
+            <label><input id="saveFullTranscript" type="checkbox" /> Save transcript artifact <span class="info-tip" data-tooltip="Writes the transcript segments produced by the selected path."></span></label>
+            <label><input id="focusedRescan" type="checkbox" checked /> Rescan sequence gaps <span class="info-tip" data-tooltip="Runs focused ASR around missing chapter-number gaps, on either backend."></span></label>
+            <label id="sosNumbersOnlyRow" class="cf-hybrid-only" hidden><input id="sosNumbersOnly" type="checkbox" /> Bare-number chapter markers <span class="info-tip" data-tooltip="Detect spoken numbers ('One.', 'Two.'...) as chapter starts instead of the word 'Chapter'. Use when the narrator never says 'Chapter' aloud -- check Audible's own chapter titles first to confirm this is the case."></span></label>
+            <label id="llmReviewRow" class="cf-hybrid-only" hidden><input id="llmReview" type="checkbox" /> LLM review names <span class="info-tip" data-tooltip="Sends text evidence to the configured LLM to review titles and obvious parse issues. The deterministic validator still controls timestamps."></span></label>
+            <label><input id="resourceGuard" type="checkbox" checked /> Stop when resources hit limits <span class="info-tip" data-tooltip="Monitors RAM, swap, and CPU during local runs and stops before the server becomes unresponsive."></span></label>
+          </div>
+
+          <div class="cf-status-strip" id="statusStrip">
+            <span class="cf-stat" id="statCores">Host &mdash; cores</span>
+            <span class="cf-stat-divider"></span>
+            <span class="cf-stat" id="statCpu">CPU &mdash;</span>
+            <span class="cf-stat" id="statRam">RAM &mdash;</span>
+            <span class="cf-stat" id="statSwap">Swap &mdash;</span>
+          </div>
+          <p id="etaStatus" class="note">ETA appears after loading a source.</p>
+
+          <div class="actions" id="detectActionsRow">
+            <button id="detectBtn">Detect chapters</button>
+            <button id="cancelBtn" class="secondary" disabled>Cancel</button>
+          </div>
+          <div class="progress-wrap" id="detectProgressWrap">
+            <div class="ring" id="ring" style="--pct: 0"><span id="percent">0%</span></div>
+            <div>
+              <h2 id="phaseLabel">Idle</h2>
+              <p id="phaseDetail">No detection run started.</p>
+              <p id="etaCountdown" class="eta-countdown">ETA not calculated.</p>
+            </div>
+          </div>
+
+          <div id="compareMethodsActions" class="actions" hidden>
+            <button id="runMethodComparisonBtn" type="button">Run comparison</button>
+          </div>
+          <p id="compareMethodsStatus" class="note"></p>
+          <div id="compareMethodsResult"></div>
+        </section>
+
+        <section id="live-output" class="card side-nav-card">
+          <h2>Live output</h2>
+          <pre id="tail"></pre>
+          <details class="cf-run-log-toggle">
+            <summary>Run log</summary>
+            <div id="runLogBody" class="cf-run-log"><p class="note">No run log recorded for this book yet.</p></div>
+          </details>
+        </section>
+
+        <section id="editor" class="card side-nav-card">
+          <div class="run-settings-heading">
+            <h2>Chapter editor</h2>
+            <div class="cf-editor-header-actions">
+              <span id="saveDirtyNote" class="cf-dirty-note" hidden>&#9679; Unsaved changes</span>
+              <button id="saveBtn" class="secondary" disabled>Save edits</button>
+              <button id="addChapterBtn" class="secondary" type="button" disabled>+ Add chapter</button>
+            </div>
+          </div>
+          <audio id="audioPreview" controls preload="metadata"></audio>
+          <div class="cf-audio-actions">
+            <button id="playAllBtn" class="secondary" type="button" disabled>Play all</button>
+          </div>
+
+          <div class="cf-summary-strip">
+            <div class="cf-summary-stats" id="chapterStats">No chapters loaded.</div>
+            <div class="cf-summary-actions">
+              <label class="cf-confidence-mode"><span class="field-label">Confidence display</span>
+                <select id="confidenceMode">
+                  <option value="heuristic">Heuristic only</option>
+                  <option value="llm-book">+ book-level LLM</option>
+                  <option value="llm-chapter" disabled>+ per-chapter LLM (coming soon)</option>
+                </select>
+              </label>
+              <button id="cleanAllTitlesBtn" class="ghost" type="button">Clean all titles</button>
+              <button id="flagFilterChip" class="cf-filter-chip" type="button" hidden>Show only flagged <span class="count" id="flagFilterCount">0</span></button>
+            </div>
+          </div>
+
+          <div id="gapBanner" class="cf-gap-banner" hidden></div>
+
+          <div class="chapter-table-wrap">
+            <table class="chapter-table">
+              <thead>
+                <tr><th style="width:28px">#</th><th>Time range</th><th>Title</th><th style="width:96px">Confidence</th><th style="width:100px"></th></tr>
+              </thead>
+              <tbody id="chapterRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="audibleCompare" class="card side-nav-card">
+          <div class="run-settings-heading">
+            <h2>Compare to Audible</h2>
+            <button id="compareAudibleBtn" class="secondary" type="button">Compare to Audible</button>
+          </div>
+          <div id="audibleCompareBody"><p class="note">Compares whatever's currently loaded in the chapter editor above against Audible's own chapter data for this book, matched by chapter number (not raw list position) -- works no matter which backend produced the current chapters.</p></div>
+        </section>
+
+        <section id="aiReview" class="card side-nav-card">
+          <h2>AI review</h2>
+          <div id="aiReviewBody"><p class="note">No AI review data. Enable "LLM review names" under Advanced settings and re-run detection to see one here.</p></div>
+        </section>
+
+        <section id="artifacts" class="card side-nav-card">
+          <h2>Artifacts</h2>
+          <div id="artifactList" class="file-list"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/static/ui-common.js?v=20260711-6"></script>
+  <script src="/static/chapter-forge.js?v=20260719-3"></script>
+</body>
+</html>

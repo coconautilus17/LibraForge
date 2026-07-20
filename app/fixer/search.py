@@ -86,6 +86,46 @@ def audible_lookup_by_asin(
     return None
 
 
+def audible_lookup_chapters(client: audible.Client, asin: str) -> list[dict] | None:
+    """Return a book's chapter list from Audible's dedicated chapters endpoint.
+
+    Distinct from catalog/products (RESPONSE_GROUPS) -- this hits
+    content/{asin}/metadata?response_groups=chapter_info, a separate Audible
+    request the normal match flow never makes. General-purpose lookup, not
+    tied to any one caller: suitable for a one-off or small-batch call (a
+    single book's chapter fetch, an export, etc). Do not call it from the
+    batch matcher's per-book hot loop or any other high-volume path.
+
+    Each returned entry is {"title": str, "start_ms": int, "length_ms": int}.
+    Returns None -- never guesses -- when the ASIN is empty, Audible's
+    chapter data for it is not marked accurate, or the request fails.
+    """
+    asin_upper = asin.strip().upper()
+    if not asin_upper:
+        return None
+    try:
+        response = client.get(
+            f"content/{asin_upper}/metadata",
+            params={"response_groups": "chapter_info"},
+        )
+    except Exception:
+        return None
+    chapter_info = (response.get("content_metadata") or {}).get("chapter_info") or {}
+    if chapter_info.get("is_accurate") is not True:
+        return None
+    raw_chapters = chapter_info.get("chapters")
+    if not isinstance(raw_chapters, list):
+        return None
+    return [
+        {
+            "title": chapter.get("title") or "",
+            "start_ms": int(chapter.get("start_offset_ms") or 0),
+            "length_ms": int(chapter.get("length_ms") or 0),
+        }
+        for chapter in raw_chapters
+    ]
+
+
 # ---------------------------------------------------------------------------
 # ABS / abs-agg / abs-tract search helpers
 # ---------------------------------------------------------------------------
