@@ -7377,6 +7377,39 @@ def load_manual_review_ebook_target(req: ManualReviewEbookLoadRequest) -> dict[s
     }
 
 
+@app.post("/api/manual-review/ebook/apply")
+def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict[str, Any]:
+    target_path = validate_audiobook_path(req.path)
+    fixer_module = load_fixer_module(default_fixer_script())
+    ebook_state = library_index.get_ebook_state()
+    unit = next((u for u in ebook_state.units if u.path == target_path), None)
+    if unit:
+        source_formats = sorted(unit.formats.keys())
+        source_files = {ext: str(p) for ext, p in unit.formats.items()}
+    else:
+        ext = target_path.suffix.lower().lstrip(".")
+        source_formats = [ext]
+        source_files = {ext: str(target_path)}
+
+    book = {
+        "title": req.book.get("title", ""),
+        "subtitle": req.book.get("subtitle", ""),
+        "author": req.book.get("author", ""),
+        "narrator": "",
+        "series": req.book.get("series", ""),
+        "sequence": req.book.get("sequence", ""),
+        "year": req.book.get("year", ""),
+        "summary": req.book.get("summary", ""),
+        "genre": req.book.get("genre", ""),
+        "isbn": req.book.get("isbn", ""),
+        "cover_url": req.book.get("cover_url", ""),
+    }
+    fixer_module.write_ebook_sidecar(
+        target_path, source_formats=source_formats, source_files=source_files, book=book,
+    )
+    return {"path": str(target_path), "book": book}
+
+
 @app.get("/api/manual-review/current-cover")
 def current_manual_review_cover(
     path: str,

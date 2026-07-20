@@ -70,5 +70,60 @@ class EbookLoadEndpointTests(unittest.TestCase):
         self.assertEqual(res.json()["local"]["title"], "Existing Title")
 
 
+class EbookApplyEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.patcher = patch.object(main, "AUDIOBOOKS_ROOT", self.root)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.tmp.cleanup()
+
+    def _touch(self, rel_path):
+        p = self.root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"")
+        return p
+
+    def test_apply_writes_the_submitted_book_verbatim(self):
+        epub_path = self._touch("Linux/EPUB/kubernetes.epub")
+        book = {
+            "title": "Kubernetes Up and Running", "subtitle": "Dive Into the Future of Infrastructure",
+            "author": "Kelsey Hightower", "series": "", "sequence": "", "year": "2022",
+            "genre": "Technology", "isbn": "9781492046530", "summary": "A guide.", "cover_url": "https://x/y.jpg",
+        }
+        res = client.post("/api/manual-review/ebook/apply", json={"path": str(epub_path), "book": book})
+        self.assertEqual(res.status_code, 200)
+
+        fixer_module = main.load_fixer_module(main.default_fixer_script())
+        saved = fixer_module.read_book_sidecar(epub_path)
+        self.assertEqual(saved["title"], "Kubernetes Up and Running")
+        self.assertEqual(saved["subtitle"], "Dive Into the Future of Infrastructure")
+        self.assertEqual(saved["isbn"], "9781492046530")
+
+    def test_apply_rejects_path_outside_audiobooks_root(self):
+        res = client.post(
+            "/api/manual-review/ebook/apply",
+            json={"path": "/etc/passwd", "book": {"title": "x"}},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_apply_overwrites_a_previous_sidecar_value(self):
+        epub_path = self._touch("Linux/EPUB/kubernetes.epub")
+        fixer_module = main.load_fixer_module(main.default_fixer_script())
+        fixer_module.write_ebook_sidecar(
+            epub_path, source_formats=["epub"], source_files={"epub": str(epub_path)},
+            book={"title": "Old Title", "subtitle": "", "author": "Old Author", "narrator": "",
+                  "series": "", "sequence": "", "year": "", "summary": "", "genre": "", "isbn": "",
+                  "cover_url": ""},
+        )
+        new_book = {"title": "New Title", "subtitle": "", "author": "New Author", "series": "",
+                    "sequence": "", "year": "", "genre": "", "isbn": "", "summary": "", "cover_url": ""}
+        client.post("/api/manual-review/ebook/apply", json={"path": str(epub_path), "book": new_book})
+        self.assertEqual(fixer_module.read_book_sidecar(epub_path)["title"], "New Title")
+
+
 if __name__ == "__main__":
     unittest.main()
