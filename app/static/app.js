@@ -547,7 +547,7 @@ function renderManualFsSearchResults(data) {
       ? ` <span class="badge">${escapeHtml(item.formats.map((f) => f.toUpperCase()).join('+'))}</span>`
       : '';
     return `
-    <div class="manual-fs-search-result-row" data-path="${escapeHtml(item.path)}">
+    <div class="manual-fs-search-result-row" data-path="${escapeHtml(item.path)}" data-media-type="${escapeHtml(item.media_type || '')}">
       <div class="manual-fs-search-result-name">${escapeHtml(item.name)}${ebookBadge}</div>
       <div class="manual-fs-search-result-path">${escapeHtml(item.path)}</div>
     </div>
@@ -558,6 +558,12 @@ function renderManualFsSearchResults(data) {
       const path = row.dataset.path;
       container.innerHTML = '';
       $('manualFsSearchInput').value = '';
+      if (row.dataset.mediaType === 'ebook') {
+        $('ebookReviewPanel').hidden = true;
+        loadEbookReviewTarget(path);
+        return;
+      }
+      $('ebookReviewPanel').hidden = true;
       $('manualBrowsePath').value = path;
       discoverManualTargets(path);
     });
@@ -747,6 +753,75 @@ async function loadManualTarget(path, useBackupTags = false) {
 
   $('manualTargetPath').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+
+let ebookReviewPath = '';
+
+async function loadEbookReviewTarget(path) {
+  $('manualDiscoveryList').innerHTML = '';
+  $('manualDiscoveryMeta').textContent = '';
+  const res = await fetch('/api/manual-review/ebook/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.detail || 'Failed to load ebook for review');
+    return;
+  }
+  ebookReviewPath = data.path;
+  $('ebookReviewPanel').hidden = false;
+  $('ebookReviewPath').textContent = data.path;
+  const source = data.match || data.local || {};
+  $('ebookFieldTitle').value = source.title || '';
+  $('ebookFieldSubtitle').value = source.subtitle || '';
+  $('ebookFieldAuthor').value = source.author || '';
+  $('ebookFieldSeries').value = source.series || '';
+  $('ebookFieldSequence').value = source.sequence || '';
+  $('ebookFieldYear').value = source.year || '';
+  $('ebookFieldGenre').value = source.genre || '';
+  $('ebookFieldIsbn').value = source.isbn || '';
+  $('ebookFieldCoverUrl').value = source.cover_url || '';
+  $('ebookFieldSummary').value = source.summary || '';
+  $('ebookReviewScore').textContent = data.score != null
+    ? `Match confidence: ${Math.round(data.score * 100)}%`
+    : 'No candidate match found — review/edit fields manually.';
+  $('ebookReviewPanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+$('ebookApplyBtn').addEventListener('click', async () => {
+  if (!ebookReviewPath) return;
+  const book = {
+    title: $('ebookFieldTitle').value.trim(),
+    subtitle: $('ebookFieldSubtitle').value.trim(),
+    author: $('ebookFieldAuthor').value.trim(),
+    series: $('ebookFieldSeries').value.trim(),
+    sequence: $('ebookFieldSequence').value.trim(),
+    year: $('ebookFieldYear').value.trim(),
+    genre: $('ebookFieldGenre').value.trim(),
+    isbn: $('ebookFieldIsbn').value.trim(),
+    cover_url: $('ebookFieldCoverUrl').value.trim(),
+    summary: $('ebookFieldSummary').value.trim(),
+  };
+  $('ebookApplyBtn').disabled = true;
+  $('ebookApplyBtn').textContent = 'Applying...';
+  try {
+    const res = await fetch('/api/manual-review/ebook/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: ebookReviewPath, book }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.detail || 'Failed to apply ebook metadata');
+      return;
+    }
+    $('ebookReviewScore').textContent = 'Applied.';
+  } finally {
+    $('ebookApplyBtn').disabled = false;
+    $('ebookApplyBtn').textContent = 'Apply';
+  }
+});
 
 async function loadManualCurrentCover() {
   if (manualCurrentCoverUrl) {
@@ -1592,6 +1667,11 @@ function buildMatchCard(item) {
   loadBtn.textContent = 'Load into Manual Review';
   loadBtn.addEventListener('click', () => {
     if (!folderPath) return;
+    if (item.media_type === 'ebook') {
+      $('ebookReviewPanel').hidden = true;
+      loadEbookReviewTarget(folderPath);
+      return;
+    }
     loadManualTarget(folderPath);
     $('manualTargetPath')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
