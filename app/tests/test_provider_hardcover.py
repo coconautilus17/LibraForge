@@ -1,41 +1,35 @@
 """Hardcover provider verification (abs-agg provider-verification workstream).
 
-**Not reachable at all, 2026-07-20 -- confirmed a configuration gap, not a
-LibraForge bug.** Hardcover is a Goodreads-alternative book cataloging/social
-site, not itself an audiobook source -- it isn't clear yet whether its data
-would even fit this pipeline's shape (no confirmed audiobook-specific fields
-like narrator/duration until it's actually reachable).
+**Config gap resolved, 2026-07-21** -- a real HARDCOVER_TOKEN was obtained
+and wired into the live abs-agg container. Confirmed via its startup log:
+"Loaded provider: Hardcover (hardcover)" (previously "disabled: missing env
+vars: HARDCOVER_TOKEN"), and it now appears in /providers with a full
+returnedFields schema (title, subtitle, author, narrator, description,
+cover, isbn, asin, publisher, publishedYear, language, series, tags).
 
-Checked directly against the live abs-agg container's own startup log:
-
-    Provider Hardcover (hardcover) disabled: missing env vars: HARDCOVER_TOKEN
-    Skipping disabled provider: Hardcover (hardcover)
-
-And confirmed live: querying it directly returns a 404, not empty results or
-a validation error -- the provider genuinely does not exist in this instance
-at all while the token is unset:
+**But the search itself is broken upstream, confirmed live -- not a
+LibraForge bug.** Queried directly against the live, now-configured abs-agg
+container with several definitely-real, well-known titles:
 
     docker exec abs-agg node -e "fetch('http://localhost:3000/hardcover/search?title=Dune')..."
-    -> 404 {"error":"Provider not found: hardcover"}
+    docker exec abs-agg node -e "...title=Project%20Hail%20Mary..."
+    docker exec abs-agg node -e "...title=1984..."
+    docker exec abs-agg node -e "...title=Mistborn..."
 
-Also absent from the live /providers listing entirely (unlike Storytel/
-Audioteka/BookBeat, which appear in /providers with their full schema even
-though their search endpoint has a separate bug -- Hardcover isn't listed at
-all while disabled). Goodreads is disabled the same way here too (missing
-GOODREADS_API_KEY), but Goodreads-via-abs-tract already ships separately and
-is out of scope for this workstream.
+Every one returned `{"matches": []}` -- a clean 200, not an error, just
+genuinely empty. `title` is confirmed to be the correct (and only required)
+query parameter -- omitting it returns a 400 "Missing required query
+parameter: title", and every other provider uses the same `title` param
+successfully. abs-agg's own /providers schema self-documents this exact
+issue for Hardcover: "The searching seems to be a bit broken, not finding
+results that exist." Same category of finding as Storytel/Audioteka/
+BookBeat (confirmed upstream blocker), just a different failure mode --
+those fail on parameter passing (400s), this one fails silently (200, empty)
+inside Hardcover's own provider implementation.
 
-**Also found, not previously tracked**: a tenth abs-agg provider, "Thalia"
-(a German bookstore chain), is also present but disabled
-("Skipping disabled provider: Thalia (thalia)") -- flagged in
-libraforge-roadmap-backlog.md as a new discovery, not yet investigated.
-
-**Next step, not something this pass can do**: obtain a real Hardcover API
-token from hardcover.app, add HARDCOVER_TOKEN to the abs-agg container's
-environment, restart it, confirm "hardcover" then appears in the live
-/providers response with a real returnedFields schema, and only then run
-the same live-fetch + standardization + full-pipeline checklist used for
-every other provider in this workstream.
+Standardization tests below use a schema-derived fixture (abs-agg's own
+published returnedFields) since no real payload could be captured live --
+same approach used for the other blocked providers.
 """
 import unittest
 from unittest.mock import patch
@@ -56,26 +50,66 @@ class _FakeResp:
         return False
 
 
-class HardcoverNotConfiguredTests(unittest.TestCase):
-    def test_unconfigured_provider_surfaces_as_a_clear_502_not_a_silent_empty_result(self):
-        # Documents today's real, confirmed behavior: querying a provider
-        # abs-agg doesn't currently expose (Hardcover, while HARDCOVER_TOKEN
-        # is unset) surfaces as an HTTPException, not a silently-empty
-        # {"matches": []} that could be mistaken for "no results found".
-        from fastapi import HTTPException
+def fake_urlopen_for(payload):
+    def _open(req, timeout=15):
+        return _FakeResp(payload)
+    return _open
 
+
+HARDCOVER_SCHEMA_FIXTURE = {
+    "title": "Dune",
+    "subtitle": "",
+    "author": "Frank Herbert",
+    "narrator": "Simon Vance",
+    "description": "A stunning blend of adventure and mysticism, environmentalism and politics.",
+    "cover": "https://example.com/dune-cover.jpg",
+    "isbn": "9780593099322",
+    "asin": "B0018OKX3W",
+    "publisher": "Recorded Books",
+    "publishedYear": 1965,
+    "language": "en",
+    "series": [{"series": "Dune", "sequence": "1"}],
+    "tags": ["Science Fiction"],
+}
+
+
+class HardcoverStandardizationTests(unittest.TestCase):
+    def test_full_meta_shape_and_real_publisher_is_used(self):
         from app.main import search_abs_agg_candidates
-        import urllib.error as _urlerror
 
-        def _raise_404(req, timeout=15):
-            raise _urlerror.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        payload = {"matches": [HARDCOVER_SCHEMA_FIXTURE]}
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload)):
+            result = search_abs_agg_candidates(
+                query="Dune", base_url="http://abs-agg:3000", provider="hardcover",
+            )
+        meta = result["results"][0]["chosen_metadata"]
+        self.assertEqual(meta["title"], "Dune")
+        self.assertEqual(meta["author"], "Frank Herbert")
+        self.assertEqual(meta["narrator"], "Simon Vance")
+        # Hardcover genuinely returns a real publisher -- must be used
+        # verbatim, never overwritten (not a SPECIAL_PROVIDER).
+        self.assertEqual(meta["publisher"], "Recorded Books")
+        self.assertEqual(meta["language"], "en")
+        self.assertEqual(meta["series"], "Dune")
+        self.assertEqual(meta["sequence"], "1")
+        self.assertEqual(meta["year"], "1965")
+        self.assertEqual(meta["asin"], "B0018OKX3W")
 
-        with patch("urllib.request.urlopen", _raise_404):
-            with self.assertRaises(HTTPException) as ctx:
-                search_abs_agg_candidates(
-                    query="Dune", base_url="http://abs-agg:3000", provider="hardcover",
-                )
-        self.assertEqual(ctx.exception.status_code, 502)
+    def test_title_is_the_only_required_query_parameter(self):
+        from app.main import search_abs_agg_candidates
+
+        captured = {}
+
+        def _open(req, timeout=15):
+            captured["url"] = req.full_url
+            return _FakeResp({"matches": []})
+
+        with patch("urllib.request.urlopen", _open):
+            search_abs_agg_candidates(
+                query="Dune", base_url="http://abs-agg:3000", provider="hardcover",
+            )
+        self.assertIn("/hardcover/search?", captured["url"])
+        self.assertIn("title=Dune", captured["url"])
 
 
 if __name__ == "__main__":
