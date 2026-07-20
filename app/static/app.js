@@ -1456,6 +1456,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'error' && s !== 'error' && s !== 'failed') continue;
       if (statusFilter === 'manually_applied' && !item.was_manually_applied) continue;
       if (statusFilter === 'multi_file' && !item.is_grouped) continue;
+      if (statusFilter === 'ebooks' && item.media_type !== 'ebook') continue;
     }
     if (query) {
       const local = item.local || {};
@@ -1515,6 +1516,9 @@ function buildMatchCard(item) {
   const providerLabel = escapeHtml(item.provider || 'Match');
   const writeAction = String(item.write_action || '').replace(/_/g, ' ');
   const writeNote = item.write_note ? ` title="${escapeHtml(item.write_note)}"` : '';
+  const ebookBadge = item.media_type === 'ebook' && item.formats && item.formats.length
+    ? `<span class="match-ebook-badge">${escapeHtml(item.formats.map((f) => f.toUpperCase()).join('+'))}</span>`
+    : '';
 
   const article = document.createElement('article');
   article.className = 'mrep-card';
@@ -1535,6 +1539,7 @@ function buildMatchCard(item) {
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
+      ${ebookBadge}
     </div>
   `;
   details.appendChild(summary);
