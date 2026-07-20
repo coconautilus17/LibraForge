@@ -5662,6 +5662,77 @@ def score_ebook_candidate(
     return round(title_sim * 0.7 + author_sim * 0.3, 4)
 
 
+EBOOK_MATCH_SCORE_FLOOR = 0.35
+
+
+def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
+    """Score every discovered ebook unit against a fresh provider search.
+
+    Companion to the audio Fixer's per-item report entries -- same shape
+    (path/local/match/score/status/provider/used_query) plus media_type/
+    formats, so it slots straight into state.report_items and renders
+    through the existing Match Report card unmodified. Never writes
+    anything; write_action is deliberately left unset since nothing here
+    is auto-applied (see docs/superpowers/specs/
+    2026-07-21-ebook-audiobook-parity-design.md).
+    """
+    fixer_module = load_fixer_module(default_fixer_script())
+    items: list[dict[str, Any]] = []
+    for unit in library_index.build_ebook_index(root):
+        local = fixer_module.read_book_sidecar(unit.path) or {}
+        epub_path = unit.formats.get("epub")
+        embedded_title, embedded_author = (
+            _extract_epub_metadata(epub_path) if epub_path else ("", "")
+        )
+        query = embedded_title or _ebook_query_from_stem(unit.path.stem)
+
+        candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
+        score = None
+        match: dict[str, Any] | None = None
+        provider = ""
+        if candidate:
+            authors = candidate.get("authors") or []
+            candidate_author = authors[0] if authors else ""
+            score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
+            if score >= EBOOK_MATCH_SCORE_FLOOR:
+                match = {
+                    "title": candidate.get("title", ""),
+                    "subtitle": candidate.get("subtitle", ""),
+                    "author": candidate_author,
+                    "series": candidate.get("series", ""),
+                    "sequence": candidate.get("sequence", ""),
+                    "year": candidate.get("year", ""),
+                    "genre": "",
+                    "isbn": candidate.get("isbn", ""),
+                    "cover_url": candidate.get("cover_url", ""),
+                    "summary": candidate.get("summary", ""),
+                }
+                provider = "goodreads" if (candidate.get("cover_url") or candidate.get("summary")) else "openlibrary"
+
+        items.append({
+            "path": str(unit.path),
+            "local": {
+                "title": local.get("title", ""),
+                "subtitle": local.get("subtitle", ""),
+                "author": local.get("author", ""),
+                "series": local.get("series", ""),
+                "sequence": str(local.get("sequence", "") or ""),
+                "year": local.get("year", ""),
+                "genre": local.get("genre", ""),
+                "isbn": local.get("isbn", ""),
+                "summary": local.get("summary", ""),
+            },
+            "match": match,
+            "score": score if match else None,
+            "status": "matched" if match else "unmatched",
+            "provider": provider,
+            "used_query": query,
+            "media_type": "ebook",
+            "formats": sorted(unit.formats.keys()),
+        })
+    return items
+
+
 _ebook_metadata_fill_lock = threading.Lock()
 
 
