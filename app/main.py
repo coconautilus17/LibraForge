@@ -3829,6 +3829,11 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         state.command = cmd
         state.status = "running"
         stream_process_output(state, cmd, threshold=threshold)
+        if state.status != "cancelled":
+            try:
+                state.report_items.extend(scan_ebook_units_for_report(Path(req.target_path)))
+            except Exception as exc:
+                print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
         if state.status != "cancelled":
             state.status = "completed" if state.returncode == 0 else "failed"
