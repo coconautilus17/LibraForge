@@ -1,3 +1,4 @@
+import difflib
 import functools
 import importlib.util
 import json
@@ -5632,6 +5633,33 @@ def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> 
                         if not top.get(field_name) and fb_top.get(field_name):
                             top[field_name] = fb_top[field_name]
     return top
+
+
+def score_ebook_candidate(
+    query_title: str, query_author: str, candidate_title: str, candidate_author: str,
+) -> float:
+    """Similarity score (0.0-1.0) between a search query and one candidate.
+
+    Purpose-built for ebooks, not a reuse of app/fixer/scoring.py -- that
+    module is tuned around duration/narrator/ASIN signals ebooks don't
+    have. Title carries most of the weight; author only contributes when
+    the query actually supplied one (an epub's embedded dc:creator can be
+    blank even when dc:title is present).
+    """
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+    q_title, c_title = _norm(query_title), _norm(candidate_title)
+    if not q_title or not c_title:
+        return 0.0
+    title_sim = difflib.SequenceMatcher(None, q_title, c_title).ratio()
+
+    q_author, c_author = _norm(query_author), _norm(candidate_author)
+    if not q_author:
+        return round(title_sim, 4)
+
+    author_sim = difflib.SequenceMatcher(None, q_author, c_author).ratio()
+    return round(title_sim * 0.7 + author_sim * 0.3, 4)
 
 
 _ebook_metadata_fill_lock = threading.Lock()
