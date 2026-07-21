@@ -212,6 +212,13 @@ ABS_AGG_REQUIRED_PARAMS: dict[str, tuple[str, str, str]] = {
     "bookbeat":  ("market",   "germany", "Country name, e.g. germany, sweden, united-kingdom"),
 }
 
+# Every other abs-agg provider's "duration" field is in seconds (confirmed
+# live for LibriVox, Storytel, Audioteka, Big Finish). Die drei ??? is a
+# confirmed exception: its real values (e.g. 52.4, 90, 45.65) are already in
+# minutes -- dividing those by 60 again would report a real ~52-minute
+# episode as ~1 minute.
+_ABS_AGG_DURATION_ALREADY_MINUTES = {"dreifragezeichen"}
+
 
 def _load_abs_agg_config() -> dict[str, Any]:
     try:
@@ -308,9 +315,27 @@ def search_abs_agg_candidates(
         # rather than leak a fabricated "abs-agg-{provider}-{i}" string into
         # the saved sidecar.
         asin = match.get("asin", "") or ""
-        publisher = _ABS_AGG_PROVIDERS_FALLBACK.get(provider, provider)
-        duration_seconds = match.get("duration") or 0
-        duration_minutes = round(duration_seconds / 60, 2) if duration_seconds else None
+        # Only GraphicAudio/SoundBooth Theater are confirmed to genuinely be
+        # their own publisher (PR #234) -- neither ever returns a real
+        # "publisher" field from abs-agg, so their display name is the only
+        # signal available and it's a deliberate, earned exception. Every
+        # other abs-agg provider must prefer the match's own real publisher
+        # field when the API supplies one (ARD Audiothek, Audioteka, Big
+        # Finish, and Storytel all genuinely do), and otherwise stay blank
+        # rather than fabricate the provider's own name as a publisher it
+        # was never confirmed to be (LibriVox, BookBeat, Die drei ??? etc.).
+        if provider in SPECIAL_PROVIDERS:
+            publisher = _ABS_AGG_PROVIDERS_FALLBACK.get(provider, provider)
+        else:
+            publisher = match.get("publisher", "") or ""
+        language = match.get("language", "") or ""
+        raw_duration = match.get("duration") or 0
+        if not raw_duration:
+            duration_minutes = None
+        elif provider in _ABS_AGG_DURATION_ALREADY_MINUTES:
+            duration_minutes = round(raw_duration, 2)
+        else:
+            duration_minutes = round(raw_duration / 60, 2)
         genre = _pick_genre(match.get("genres") or [])
 
         full_meta = {
@@ -326,6 +351,7 @@ def search_abs_agg_candidates(
             "publisher": publisher,
             "summary": summary,
             "genre": genre,
+            "language": language,
         }
         series_only_meta = {
             "title": "",
@@ -340,6 +366,7 @@ def search_abs_agg_candidates(
             "publisher": publisher,
             "summary": "",
             "genre": genre,
+            "language": language,
         }
         allowed_modes = ["full"] + (["series_only"] if series_name else [])
 

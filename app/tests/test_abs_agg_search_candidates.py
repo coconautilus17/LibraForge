@@ -99,7 +99,14 @@ class AbsAggCandidatesPublisherTests(unittest.TestCase):
         candidate = result["results"][0]
         self.assertEqual(candidate["chosen_metadata"]["publisher"], "Graphic Audio")
 
-    def test_unknown_provider_falls_back_to_its_own_id_as_publisher(self):
+    def test_non_special_provider_with_no_real_publisher_stays_blank(self):
+        # Only GraphicAudio/SoundBooth Theater are confirmed to genuinely be
+        # their own publisher (PR #234). Every other abs-agg provider
+        # (LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek,
+        # Die drei ???) must never get its own display name fabricated as
+        # "publisher" -- most of them aren't publishers at all (LibriVox is
+        # volunteer public-domain readings; BookBeat is a distribution
+        # platform; Die drei ??? is a franchise name, not an imprint).
         from app.main import search_abs_agg_candidates
 
         payload = {"matches": [{"title": "Storm Front", "author": "Jim Butcher"}]}
@@ -107,10 +114,60 @@ class AbsAggCandidatesPublisherTests(unittest.TestCase):
             result = search_abs_agg_candidates(
                 query="Storm Front",
                 base_url="http://abs-agg:3000",
-                provider="somefutureprovider",
+                provider="librivox",
             )
         candidate = result["results"][0]
-        self.assertEqual(candidate["chosen_metadata"]["publisher"], "somefutureprovider")
+        self.assertEqual(candidate["chosen_metadata"]["publisher"], "")
+        self.assertEqual(candidate["chosen_metadata_by_mode"]["full"]["publisher"], "")
+
+    def test_non_special_provider_with_a_real_publisher_field_uses_it(self):
+        # ARD Audiothek, Audioteka, Big Finish, and Storytel genuinely return
+        # a publisher field (confirmed live against abs-agg's own /providers
+        # schema) -- that real data must be used, not discarded.
+        from app.main import search_abs_agg_candidates
+
+        payload = {"matches": [{
+            "title": "Some Book", "author": "Some Author", "publisher": "Real Publisher House",
+        }]}
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload)):
+            result = search_abs_agg_candidates(
+                query="Some Book",
+                base_url="http://abs-agg:3000",
+                provider="bigfinish",
+            )
+        candidate = result["results"][0]
+        self.assertEqual(candidate["chosen_metadata"]["publisher"], "Real Publisher House")
+
+
+class AbsAggCandidatesLanguageTests(unittest.TestCase):
+    def test_real_language_field_is_carried_through(self):
+        from app.main import search_abs_agg_candidates
+
+        payload = {"matches": [{
+            "title": "Ein Buch", "author": "Autor", "language": "german",
+        }]}
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload)):
+            result = search_abs_agg_candidates(
+                query="Ein Buch",
+                base_url="http://abs-agg:3000",
+                provider="ardaudiothek",
+            )
+        candidate = result["results"][0]
+        self.assertEqual(candidate["chosen_metadata"]["language"], "german")
+        self.assertEqual(candidate["chosen_metadata_by_mode"]["full"]["language"], "german")
+
+    def test_missing_language_field_is_blank_not_absent(self):
+        from app.main import search_abs_agg_candidates
+
+        payload = {"matches": [{"title": "Some Book", "author": "Some Author"}]}
+        with patch("urllib.request.urlopen", fake_urlopen_for(payload)):
+            result = search_abs_agg_candidates(
+                query="Some Book",
+                base_url="http://abs-agg:3000",
+                provider="bookbeat",
+            )
+        candidate = result["results"][0]
+        self.assertEqual(candidate["chosen_metadata"]["language"], "")
 
 
 if __name__ == "__main__":
