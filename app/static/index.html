@@ -304,6 +304,7 @@
             <option value="skipped">Skipped</option>
             <option value="error">Error</option>
             <option value="unmatched">Not Matched</option>
+            <option value="ebooks">Ebooks</option>
           </select>
         </div>
         <div id="matchReportList"></div>
@@ -332,6 +333,44 @@
         <div id="manualPathBrowser" class="path-browser" hidden></div>
         <p id="manualDiscoveryMeta" class="note"></p>
         <div id="manualDiscoveryList" class="file-list"></div>
+        <div id="ebookReviewPanel" class="ebook-review-panel" hidden>
+          <h3>Ebook match review</h3>
+          <p id="ebookReviewPath" class="note"></p>
+          <div class="grid manual-grid">
+            <label>Title
+              <input id="ebookFieldTitle" />
+            </label>
+            <label>Subtitle
+              <input id="ebookFieldSubtitle" />
+            </label>
+            <label>Author
+              <input id="ebookFieldAuthor" />
+            </label>
+            <label>Series
+              <input id="ebookFieldSeries" />
+            </label>
+            <label>Sequence
+              <input id="ebookFieldSequence" />
+            </label>
+            <label>Year
+              <input id="ebookFieldYear" />
+            </label>
+            <label>Genre
+              <input id="ebookFieldGenre" />
+            </label>
+            <label>ISBN
+              <input id="ebookFieldIsbn" />
+            </label>
+            <label>Cover URL
+              <input id="ebookFieldCoverUrl" />
+            </label>
+          </div>
+          <label>Summary
+            <textarea id="ebookFieldSummary" rows="3"></textarea>
+          </label>
+          <p id="ebookReviewScore" class="note"></p>
+          <button id="ebookApplyBtn" class="primary">Apply</button>
+        </div>
       </div>
 
       <h3>Items from current run</h3>

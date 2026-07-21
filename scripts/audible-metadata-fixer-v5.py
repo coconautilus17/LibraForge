@@ -1947,6 +1947,35 @@ def write_marker(
     }
     _write_libraforge(lf_path, payload)
 
+def write_ebook_sidecar(
+    source: Path,
+    source_formats: list[str],
+    source_files: dict[str, str],
+    book: dict,
+) -> None:
+    """Write (or update) an ebook's libraforge.json sidecar.
+
+    Mirrors write_marker's load-merge-write pattern for a non-audio book
+    unit: no marker/audio_summary/duration sections, since those describe
+    ID3/MP4 tags and audio streams that don't apply to an epub/pdf. `book`
+    is stored verbatim under sidecar.book -- the same field
+    read_book_sidecar() already reads for any book type, audiobook or not.
+
+    Always writes the per-file sidecar (alone=False), never the
+    folder-level one: ebook bucket folders (EPUB/, PDF/) routinely hold
+    many unrelated books' files, so per-file naming is always safe here,
+    even for a book that happens to be alone in its folder.
+    """
+    lf_path, payload = _load_libraforge_raw(source, alone=False)
+    payload.setdefault("schema_version", 2)
+    payload.setdefault("tool", "audible-metadata-fixer")
+    payload["media_type"] = "ebook"
+    payload["source_formats"] = source_formats
+    payload["source_files"] = source_files
+    sidecar = payload.setdefault("sidecar", {})
+    sidecar["book"] = book
+    _write_libraforge(lf_path, payload)
+
 def should_write_json_sidecar(source: Path, clues: dict | None = None) -> bool:
     suffix = source.suffix.lower()
     group_search = (clues or {}).get("group_search", {}) or {}

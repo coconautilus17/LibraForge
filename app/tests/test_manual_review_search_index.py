@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
 from app.main import (
@@ -80,23 +81,27 @@ class FilterEntriesByIgnoredFoldersTests(unittest.TestCase):
 class ManualReviewSearchIndexIsStaleTests(unittest.TestCase):
     def test_never_built_is_stale(self):
         state = _ManualReviewSearchIndex()
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, "sig1"))
+        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig1"))
 
     def test_ready_with_matching_generation_and_signature_is_fresh(self):
+        # ebook_source_generation defaults to -1 (never derived), so the
+        # ebook_generation argument here must match that default for the
+        # state to actually be considered fresh -- this test's focus is the
+        # shared audio generation/signature match, not the ebook one.
         state = _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1")
-        self.assertFalse(_manual_review_search_index_is_stale(state, 1, "sig1"))
+        self.assertFalse(_manual_review_search_index_is_stale(state, 1, -1, "sig1"))
 
     def test_ready_with_newer_shared_generation_is_stale(self):
         state = _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 2, "sig1"))
+        self.assertTrue(_manual_review_search_index_is_stale(state, 2, 0, "sig1"))
 
     def test_ready_with_changed_ignore_signature_is_stale(self):
         state = _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, "sig2"))
+        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig2"))
 
     def test_error_state_is_stale_so_it_can_retry(self):
         state = _ManualReviewSearchIndex(status="error", source_generation=1, ignored_signature="sig1")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, "sig1"))
+        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig1"))
 
     def test_externally_seeded_ready_state_with_sentinel_generation_is_trusted(self):
         # A caller that sets status="ready" directly (bypassing
@@ -107,11 +112,23 @@ class ManualReviewSearchIndexIsStaleTests(unittest.TestCase):
         # this combination is trusted rather than force-rebuilt against a
         # generation number the caller could never have matched.
         state = _ManualReviewSearchIndex(status="ready", source_generation=-1, ignored_signature="")
-        self.assertFalse(_manual_review_search_index_is_stale(state, 7, ""))
+        self.assertFalse(_manual_review_search_index_is_stale(state, 7, 0, ""))
 
     def test_externally_seeded_ready_state_still_honors_ignore_signature_change(self):
         state = _ManualReviewSearchIndex(status="ready", source_generation=-1, ignored_signature="")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 7, "temp"))
+        self.assertTrue(_manual_review_search_index_is_stale(state, 7, 0, "temp"))
+
+    def test_ready_with_matching_shared_generation_but_newer_ebook_generation_is_stale(self):
+        state = _ManualReviewSearchIndex(
+            status="ready", source_generation=1, ebook_source_generation=1, ignored_signature="sig1"
+        )
+        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 2, "sig1"))
+
+    def test_ready_with_matching_shared_and_ebook_generation_is_fresh(self):
+        state = _ManualReviewSearchIndex(
+            status="ready", source_generation=1, ebook_source_generation=2, ignored_signature="sig1"
+        )
+        self.assertFalse(_manual_review_search_index_is_stale(state, 1, 2, "sig1"))
 
 
 class RunManualReviewSearchIndexBuildTests(unittest.TestCase):
@@ -241,3 +258,47 @@ class EnsureManualReviewSearchIndexFreshEndToEndTests(unittest.TestCase):
         finally:
             main_module.AUDIOBOOKS_ROOT = orig_root
             main_module._manual_review_search_index = orig_state
+
+
+from app.main import _run_manual_review_search_index_build, _ManualReviewSearchIndex
+
+
+class ManualReviewSearchIndexIncludesEbooksTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        library_index.reset_state_for_tests()
+        library_index.reset_ebook_state_for_tests()
+
+    def tearDown(self):
+        library_index.reset_state_for_tests()
+        library_index.reset_ebook_state_for_tests()
+        self.tmp.cleanup()
+
+    def _touch(self, rel):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    def test_ebook_units_appear_in_derived_entries_with_formats_recorded(self):
+        self._touch("Author/Book/Book.m4b")
+        self._touch("Linux/EPUB/kubernetes.epub")
+        self._touch("Linux/PDF/kubernetes.pdf")
+        library_index.ensure_library_index_fresh(self.root)
+        library_index.ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and (
+            library_index.get_state().status != "ready" or library_index.get_ebook_state().status != "ready"
+        ):
+            time.sleep(0.02)
+
+        state = _ManualReviewSearchIndex()
+        _run_manual_review_search_index_build(state, self.root, [])
+
+        paths = {p for p, _ in state.entries}
+        ebook_path = str(self.root / "Linux" / "EPUB" / "kubernetes.epub")
+        self.assertIn(ebook_path, paths)
+        self.assertEqual(sorted(state.ebook_formats[ebook_path]), ["epub", "pdf"])
+        self.assertEqual(state.book_count, 2)
+

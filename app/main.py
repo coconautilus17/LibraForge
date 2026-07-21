@@ -1,3 +1,4 @@
+import difflib
 import functools
 import hashlib
 import importlib.util
@@ -14,6 +15,8 @@ import threading
 import time
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1292,6 +1295,15 @@ class ManualReviewLoadRequest(BaseModel):
     path: str
     script_name: str = Field(default_factory=default_fixer_script)
     use_backup_tags: bool = False
+
+
+class ManualReviewEbookLoadRequest(BaseModel):
+    path: str
+
+
+class ManualReviewEbookApplyRequest(BaseModel):
+    path: str
+    book: dict[str, Any]
 
 
 class ManualReviewDiscoverRequest(BaseModel):
@@ -4064,6 +4076,11 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         state.command = cmd
         state.status = "running"
         stream_process_output(state, cmd, threshold=threshold)
+        if state.status != "cancelled":
+            try:
+                state.report_items.extend(scan_ebook_units_for_report(Path(req.target_path)))
+            except Exception as exc:
+                print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
         if state.status != "cancelled":
             state.status = "completed" if state.returncode == 0 else "failed"
@@ -5156,14 +5173,17 @@ class _ManualReviewSearchIndex:
     Derived from the shared library_index state rather than running its own
     walk. source_generation tracks which shared-index generation this was
     last derived from, replacing the old root+first-level fingerprint as
-    the staleness signal.
+    the staleness signal. ebook_source_generation is the equivalent signal
+    for the fully-independent ebook index (see app/library_index.py).
     """
     status: str = "idle"  # idle | building | updating | ready | error
     entries: list[tuple[str, bool]] = field(default_factory=list)
     book_count: int = 0
     source_generation: int = -1
+    ebook_source_generation: int = -1
     ignored_signature: str | None = None
     error: str | None = None
+    ebook_formats: dict[str, list[str]] = field(default_factory=dict)
 
 
 _manual_review_search_index = _ManualReviewSearchIndex()
@@ -5171,7 +5191,7 @@ _manual_review_search_lock = threading.Lock()
 
 
 def _manual_review_search_index_is_stale(
-    state: _ManualReviewSearchIndex, generation: int, ignored_signature: str
+    state: _ManualReviewSearchIndex, generation: int, ebook_generation: int, ignored_signature: str
 ) -> bool:
     """Whether Manual Review's own derived entries need rebuilding from the
     current shared index state. A build already in flight is never
@@ -5192,6 +5212,7 @@ def _manual_review_search_index_is_stale(
     return (
         state.status != "ready"
         or state.source_generation != generation
+        or state.ebook_source_generation != ebook_generation
         or state.ignored_signature != ignored_signature
     )
 
@@ -5223,10 +5244,20 @@ def _run_manual_review_search_index_build(
             while shared.status == "idle" and time.monotonic() < deadline:
                 time.sleep(0.05)
                 shared = library_index.get_state()
-        entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
-        state.entries = entries
-        state.book_count = len(entries)
+        ebook_shared = library_index.get_ebook_state()
+        audio_entries = _filter_entries_by_ignored_folders(shared.entries, root, ignored_folders)
+        raw_ebook_entries = [(str(unit.path), True) for unit in ebook_shared.units]
+        ebook_entries = _filter_entries_by_ignored_folders(raw_ebook_entries, root, ignored_folders)
+        state.entries = audio_entries + ebook_entries
+        ebook_entry_paths = {path for path, _ in ebook_entries}
+        state.ebook_formats = {
+            str(unit.path): sorted(unit.formats.keys())
+            for unit in ebook_shared.units
+            if str(unit.path) in ebook_entry_paths
+        }
+        state.book_count = len(state.entries)
         state.source_generation = shared.generation
+        state.ebook_source_generation = ebook_shared.generation
         state.ignored_signature = _ignored_signature(ignored_folders)
         state.status = "ready"
     except Exception as exc:
@@ -5240,11 +5271,13 @@ def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None
     entries if the shared index has moved on or the ignore list changed.
     Returns immediately whether or not a build was started."""
     library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
+    library_index.ensure_ebook_index_fresh(AUDIOBOOKS_ROOT)
 
     state = _manual_review_search_index
     shared = library_index.get_state()
+    ebook_shared = library_index.get_ebook_state()
     signature = _ignored_signature(ignored_folders)
-    if not _manual_review_search_index_is_stale(state, shared.generation, signature):
+    if not _manual_review_search_index_is_stale(state, shared.generation, ebook_shared.generation, signature):
         return
     if not _manual_review_search_lock.acquire(blocking=False):
         return
@@ -6283,6 +6316,197 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
         })
 
     return {"queries": [title], "results": results}
+
+
+def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> dict[str, Any] | None:
+    """Open-Library-primary, Goodreads-backfill metadata lookup for an ebook.
+
+    Open Library is used first. A missing result, or a top result with a
+    blank cover_url/summary, is backfilled from Goodreads via abs-tract --
+    live-testing (see docs/superpowers/specs/2026-07-18-ebook-support-design.md)
+    showed Goodreads fills exactly those two fields far more consistently
+    than Open Library does. Only descriptive fields are backfilled: title/
+    author identity always stays whatever Open Library reported when it
+    reported anything at all. Returns None if both sources come back empty.
+    """
+    try:
+        primary = search_abs_candidates(title=title, author=author, provider="openlibrary", limit=limit)
+    except HTTPException:
+        primary = {"results": []}
+    top = primary["results"][0] if primary["results"] else None
+
+    needs_backfill = top is None or not top.get("cover_url") or not top.get("summary")
+    if needs_backfill:
+        abs_tract_config = _load_abs_tract_config()
+        if abs_tract_config.get("url"):
+            try:
+                fallback = search_abs_tract_candidates(
+                    query=title,
+                    author=author,
+                    base_url=abs_tract_config["url"],
+                    provider="goodreads",
+                    kindle_region=abs_tract_config.get("kindle_region", "us"),
+                    limit=limit,
+                )
+                fallback_results = fallback["results"]
+            except HTTPException:
+                fallback_results = []
+            fb_top = fallback_results[0] if fallback_results else None
+            if fb_top:
+                if top is None:
+                    top = fb_top
+                else:
+                    for field_name in ("cover_url", "summary"):
+                        if not top.get(field_name) and fb_top.get(field_name):
+                            top[field_name] = fb_top[field_name]
+    return top
+
+
+def score_ebook_candidate(
+    query_title: str, query_author: str, candidate_title: str, candidate_author: str,
+) -> float:
+    """Similarity score (0.0-1.0) between a search query and one candidate.
+
+    Purpose-built for ebooks, not a reuse of app/fixer/scoring.py -- that
+    module is tuned around duration/narrator/ASIN signals ebooks don't
+    have. Title carries most of the weight; author only contributes when
+    the query actually supplied one (an epub's embedded dc:creator can be
+    blank even when dc:title is present).
+    """
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+    q_title, c_title = _norm(query_title), _norm(candidate_title)
+    if not q_title or not c_title:
+        return 0.0
+    title_sim = difflib.SequenceMatcher(None, q_title, c_title).ratio()
+
+    q_author, c_author = _norm(query_author), _norm(candidate_author)
+    if not q_author:
+        return round(title_sim, 4)
+
+    author_sim = difflib.SequenceMatcher(None, q_author, c_author).ratio()
+    return round(title_sim * 0.7 + author_sim * 0.3, 4)
+
+
+EBOOK_MATCH_SCORE_FLOOR = 0.35
+
+
+def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
+    """Score every discovered ebook unit against a fresh provider search.
+
+    Companion to the audio Fixer's per-item report entries -- same shape
+    (path/local/match/score/status/provider/used_query) plus media_type/
+    formats, so it slots straight into state.report_items and renders
+    through the existing Match Report card unmodified. Never writes
+    anything; write_action is deliberately left unset since nothing here
+    is auto-applied (see docs/superpowers/specs/
+    2026-07-21-ebook-audiobook-parity-design.md).
+    """
+    fixer_module = load_fixer_module(default_fixer_script())
+    items: list[dict[str, Any]] = []
+    for unit in library_index.build_ebook_index(root):
+        local = fixer_module.read_book_sidecar(unit.path) or {}
+        epub_path = unit.formats.get("epub")
+        embedded_title, embedded_author = (
+            _extract_epub_metadata(epub_path) if epub_path else ("", "")
+        )
+        query = embedded_title or _ebook_query_from_stem(unit.path.stem)
+
+        candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
+        score = None
+        match: dict[str, Any] | None = None
+        provider = ""
+        if candidate:
+            authors = candidate.get("authors") or []
+            candidate_author = authors[0] if authors else ""
+            score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
+            if score >= EBOOK_MATCH_SCORE_FLOOR:
+                match = {
+                    "title": candidate.get("title", ""),
+                    "subtitle": candidate.get("subtitle", ""),
+                    "author": candidate_author,
+                    "series": candidate.get("series", ""),
+                    "sequence": candidate.get("sequence", ""),
+                    "year": candidate.get("year", ""),
+                    "genre": "",
+                    "isbn": candidate.get("isbn", ""),
+                    "cover_url": candidate.get("cover_url", ""),
+                    "summary": candidate.get("summary", ""),
+                }
+                provider = "goodreads" if (candidate.get("cover_url") or candidate.get("summary")) else "openlibrary"
+
+        items.append({
+            "path": str(unit.path),
+            "local": {
+                "title": local.get("title", ""),
+                "subtitle": local.get("subtitle", ""),
+                "author": local.get("author", ""),
+                "series": local.get("series", ""),
+                "sequence": str(local.get("sequence", "") or ""),
+                "year": local.get("year", ""),
+                "genre": local.get("genre", ""),
+                "isbn": local.get("isbn", ""),
+                "summary": local.get("summary", ""),
+            },
+            "match": match,
+            "score": score if match else None,
+            "status": "matched" if match else "unmatched",
+            "provider": provider,
+            "used_query": query,
+            "media_type": "ebook",
+            "formats": sorted(unit.formats.keys()),
+        })
+    return items
+
+
+def _extract_epub_metadata(path: Path) -> tuple[str, str]:
+    """Read (title, author) from an epub's embedded OPF metadata.
+
+    An epub is a zip archive; META-INF/container.xml points at the actual
+    package (.opf) file, which carries the publisher's own Dublin Core
+    <dc:title>/<dc:creator> fields -- not a guess derived from the
+    filename. Verified live against real books whose filenames have no
+    word separators at all (e.g. "efficientlinuxatthecommandline.epub"):
+    the embedded title/author were correct in every case checked.
+
+    Returns ("", "") on any failure (corrupt zip, missing container/opf,
+    no dc:title) -- never raises, so a malformed epub just falls back to
+    the filename-stem heuristic in the caller.
+    """
+    dc_ns = "{http://purl.org/dc/elements/1.1/}"
+    try:
+        with zipfile.ZipFile(path) as zf:
+            container = ET.fromstring(zf.read("META-INF/container.xml"))
+            rootfile = container.find(
+                ".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile"
+            )
+            opf_path = rootfile.get("full-path") if rootfile is not None else None
+            if not opf_path:
+                return "", ""
+            opf = ET.fromstring(zf.read(opf_path))
+            title_el = opf.find(f".//{dc_ns}title")
+            creator_el = opf.find(f".//{dc_ns}creator")
+            title = (title_el.text or "").strip() if title_el is not None else ""
+            author = (creator_el.text or "").strip() if creator_el is not None else ""
+            return title, author
+    except (KeyError, zipfile.BadZipFile, ET.ParseError, OSError):
+        return "", ""
+
+
+def _ebook_query_from_stem(stem: str) -> str:
+    """Best-effort recovery of a searchable title from a filename stem.
+
+    Filenames in ebook "format bucket" dumps are frequently
+    underscore/hyphen-joined with no further word-splitting (e.g.
+    "kubernetes_upandrunning"). Replacing separators with spaces is a
+    cheap, always-safe improvement; fully space-free stems (e.g.
+    "efficientlinuxatthecommandline") are a known, accepted gap -- both
+    Open Library and Goodreads reliably return zero results for those
+    (verified live), so search_ebook_candidates correctly returns None
+    for them rather than guessing at a wrong match.
+    """
+    return re.sub(r"[_\-\.]+", " ", stem).strip()
 
 
 class AbsSearchRequest(BaseModel):
@@ -8000,6 +8224,8 @@ class ManualReviewSearchResult(BaseModel):
     name: str
     path: str
     is_file: bool
+    media_type: str = ""
+    formats: list[str] = Field(default_factory=list)
 
 
 class ManualReviewSearchResponse(BaseModel):
@@ -8014,7 +8240,13 @@ def manual_review_search(req: ManualReviewSearchRequest) -> ManualReviewSearchRe
     state = _manual_review_search_index
     query = req.query.strip().lower()
     results = [
-        ManualReviewSearchResult(name=Path(path).name, path=path, is_file=is_file)
+        ManualReviewSearchResult(
+            name=Path(path).name,
+            path=path,
+            is_file=is_file,
+            media_type="ebook" if path in state.ebook_formats else "",
+            formats=state.ebook_formats.get(path, []),
+        )
         for path, is_file in state.entries
         if not query or query in path.lower()
     ]
@@ -8031,6 +8263,99 @@ def discover_manual_review(req: ManualReviewDiscoverRequest) -> dict[str, Any]:
 @app.post("/api/manual-review/load")
 def load_manual_review_target(req: ManualReviewLoadRequest) -> dict[str, Any]:
     return inspect_manual_review_target(path=req.path, script_name=req.script_name, use_backup_tags=req.use_backup_tags)
+
+
+@app.post("/api/manual-review/ebook/load")
+def load_manual_review_ebook_target(req: ManualReviewEbookLoadRequest) -> dict[str, Any]:
+    target_path = validate_audiobook_path(req.path)
+    fixer_module = load_fixer_module(default_fixer_script())
+    local = fixer_module.read_book_sidecar(target_path) or {}
+    ebook_state = library_index.get_ebook_state()
+    unit = next((u for u in ebook_state.units if u.path == target_path), None)
+    formats = sorted(unit.formats.keys()) if unit else [target_path.suffix.lower().lstrip(".")]
+
+    epub_path = (
+        unit.formats.get("epub") if unit
+        else target_path if target_path.suffix.lower() == ".epub"
+        else None
+    )
+    embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
+    query = embedded_title or _ebook_query_from_stem(target_path.stem)
+
+    candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
+    score = None
+    match: dict[str, Any] | None = None
+    if candidate:
+        authors = candidate.get("authors") or []
+        candidate_author = authors[0] if authors else ""
+        score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
+        if score >= EBOOK_MATCH_SCORE_FLOOR:
+            match = {
+                "title": candidate.get("title", ""),
+                "subtitle": candidate.get("subtitle", ""),
+                "author": candidate_author,
+                "series": candidate.get("series", ""),
+                "sequence": candidate.get("sequence", ""),
+                "year": candidate.get("year", ""),
+                "genre": "",
+                "isbn": candidate.get("isbn", ""),
+                "cover_url": candidate.get("cover_url", ""),
+                "summary": candidate.get("summary", ""),
+            }
+        else:
+            score = None
+
+    return {
+        "path": str(target_path),
+        "local": {
+            "title": local.get("title", ""),
+            "subtitle": local.get("subtitle", ""),
+            "author": local.get("author", ""),
+            "series": local.get("series", ""),
+            "sequence": str(local.get("sequence", "") or ""),
+            "year": local.get("year", ""),
+            "genre": local.get("genre", ""),
+            "isbn": local.get("isbn", ""),
+            "summary": local.get("summary", ""),
+            "cover_url": local.get("cover_url", ""),
+        },
+        "match": match,
+        "score": score,
+        "formats": formats,
+    }
+
+
+@app.post("/api/manual-review/ebook/apply")
+def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict[str, Any]:
+    target_path = validate_audiobook_path(req.path)
+    fixer_module = load_fixer_module(default_fixer_script())
+    ebook_state = library_index.get_ebook_state()
+    unit = next((u for u in ebook_state.units if u.path == target_path), None)
+    if unit:
+        source_formats = sorted(unit.formats.keys())
+        source_files = {ext: str(p) for ext, p in unit.formats.items()}
+    else:
+        ext = target_path.suffix.lower().lstrip(".")
+        source_formats = [ext]
+        source_files = {ext: str(target_path)}
+
+    book = {
+        "title": req.book.get("title", ""),
+        "subtitle": req.book.get("subtitle", ""),
+        "author": req.book.get("author", ""),
+        "narrator": "",
+        "series": req.book.get("series", ""),
+        "sequence": req.book.get("sequence", ""),
+        "year": req.book.get("year", ""),
+        "summary": req.book.get("summary", ""),
+        "genre": req.book.get("genre", ""),
+        "isbn": req.book.get("isbn", ""),
+        "cover_url": req.book.get("cover_url", ""),
+    }
+    fixer_module.write_ebook_sidecar(
+        target_path, source_formats=source_formats, source_files=source_files, book=book,
+    )
+    return {"path": str(target_path), "book": book}
 
 
 @app.get("/api/manual-review/current-cover")

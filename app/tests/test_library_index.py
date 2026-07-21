@@ -305,3 +305,166 @@ class EnsureLibraryIndexFreshTests(unittest.TestCase):
         # behavior is documented, not assumed.
         self.assertEqual(get_state().status, "ready")
         self.assertEqual(get_state().entries, [])
+
+
+from app.library_index import (
+    EbookUnit,
+    build_ebook_index,
+    is_ebook_file,
+)
+
+
+class IsEbookFileTests(unittest.TestCase):
+    def test_epub_is_ebook(self):
+        self.assertTrue(is_ebook_file(Path("book.epub")))
+
+    def test_pdf_is_ebook(self):
+        self.assertTrue(is_ebook_file(Path("book.pdf")))
+
+    def test_case_insensitive(self):
+        self.assertTrue(is_ebook_file(Path("book.EPUB")))
+
+    def test_mobi_is_not_ebook(self):
+        self.assertFalse(is_ebook_file(Path("book.mobi")))
+
+    def test_audio_file_is_not_ebook(self):
+        self.assertFalse(is_ebook_file(Path("book.m4b")))
+
+
+class BuildEbookIndexTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _touch(self, rel):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    def test_standalone_ebook_outside_bucket_folder_is_its_own_unit(self):
+        self._touch("Author/Some Book/book.epub")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].path, self.root / "Author" / "Some Book" / "book.epub")
+        self.assertEqual(units[0].formats, {"epub": self.root / "Author" / "Some Book" / "book.epub"})
+
+    def test_paired_epub_pdf_in_sibling_bucket_folders_merge_by_stem(self):
+        self._touch("Linux/EPUB/kubernetes.epub")
+        self._touch("Linux/PDF/kubernetes.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 1)
+        unit = units[0]
+        # epub preferred as canonical path when both formats present.
+        self.assertEqual(unit.path, self.root / "Linux" / "EPUB" / "kubernetes.epub")
+        self.assertEqual(unit.formats, {
+            "epub": self.root / "Linux" / "EPUB" / "kubernetes.epub",
+            "pdf": self.root / "Linux" / "PDF" / "kubernetes.pdf",
+        })
+
+    def test_bucket_folder_name_matching_is_case_insensitive(self):
+        self._touch("Linux/Epub/book.epub")
+        self._touch("Linux/PDF/book.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 1)
+        self.assertEqual(len(units[0].formats), 2)
+
+    def test_unmatched_stem_in_bucket_folder_stays_single_format(self):
+        self._touch("Linux/EPUB/onlyepub.epub")
+        self._touch("Linux/PDF/onlypdf.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 2)
+        formats_by_stem = {u.path.stem: u.formats for u in units}
+        self.assertEqual(list(formats_by_stem["onlyepub"].keys()), ["epub"])
+        self.assertEqual(list(formats_by_stem["onlypdf"].keys()), ["pdf"])
+
+    def test_same_stem_under_different_grandparents_does_not_merge(self):
+        self._touch("Linux/EPUB/kubernetes.epub")
+        self._touch("Other/PDF/kubernetes.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 2)
+        for unit in units:
+            self.assertEqual(len(unit.formats), 1)
+
+    def test_non_bucket_sibling_folders_do_not_merge(self):
+        self._touch("Series/BookA/book.epub")
+        self._touch("Series/BookB/book.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 2)
+        for unit in units:
+            self.assertEqual(len(unit.formats), 1)
+
+    def test_skips_hardcoded_hidden_and_system_prefixes(self):
+        self._touch("Linux/EPUB/book.epub")
+        self._touch(".hidden/Ghost.epub")
+        self._touch("#recycle/Ghost.epub")
+        units = build_ebook_index(self.root)
+        paths = {str(u.path) for u in units}
+        self.assertEqual(paths, {str(self.root / "Linux" / "EPUB" / "book.epub")})
+
+    def test_no_ebooks_returns_empty_list(self):
+        self._touch("Author/Book/Book.m4b")
+        units = build_ebook_index(self.root)
+        self.assertEqual(units, [])
+
+
+from app.library_index import (
+    ensure_ebook_index_fresh,
+    get_ebook_state,
+    reset_ebook_state_for_tests,
+)
+
+
+class EnsureEbookIndexFreshTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        reset_ebook_state_for_tests()
+
+    def tearDown(self):
+        reset_ebook_state_for_tests()
+        self.tmp.cleanup()
+
+    def _touch(self, rel):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+        return p
+
+    def test_initial_state_is_idle_with_no_units(self):
+        self.assertEqual(get_ebook_state().status, "idle")
+        self.assertEqual(get_ebook_state().units, [])
+
+    def test_reaches_ready_and_finds_units(self):
+        self._touch("Linux/EPUB/book.epub")
+        ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and get_ebook_state().status != "ready":
+            time.sleep(0.02)
+        state = get_ebook_state()
+        self.assertEqual(state.status, "ready")
+        self.assertEqual(len(state.units), 1)
+
+    def test_generation_bumps_only_when_units_change(self):
+        ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and get_ebook_state().status != "ready":
+            time.sleep(0.02)
+        first_generation = get_ebook_state().generation
+
+        ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and get_ebook_state().generation != first_generation and get_ebook_state().status != "ready":
+            time.sleep(0.02)
+        time.sleep(0.1)
+        self.assertEqual(get_ebook_state().generation, first_generation)
+
+        self._touch("Linux/EPUB/new.epub")
+        ensure_ebook_index_fresh(self.root)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and get_ebook_state().generation == first_generation:
+            time.sleep(0.02)
+        self.assertGreater(get_ebook_state().generation, first_generation)
