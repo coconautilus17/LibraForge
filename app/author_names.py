@@ -6,9 +6,9 @@ letter with no spaces between them, then one space before the rest of the name.
 "J.K. Rowling"; a lone initial gets its dot ("Kevin J Anderson" becomes
 "Kevin J. Anderson").
 
-Exceptions follow the same known/private pattern as publishers and title noise:
-config/author-names.default.json (known patterns, ships with LibraForge) and
-config/author-names.local.json (private patterns, disabled_defaults and
+Exceptions follow the same patterns-in-use/custom pattern as publishers and title noise:
+config/author-names.default.json (patterns in use, ships with LibraForge) and
+config/author-names.local.json (custom patterns, disabled_defaults and
 custom_names). Stdlib only: shared by the organizer script, the fixer and the app.
 """
 import json
@@ -103,7 +103,7 @@ def save_author_policy(disabled_defaults: list[str], custom_names: list[dict[str
         name = str(item.get("name") or "").strip()
         spelling = str(item.get("spelling") or "").strip()
         if not name or not spelling:
-            raise ValueError("Each private pattern needs a name and the exact spelling to keep.")
+            raise ValueError("Each custom pattern needs a name and the exact spelling to keep.")
         if name_key(name) != name_key(spelling):
             raise ValueError(f"{spelling!r} must have the same letters as {name!r}; a pattern can only choose the spelling.")
         if name_key(name) in seen:

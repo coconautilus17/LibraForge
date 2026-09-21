@@ -56,7 +56,7 @@ const el = (id, tag = "div") => (registry[id] = new Node(tag));
 def extract(source: str, name: str) -> str:
     match = re.search(rf"^  (?:async )?function {name}\(", source, re.M)
     assert match, name
-    end = re.compile(r"\n  (?:async )?function |\n  window\.addEventListener").search(source, match.end())
+    end = re.compile(r"\n  (?:async )?function |\n  let preferences|\n  window\.addEventListener").search(source, match.end())
     return source[match.start(): end.start()]
 
 
@@ -102,7 +102,7 @@ class PatternUiTests(unittest.TestCase):
         self.make_title_noise()
         self.assertEqual(self.json("registry.titleNoiseDefaults.children.length"), 2)
         self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 1)
-        self.assertIn("Known patterns ship", self.run_js("registry.titleNoiseStatus.textContent"))
+        self.assertIn("Patterns in use ship", self.run_js("registry.titleNoiseStatus.textContent"))
 
     def put_body(self, index=0):
         return json.loads(self.run_js(f"JSON.stringify(calls.filter(c => c.method === 'PUT')[{index}].body)"))
@@ -133,7 +133,7 @@ class PatternUiTests(unittest.TestCase):
         self.assertEqual([p["pattern"] for p in body["custom_patterns"]], ["bbc", "A slice of life"])
         self.assertEqual(self.run_js("registry.titleNoiseLabel.value"), "")
         self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 2)
-        self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Private pattern added and saved.")
+        self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Custom pattern added and saved.")
 
     def test_empty_form_shows_the_old_message(self):
         self.make_title_noise()
@@ -288,8 +288,8 @@ class StaticPageTests(unittest.TestCase):
             self.assertNotIn(f'id="{gone}"', html, gone)
         self.assertIn('href="#author-names"', html)
         self.assertLess(html.index("pattern-settings.js"), html.index("ui-preferences.js"))
-        self.assertEqual(html.count("<h3>Known patterns</h3>"), 3)
-        self.assertEqual(html.count("<h3>Private patterns</h3>"), 3)
+        self.assertEqual(html.count("<h3>Patterns in use</h3>"), 3)
+        self.assertEqual(html.count("<h3>Custom patterns</h3>"), 3)
 
 
 if __name__ == "__main__":

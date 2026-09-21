@@ -1,5 +1,5 @@
 /* One renderer for the Settings pattern sections (Publishers, Title noise, Author names).
- * Each section shows Known patterns (shipped, can be switched off) and Private patterns
+ * Each section shows Patterns in use (shipped, can be switched off) and Custom patterns
  * (yours: add, switch off, remove). The server owns the data; this only draws it.
  * Every change (add, remove, switch) is saved right away, so there is no Save button. */
 (function () {

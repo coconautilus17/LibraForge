@@ -82,6 +82,13 @@ class SchemeHooksTests(unittest.TestCase):
         self.assertNotIn("author_initials_fixed", self.report_item("V A Lewis", "V.A. Lewis"))
 
 
+class SharedScriptSetupTests(unittest.TestCase):
+    def test_ui_preferences_still_creates_the_preferences_every_page_needs(self):
+        js = (ROOT / "app" / "static" / "ui-preferences.js").read_text(encoding="utf-8")
+        self.assertIn("let preferences = readPreferences();", js)
+        self.assertIn("window.LibraForgePrefs = { get: () => preferences };", js)
+
+
 class ReportUiWiringTests(unittest.TestCase):
     def test_match_report_has_the_filter_badge_and_stat(self):
         static = ROOT / "app" / "static"

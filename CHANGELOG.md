@@ -12,14 +12,14 @@ onward is tracked here going forward.
   space before the rest of the name; `V A Lewis` and `JK Rowling` become `V.A. Lewis` and
   `J.K. Rowling`) for Folder Forge folder names and for the author tags and metadata.json
   written by the fixer and Manual Review. Off by default for updated installs, on for new
-  installs, with a one-time notice on first run after updating. Known and private
+  installs, with a one-time notice on first run after updating. Patterns in use and custom
   exception patterns, and an opt-in migration script (`scripts/normalize-author-names.py`,
   dry run by default, revertible) for existing folders, sidecars and tags.
 - Match report: books whose author was rewritten only because the scheme unified the
   initials get an **Initials Fixed** badge, an **Author Initials Fixed** status filter
   and a summary tile.
-- Settings: Publishers, Title noise and Author names now share one Known patterns /
-  Private patterns layout and one renderer. Every change is saved immediately, so there
+- Settings: Publishers, Title noise and Author names now share one Patterns in use /
+  Custom patterns layout and one renderer. Every change is saved immediately, so there
   is no Save button and no unsaved switches to lose. The author card has a single field
   for a private name. Publishers learned in earlier runs (Aethon Audio, Mountaindale
   Press and others) now ship as known publishers, and names containing a digit are never

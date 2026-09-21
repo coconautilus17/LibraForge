@@ -431,11 +431,11 @@
       }),
       afterLoad: reapplyHashScroll,
       text: {
-        emptyPrivate: "No private patterns yet.",
-        loaded: "Known patterns ship with LibraForge; private patterns are yours.",
+        emptyPrivate: "No custom patterns yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
         loadError: "Could not load title patterns.",
         saveError: "Could not save title patterns.",
-        added: "Private pattern added and saved.",
+        added: "Custom pattern added and saved.",
         removed: "Pattern removed.",
         saved: "Saved. New runs now use these title patterns.",
       },
@@ -505,8 +505,8 @@
       }),
       afterLoad: reapplyHashScroll,
       text: {
-        emptyPrivate: "No private or learned publishers yet.",
-        loaded: "Known patterns ship with LibraForge; private patterns are yours.",
+        emptyPrivate: "No custom or learned publishers yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
         loadError: "Could not load publishers.",
         saveError: "Could not save publishers.",
         added: "Publisher added and saved.",
@@ -576,11 +576,11 @@
       onLoaded: describeScheme,
       afterLoad: reapplyHashScroll,
       text: {
-        emptyPrivate: "No private patterns yet.",
-        loaded: "Known patterns ship with LibraForge; private patterns are yours.",
+        emptyPrivate: "No custom patterns yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
         loadError: "Could not load author name settings.",
         saveError: "Could not save author name patterns.",
-        added: "Private pattern added and saved.",
+        added: "Custom pattern added and saved.",
         removed: "Pattern removed.",
         saved: "Saved. New runs use these author name patterns.",
       },
@@ -662,6 +662,25 @@
       window.location.href = "/settings#author-names";
     });
     dlg.showModal();
+  }
+
+  let preferences = readPreferences();
+  applyPreferences(preferences);
+
+  // Expose read-only access for page scripts that need preference values.
+  window.LibraForgePrefs = { get: () => preferences };
+
+  const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
+  const handleSystemThemeChange = () => {
+    if (preferences.theme !== "system") return;
+    applyPreferences(preferences);
+    const surface = document.getElementById("uiSurface");
+    if (surface) populateSurfaceSelect(surface, preferences);
+  };
+  if (systemTheme.addEventListener) {
+    systemTheme.addEventListener("change", handleSystemThemeChange);
+  } else {
+    systemTheme.addListener(handleSystemThemeChange);
   }
 
   window.addEventListener("DOMContentLoaded", () => {

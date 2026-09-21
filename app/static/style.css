@@ -2198,9 +2198,17 @@ summary:focus-visible {
 
 .pattern-editor {
   display: grid;
-  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.3fr) auto;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 5fr) minmax(0, 2fr);
   align-items: end;
   gap: var(--space-md);
+}
+
+.pattern-editor > button {
+  width: 100%;
+}
+
+.pattern-editor-single > label {
+  grid-column: 1 / span 2;
 }
 
 :root[data-density="compact"] .card {
@@ -2319,6 +2327,10 @@ summary:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .pattern-editor-single > label {
+    grid-column: auto;
+  }
+
   .checks {
     gap: var(--space-sm);
   }
@@ -2393,6 +2405,10 @@ summary:focus-visible {
   .settings-grid,
   .pattern-editor {
     grid-template-columns: 1fr;
+  }
+
+  .pattern-editor-single > label {
+    grid-column: auto;
   }
 }
 

@@ -127,7 +127,7 @@ def load_publisher_policy() -> dict[str, Any]:
     }
 
     def already_shipped(entry: dict[str, Any]) -> bool:
-        # A learned/private entry that a later release ships as a known pattern
+        # A learned/custom entry that a later release ships as a pattern in use
         # (or a joined "A, B" of shipped ones) is shown once, as the known one.
         parts = [part for part in re.split(r"\s*[,;]\s*", entry["name"]) if part.strip()]
         return bool(parts) and all(normalize_publisher_key(part) in shipped_keys for part in parts)

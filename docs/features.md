@@ -117,9 +117,9 @@ Goodreads/Kindle, Developer, and sidecar cleanup. The gear icon in the header li
 the old `/auth-setup` URL still works and redirects to the Accounts section.
 
 **Patterns (Title noise, Publishers, Author names):** the three pattern sections share
-one layout. **Known patterns** ship with LibraForge and can each be switched off;
-**Private patterns** are yours (add, switch off, remove). Publishers you have not seen
-before are learned during runs and listed under private patterns for review. Every
+one layout. **Patterns in use** ship with LibraForge and can each be switched off;
+**Custom patterns** are yours (add, switch off, remove). Publishers you have not seen
+before are learned during runs and listed under custom patterns for review. Every
 change (add, remove, switch on or off) is saved immediately; there is no Save button.
 
 **Author names:** a universal scheme for how initials are written: a dot after each
@@ -129,8 +129,8 @@ letter, no spaces between them, one space before the rest of the name (`V A Lewi
 write. It is switched on automatically for new installs and left off when an existing
 install is updated, so an organized library is not touched unless you turn it on
 (Settings → Author names). Names whose letters are not initials (`Mashton XX`, or a
-handle with a digit such as `Comedian0 L`) are covered by known patterns and a built-in
-digit rule; add your own under private patterns. When a run rewrites an author only
+handle with a digit such as `Comedian0 L`) are covered by the patterns in use and a built-in
+digit rule; add your own under custom patterns. When a run rewrites an author only
 because the scheme unified its initials, the full match report marks the book with an
 **Initials Fixed** badge and lists all of them under the **Author Initials Fixed** filter. Existing folders and
 files are renamed only by the opt-in `scripts/normalize-author-names.py`, which is a dry

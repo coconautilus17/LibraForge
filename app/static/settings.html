@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
-  <script src="/static/pattern-settings.js?v=20260921-2"></script>
-  <script src="/static/ui-preferences.js?v=20260921-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260921-1" />
+  <script src="/static/pattern-settings.js?v=20260921-3"></script>
+  <script src="/static/ui-preferences.js?v=20260921-2"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260921-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -99,9 +99,9 @@
     <section id="title-noise" class="card side-nav-card">
       <h2>Title noise patterns</h2>
       <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
-      <h3>Known patterns</h3>
+      <h3>Patterns in use</h3>
       <div id="titleNoiseDefaults" class="pattern-list"></div>
-      <h3>Private patterns</h3>
+      <h3>Custom patterns</h3>
       <div class="pattern-editor">
         <label>Pattern label
           <input id="titleNoiseLabel" placeholder="Generic academy LitRPG subtitle" />
@@ -119,9 +119,9 @@
     <section id="publishers" class="card side-nav-card">
       <h2>Publishers</h2>
       <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
-      <h3>Known patterns</h3>
+      <h3>Patterns in use</h3>
       <div id="publisherDefaults" class="pattern-list"></div>
-      <h3>Private patterns</h3>
+      <h3>Custom patterns</h3>
       <div class="pattern-editor">
         <label>Publisher name
           <input id="publisherName" placeholder="Tantor Audio" />
@@ -161,13 +161,13 @@
           <li>Applies to author folder names (Folder Forge) and to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> does that when you choose to run it.</li>
         </ul>
       </details>
-      <h3>Known patterns</h3>
+      <h3>Patterns in use</h3>
       <p class="note">Names whose letters are part of the name rather than initials. The scheme leaves these exactly as written. Untick one to let the scheme handle it.</p>
       <div id="authorNameDefaults" class="pattern-list"></div>
-      <h3>Private patterns</h3>
-      <p class="note">Add a name the scheme gets wrong, written the way it must stay. It is saved as soon as you add it.</p>
-      <div class="pattern-editor">
-        <label>Keep this name exactly as written
+      <h3>Custom patterns</h3>
+      <p class="note">Add a name the scheme gets wrong. It is always written with exactly these capitals, while spacing and dots are ignored when matching. Saved as soon as you add it.</p>
+      <div class="pattern-editor pattern-editor-single">
+        <label>Keep this name exactly as written (case sensitive)
           <input id="authorNamePattern" placeholder="Comedian0 L" />
         </label>
         <button id="authorNameAddBtn" class="secondary" type="button">Add pattern</button>
