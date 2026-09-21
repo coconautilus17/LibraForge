@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
+  <script src="/static/pattern-settings.js?v=20260921-1"></script>
   <script src="/static/ui-preferences.js?v=20260712-2"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260715-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
@@ -56,6 +57,7 @@
       <a href="#appearance">Appearance</a>
       <a href="#title-noise">Title noise</a>
       <a href="#publishers">Publishers</a>
+      <a href="#author-names">Author names</a>
       <a href="#library">Library</a>
       <a href="#reports">Reports</a>
       <a href="#accounts">Accounts</a>
@@ -97,9 +99,11 @@
     <section id="title-noise" class="card side-nav-card">
       <h2>Title noise patterns</h2>
       <p>Shared expressions prevent generic marketing text from becoming a book title or folder. Changes apply to both maintained scripts.</p>
+      <h3>Known patterns</h3>
       <div id="titleNoiseDefaults" class="pattern-list"></div>
+      <h3>Private patterns</h3>
       <div class="pattern-editor">
-        <label>Custom pattern label
+        <label>Pattern label
           <input id="titleNoiseLabel" placeholder="Generic academy LitRPG subtitle" />
         </label>
         <label>Noise phrase
@@ -118,7 +122,9 @@
     <section id="publishers" class="card side-nav-card">
       <h2>Publishers</h2>
       <p>Canonical publishers/imprints are stripped from search queries and from leaked author/narrator tags. Recognized special editions (GraphicAudio, Soundbooth Theater) flag a suggestion to use their dedicated abs-agg endpoint. Publishers seen during runs are learned here for review.</p>
+      <h3>Known patterns</h3>
       <div id="publisherDefaults" class="pattern-list"></div>
+      <h3>Private patterns</h3>
       <div class="pattern-editor">
         <label>Publisher name
           <input id="publisherName" placeholder="Tantor Audio" />
@@ -137,6 +143,48 @@
         <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
       </div>
       <p id="publisherStatus" class="note"></p>
+    </section>
+
+    <!-- Author names -->
+    <section id="author-names" class="card side-nav-card">
+      <h2>Author names</h2>
+      <label class="pattern-row">
+        <input id="authorSchemeToggle" type="checkbox" />
+        <span>
+          <strong>Use the universal author-name scheme</strong>
+          <small>Turned on automatically for new installs, left off when an existing install is updated.</small>
+        </span>
+      </label>
+      <p id="authorSchemeStatus" class="note"></p>
+      <details class="rule-explainer" open>
+        <summary>How author names are unified</summary>
+        <p>Initials are unified so every spelling of a name ends up in one author folder and is written the same way in tags:</p>
+        <ul>
+          <li>Each initial is a letter followed by a single dot, initials are joined with no spaces, and one space separates the last initial from the rest of the name.</li>
+          <li>Examples: <code>J. R. R. Tolkien</code> and <code>J.R.R Tolkien</code> become <code>J.R.R. Tolkien</code>; <code>V A Lewis</code> becomes <code>V.A. Lewis</code>; <code>Kevin J Anderson</code> becomes <code>Kevin J. Anderson</code>. With the scheme on, <code>JK Rowling</code> and <code>J.K.Rowling</code> become <code>J.K. Rowling</code>, and <code>TJ Klune</code> becomes <code>T.J. Klune</code>.</li>
+          <li>The last word of a name is never treated as initials, so <code>Mashton XX</code> and <code>John Smith III</code> stay as they are. Names that would still be misread go in the patterns below.</li>
+          <li>Off: only spaced and single initials are unified, as in earlier versions (<code>J. R. R.</code> becomes <code>J.R.R.</code>); <code>JK Rowling</code> and <code>J.K.Rowling</code> are left alone.</li>
+          <li>Applies to author folder names (Folder Forge) and to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> does that when you choose to run it.</li>
+        </ul>
+      </details>
+      <h3>Known patterns</h3>
+      <p class="note">Names whose letters are part of the name rather than initials. The scheme leaves these exactly as written.</p>
+      <div id="authorNameDefaults" class="pattern-list"></div>
+      <h3>Private patterns</h3>
+      <div class="pattern-editor">
+        <label>Name as it may appear
+          <input id="authorNamePattern" placeholder="TJ Klune" />
+        </label>
+        <label>Exact spelling to keep
+          <input id="authorNameSpelling" placeholder="TJ Klune" />
+        </label>
+        <button id="authorNameAddBtn" class="secondary" type="button">Add pattern</button>
+      </div>
+      <div id="authorNameCustom" class="pattern-list"></div>
+      <div class="actions">
+        <button id="authorNameSaveBtn" class="secondary" type="button">Save author patterns</button>
+      </div>
+      <p id="authorNameStatus" class="note"></p>
     </section>
 
     <!-- Library -->
