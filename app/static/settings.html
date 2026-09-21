@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
-  <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260715-2" />
+  <script src="/static/ui-preferences.js?v=20260922-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260922-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -145,6 +145,10 @@
       <label class="preference-field">Default root path
         <input id="defaultRootPath" placeholder="/audiobooks" style="font-family:var(--font-mono);font-size:0.85em" />
       </label>
+      <label class="preference-field">Folder Forge scan root
+        <input id="organizerScanRoot" placeholder="/audiobooks/_unorganized" style="font-family:var(--font-mono);font-size:0.85em" />
+      </label>
+      <p class="field-hint">Folder Forge scans this folder for new books. Left empty, it uses the built-in default <code id="organizerScanRootDefault">/audiobooks/_unorganized</code> (the usual import folder under the library root). You can still change it for a single run on the Folder Forge page.</p>
       <div style="margin-top:12px">
         <p style="font-size:0.85em;color:var(--text-soft);margin:0 0 6px">Folders to ignore <span style="color:var(--muted);font-size:0.9em">(prefix or exact name, e.g. <code>.</code> hides hidden dirs, <code>@eaDir</code> hides Synology system dirs)</span></p>
         <div id="ignoredFoldersList" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
