@@ -629,7 +629,7 @@
       createTextElement("strong", "J.K. Rowling"),
       " or ",
       createTextElement("strong", "V.A. Lewis"),
-      " (a dot after each letter, no spaces between them, one space before the rest of the name), including forms such as JK Rowling or J.K.Rowling. It affects author folder names in Folder Forge and the author tags and metadata.json written by the fixer and Manual Review. ",
+      " (a dot after each letter, no spaces between them, one space before the rest of the name), including forms such as JK Rowling or J.K.Rowling. It changes the author tags and metadata.json written by the fixer and Manual Review; Folder Forge names author folders from that metadata. ",
       createTextElement("strong", "Because you updated an existing install, it is switched off"),
       ", so your organized library is not affected unless you turn it on. You can turn it on or off, and add your own exceptions, under ",
       createTextElement("strong", "Settings, Author names"),

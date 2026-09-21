@@ -1,7 +1,6 @@
 import importlib.util
 import os
 import sys
-import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -37,30 +36,27 @@ class SchemeHooksTests(unittest.TestCase):
         else:
             os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = self.saved
 
-    def test_default_behaviour_is_unchanged(self):
+    def test_fixer_output_is_unchanged_until_the_scheme_is_on(self):
         os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "legacy"
-        self.assertEqual(ORGANIZER.canonical_author_name("JK Rowling"), "JK Rowling")
-        self.assertEqual(ORGANIZER.canonical_author_name("V A Lewis"), "V.A. Lewis")
         self.assertEqual(FIXER.canonicalize_author_credits("A. F. Kay, TJ Klune"), "A. F. Kay, TJ Klune")
 
-    def test_universal_scheme_applies_to_folders_and_fixer_output(self):
+    def test_universal_scheme_applies_to_fixer_output(self):
         os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "universal"
-        self.assertEqual(ORGANIZER.canonical_author_name("JK Rowling"), "J.K. Rowling")
         self.assertEqual(FIXER.canonicalize_author_credits("A. F. Kay, TJ Klune"), "A.F. Kay, T.J. Klune")
         self.assertEqual(FIXER.canonicalize_author_credits("Mashton X X, Mashton X Y"), "Mashton XX, Mashton XY")
+
+    def test_folder_forge_ignores_the_scheme_and_follows_the_metadata(self):
+        for mode in ("legacy", "universal"):
+            os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = mode
+            self.assertEqual(ORGANIZER.canonical_author_name("JK Rowling"), "JK Rowling", mode)
+            self.assertEqual(ORGANIZER.canonical_author_name("V A Lewis"), "V.A. Lewis", mode)
+            self.assertEqual(ORGANIZER.canonical_author_name("V.A. Lewis"), "V.A. Lewis", mode)
 
     def test_folder_name_parsers_keep_raw_text_in_both_modes(self):
         for mode in ("legacy", "universal"):
             os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = mode
             parsed = ORGANIZER.parse_explicit_identity_folder_name("Extra26, T C Liyanage - Magus Reborn 01")
             self.assertEqual(parsed.get("author"), "T C Liyanage", mode)
-
-    def test_noncanonical_folders_are_listed_in_universal_mode(self):
-        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "universal"
-        with tempfile.TemporaryDirectory() as tmp:
-            for name in ("A. F. Kay", "A.F. Wells", "_unorganized", "Brian McClellan"):
-                (Path(tmp) / name).mkdir()
-            self.assertEqual(ORGANIZER.noncanonical_author_folders(Path(tmp)), ["A. F. Kay"])
 
     def report_item(self, current_author, written_author):
         result = FIXER.ItemResult(index=1, file_path=Path("/x/a.m4b"), display_path=Path("a.m4b"))

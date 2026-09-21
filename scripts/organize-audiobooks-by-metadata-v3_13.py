@@ -44,7 +44,6 @@ try:
         is_title_noise,
         remove_trailing_title_noise,
     )
-    from app.author_names import folder_author_name, is_canonical_author_name, scheme_enabled
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import (
@@ -52,7 +51,6 @@ except ModuleNotFoundError:
         is_title_noise,
         remove_trailing_title_noise,
     )
-    from app.author_names import folder_author_name, is_canonical_author_name, scheme_enabled
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
 # Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
@@ -852,23 +850,31 @@ _SINGLE_INITIAL_RE = re.compile(r"[A-Za-z]\.?$")
 
 
 def canonical_author_name(value: str) -> str:
-    """Author folder name. The universal scheme (app/author_names.py) when it is
-    switched on in Settings; otherwise the behaviour LibraForge has always had."""
-    return folder_author_name(value)
+    """Canonicalize initial spacing so name variants map to one author folder.
 
-
-def noncanonical_author_folders(destination_root: Path) -> list[str]:
-    try:
-        with os.scandir(destination_root) as entries:
-            return sorted(
-                entry.name
-                for entry in entries
-                if entry.is_dir(follow_symlinks=False)
-                and not entry.name.startswith(("_", "#", "@", "."))
-                and not is_canonical_author_name(entry.name)
-            )
-    except OSError:
-        return []
+    Runs of consecutive single-letter initials are collapsed into a dotted,
+    space-free cluster, so "J. R. R. Tolkien" and "J.R.R. Tolkien" both become
+    "J.R.R. Tolkien" (and "George R. R. Martin" / "George R.R. Martin" both
+    become "George R.R. Martin"). Non-initial tokens are left untouched.
+    """
+    if not value:
+        return value
+    parts = value.split()
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        if _SINGLE_INITIAL_RE.fullmatch(parts[i]):
+            run: list[str] = []
+            while i < len(parts) and _SINGLE_INITIAL_RE.fullmatch(parts[i]):
+                run.append(parts[i][0].upper())
+                i += 1
+            # Two or more adjacent initials collapse to "J.R.R."; a lone initial
+            # just gets a normalizing dot ("J" -> "J.").
+            out.append("".join(letter + "." for letter in run))
+        else:
+            out.append(parts[i])
+            i += 1
+    return " ".join(out)
 
 
 def people_keys(value: str) -> list[str]:
@@ -5445,11 +5451,6 @@ def main() -> None:
     print(f"Skipped ambiguous structure: {skipped_ambiguous_structure}")
     print(f"Skipped likely existing book folders: {skipped_existing_book_folders}")
     print(f"Skipped review items: {len(skipped_reviews)}")
-    if scheme_enabled():
-        legacy_author_folders = noncanonical_author_folders(destination_root)
-        print(f"Author folders not matching the naming scheme: {len(legacy_author_folders)}")
-        for name in legacy_author_folders:
-            print(f"  Legacy author folder: {name}")
     print(f"Planned moves: {len(planned_moves)}")
     print(f"Mode: {mode}")
     print()

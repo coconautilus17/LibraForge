@@ -10,8 +10,8 @@ onward is tracked here going forward.
 
 - Author names: a universal initials scheme (a dot after each letter, no spaces, one
   space before the rest of the name; `V A Lewis` and `JK Rowling` become `V.A. Lewis` and
-  `J.K. Rowling`) for Folder Forge folder names and for the author tags and metadata.json
-  written by the fixer and Manual Review. Off by default for updated installs, on for new
+  `J.K. Rowling`) for the author tags and metadata.json written by the fixer and Manual
+  Review; Folder Forge names folders from that metadata. Off by default for updated installs, on for new
   installs, with a one-time notice on first run after updating. Patterns in use and custom
   exception patterns, and an opt-in migration script (`scripts/normalize-author-names.py`,
   dry run by default, revertible) for existing folders, sidecars and tags.

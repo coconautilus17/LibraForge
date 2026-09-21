@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
   <script src="/static/pattern-settings.js?v=20260921-3"></script>
-  <script src="/static/ui-preferences.js?v=20260921-2"></script>
+  <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260921-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
@@ -157,8 +157,8 @@
           <li>Each initial is a letter followed by a single dot, initials are joined with no spaces, and one space separates the last initial from the rest of the name.</li>
           <li>Examples: <code>J. R. R. Tolkien</code> and <code>J.R.R Tolkien</code> become <code>J.R.R. Tolkien</code>; <code>V A Lewis</code> becomes <code>V.A. Lewis</code>; <code>Kevin J Anderson</code> becomes <code>Kevin J. Anderson</code>. With the scheme on, <code>JK Rowling</code> and <code>J.K.Rowling</code> become <code>J.K. Rowling</code>, and <code>TJ Klune</code> becomes <code>T.J. Klune</code>.</li>
           <li>The last word of a name is never treated as initials, so <code>Mashton XX</code> and <code>John Smith III</code> stay as they are. A name containing a digit, such as <code>Comedian0 L</code>, is never treated as initials either. Names that would still be misread go in the patterns below.</li>
-          <li>Off: only spaced and single initials are unified, as in earlier versions (<code>J. R. R.</code> becomes <code>J.R.R.</code>); <code>JK Rowling</code> and <code>J.K.Rowling</code> are left alone.</li>
-          <li>Applies to author folder names (Folder Forge) and to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> does that when you choose to run it.</li>
+          <li>Off: author tags are written as they come, so <code>JK Rowling</code> and <code>J.K.Rowling</code> are left alone.</li>
+          <li>Applies to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folder Forge does not apply it: it names author folders from the metadata it finds, so folders follow once the metadata is updated. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> updates metadata and folders together when you choose to run it.</li>
         </ul>
       </details>
       <h3>Patterns in use</h3>

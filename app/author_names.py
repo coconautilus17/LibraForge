@@ -45,7 +45,6 @@ _DOTTED = re.compile(r"^(?:[A-Za-z]\.)+[A-Za-z]?\.?$")
 _CAPS_CLUSTER = re.compile(r"^[A-Z]{2,3}$")
 _ROLE_SUFFIX = re.compile(r"(\s+-\s+[A-Za-z][A-Za-z ]*)$")
 _CREDIT_SEPARATOR = re.compile(r"(\s*(?:,|;|&|\band\b)\s*)", re.IGNORECASE)
-_SINGLE_INITIAL_RE = re.compile(r"[A-Za-z]\.?$")
 
 
 def name_key(text: str) -> str:
@@ -210,31 +209,7 @@ def initials_only_change(before: str, after: str) -> bool:
     return strip(before) == strip(after)
 
 
-def is_canonical_author_name(name: str) -> bool:
-    return format_person_name(name) == name
-
-
-# ------------------------------------------------------------ on/off, legacy rule
-
-def legacy_canonical_author_name(value: str) -> str:
-    """The behaviour shipped since v0.1.1 (spaced and lone initials only)."""
-    if not value:
-        return value
-    parts = value.split()
-    out: list[str] = []
-    i = 0
-    while i < len(parts):
-        if _SINGLE_INITIAL_RE.fullmatch(parts[i]):
-            run: list[str] = []
-            while i < len(parts) and _SINGLE_INITIAL_RE.fullmatch(parts[i]):
-                run.append(parts[i][0].upper())
-                i += 1
-            out.append("".join(letter + "." for letter in run))
-        else:
-            out.append(parts[i])
-            i += 1
-    return " ".join(out)
-
+# ------------------------------------------------------------------- on/off
 
 _STATE_CACHE: dict[str, Any] = {"key": None, "value": False}
 
@@ -254,13 +229,6 @@ def scheme_enabled() -> bool:
         _STATE_CACHE["value"] = _read_json(STATE_FILE).get("author_scheme_enabled") is True
         _STATE_CACHE["key"] = key
     return _STATE_CACHE["value"]
-
-
-def folder_author_name(value: str) -> str:
-    """Author folder name: the universal scheme when enabled, else the shipped behaviour."""
-    if not value:
-        return value
-    return format_person_name(value) if scheme_enabled() else legacy_canonical_author_name(value)
 
 
 def output_author_credit(value: str) -> str:

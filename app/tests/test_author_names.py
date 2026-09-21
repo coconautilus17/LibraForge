@@ -28,12 +28,6 @@ CREDIT_CASES = {
     "V A Lewis & Kevin J Anderson": "V.A. Lewis & Kevin J. Anderson",
 }
 # What the shipped (legacy) rule returns; generated from the pre-change function.
-LEGACY_CASES = {
-    "V A Lewis": "V.A. Lewis", "A. F. Kay": "A.F. Kay", "J. R. R. Tolkien": "J.R.R. Tolkien",
-    "Kevin J Anderson": "Kevin J. Anderson", "J.R.R Tolkien": "J.R.R Tolkien", "J.K.Rowling": "J.K.Rowling",
-    "C.S.Lewis": "C.S.Lewis", "JK Rowling": "JK Rowling", "TJ Klune": "TJ Klune", "JD Kirk": "JD Kirk",
-    "Brian McClellan": "Brian McClellan", "Ursula K Le Guin": "Ursula K. Le Guin", "George R. R. Martin": "George R.R. Martin",
-}
 
 
 class WithTempPolicy(unittest.TestCase):
@@ -71,16 +65,6 @@ class SchemeRuleTests(WithTempPolicy):
             once = an.format_person_name(raw)
             self.assertEqual(an.format_person_name(once), once, raw)
 
-    def test_is_canonical(self):
-        self.assertTrue(an.is_canonical_author_name("V.A. Lewis"))
-        self.assertFalse(an.is_canonical_author_name("V A Lewis"))
-
-
-class LegacyRuleTests(WithTempPolicy):
-    def test_legacy_rule_matches_what_shipped(self):
-        for raw, expected in LEGACY_CASES.items():
-            with self.subTest(raw=raw):
-                self.assertEqual(an.legacy_canonical_author_name(raw), expected)
 
 
 class PatternPolicyTests(WithTempPolicy):
@@ -137,16 +121,13 @@ class InitialsOnlyChangeTests(unittest.TestCase):
 
 
 class SchemeSwitchTests(WithTempPolicy):
-    def test_off_by_default_and_legacy_behaviour(self):
+    def test_off_by_default_and_leaves_author_text_alone(self):
         self.assertFalse(an.scheme_enabled())
-        self.assertEqual(an.folder_author_name("JK Rowling"), "JK Rowling")
-        self.assertEqual(an.folder_author_name("V A Lewis"), "V.A. Lewis")
         self.assertEqual(an.output_author_credit("A. F. Kay, TJ Klune"), "A. F. Kay, TJ Klune")
 
     def test_state_file_turns_it_on(self):
         an.STATE_FILE.write_text(json.dumps({"schema_version": 1, "author_scheme_enabled": True}))
         self.assertTrue(an.scheme_enabled())
-        self.assertEqual(an.folder_author_name("JK Rowling"), "J.K. Rowling")
         self.assertEqual(an.output_author_credit("A. F. Kay, TJ Klune"), "A.F. Kay, T.J. Klune")
 
     def test_env_override_wins_either_way(self):

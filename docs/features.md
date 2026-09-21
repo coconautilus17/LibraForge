@@ -124,9 +124,9 @@ change (add, remove, switch on or off) is saved immediately; there is no Save bu
 
 **Author names:** a universal scheme for how initials are written: a dot after each
 letter, no spaces between them, one space before the rest of the name (`V A Lewis` and
-`JK Rowling` become `V.A. Lewis` and `J.K. Rowling`). It applies to author folder names
-(Folder Forge) and to the author tags and `metadata.json` the fixer and Manual Review
-write. It is switched on automatically for new installs and left off when an existing
+`JK Rowling` become `V.A. Lewis` and `J.K. Rowling`). It applies to the author tags and
+`metadata.json` the fixer and Manual Review write; Folder Forge does not apply it, it names
+author folders from the metadata it finds. It is switched on automatically for new installs and left off when an existing
 install is updated, so an organized library is not touched unless you turn it on
 (Settings → Author names). Names whose letters are not initials (`Mashton XX`, or a
 handle with a digit such as `Comedian0 L`) are covered by the patterns in use and a built-in
