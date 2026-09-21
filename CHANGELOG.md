@@ -6,6 +6,25 @@ onward is tracked here going forward.
 
 ---
 
+## v0.2.5 (unreleased)
+
+- Author names: a universal initials scheme (a dot after each letter, no spaces, one
+  space before the rest of the name; `V A Lewis` and `JK Rowling` become `V.A. Lewis` and
+  `J.K. Rowling`) for Folder Forge folder names and for the author tags and metadata.json
+  written by the fixer and Manual Review. Off by default for updated installs, on for new
+  installs, with a one-time notice on first run after updating. Known and private
+  exception patterns, and an opt-in migration script (`scripts/normalize-author-names.py`,
+  dry run by default, revertible) for existing folders, sidecars and tags.
+- Settings: Publishers, Title noise and Author names now share one Known patterns /
+  Private patterns layout and one renderer. Unsaved switch changes are no longer lost
+  when you add or remove a private pattern.
+- Fixed settings not surviving an image upgrade for people using the published image
+  or `docker-compose.dist.yml`: saved patterns, the Audiobookshelf connection and report
+  retention now live in a `libraforge-settings` volume (`LIBRAFORGE_SETTINGS_DIR`). Add the
+  volume once when upgrading (see the README).
+
+---
+
 ## v0.2.4 (2026-07-15)
 
 ### 2026-07-14 to 07-15 (PR #233-249)

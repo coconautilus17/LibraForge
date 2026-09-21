@@ -119,8 +119,9 @@ Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test
 ### Run the published image (no clone)
 
 The image on GitHub Container Registry is self-contained - the only thing you
-provide is the path to your library. Audible auth and run reports persist in
-named volumes, so there is nothing else to set up:
+provide is the path to your library. Audible auth, run reports and the settings you
+save in the UI (patterns, Audiobookshelf connection, retention) persist in named
+volumes, so there is nothing else to set up:
 
 ```bash
 docker run -d --name libraforge \
@@ -129,6 +130,8 @@ docker run -d --name libraforge \
   -v /path/to/your/audiobooks:/audiobooks \
   -v libraforge-auth:/auth \
   -v libraforge-reports:/app/reports \
+  -v libraforge-settings:/app/settings \
+  -e LIBRAFORGE_SETTINGS_DIR=/app/settings \
   ghcr.io/coconautilus17/libraforge:latest
 ```
 
@@ -142,6 +145,15 @@ AUDIOBOOKS_PATH=/path/to/your/audiobooks \
 Then open **http://127.0.0.1:5056** and connect an Audible account under
 Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
 `docker pull ghcr.io/coconautilus17/libraforge:latest`.
+
+> **Upgrading from 0.2.4 or earlier?** Earlier run commands and compose files had no
+> volume for saved settings, so anything saved in the UI lived inside the container and was
+> lost when it was recreated. Add the `libraforge-settings` volume and the
+> `LIBRAFORGE_SETTINGS_DIR` variable shown above (or download the new
+> `docker-compose.dist.yml`) once; settings you save from then on survive upgrades.
+> New in 0.2.5: **Settings → Author names** (a universal author-name scheme). It is on for
+> new installs and off after an upgrade, so an existing organized library is not affected
+> unless you turn it on.
 
 <!-- TODO: this published image is the lean default (Dockerfile) -- it doesn't
 include Chapter Forge's optional Hybrid/Full transcription ASR backends

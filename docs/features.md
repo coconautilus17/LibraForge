@@ -112,9 +112,26 @@ the downloads when finished.
 
 ## Settings (`/settings`)
 One consolidated page for everything global: Appearance, Title noise, Publishers,
-Library, Reports (retention policy), Accounts, Audiobookshelf, Goodreads/Kindle,
-Developer, and sidecar cleanup. The gear icon in the header links here from every page;
+Author names, Library, Reports (retention policy), Accounts, Audiobookshelf,
+Goodreads/Kindle, Developer, and sidecar cleanup. The gear icon in the header links here from every page;
 the old `/auth-setup` URL still works and redirects to the Accounts section.
+
+**Patterns (Title noise, Publishers, Author names):** the three pattern sections share
+one layout. **Known patterns** ship with LibraForge and can each be switched off;
+**Private patterns** are yours (add, switch off, remove). Publishers you have not seen
+before are learned during runs and listed under private patterns for review.
+
+**Author names:** a universal scheme for how initials are written: a dot after each
+letter, no spaces between them, one space before the rest of the name (`V A Lewis` and
+`JK Rowling` become `V.A. Lewis` and `J.K. Rowling`). It applies to author folder names
+(Folder Forge) and to the author tags and `metadata.json` the fixer and Manual Review
+write. It is switched on automatically for new installs and left off when an existing
+install is updated, so an organized library is not touched unless you turn it on
+(Settings → Author names). Names whose letters are not initials (`Mashton XX`) are
+covered by known patterns; add your own under private patterns. Existing folders and
+files are renamed only by the opt-in `scripts/normalize-author-names.py`, which is a dry
+run by default and can be reverted. Saved settings live in the `libraforge-settings`
+volume (`LIBRAFORGE_SETTINGS_DIR`), so they survive image upgrades.
 
 **Accounts:** guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**,
 each with a recognisable name, and **switch between them in one click**, rename them, or
