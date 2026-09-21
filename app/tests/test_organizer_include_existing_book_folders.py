@@ -69,5 +69,31 @@ class LikelyExistingBookFolderTests(unittest.TestCase):
         self.assertFalse(ORGANIZER.is_likely_existing_book_folder(item, COMPUTED_TARGET, ROOT))
 
 
+class ScanRootAwareTests(unittest.TestCase):
+    LIBRARY = Path("/library")
+
+    def _matching_folder_item(self, root):
+        source = root / "Book 5 - Bold Beginnings"
+        audio = source / "book.m4b"
+        return ORGANIZER.BookItem("folder", source, [audio], audio)
+
+    def test_staging_folder_under_the_library_is_planned_normally(self):
+        # Scanning /library/_unorganized: a matching name says nothing, the
+        # book still has to be organized into the library.
+        root = self.LIBRARY / "_unorganized"
+        item = self._matching_folder_item(root)
+        self.assertFalse(ORGANIZER.is_likely_existing_book_folder(item, COMPUTED_TARGET, root, self.LIBRARY))
+
+    def test_library_wide_scan_still_uses_the_name_signal(self):
+        item = self._matching_folder_item(self.LIBRARY)
+        self.assertTrue(ORGANIZER.is_likely_existing_book_folder(item, COMPUTED_TARGET, self.LIBRARY, self.LIBRARY))
+
+    def test_loose_file_in_staging_is_planned_normally(self):
+        root = self.LIBRARY / "_unorganized"
+        audio = root / "Book 5 - Bold Beginnings" / "Bold Beginnings.m4b"
+        item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
+        self.assertFalse(ORGANIZER.is_likely_existing_book_folder(item, COMPUTED_TARGET, root, self.LIBRARY))
+
+
 if __name__ == "__main__":
     unittest.main()

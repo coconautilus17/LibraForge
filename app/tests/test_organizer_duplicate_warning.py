@@ -36,10 +36,16 @@ class PossibleDuplicateTests(unittest.TestCase):
         self.assertIn(str(TARGET), file_reasons[0])
         self.assertIn("26 chapter file(s)", file_reasons[0])
 
-    def test_planned_loose_file_inside_a_planned_folder_is_flagged_too(self):
+    def test_planned_merged_file_becomes_a_skipped_review_item(self):
         folder = move("folder", FOLDER, TARGET, audio_count=3)
-        loose = move("loose_file", MERGED, TARGET / "x.m4b")
-        self.assertEqual(ORGANIZER.annotate_possible_duplicates([folder, loose], []), 1)
+        loose = move("loose_file", MERGED, Path("/lib/Eric Vall/Pocket Dungeon 2/x.m4b"))
+        planned, skipped = [folder, loose], []
+        self.assertEqual(ORGANIZER.annotate_possible_duplicates(planned, skipped), 1)
+        self.assertEqual(planned, [folder])
+        self.assertEqual(skipped, [loose])
+        self.assertTrue(loose["skipped"])
+        self.assertIn("possible duplicate", loose["skip_reason"])
+        self.assertIn(str(FOLDER), loose["skip_reason"])
         self.assertIn("possible duplicate", loose["metadata"]["review_reasons"][0])
 
     def test_unrelated_loose_file_and_lone_books_are_not_flagged(self):

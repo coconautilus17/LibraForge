@@ -245,6 +245,8 @@ def sanitize_path_name(name: str, fallback: str = "Unknown") -> str:
     name = clean_text(name)
     if not name:
         name = fallback
+    # A censored word ("Unfu*k") keeps its letters instead of splitting into "Unfu - k".
+    name = re.sub(r"(?<=\w)\*(?=\w)", "", name)
     name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', " - ", name)
     name = re.sub(r"\s+", " ", name)
     name = re.sub(r"\s+-\s+-\s+", " - ", name)
@@ -796,6 +798,26 @@ def parse_author_narrator_folder(value: str) -> tuple[str, str]:
             return author, narrator
         return "", ""
     return clean_author_credits(cleaned), ""
+
+
+_AUTHOR_ROLE_SUFFIX_RE = re.compile(
+    r"\s+-\s+(?:adaptation|translator|editor|foreword|introduction|illustrator|contributor)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def series_is_author_credit(series: str, author: str) -> bool:
+    """True when a series name is just the author credit (one author, or all
+    of them joined), e.g. a legacy "Authors - adaptation - Title" folder."""
+    key = normalize_for_compare(series)
+    if not key:
+        return False
+    names = [
+        normalize_for_compare(_AUTHOR_ROLE_SUFFIX_RE.sub("", person))
+        for person in split_people(author)
+    ]
+    names = [name for name in names if name]
+    return key in names or key == "".join(names)
 
 
 def author_is_probably_bad_for_series(author: str, series: str) -> bool:
@@ -2837,6 +2859,20 @@ def parse_book_folder_name(name: str) -> dict[str, str]:
         result["sequence_label"] = label
     return result
 
+_SUBTITLE_SERIES_RE = re.compile(
+    r"^\s*(?P<series>[^,]+?)\s*,\s*(?:book|vol\.?|volume)\s*(?P<number>\d{1,3})\s*$",
+    re.IGNORECASE,
+)
+
+
+def series_from_subtitle(subtitle: str) -> tuple[str, str]:
+    """Series and number from a 'Series, Book N' subtitle, else ("", "")."""
+    match = _SUBTITLE_SERIES_RE.match(subtitle or "")
+    if not match:
+        return "", ""
+    return match.group("series").strip(), match.group("number")
+
+
 def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
     paths: list[Path] = []
     if item.kind == "folder":
@@ -2906,6 +2942,8 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
         if audible_data:
             title = audible_data.get("chosen_title") or audible_data.get("title") or ""
             series = audible_data.get("series", "")
+            if not series:
+                series, _subtitle_number = series_from_subtitle(audible_data.get("subtitle", ""))
             author = audible_data.get("author", "")
             # Skip skeletal markers that carry only an ASIN placeholder (e.g.
             # {"asin": "NOREALASIN"}) and no real book data. Returning them here
@@ -3407,6 +3445,8 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     # such as "The Fifth Law of Cultivation", so only flag untrusted ones.
     if not trusted_metadata and marketing_cleanup_kind(metadata_title):
         add_review_reason(MARKETING_TITLE_TRIMMED_REASON)
+    if clean_series and series_is_author_credit(clean_series, author_full):
+        clean_series = ""
 
     if not book_number:
         book_number = (
@@ -3878,10 +3918,20 @@ def folder_name_matches_naming_template(source_name: str, target_leaf_name: str)
     return normalize_for_compare(source_name) == normalize_for_compare(target_leaf_name)
 
 
-def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, root: Path) -> bool:
+def is_likely_existing_book_folder(
+    item: BookItem,
+    computed_target_dir: Path,
+    root: Path,
+    destination_root: Path | None = None,
+) -> bool:
     """True when `item`'s own enclosing folder name already matches what the
     naming template computed for it -- it looks like it's already organized
     under the current scheme, wherever it currently sits.
+
+    The name is only a signal when the whole library is being scanned. When
+    the scan root is a sub-folder of the destination library (the usual
+    `_unorganized` import folder) every item is still waiting to be organized,
+    so a matching name proves nothing and the item is planned normally.
 
     For a folder-kind item that's the item's own source folder. For a
     loose-file item -- the common shape build_book_items() gives a
@@ -3890,6 +3940,8 @@ def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, ro
     the scan root itself (a bare loose file with no wrapper folder has
     nothing meaningful to compare).
     """
+    if destination_root is not None and root != destination_root:
+        return False
     if item.kind == "folder":
         folder_name = item.source_path.name
     else:
@@ -5082,38 +5134,45 @@ def conflict_reason_with_paths(reason: str, source: Path, target_dir: Path, clai
 def annotate_possible_duplicates(
     planned_moves: list[dict[str, Any]], skipped_reviews: list[dict[str, Any]]
 ) -> int:
-    """Warn, with paths, when a merged single file sits inside a folder that is
-    planned to move with its own chapter files: both look like the same book,
-    so the audio may exist twice. Only adds review reasons; never changes plans.
-    Returns how many loose files were matched to such a folder."""
+    """Handle a merged single file that sits inside a folder planned to move with
+    its own chapter files: both look like the same book, so the audio may exist
+    twice. Both get a review warning that names the paths. A merged file that
+    was still planned to move on its own is turned into a skipped review item,
+    so the two editions never land in different library places; the folder's
+    own move is untouched. Returns how many merged files matched such a folder."""
     folders = [m for m in planned_moves if m.get("kind") == "folder" and not m.get("skipped")]
     if not folders:
         return 0
     matched = 0
-    for group in (planned_moves, skipped_reviews):
-        for move in group:
-            if move.get("kind") != "loose_file":
-                continue
-            source = Path(move["source"])
-            folder = next(
-                (f for f in folders if Path(f["source"]) == source.parent or Path(f["source"]) in source.parents),
-                None,
-            )
-            if folder is None:
-                continue
-            matched += 1
-            chapters = folder.get("audio_count", 0)
-            file_note = (
-                f"possible duplicate: merged file {source} sits inside {folder['source']}, "
-                f"which is planned to move to {folder['target']} with {chapters} chapter file(s); "
-                f"both look like the same book, so the audio may exist twice"
-            )
-            move["metadata"] = add_metadata_review_reason(move["metadata"], file_note)
-            folder["metadata"] = add_metadata_review_reason(
-                folder["metadata"],
-                f"possible duplicate: this folder holds {chapters} chapter file(s) and also the merged file "
-                f"{source}; both look like the same book, so the audio may exist twice",
-            )
+    for move in list(planned_moves) + list(skipped_reviews):
+        if move.get("kind") != "loose_file":
+            continue
+        source = Path(move["source"])
+        folder = next(
+            (f for f in folders if Path(f["source"]) == source.parent or Path(f["source"]) in source.parents),
+            None,
+        )
+        if folder is None:
+            continue
+        matched += 1
+        chapters = folder.get("audio_count", 0)
+        file_note = (
+            f"possible duplicate: merged file {source} sits inside {folder['source']}, "
+            f"which is planned to move to {folder['target']} with {chapters} chapter file(s); "
+            f"both look like the same book, so the audio may exist twice"
+        )
+        move["metadata"] = add_metadata_review_reason(move["metadata"], file_note)
+        folder["metadata"] = add_metadata_review_reason(
+            folder["metadata"],
+            f"possible duplicate: this folder holds {chapters} chapter file(s) and also the merged file "
+            f"{source}; both look like the same book, so the audio may exist twice",
+        )
+        if move in planned_moves:
+            planned_moves.remove(move)
+            move["skipped"] = True
+            move["skip_reason"] = f"skipped: possible duplicate of the chapter files in {folder['source']}"
+            move["structure"] = "skipped_possible_duplicate"
+            skipped_reviews.append(move)
     return matched
 
 
@@ -5414,7 +5473,7 @@ def main() -> None:
             print(f"SKIP: ambiguous structure | {item.source_path}", file=sys.stderr)
             continue
 
-        if is_likely_existing_book_folder(item, target_dir, root):
+        if is_likely_existing_book_folder(item, target_dir, root, destination_root):
             if not args.include_existing_book_folders:
                 skipped_existing_book_folders += 1
                 reason = "skipped: folder name already matches the naming template"

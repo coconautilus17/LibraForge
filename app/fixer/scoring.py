@@ -261,7 +261,7 @@ def get_audible_number_candidates(product: dict) -> list[str]:
         ):
             continue
 
-        match = re.search(r"(?:^|\s)(\d+(?:\.\d+)?)\s*(?:[:\-]|$)", cleaned)
+        match = re.search(r"(?:^|\s)(\d+(?:\.\d+)?)\s*(?::|-(?=\s|$)|$)", cleaned)
         if match:
             candidates.append(normalize_book_number(match.group(1)))
 

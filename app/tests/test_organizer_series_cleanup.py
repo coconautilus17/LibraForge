@@ -79,6 +79,41 @@ class InferMetadataFlagTests(unittest.TestCase):
         self.assertFalse(ORGANIZER.MARKETING_REASONS & set(md["review_reasons"]))
 
 
+class SanitizePathNameTests(unittest.TestCase):
+    def test_in_word_asterisk_is_dropped(self):
+        self.assertEqual(ORGANIZER.sanitize_path_name("Unfu*k Yourself"), "Unfuk Yourself")
+
+    def test_other_reserved_characters_unchanged(self):
+        self.assertEqual(ORGANIZER.sanitize_path_name("AC/DC: The Story"), "AC - DC - The Story")
+        self.assertEqual(ORGANIZER.sanitize_path_name("Halo * Reach"), "Halo - Reach")
+        self.assertEqual(ORGANIZER.sanitize_path_name("Who Wants to Be a Millionaire?"), "Who Wants to Be a Millionaire")
+
+
+class SeriesIsAuthorCreditTests(unittest.TestCase):
+    def test_full_credit_list_matches_ignoring_role_suffix(self):
+        self.assertTrue(ORGANIZER.series_is_author_credit(
+            "Joe Harris, Chris Carter, Dirk Maggs",
+            "Joe Harris, Chris Carter, Dirk Maggs - adaptation",
+        ))
+        self.assertTrue(ORGANIZER.series_is_author_credit("Sarah Lin", "Sarah Lin"))
+        self.assertTrue(ORGANIZER.series_is_author_credit("Landon Scott, Adam Sage", "Landon Scott, Adam Sage"))
+
+    def test_real_series_is_not_matched(self):
+        self.assertFalse(ORGANIZER.series_is_author_credit("Amelia", "V.A. Lewis"))
+        self.assertFalse(ORGANIZER.series_is_author_credit("Street Cultivation", "Sarah Lin"))
+        self.assertFalse(ORGANIZER.series_is_author_credit("", "Sarah Lin"))
+
+
+class SeriesFromSubtitleTests(unittest.TestCase):
+    def test_series_and_number_parsed(self):
+        self.assertEqual(ORGANIZER.series_from_subtitle("Blight, Book 1"), ("Blight", "1"))
+        self.assertEqual(ORGANIZER.series_from_subtitle("Tower Mage, Volume 3"), ("Tower Mage", "3"))
+
+    def test_non_series_subtitles_are_ignored(self):
+        for subtitle in ("", "LitRPG", "A Novel", "How to Change Your Mind"):
+            self.assertEqual(ORGANIZER.series_from_subtitle(subtitle), ("", ""), subtitle)
+
+
 class SummaryParsingTests(unittest.TestCase):
     def test_app_parses_the_new_summary_lines(self):
         main_src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
