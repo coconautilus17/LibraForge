@@ -546,7 +546,7 @@ SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
 )
-ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves|Moves succeeded|Moves failed):\s+(\d+)\s*$")
+ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Possible duplicates flagged|Flagged by generic marketing cleanup|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves|Moves succeeded|Moves failed):\s+(\d+)\s*$")
 ORGANIZER_MODE_RE = re.compile(r"^Mode:\s+(APPLY|DRY RUN|INDEX ONLY)\s*$")
 ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure|Error):\s+(.+)$")
 ORGANIZER_PROGRESS_RE = re.compile(r"^Scanning\s+(\d+)/(\d+):\s+(.+)$")
@@ -3852,6 +3852,8 @@ def initial_organizer_stats() -> dict[str, Any]:
         "found_items": 0,
         "ignored_mp3_files": 0,
         "skipped_existing_book_folders": 0,
+        "possible_duplicates_flagged": 0,
+        "flagged_marketing_cleanup": 0,
         "structure_cache_entries": 0,
         "matched_existing_structure": 0,
         "ambiguous_structure_matches": 0,
@@ -3913,6 +3915,8 @@ def parse_organizer_line(state: RunState, line: str) -> None:
             "Found book items": "found_items",
             "Ignored MP3 files": "ignored_mp3_files",
             "Skipped likely existing book folders": "skipped_existing_book_folders",
+            "Possible duplicates flagged": "possible_duplicates_flagged",
+            "Flagged by generic marketing cleanup": "flagged_marketing_cleanup",
             "Skipped unknown author": "skipped_unknown_author",
             "Skipped by pattern": "skipped_pattern_match",
             "Skipped already in target folder": "skipped_already_target",

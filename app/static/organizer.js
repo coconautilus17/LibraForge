@@ -319,6 +319,8 @@ function renderStats(stats) {
     stat('Skipped In Place', stats.skipped_already_target, 'Items already sitting in the target folder.'),
     stat("Skipped Ambiguous", stats.skipped_ambiguous_structure, "Moves blocked because multiple existing series folders were equally plausible."),
     stat('Skipped Conflicts', stats.skipped_conflicts, 'Moves blocked by target collisions or subtree issues.'),
+    stats.possible_duplicates_flagged ? stat('Possible Duplicates', stats.possible_duplicates_flagged, 'Merged single files that sit next to their own chapter files. Each review warning lists the paths involved.') : '',
+    stats.flagged_marketing_cleanup ? stat('Marketing Cleanup', stats.flagged_marketing_cleanup, 'Books whose series or title was trimmed or dropped as generic marketing text. Each has a review reason.') : '',
     stat('Planned Moves', stats.planned_moves, 'Move operations parsed from the current run output.'),
     stat('Review Items', reviewItems, 'Planned moves using inferred, conflicting, or incomplete identity data.'),
     stat('Mode', stats.mode || '-', 'Dry run or apply.'),
