@@ -127,8 +127,8 @@ COPY config /app/config
 # "script not found" error instead of an obviously wrong one.
 COPY tools /app/tools
 
-RUN mkdir -p /app/reports /auth /models \
-    && chmod -R 0777 /app/reports /auth /app/config /models
+RUN mkdir -p /app/reports /auth /app/settings /models \
+    && chmod -R 0777 /app/reports /auth /app/config /app/settings /models
 
 USER 1000:1000
 

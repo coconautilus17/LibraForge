@@ -29,8 +29,8 @@ COPY tools /app/tools
 # works for any runtime UID/GID. Named volumes inherit these perms at first
 # creation, so compose/`docker run` with `--user` (or the default 1000) can
 # write reports, auth files, and UI config overrides without a host chown.
-RUN mkdir -p /app/reports /auth \
-    && chmod -R 0777 /app/reports /auth /app/config
+RUN mkdir -p /app/reports /auth /app/settings \
+    && chmod -R 0777 /app/reports /auth /app/config /app/settings
 
 # Default to a non-root user so a bare `docker run` (no --user) does not write
 # root-owned files into a mounted library. Compose overrides this with the host

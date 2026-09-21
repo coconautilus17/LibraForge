@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.settings_paths import user_settings_file
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_FILE = Path(
@@ -15,7 +17,7 @@ DEFAULT_POLICY_FILE = Path(
 LOCAL_POLICY_FILE = Path(
     os.environ.get(
         "TITLE_NOISE_LOCAL_FILE",
-        PROJECT_ROOT / "config" / "title-noise.local.json",
+        user_settings_file("title-noise.local.json"),
     )
 )
 

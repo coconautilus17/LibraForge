@@ -78,6 +78,7 @@ from app.progress_phases import (
     terminal_phase,
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
+from app.settings_paths import user_settings_file
 from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
 from app.chaptering import (
     ChapterDetectionCancelled,
@@ -138,8 +139,8 @@ DEFAULT_AUTH_FILE = Path("/auth/audible-metadata.json")
 ACCOUNTS_DIR = Path("/auth/accounts")
 COVER_UPLOAD_DIR = Path(tempfile.gettempdir()) / "libraforge-cover-uploads"
 MAX_COVER_DOWNLOAD_BYTES = 10 * 1024 * 1024
-ABS_AGG_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-agg.json"
-RETENTION_CONFIG_FILE = APP_ROOT.parent / "config" / "retention.json"
+ABS_AGG_CONFIG_FILE = user_settings_file("abs-agg.json")
+RETENTION_CONFIG_FILE = user_settings_file("retention.json")
 
 
 def _load_retention_config() -> dict[str, Any]:
@@ -242,7 +243,7 @@ def _save_abs_agg_config(config: dict[str, Any]) -> None:
 
 # abs-tract (Goodreads/Kindle) is a separate service from abs-agg. Empty URL by
 # default. Batch Goodreads fallback also requires an explicit per-run flag.
-ABS_TRACT_CONFIG_FILE = APP_ROOT.parent / "config" / "abs-tract.json"
+ABS_TRACT_CONFIG_FILE = user_settings_file("abs-tract.json")
 
 
 def _load_abs_tract_config() -> dict[str, Any]:
@@ -6179,7 +6180,7 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
 # ABS (Audiobookshelf) metadata provider
 # ---------------------------------------------------------------------------
 
-ABS_CONFIG_FILE = APP_ROOT.parent / "config" / "abs.json"
+ABS_CONFIG_FILE = user_settings_file("abs.json")
 
 # Env vars are the startup defaults; config file values override at request time.
 _ABS_URL_DEFAULT = os.environ.get("ABS_URL", "http://audiobookshelf").rstrip("/")
