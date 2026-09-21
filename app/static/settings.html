@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Settings</title>
-  <script src="/static/pattern-settings.js?v=20260921-1"></script>
-  <script src="/static/ui-preferences.js?v=20260712-2"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260715-2" />
+  <script src="/static/pattern-settings.js?v=20260921-2"></script>
+  <script src="/static/ui-preferences.js?v=20260921-1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260921-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -112,9 +112,6 @@
         <button id="titleNoiseAddBtn" class="secondary" type="button">Add pattern</button>
       </div>
       <div id="titleNoiseCustom" class="pattern-list"></div>
-      <div class="actions">
-        <button id="titleNoiseSaveBtn" class="secondary" type="button">Save title patterns</button>
-      </div>
       <p id="titleNoiseStatus" class="note"></p>
     </section>
 
@@ -139,9 +136,6 @@
         <button id="publisherAddBtn" class="secondary" type="button">Add publisher</button>
       </div>
       <div id="publisherCustom" class="pattern-list"></div>
-      <div class="actions">
-        <button id="publisherSaveBtn" class="secondary" type="button">Save publishers</button>
-      </div>
       <p id="publisherStatus" class="note"></p>
     </section>
 
@@ -162,28 +156,23 @@
         <ul>
           <li>Each initial is a letter followed by a single dot, initials are joined with no spaces, and one space separates the last initial from the rest of the name.</li>
           <li>Examples: <code>J. R. R. Tolkien</code> and <code>J.R.R Tolkien</code> become <code>J.R.R. Tolkien</code>; <code>V A Lewis</code> becomes <code>V.A. Lewis</code>; <code>Kevin J Anderson</code> becomes <code>Kevin J. Anderson</code>. With the scheme on, <code>JK Rowling</code> and <code>J.K.Rowling</code> become <code>J.K. Rowling</code>, and <code>TJ Klune</code> becomes <code>T.J. Klune</code>.</li>
-          <li>The last word of a name is never treated as initials, so <code>Mashton XX</code> and <code>John Smith III</code> stay as they are. Names that would still be misread go in the patterns below.</li>
+          <li>The last word of a name is never treated as initials, so <code>Mashton XX</code> and <code>John Smith III</code> stay as they are. A name containing a digit, such as <code>Comedian0 L</code>, is never treated as initials either. Names that would still be misread go in the patterns below.</li>
           <li>Off: only spaced and single initials are unified, as in earlier versions (<code>J. R. R.</code> becomes <code>J.R.R.</code>); <code>JK Rowling</code> and <code>J.K.Rowling</code> are left alone.</li>
           <li>Applies to author folder names (Folder Forge) and to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> does that when you choose to run it.</li>
         </ul>
       </details>
       <h3>Known patterns</h3>
-      <p class="note">Names whose letters are part of the name rather than initials. The scheme leaves these exactly as written.</p>
+      <p class="note">Names whose letters are part of the name rather than initials. The scheme leaves these exactly as written. Untick one to let the scheme handle it.</p>
       <div id="authorNameDefaults" class="pattern-list"></div>
       <h3>Private patterns</h3>
+      <p class="note">Add a name the scheme gets wrong, written the way it must stay. It is saved as soon as you add it.</p>
       <div class="pattern-editor">
-        <label>Name as it may appear
-          <input id="authorNamePattern" placeholder="TJ Klune" />
-        </label>
-        <label>Exact spelling to keep
-          <input id="authorNameSpelling" placeholder="TJ Klune" />
+        <label>Keep this name exactly as written
+          <input id="authorNamePattern" placeholder="Comedian0 L" />
         </label>
         <button id="authorNameAddBtn" class="secondary" type="button">Add pattern</button>
       </div>
       <div id="authorNameCustom" class="pattern-list"></div>
-      <div class="actions">
-        <button id="authorNameSaveBtn" class="secondary" type="button">Save author patterns</button>
-      </div>
       <p id="authorNameStatus" class="note"></p>
     </section>
 

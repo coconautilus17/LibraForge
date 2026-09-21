@@ -62,6 +62,38 @@ class SchemeHooksTests(unittest.TestCase):
                 (Path(tmp) / name).mkdir()
             self.assertEqual(ORGANIZER.noncanonical_author_folders(Path(tmp)), ["A. F. Kay"])
 
+    def report_item(self, current_author, written_author):
+        result = FIXER.ItemResult(index=1, file_path=Path("/x/a.m4b"), display_path=Path("a.m4b"))
+        result.status = "matched"
+        result.clues = {"current": {"author": current_author}}
+        result.metadata = {"author": written_author}
+        return FIXER._build_report_item(result)
+
+    def test_report_flags_books_whose_initials_the_scheme_unified(self):
+        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "universal"
+        self.assertTrue(self.report_item("V A Lewis", "V.A. Lewis").get("author_initials_fixed"))
+        self.assertTrue(self.report_item("JK Rowling, TJ Klune", "J.K. Rowling, T.J. Klune").get("author_initials_fixed"))
+
+    def test_report_does_not_flag_unchanged_or_different_authors_or_the_old_mode(self):
+        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "universal"
+        self.assertNotIn("author_initials_fixed", self.report_item("V.A. Lewis", "V.A. Lewis"))
+        self.assertNotIn("author_initials_fixed", self.report_item("V A Lewis", "Brian McClellan"))
+        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "legacy"
+        self.assertNotIn("author_initials_fixed", self.report_item("V A Lewis", "V.A. Lewis"))
+
+
+class ReportUiWiringTests(unittest.TestCase):
+    def test_match_report_has_the_filter_badge_and_stat(self):
+        static = ROOT / "app" / "static"
+        html = (static / "index.html").read_text(encoding="utf-8")
+        js = (static / "app.js").read_text(encoding="utf-8")
+        css = (static / "style.css").read_text(encoding="utf-8")
+        self.assertIn('<option value="initials_fixed">Author Initials Fixed</option>', html)
+        self.assertIn("statusFilter === 'initials_fixed' && !item.author_initials_fixed", js)
+        self.assertIn('class="match-initials-badge"', js)
+        self.assertIn("stat('Author initials fixed'", js)
+        self.assertIn(".match-initials-badge", css)
+
 
 if __name__ == "__main__":
     unittest.main()

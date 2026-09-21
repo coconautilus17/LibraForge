@@ -400,6 +400,7 @@ function renderStats(stats, startedAt, finishedAt) {
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
     stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads (abs-tract) circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
+    matchReportItems.some((i) => i.author_initials_fixed) ? stat('Author initials fixed', matchReportItems.filter((i) => i.author_initials_fixed).length, 'Author names whose initials were unified by the author-name scheme (Settings, Author names). Filter the match report by Author Initials Fixed to list them.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -1531,6 +1532,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'matched' && !hasMatch) continue;
       if (statusFilter === 'goodreads' && (item.provider || '').toLowerCase() !== 'goodreads') continue;
       if (statusFilter === 'gr_limited' && !item.goodreads_rate_limited) continue;
+      if (statusFilter === 'initials_fixed' && !item.author_initials_fixed) continue;
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
       if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
       if (statusFilter === 'written' && writeAction !== 'written') continue;
@@ -1621,6 +1623,7 @@ function buildMatchCard(item) {
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
+      ${item.author_initials_fixed ? `<span class="match-initials-badge" title="${escapeHtml(`The author initials were unified by the author-name scheme: ${local.author || ''} to ${m.author || ''}`)}">Initials Fixed</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
       ${ebookBadge}
     </div>

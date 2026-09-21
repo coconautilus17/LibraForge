@@ -34,6 +34,8 @@ _BUILTIN_KNOWN = [
      "name": "Mashton XX", "spelling": "Mashton XX"},
     {"id": "mashton-xy", "label": "Mashton XY", "description": "The letters XY are part of the name, not initials.",
      "name": "Mashton XY", "spelling": "Mashton XY"},
+    {"id": "comedian0-l", "label": "Comedian0 L", "description": "A handle with a digit and a single trailing letter, not initials.",
+     "name": "Comedian0 L", "spelling": "Comedian0 L"},
 ]
 
 _ROMAN = re.compile(r"^(?:II|III|IV|VI|VII|VIII|IX|XI|XII)$")
@@ -167,6 +169,8 @@ def format_person_name(name: str) -> str:
     exception = _active_exceptions().get(name_key(name))
     if exception:
         return exception + role
+    if any(char.isdigit() for char in name):
+        return name + role  # handles such as "Comedian0 L" are never initials
     tokens: list[str] = []
     for token in name.split():
         glued = _GLUED.fullmatch(token)
@@ -195,6 +199,15 @@ def format_author_credit(value: str) -> str:
         return value
     parts = _CREDIT_SEPARATOR.split(value)
     return "".join(part if index % 2 else format_person_name(part) for index, part in enumerate(parts))
+
+
+def initials_only_change(before: str, after: str) -> bool:
+    """True when two author credits differ only in how initials are written
+    ("V A Lewis" and "V.A. Lewis"): same letters, different text."""
+    if not before or not after or before == after:
+        return False
+    strip = lambda text: re.sub(r"[^a-z0-9]+", "", text.lower())
+    return strip(before) == strip(after)
 
 
 def is_canonical_author_name(name: str) -> bool:

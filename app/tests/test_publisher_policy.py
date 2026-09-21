@@ -88,6 +88,28 @@ class PublisherPolicyTests(unittest.TestCase):
         learned = [e["name"] for e in pp.load_publisher_policy()["custom_publishers"] if e["source"] == "learned"]
         self.assertEqual(learned, ["Michael Chatfield Publications Inc."])
 
+    def test_learned_entries_that_now_ship_as_known_patterns_show_once(self):
+        self._local.write_text(json.dumps({"schema_version": 1, "disabled_defaults": [], "custom_publishers": [
+            {"id": "tantor-audio-x", "name": "tantor audio", "source": "learned"},
+            {"id": "tantor-graphic", "name": "Tantor Audio, Graphic Audio", "source": "learned"},
+            {"id": "acme", "name": "Acme Audio", "source": "learned"},
+        ]}), encoding="utf-8")
+        policy = pp.load_publisher_policy()
+        self.assertEqual([e["name"] for e in policy["custom_publishers"]], ["Acme Audio"])
+        self.assertEqual(sum(1 for e in policy["publishers"] if e["name"].lower() == "tantor audio"), 1)
+
+    def test_learn_never_treats_independently_published_as_a_publisher(self):
+        self.assertIsNone(pp.learn_publishers(["Independently published", "Self-published"]))
+        self.assertEqual(pp.load_publisher_policy()["custom_publishers"], [])
+
+    def test_shipped_defaults_carry_the_formerly_learned_publishers(self):
+        shipped = json.loads((Path(__file__).parents[2] / "config" / "publishers.default.json").read_text(encoding="utf-8"))
+        names = {entry["name"] for entry in shipped["publishers"]}
+        for name in ("Aethon Audio", "Mountaindale Press", "Hidden Infinity", "Seven Seas Entertainment", "Seven Seas Siren"):
+            self.assertIn(name, names)
+        self.assertNotIn("Independently published", names)
+        self.assertNotIn("Seven Seas Entertainment, Seven Seas Siren", names)
+
     def test_normalize_publisher_key_ignores_punctuation(self):
         self.assertEqual(
             pp.normalize_publisher_key("William D. Arand"),

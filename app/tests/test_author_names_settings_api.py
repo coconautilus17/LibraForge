@@ -33,7 +33,7 @@ class AuthorNamesApiTests(unittest.TestCase):
 
     def test_get_lists_known_patterns_and_defaults_to_scheme_off(self):
         data = client.get("/api/settings/author-names").json()
-        self.assertEqual({e["name"] for e in data["names"] if e["source"] == "default"}, {"Mashton XX", "Mashton XY"})
+        self.assertEqual({e["name"] for e in data["names"] if e["source"] == "default"}, {"Mashton XX", "Mashton XY", "Comedian0 L"})
         self.assertFalse(data["scheme_enabled"])
         self.assertFalse(data["notice_pending"])
 

@@ -17,7 +17,7 @@ PERSON_CASES = {
     "Ursula K Le Guin": "Ursula K. Le Guin", "E. D. deBirmingham": "E.D. deBirmingham", "A. F. Kay": "A.F. Kay",
     "P.D. James": "P.D. James", "John Smith III": "John Smith III", "William Strunk Jr": "William Strunk Jr",
     "Mashton XX": "Mashton XX", "Mashton X X": "Mashton XX", "Brian McClellan": "Brian McClellan",
-    "St. John Mandel": "St. John Mandel", "Comedian0 L": "Comedian0 L.",
+    "St. John Mandel": "St. John Mandel", "Comedian0 L": "Comedian0 L", "Handle7 X Smith": "Handle7 X Smith",
     "A. F. Kay - translator": "A.F. Kay - translator", "Arthur Stone - translator": "Arthur Stone - translator", "": "",
 }
 CREDIT_CASES = {
@@ -84,10 +84,15 @@ class LegacyRuleTests(WithTempPolicy):
 
 
 class PatternPolicyTests(WithTempPolicy):
-    def test_known_patterns_ship_with_mashton(self):
+    def test_known_patterns_ship_with_the_real_exceptions(self):
         names = {e["name"]: e for e in an.load_author_policy()["names"] if e["source"] == "default"}
-        self.assertEqual(set(names), {"Mashton XX", "Mashton XY"})
+        self.assertEqual(set(names), {"Mashton XX", "Mashton XY", "Comedian0 L"})
         self.assertTrue(all(e["enabled"] for e in names.values()))
+
+    def test_a_name_with_a_digit_is_never_read_as_initials(self):
+        an.save_author_policy(["comedian0-l"], [])
+        self.assertEqual(an.format_person_name("Comedian0 L"), "Comedian0 L")
+        self.assertEqual(an.format_person_name("Comedian0 L - narrator"), "Comedian0 L - narrator")
 
     def test_private_pattern_keeps_a_spelling_for_every_variant(self):
         self.assertEqual(an.format_person_name("TJ Klune"), "T.J. Klune")
@@ -120,6 +125,15 @@ class PatternPolicyTests(WithTempPolicy):
         data = json.loads(an.LOCAL_POLICY_FILE.read_text())
         self.assertEqual(set(data), {"schema_version", "disabled_defaults", "custom_names"})
         self.assertEqual(data["disabled_defaults"], ["mashton-xy"])
+
+
+class InitialsOnlyChangeTests(unittest.TestCase):
+    def test_only_formatting_differences_count(self):
+        self.assertTrue(an.initials_only_change("V A Lewis", "V.A. Lewis"))
+        self.assertTrue(an.initials_only_change("A. F. Kay, Yagupov", "A.F. Kay, Yagupov"))
+        self.assertFalse(an.initials_only_change("V.A. Lewis", "V.A. Lewis"))
+        self.assertFalse(an.initials_only_change("V A Lewis", "Brian McClellan"))
+        self.assertFalse(an.initials_only_change("", "V.A. Lewis"))
 
 
 class SchemeSwitchTests(WithTempPolicy):

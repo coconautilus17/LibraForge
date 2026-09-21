@@ -15,9 +15,15 @@ onward is tracked here going forward.
   installs, with a one-time notice on first run after updating. Known and private
   exception patterns, and an opt-in migration script (`scripts/normalize-author-names.py`,
   dry run by default, revertible) for existing folders, sidecars and tags.
+- Match report: books whose author was rewritten only because the scheme unified the
+  initials get an **Initials Fixed** badge, an **Author Initials Fixed** status filter
+  and a summary tile.
 - Settings: Publishers, Title noise and Author names now share one Known patterns /
-  Private patterns layout and one renderer. Unsaved switch changes are no longer lost
-  when you add or remove a private pattern.
+  Private patterns layout and one renderer. Every change is saved immediately, so there
+  is no Save button and no unsaved switches to lose. The author card has a single field
+  for a private name. Publishers learned in earlier runs (Aethon Audio, Mountaindale
+  Press and others) now ship as known publishers, and names containing a digit are never
+  read as initials.
 - Fixed settings not surviving an image upgrade for people using the published image
   or `docker-compose.dist.yml`: saved patterns, the Audiobookshelf connection and report
   retention now live in a `libraforge-settings` volume (`LIBRAFORGE_SETTINGS_DIR`). Add the

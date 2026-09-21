@@ -3520,6 +3520,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge,
 .match-write-badge,
 .match-gr-limited-badge,
+.match-initials-badge,
 .match-grouped-badge,
 .match-ebook-badge {
   display: inline-block;
@@ -3536,6 +3537,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge     { background: rgb(0 160 100 / 15%);         color: #00c878;        }
 .match-write-badge      { background: var(--accent-dim);            color: var(--accent-dim-text); }
 .match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
+.match-initials-badge   { background: var(--warning-soft);          color: var(--warning); }
 .match-grouped-badge    { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 .match-ebook-badge      { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 

@@ -398,7 +398,6 @@
         custom: document.getElementById("titleNoiseCustom"),
         status: document.getElementById("titleNoiseStatus"),
         addButton: document.getElementById("titleNoiseAddBtn"),
-        saveButton: document.getElementById("titleNoiseSaveBtn"),
       },
       requiredInputs: [labelInput, patternInput],
       describeKnown: (item) => ({ title: item.label, detail: item.description || item.pattern }),
@@ -436,8 +435,8 @@
         loaded: "Known patterns ship with LibraForge; private patterns are yours.",
         loadError: "Could not load title patterns.",
         saveError: "Could not save title patterns.",
-        added: "Private pattern added locally. Save to apply it.",
-        removed: "Pattern removed locally. Save to apply the change.",
+        added: "Private pattern added and saved.",
+        removed: "Pattern removed.",
         saved: "Saved. New runs now use these title patterns.",
       },
     });
@@ -462,7 +461,6 @@
         custom: document.getElementById("publisherCustom"),
         status: document.getElementById("publisherStatus"),
         addButton: document.getElementById("publisherAddBtn"),
-        saveButton: document.getElementById("publisherSaveBtn"),
       },
       requiredInputs: [nameInput],
       describeKnown: (item, policy) => {
@@ -511,8 +509,8 @@
         loaded: "Known patterns ship with LibraForge; private patterns are yours.",
         loadError: "Could not load publishers.",
         saveError: "Could not save publishers.",
-        added: "Publisher added locally. Save to apply it.",
-        removed: "Publisher removed locally. Save to apply the change.",
+        added: "Publisher added and saved.",
+        removed: "Publisher removed.",
         saved: "Saved. New runs now use these publishers.",
       },
     });
@@ -523,7 +521,6 @@
     const toggle = document.getElementById("authorSchemeToggle");
     const schemeStatus = document.getElementById("authorSchemeStatus");
     const nameInput = document.getElementById("authorNamePattern");
-    const spellingInput = document.getElementById("authorNameSpelling");
     if (!toggle || !schemeStatus) return;
 
     const describeScheme = (policy) => {
@@ -545,14 +542,13 @@
         custom: document.getElementById("authorNameCustom"),
         status: document.getElementById("authorNameStatus"),
         addButton: document.getElementById("authorNameAddBtn"),
-        saveButton: document.getElementById("authorNameSaveBtn"),
       },
-      requiredInputs: [nameInput, spellingInput],
+      requiredInputs: [nameInput],
       describeKnown: (item) => ({ title: item.label, detail: item.description || `Always written ${item.spelling}` }),
-      describePrivate: (item) => ({ title: item.name, detail: `always written ${item.spelling}` }),
+      describePrivate: (item) => ({ title: item.spelling, detail: "always kept exactly like this" }),
       readAddForm: () => {
         const name = nameInput.value.trim();
-        const spelling = spellingInput.value.trim() || name;
+        const spelling = name;
         if (!name) return { error: "Enter the author name." };
         return {
           item: {
@@ -568,7 +564,6 @@
       },
       clearAddForm: () => {
         nameInput.value = "";
-        spellingInput.value = "";
       },
       serializePrivate: (item, enabled) => ({
         id: item.id,
@@ -585,8 +580,8 @@
         loaded: "Known patterns ship with LibraForge; private patterns are yours.",
         loadError: "Could not load author name settings.",
         saveError: "Could not save author name patterns.",
-        added: "Private pattern added locally. Save to apply it.",
-        removed: "Pattern removed locally. Save to apply the change.",
+        added: "Private pattern added and saved.",
+        removed: "Pattern removed.",
         saved: "Saved. New runs use these author name patterns.",
       },
     });

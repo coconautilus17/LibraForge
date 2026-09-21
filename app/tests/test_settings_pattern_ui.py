@@ -47,7 +47,7 @@ globalThis.fetch = (url, opts) => {
   const reply = responses[key];
   const value = typeof reply === "function" ? reply(opts) : reply;
   if (!value) return Promise.reject(new Error("no response for " + key));
-  return Promise.resolve({ ok: value.ok !== false, json: () => Promise.resolve(value.body) });
+  return Promise.resolve({ ok: value.ok !== false, json: () => Promise.resolve(JSON.parse(JSON.stringify(value.body))) });
 };
 const el = (id, tag = "div") => (registry[id] = new Node(tag));
 """
@@ -89,7 +89,7 @@ class PatternUiTests(unittest.TestCase):
     # ------------------------------------------------------------ title noise
     def make_title_noise(self):
         self.run_js("""['titleNoiseDefaults','titleNoiseCustom','titleNoiseStatus'].forEach((id) => el(id));
-          ['titleNoiseAddBtn','titleNoiseSaveBtn'].forEach((id) => el(id,'button'));
+          ['titleNoiseAddBtn'].forEach((id) => el(id,'button'));
           ['titleNoiseLabel','titleNoisePattern'].forEach((id) => el(id,'input'));""")
         self.respond("GET /api/settings/title-noise", {"patterns": [
             {"id": "generic", "label": "Generic", "description": "desc", "pattern": "x", "source": "default", "enabled": True},
@@ -104,48 +104,63 @@ class PatternUiTests(unittest.TestCase):
         self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 1)
         self.assertIn("Known patterns ship", self.run_js("registry.titleNoiseStatus.textContent"))
 
-    def test_title_noise_save_sends_the_same_shape_as_before(self):
+    def put_body(self, index=0):
+        return json.loads(self.run_js(f"JSON.stringify(calls.filter(c => c.method === 'PUT')[{index}].body)"))
+
+    def test_title_noise_switch_saves_at_once_in_the_same_shape_as_before(self):
         self.make_title_noise()
         self.respond("PUT /api/settings/title-noise", {"patterns": []})
         self.run_js("registry.titleNoiseDefaults.children[1].children[0].checked = false;")
-        self.run_js("registry.titleNoiseSaveBtn.fire('click');")
-        body = json.loads(self.run_js("JSON.stringify(calls.filter(c => c.method === 'PUT')[0].body)"))
-        self.assertEqual(body, {
+        self.run_js("registry.titleNoiseDefaults.children[1].children[0].fire('change');")
+        self.assertEqual(self.put_body(), {
             "disabled_defaults": ["other"],
             "custom_patterns": [{"id": "custom-bbc", "label": "bbc", "description": "", "pattern": "bbc", "enabled": True}],
         })
+        self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Saved. New runs now use these title patterns.")
 
-    def test_adding_keeps_unsaved_switches_and_clears_the_form(self):
+    def test_adding_saves_at_once_keeps_switches_and_clears_the_form(self):
         self.make_title_noise()
         self.run_js("registry.titleNoiseDefaults.children[0].children[0].checked = false;")
         self.run_js("registry.titleNoiseLabel.value = 'SoL'; registry.titleNoisePattern.value = 'A slice of life';")
+        self.respond("PUT /api/settings/title-noise", {"patterns": [
+            {"id": "generic", "label": "Generic", "description": "desc", "pattern": "x", "source": "default", "enabled": False},
+            {"id": "custom-bbc", "label": "bbc", "description": "", "phrase": "bbc", "pattern": "bbc", "source": "custom", "enabled": True},
+            {"id": "custom-sol", "label": "SoL", "description": "", "phrase": "A slice of life", "pattern": "A slice of life", "source": "custom", "enabled": True},
+        ]})
         self.run_js("registry.titleNoiseAddBtn.fire('click');")
-        self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 2)
-        self.assertFalse(self.run_js("registry.titleNoiseDefaults.children[0].children[0].checked"))
-        self.assertEqual(self.run_js("registry.titleNoiseLabel.value"), "")
-        self.respond("PUT /api/settings/title-noise", {"patterns": []})
-        self.run_js("registry.titleNoiseSaveBtn.fire('click');")
-        body = json.loads(self.run_js("JSON.stringify(calls.filter(c => c.method === 'PUT')[0].body)"))
+        body = self.put_body()
         self.assertEqual(body["disabled_defaults"], ["generic"])
         self.assertEqual([p["pattern"] for p in body["custom_patterns"]], ["bbc", "A slice of life"])
+        self.assertEqual(self.run_js("registry.titleNoiseLabel.value"), "")
+        self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 2)
+        self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Private pattern added and saved.")
 
     def test_empty_form_shows_the_old_message(self):
         self.make_title_noise()
         self.run_js("registry.titleNoiseAddBtn.fire('click');")
         self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Enter both a label and a noise phrase.")
 
-    def test_remove_and_save_error_message(self):
+    def test_remove_saves_at_once(self):
         self.make_title_noise()
+        self.respond("PUT /api/settings/title-noise", {"patterns": [
+            {"id": "generic", "label": "Generic", "description": "desc", "pattern": "x", "source": "default", "enabled": True}]})
         self.run_js("registry.titleNoiseCustom.children[0].children[1].fire('click');")
+        self.assertEqual(self.put_body()["custom_patterns"], [])
         self.assertEqual(self.json("registry.titleNoiseCustom.children[0].className"), "note")
+        self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "Pattern removed.")
+
+    def test_a_rejected_change_shows_the_message_and_restores_the_server_list(self):
+        self.make_title_noise()
         self.respond("PUT /api/settings/title-noise", {"detail": "bad regex"}, ok=False)
-        self.run_js("registry.titleNoiseSaveBtn.fire('click');")
+        self.run_js("registry.titleNoiseLabel.value = 'Bad'; registry.titleNoisePattern.value = '(';")
+        self.run_js("registry.titleNoiseAddBtn.fire('click');")
         self.assertEqual(self.run_js("registry.titleNoiseStatus.textContent"), "bad regex")
+        self.assertEqual(self.json("registry.titleNoiseCustom.children.length"), 1)
 
     # -------------------------------------------------------------- publishers
     def test_publishers_keep_learned_entries_and_the_special_endpoint(self):
         self.run_js("""['publisherDefaults','publisherCustom','publisherStatus'].forEach((id) => el(id));
-          ['publisherAddBtn','publisherSaveBtn'].forEach((id) => el(id,'button'));
+          ['publisherAddBtn'].forEach((id) => el(id,'button'));
           el('publisherName','input'); el('publisherSpecial','select');""")
         self.respond("GET /api/settings/publishers", {"special_providers": {"graphicaudio": "Graphic Audio"}, "publishers": [
             {"id": "tantor", "name": "Tantor Audio", "aliases": ["Tantor"], "special_provider": None, "source": "default", "enabled": True},
@@ -157,9 +172,8 @@ class PatternUiTests(unittest.TestCase):
         detail = self.run_js("registry.publisherDefaults.children[1].children[1].children[1].textContent")
         self.assertEqual(detail, "→ Graphic Audio endpoint")
         self.run_js("registry.publisherName.value = 'Podium'; registry.publisherSpecial.value = 'graphicaudio';")
-        self.run_js("registry.publisherAddBtn.fire('click');")
         self.respond("PUT /api/settings/publishers", {"publishers": []})
-        self.run_js("registry.publisherSaveBtn.fire('click');")
+        self.run_js("registry.publisherAddBtn.fire('click');")
         body = json.loads(self.run_js("JSON.stringify(calls.filter(c => c.method === 'PUT')[0].body)"))
         self.assertEqual(body["disabled_defaults"], [])
         self.assertEqual(body["custom_publishers"], [
@@ -170,8 +184,8 @@ class PatternUiTests(unittest.TestCase):
     # ------------------------------------------------------------ author names
     def make_authors(self, scheme=False, origin="upgraded"):
         self.run_js("""['authorNameDefaults','authorNameCustom','authorNameStatus','authorSchemeStatus'].forEach((id) => el(id));
-          ['authorNameAddBtn','authorNameSaveBtn'].forEach((id) => el(id,'button'));
-          ['authorNamePattern','authorNameSpelling'].forEach((id) => el(id,'input')); el('authorSchemeToggle','input');""")
+          ['authorNameAddBtn'].forEach((id) => el(id,'button'));
+          ['authorNamePattern'].forEach((id) => el(id,'input')); el('authorSchemeToggle','input');""")
         self.respond("GET /api/settings/author-names", {"scheme_enabled": scheme, "origin": origin, "names": [
             {"id": "mashton-xx", "label": "Mashton XX", "description": "part of the name", "name": "Mashton XX", "spelling": "Mashton XX", "source": "default", "enabled": True},
         ]})
@@ -199,15 +213,15 @@ class PatternUiTests(unittest.TestCase):
         self.assertFalse(self.run_js("registry.authorSchemeToggle.checked"))
         self.assertEqual(self.run_js("registry.authorSchemeStatus.textContent"), "Could not save the setting.")
 
-    def test_private_author_pattern_defaults_the_spelling_to_the_name(self):
+    def test_a_private_author_pattern_is_one_field_and_saves_at_once(self):
         self.make_authors()
-        self.run_js("registry.authorNamePattern.value = 'TJ Klune';")
-        self.run_js("registry.authorNameAddBtn.fire('click');")
+        self.run_js("registry.authorNamePattern.value = 'Comedian0 L';")
         self.respond("PUT /api/settings/author-names", {"scheme_enabled": False, "origin": "upgraded", "names": []})
-        self.run_js("registry.authorNameSaveBtn.fire('click');")
+        self.run_js("registry.authorNameAddBtn.fire('click');")
         body = self.json("calls.filter(c => c.method === 'PUT')[0].body")
         self.assertEqual(body, {"disabled_defaults": [], "custom_names": [
-            {"id": "custom-tjklune", "label": "TJ Klune", "description": "", "name": "TJ Klune", "spelling": "TJ Klune", "enabled": True}]})
+            {"id": "custom-comedian0l", "label": "Comedian0 L", "description": "", "name": "Comedian0 L", "spelling": "Comedian0 L", "enabled": True}]})
+        self.assertEqual(self.run_js("registry.authorNamePattern.value"), "")
         self.assertNotIn("scheme_enabled", body)
 
     # ------------------------------------------------------- upgrade notice
@@ -263,13 +277,15 @@ class StaticPageTests(unittest.TestCase):
     def test_settings_page_has_the_ids_the_scripts_need_and_loads_the_shared_component(self):
         html = (STATIC / "settings.html").read_text(encoding="utf-8")
         for element_id in (
-            "titleNoiseDefaults", "titleNoiseCustom", "titleNoiseStatus", "titleNoiseAddBtn", "titleNoiseSaveBtn",
+            "titleNoiseDefaults", "titleNoiseCustom", "titleNoiseStatus", "titleNoiseAddBtn",
             "titleNoiseLabel", "titleNoisePattern", "publisherDefaults", "publisherCustom", "publisherStatus",
-            "publisherAddBtn", "publisherSaveBtn", "publisherName", "publisherSpecial", "authorSchemeToggle",
+            "publisherAddBtn", "publisherName", "publisherSpecial", "authorSchemeToggle",
             "authorSchemeStatus", "authorNameDefaults", "authorNameCustom", "authorNameStatus", "authorNameAddBtn",
-            "authorNameSaveBtn", "authorNamePattern", "authorNameSpelling",
+            "authorNamePattern",
         ):
             self.assertIn(f'id="{element_id}"', html, element_id)
+        for gone in ("titleNoiseSaveBtn", "publisherSaveBtn", "authorNameSaveBtn", "authorNameSpelling"):
+            self.assertNotIn(f'id="{gone}"', html, gone)
         self.assertIn('href="#author-names"', html)
         self.assertLess(html.index("pattern-settings.js"), html.index("ui-preferences.js"))
         self.assertEqual(html.count("<h3>Known patterns</h3>"), 3)
