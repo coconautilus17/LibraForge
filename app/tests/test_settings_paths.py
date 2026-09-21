@@ -27,13 +27,14 @@ class SettingsPathsTests(unittest.TestCase):
             for name, attr, filename in (
                 ("app.publisher_policy", "LOCAL_POLICY_FILE", "publishers.local.json"),
                 ("app.title_noise_policy", "LOCAL_POLICY_FILE", "title-noise.local.json"),
+                ("app.author_names", "LOCAL_POLICY_FILE", "author-names.local.json"),
             ):
-                with mock.patch.dict(os.environ, {"PUBLISHERS_LOCAL_FILE": "", "TITLE_NOISE_LOCAL_FILE": ""}):
-                    for var in ("PUBLISHERS_LOCAL_FILE", "TITLE_NOISE_LOCAL_FILE"):
+                with mock.patch.dict(os.environ, {"PUBLISHERS_LOCAL_FILE": "", "TITLE_NOISE_LOCAL_FILE": "", "AUTHOR_NAMES_LOCAL_FILE": ""}):
+                    for var in ("PUBLISHERS_LOCAL_FILE", "TITLE_NOISE_LOCAL_FILE", "AUTHOR_NAMES_LOCAL_FILE"):
                         os.environ.pop(var, None)
                     module = importlib.reload(importlib.import_module(name))
                     self.assertEqual(getattr(module, attr), Path("/app/settings") / filename, name)
-        for name in ("app.publisher_policy", "app.title_noise_policy"):
+        for name in ("app.publisher_policy", "app.title_noise_policy", "app.author_names"):
             importlib.reload(importlib.import_module(name))
 
 

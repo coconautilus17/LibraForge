@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "names": [
+    {
+      "id": "mashton-xx",
+      "label": "Mashton XX",
+      "description": "The letters XX are part of the name, not initials.",
+      "name": "Mashton XX",
+      "spelling": "Mashton XX"
+    },
+    {
+      "id": "mashton-xy",
+      "label": "Mashton XY",
+      "description": "The letters XY are part of the name, not initials.",
+      "name": "Mashton XY",
+      "spelling": "Mashton XY"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ data/*/*
 !data/audiobooks/.gitkeep
 !data/auth/.gitkeep
 config/title-noise.local.json
+config/author-names.local.json
 config/publishers.local.json
 config/abs-agg.json
 config/abs-tract.json

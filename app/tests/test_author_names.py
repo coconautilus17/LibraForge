@@ -1,0 +1,152 @@
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from app import author_names as an
+
+PERSON_CASES = {
+    "V A Lewis": "V.A. Lewis", "V.A. Lewis": "V.A. Lewis", "V.A Lewis": "V.A. Lewis",
+    "J R R Tolkien": "J.R.R. Tolkien", "J.R.R Tolkien": "J.R.R. Tolkien", "J. R. R. Tolkien": "J.R.R. Tolkien",
+    "JRR Tolkien": "J.R.R. Tolkien", "J.K.Rowling": "J.K. Rowling", "C.S.Lewis": "C.S. Lewis",
+    "JK Rowling": "J.K. Rowling", "TJ Klune": "T.J. Klune", "AJ Hackwith": "A.J. Hackwith", "DJ Lucas": "D.J. Lucas",
+    "Kevin J Anderson": "Kevin J. Anderson", "Kevin J. Anderson": "Kevin J. Anderson",
+    "George R. R. Martin": "George R.R. Martin", "James S. A. Corey": "James S.A. Corey",
+    "Ursula K Le Guin": "Ursula K. Le Guin", "E. D. deBirmingham": "E.D. deBirmingham", "A. F. Kay": "A.F. Kay",
+    "P.D. James": "P.D. James", "John Smith III": "John Smith III", "William Strunk Jr": "William Strunk Jr",
+    "Mashton XX": "Mashton XX", "Mashton X X": "Mashton XX", "Brian McClellan": "Brian McClellan",
+    "St. John Mandel": "St. John Mandel", "Comedian0 L": "Comedian0 L.",
+    "A. F. Kay - translator": "A.F. Kay - translator", "Arthur Stone - translator": "Arthur Stone - translator", "": "",
+}
+CREDIT_CASES = {
+    "A. F. Kay, Mikhail Yagupov - translator": "A.F. Kay, Mikhail Yagupov - translator",
+    "Landon Scott, Adam Sage": "Landon Scott, Adam Sage",
+    "J R R Tolkien and C S Lewis": "J.R.R. Tolkien and C.S. Lewis",
+    "TheFirstDefier; JF Brink": "TheFirstDefier; J.F. Brink",
+    "V A Lewis & Kevin J Anderson": "V.A. Lewis & Kevin J. Anderson",
+}
+# What the shipped (legacy) rule returns; generated from the pre-change function.
+LEGACY_CASES = {
+    "V A Lewis": "V.A. Lewis", "A. F. Kay": "A.F. Kay", "J. R. R. Tolkien": "J.R.R. Tolkien",
+    "Kevin J Anderson": "Kevin J. Anderson", "J.R.R Tolkien": "J.R.R Tolkien", "J.K.Rowling": "J.K.Rowling",
+    "C.S.Lewis": "C.S.Lewis", "JK Rowling": "JK Rowling", "TJ Klune": "TJ Klune", "JD Kirk": "JD Kirk",
+    "Brian McClellan": "Brian McClellan", "Ursula K Le Guin": "Ursula K. Le Guin", "George R. R. Martin": "George R.R. Martin",
+}
+
+
+class WithTempPolicy(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.patches = [
+            mock.patch.object(an, "LOCAL_POLICY_FILE", base / "author-names.local.json"),
+            mock.patch.object(an, "STATE_FILE", base / ".install-state.json"),
+            mock.patch.dict(os.environ, {}, clear=False),
+        ]
+        for patch in self.patches:
+            patch.start()
+        os.environ.pop("LIBRAFORGE_AUTHOR_SCHEME", None)
+
+    def tearDown(self):
+        for patch in reversed(self.patches):
+            patch.stop()
+        self.tmp.cleanup()
+
+
+class SchemeRuleTests(WithTempPolicy):
+    def test_person_names(self):
+        for raw, expected in PERSON_CASES.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(an.format_person_name(raw), expected)
+
+    def test_credits(self):
+        for raw, expected in CREDIT_CASES.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(an.format_author_credit(raw), expected)
+
+    def test_idempotent(self):
+        for raw in PERSON_CASES:
+            once = an.format_person_name(raw)
+            self.assertEqual(an.format_person_name(once), once, raw)
+
+    def test_is_canonical(self):
+        self.assertTrue(an.is_canonical_author_name("V.A. Lewis"))
+        self.assertFalse(an.is_canonical_author_name("V A Lewis"))
+
+
+class LegacyRuleTests(WithTempPolicy):
+    def test_legacy_rule_matches_what_shipped(self):
+        for raw, expected in LEGACY_CASES.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(an.legacy_canonical_author_name(raw), expected)
+
+
+class PatternPolicyTests(WithTempPolicy):
+    def test_known_patterns_ship_with_mashton(self):
+        names = {e["name"]: e for e in an.load_author_policy()["names"] if e["source"] == "default"}
+        self.assertEqual(set(names), {"Mashton XX", "Mashton XY"})
+        self.assertTrue(all(e["enabled"] for e in names.values()))
+
+    def test_private_pattern_keeps_a_spelling_for_every_variant(self):
+        self.assertEqual(an.format_person_name("TJ Klune"), "T.J. Klune")
+        an.save_author_policy([], [{"name": "TJ Klune", "spelling": "TJ Klune"}])
+        for variant in ("TJ Klune", "T J Klune", "T.J. Klune", "tj klune"):
+            self.assertEqual(an.format_person_name(variant), "TJ Klune", variant)
+        self.assertEqual(an.format_person_name("TJ Klune - narrator"), "TJ Klune - narrator")
+
+    def test_disabling_a_known_pattern_stops_it_applying(self):
+        self.assertEqual(an.format_person_name("Mashton X X"), "Mashton XX")
+        an.save_author_policy(["mashton-xx"], [])
+        self.assertEqual(an.format_person_name("Mashton X X"), "Mashton X.X.")
+
+    def test_disabled_private_pattern_is_ignored(self):
+        an.save_author_policy([], [{"name": "TJ Klune", "spelling": "TJ Klune", "enabled": False}])
+        self.assertEqual(an.format_person_name("TJ Klune"), "T.J. Klune")
+
+    def test_a_pattern_can_only_choose_a_spelling(self):
+        with self.assertRaises(ValueError):
+            an.save_author_policy([], [{"name": "TJ Klune", "spelling": "Somebody Else"}])
+
+    def test_duplicates_and_blanks_are_rejected(self):
+        with self.assertRaises(ValueError):
+            an.save_author_policy([], [{"name": "TJ Klune", "spelling": "TJ Klune"}, {"name": "T.J. Klune", "spelling": "T.J. Klune"}])
+        with self.assertRaises(ValueError):
+            an.save_author_policy([], [{"name": "", "spelling": ""}])
+
+    def test_local_file_shape_matches_the_other_policies(self):
+        an.save_author_policy(["mashton-xy"], [{"name": "TJ Klune", "spelling": "TJ Klune"}])
+        data = json.loads(an.LOCAL_POLICY_FILE.read_text())
+        self.assertEqual(set(data), {"schema_version", "disabled_defaults", "custom_names"})
+        self.assertEqual(data["disabled_defaults"], ["mashton-xy"])
+
+
+class SchemeSwitchTests(WithTempPolicy):
+    def test_off_by_default_and_legacy_behaviour(self):
+        self.assertFalse(an.scheme_enabled())
+        self.assertEqual(an.folder_author_name("JK Rowling"), "JK Rowling")
+        self.assertEqual(an.folder_author_name("V A Lewis"), "V.A. Lewis")
+        self.assertEqual(an.output_author_credit("A. F. Kay, TJ Klune"), "A. F. Kay, TJ Klune")
+
+    def test_state_file_turns_it_on(self):
+        an.STATE_FILE.write_text(json.dumps({"schema_version": 1, "author_scheme_enabled": True}))
+        self.assertTrue(an.scheme_enabled())
+        self.assertEqual(an.folder_author_name("JK Rowling"), "J.K. Rowling")
+        self.assertEqual(an.output_author_credit("A. F. Kay, TJ Klune"), "A.F. Kay, T.J. Klune")
+
+    def test_env_override_wins_either_way(self):
+        an.STATE_FILE.write_text(json.dumps({"schema_version": 1, "author_scheme_enabled": True}))
+        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "legacy"
+        self.assertFalse(an.scheme_enabled())
+        os.environ["LIBRAFORGE_AUTHOR_SCHEME"] = "universal"
+        an.STATE_FILE.write_text(json.dumps({"schema_version": 1, "author_scheme_enabled": False}))
+        self.assertTrue(an.scheme_enabled())
+
+    def test_unreadable_state_means_off(self):
+        an.STATE_FILE.write_text("{not json")
+        self.assertFalse(an.scheme_enabled())
+
+
+if __name__ == "__main__":
+    unittest.main()
