@@ -78,7 +78,9 @@ from app.progress_phases import (
     terminal_phase,
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
-from app.settings_paths import user_settings_file
+from app import install_state
+from app.settings_paths import settings_dir, user_settings_file
+from app.author_names import load_author_policy, save_author_policy
 from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
 from app.chaptering import (
     ChapterDetectionCancelled,
@@ -4767,6 +4769,15 @@ async def _lifespan(app: FastAPI):
     # defined later in this module -- name lookup inside a function body
     # happens at call time, well after the whole module has loaded.
     _ensure_manual_review_search_index_fresh([])
+    try:
+        # Decides once whether this is a fresh install or an upgrade (see
+        # app/install_state.py) so the author-name scheme defaults correctly.
+        install_state.init_install_state(
+            _read_app_version(), REPORTS_DIR, DEFAULT_AUTH_FILE.parent,
+            [APP_ROOT.parent / "config", settings_dir()],
+        )
+    except OSError:
+        pass
     yield
 
 
@@ -7821,6 +7832,78 @@ def update_publisher_policy(req: PublisherPolicyUpdate) -> dict[str, Any]:
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _read_app_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+class AuthorNamePattern(BaseModel):
+    id: str = ""
+    label: str = ""
+    description: str = ""
+    name: str
+    spelling: str
+    enabled: bool = True
+
+
+class AuthorNamesUpdate(BaseModel):
+    """Every field is optional; a field left out is left as it is."""
+    disabled_defaults: list[str] | None = None
+    custom_names: list[AuthorNamePattern] | None = None
+    scheme_enabled: bool | None = None
+
+
+def _author_names_view() -> dict[str, Any]:
+    state = install_state.public_view()
+    return {
+        **load_author_policy(),
+        "scheme_enabled": state["author_scheme_enabled"],
+        "notice_pending": state["author_notice_pending"],
+        "origin": state["origin"],
+    }
+
+
+@app.get("/api/settings/author-names")
+def get_author_names_policy() -> dict[str, Any]:
+    return _author_names_view()
+
+
+@app.put("/api/settings/author-names")
+def update_author_names_policy(req: AuthorNamesUpdate) -> dict[str, Any]:
+    if req.disabled_defaults is not None or req.custom_names is not None:
+        current = load_author_policy()["names"]
+        disabled = (
+            req.disabled_defaults
+            if req.disabled_defaults is not None
+            else [e["id"] for e in current if e["source"] == "default" and not e["enabled"]]
+        )
+        custom = (
+            [item.model_dump() for item in req.custom_names]
+            if req.custom_names is not None
+            else [e for e in current if e["source"] == "custom"]
+        )
+        try:
+            save_author_policy(disabled_defaults=disabled, custom_names=custom)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    if req.scheme_enabled is not None:
+        install_state.update_state({"author_scheme_enabled": req.scheme_enabled})
+    return _author_names_view()
+
+
+@app.get("/api/install-state")
+def get_install_state() -> dict[str, Any]:
+    return install_state.public_view()
+
+
+@app.post("/api/install-state/ack-author-notice")
+def acknowledge_author_notice() -> dict[str, Any]:
+    install_state.update_state({"author_notice_pending": False})
+    return install_state.public_view()
 
 
 @app.post("/api/runs")
