@@ -517,6 +517,24 @@ GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The individual genre/marketing words the pattern above is built from. Used
+# to tell a real name that merely ENDS in a genre word ("Street Cultivation")
+# apart from a value that is nothing but a coupling of genre buckets
+# ("Fantasy Cultivation", "LitRPG"): the former has a real word in front, the
+# latter does not.
+_GENRE_VOCABULARY_WORDS = {
+    "lit", "rpg", "litrpg", "game", "gamelit", "isekai", "xianxia", "wuxia",
+    "cultivation", "progression", "fantasy", "slice", "life", "adventure",
+}
+_GENRE_STOPWORDS = {"a", "an", "the", "of"}
+
+
+def is_generic_genre_coupling(value: str) -> bool:
+    """True when every real word in `value` is itself genre/marketing
+    vocabulary. Only meaningful together with is_marketing_descriptor()."""
+    tokens = [t for t in re.findall(r"[a-z0-9]+", value.lower()) if t not in _GENRE_STOPWORDS]
+    return bool(tokens) and all(t in _GENRE_VOCABULARY_WORDS for t in tokens)
+
 # Trailing "special edition"-style tags with no real title content of their
 # own, e.g. "(Swimsuit Edition)", "(Series Completion)", "(Director's Cut)".
 # These convey a real fact about the release but aren't a distinct book
@@ -652,14 +670,21 @@ def sanitize_technical_labels(value: str) -> str:
     return value.strip(" -_.:,")
 
 
-def sanitize_book_title(value: str) -> str:
-    """Remove technical and generic marketing text from a book title."""
+def sanitize_book_title(value: str, trusted: bool = False) -> str:
+    """Remove technical and generic marketing text from a book title.
+
+    `trusted` (Audible sidecar/marker data) skips the wholesale drop for a
+    value that merely ENDS in a genre word (e.g. "Street Cultivation" is a
+    real, confirmed name) -- but a value that is nothing but a coupling of
+    genre buckets with no real content of its own ("LitRPG", "Fantasy
+    Cultivation") is dropped either way, trusted or not.
+    """
     value = sanitize_technical_labels(value)
     if not value:
         return ""
 
     value = strip_edition_descriptors(value).strip(" -_.:,")
-    if is_marketing_descriptor(value):
+    if is_marketing_descriptor(value) and (not trusted or is_generic_genre_coupling(value)):
         return ""
 
     value = remove_trailing_marketing_descriptor(value)
@@ -680,15 +705,16 @@ MARKETING_REASONS = frozenset({
 })
 
 
-def marketing_cleanup_kind(raw: str) -> str:
+def marketing_cleanup_kind(raw: str, trusted: bool = False) -> str:
     """Report, without changing anything, what sanitize_book_title() does to
     `raw` because of generic marketing text: "dropped" (whole value discarded),
-    "trimmed" (trailing descriptor removed) or "" (untouched)."""
+    "trimmed" (trailing descriptor removed) or "" (untouched). See
+    sanitize_book_title() for what `trusted` changes."""
     value = sanitize_technical_labels(raw or "")
     if not value:
         return ""
     value = strip_edition_descriptors(value).strip(" -_.:,")
-    if is_marketing_descriptor(value):
+    if is_marketing_descriptor(value) and (not trusted or is_generic_genre_coupling(value)):
         return "dropped"
     trimmed = strip_edition_descriptors(remove_trailing_marketing_descriptor(value)).strip(" -_.:,")
     return "trimmed" if trimmed != value else ""
@@ -718,8 +744,8 @@ def cleanup_title_artifacts(value: str) -> str:
     return value.strip(" -_.,")
 
 
-def clean_series_name(value: str) -> str:
-    value = sanitize_path_name(sanitize_book_title(value), "") if value else ""
+def clean_series_name(value: str, trusted: bool = False) -> str:
+    value = sanitize_path_name(sanitize_book_title(value, trusted=trusted), "") if value else ""
     value = strip_leading_sort_prefix(value)
     value = re.sub(r"\s+series\s*$", "", value, flags=re.IGNORECASE)
     return sanitize_path_name(value, "") if value else ""
@@ -1474,7 +1500,7 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         without_suffix = remove_trailing_marketing_descriptor(cleaned)
         if without_suffix and without_suffix != cleaned:
             cleaned = without_suffix.strip(" -_.,")
-        series_clean = clean_series_name(series)
+        series_clean = clean_series_name(series, trusted=True)
         # Strip a trailing "(Series Book N)" annotation the same way the
         # untrusted cleanup path does (e.g. "Rebirth (Dread Knight Book 4)"
         # -> "Rebirth"). Trusted Audible/fixer titles occasionally bake this
@@ -3443,8 +3469,8 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     series = strip_edition_marker(series)
     title = strip_edition_marker(title)
     metadata_title = strip_edition_marker(metadata_title)
-    clean_series = clean_series_name(series)
-    series_marketing = marketing_cleanup_kind(series) if series else ""
+    clean_series = clean_series_name(series, trusted=trusted_metadata)
+    series_marketing = marketing_cleanup_kind(series, trusted=trusted_metadata) if series else ""
     if series_marketing == "dropped" and not clean_series:
         add_review_reason(MARKETING_SERIES_DROPPED_REASON)
         add_review_detail("Source series", series)
@@ -4673,12 +4699,15 @@ def title_matches_author_name(title: str, author: str) -> bool:
 def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, Any]:
     """Final target-title cleanup after author/series have stabilized."""
     metadata = dict(metadata)
-    series = clean_series_name(metadata.get("series", ""))
     number = metadata.get("book_number", "")
     title = metadata.get("title", "")
     author = metadata.get("author", "")
     source = metadata.get("metadata_source", "")
     trusted = metadata_source_is_trusted(source)
+    # Re-derives from metadata["series"] rather than trusting it as already
+    # clean: this runs after apply_run_author_correction, which can replace
+    # series with a raw, uncleaned value from a sibling book in the same run.
+    series = clean_series_name(metadata.get("series", ""), trusted=trusted)
 
     cleaned_title = clean_book_title(title, series, number, trusted=trusted)
     if (

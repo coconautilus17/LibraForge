@@ -51,6 +51,30 @@ class MarketingCleanupKindTests(unittest.TestCase):
         )
 
 
+class GenreCouplingTests(unittest.TestCase):
+    def test_bare_genre_words_and_couplings_are_genre_only(self):
+        for value in ("LitRPG", "Cultivation", "Isekai", "Fantasy Cultivation", "LitRPG Isekai", "a LitRPG"):
+            self.assertTrue(ORGANIZER.is_generic_genre_coupling(value), value)
+
+    def test_a_real_word_in_front_is_not_genre_only(self):
+        for value in ("Street Cultivation", "Dungeon Lord", "The Wraith's Haunt", "Pocket Dungeon"):
+            self.assertFalse(ORGANIZER.is_generic_genre_coupling(value), value)
+
+    def test_empty_value_is_not_genre_only(self):
+        self.assertFalse(ORGANIZER.is_generic_genre_coupling(""))
+
+
+class SanitizeBookTitleTrustTests(unittest.TestCase):
+    def test_untrusted_drops_any_marketing_shaped_value(self):
+        self.assertEqual(ORGANIZER.sanitize_book_title("Street Cultivation"), "")
+        self.assertEqual(ORGANIZER.sanitize_book_title("LitRPG"), "")
+
+    def test_trusted_keeps_a_real_name_but_still_drops_a_bare_genre_bucket(self):
+        self.assertEqual(ORGANIZER.sanitize_book_title("Street Cultivation", trusted=True), "Street Cultivation")
+        self.assertEqual(ORGANIZER.sanitize_book_title("LitRPG", trusted=True), "")
+        self.assertEqual(ORGANIZER.sanitize_book_title("Fantasy Cultivation", trusted=True), "")
+
+
 class InferMetadataFlagTests(unittest.TestCase):
     def _run(self, series: str, title: str):
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,23 +92,49 @@ class InferMetadataFlagTests(unittest.TestCase):
             item = ORGANIZER.build_book_items(root, Path(tmp) / "dest")[0]
             return ORGANIZER.infer_metadata(item, root)
 
-    def test_dropped_series_adds_review_reason_and_names_the_source_series(self):
+    def test_a_real_name_that_ends_in_a_genre_word_is_kept_from_trusted_metadata(self):
+        # "Street Cultivation" is a real Audible series (trusted marker data);
+        # unlike a bare genre bucket it has a real word in front of the genre
+        # word, so it must not be treated as marketing text at all.
         md = self._run("Street Cultivation", "Street Cultivation 2")
+        self.assertEqual(md["series"], "Street Cultivation")
+        self.assertFalse(ORGANIZER.MARKETING_REASONS & set(md["review_reasons"]))
+        self.assertEqual(md["review_details"], [])
+
+    def test_a_bare_genre_bucket_is_still_dropped_even_from_trusted_metadata(self):
+        # "LitRPG" has no real content of its own -- Audible sometimes files a
+        # book under the genre bucket itself with nothing else, and that is
+        # still not a real series, trusted source or not.
+        md = self._run("LitRPG", "LitRPG 2")
         self.assertEqual(md["series"], "")
         self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, md["review_reasons"])
         details = {d["label"]: d["value"] for d in md["review_details"]}
-        self.assertEqual(details["Source series"], "Street Cultivation")
+        self.assertEqual(details["Source series"], "LitRPG")
+
+    def test_a_coupling_of_two_genre_words_is_also_dropped(self):
+        # Neither word is real content on its own -- "Fantasy" is as generic
+        # a modifier here as "Cultivation" is, unlike "Street".
+        md = self._run("Fantasy Cultivation", "Fantasy Cultivation 2")
+        self.assertEqual(md["series"], "")
+        self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, md["review_reasons"])
 
     def test_two_different_dropped_series_share_the_identical_review_reason(self):
         # The reason itself must group; only review_details may vary per book.
-        a = self._run("Street Cultivation", "Street Cultivation 2")
-        b = self._run("LitRPG", "LitRPG 2")
+        a = self._run("LitRPG", "LitRPG 2")
+        b = self._run("Isekai LitRPG", "Isekai LitRPG 2")
         self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, a["review_reasons"])
         self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, b["review_reasons"])
         a_details = {d["label"]: d["value"] for d in a["review_details"]}
         b_details = {d["label"]: d["value"] for d in b["review_details"]}
-        self.assertEqual(a_details["Source series"], "Street Cultivation")
-        self.assertEqual(b_details["Source series"], "LitRPG")
+        self.assertEqual(a_details["Source series"], "LitRPG")
+        self.assertEqual(b_details["Source series"], "Isekai LitRPG")
+
+    def test_untrusted_path_derived_series_is_still_dropped_even_when_real(self):
+        # A folder-name guess never gets the trusted exemption -- only marker/
+        # sidecar data is confirmed enough to keep a genre-shaped real name.
+        self.assertEqual(ORGANIZER.clean_series_name("Street Cultivation"), "")
+        self.assertEqual(ORGANIZER.clean_series_name("Street Cultivation", trusted=False), "")
+        self.assertEqual(ORGANIZER.clean_series_name("Street Cultivation", trusted=True), "Street Cultivation")
 
     def test_ordinary_series_is_not_flagged(self):
         md = self._run("Pocket Dungeon", "Pocket Dungeon 2")

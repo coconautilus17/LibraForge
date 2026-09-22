@@ -8,6 +8,11 @@ onward is tracked here going forward.
 
 ## v0.2.5 (unreleased)
 
+- Folder Forge: a real series name that merely ends in a genre word (`Street
+  Cultivation`) is no longer wiped by the marketing-cleanup filter when it comes from
+  trusted (fixer/Manual Review) metadata. A series that is nothing but a genre bucket
+  with no real content (`LitRPG`, `Fantasy Cultivation`) is still correctly dropped,
+  trusted or not. (Issue #276)
 - Folder Forge: the organizer now flags books whose series or title was dropped or
   trimmed as generic marketing/genre text, and warns (with the folder and file paths)
   when a merged single file sits next to its own chapter files, so the two editions
