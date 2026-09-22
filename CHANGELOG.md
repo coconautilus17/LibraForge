@@ -8,6 +8,31 @@ onward is tracked here going forward.
 
 ## v0.2.5 (unreleased)
 
+- Folder Forge: a real series name that merely ends in a genre word (`Street
+  Cultivation`) is no longer wiped by the marketing-cleanup filter when it comes from
+  trusted (fixer/Manual Review) metadata. A series that is nothing but a genre bucket
+  with no real content (`LitRPG`, `Fantasy Cultivation`) is still correctly dropped,
+  trusted or not. (Issue #276)
+- Folder Forge: the organizer now flags books whose series or title was dropped or
+  trimmed as generic marketing/genre text, and warns (with the folder and file paths)
+  when a merged single file sits next to its own chapter files, so the two editions
+  don't silently end up in different places. Also fixed: a censored in-word asterisk no
+  longer splits a title, a series that is really the author credit list is dropped, a
+  series can be read from a "Series, Book N" subtitle when Audible has none, and the
+  "folder name matches the template" skip only applies to a library-wide scan, not to
+  the normal `_unorganized` import folder.
+- Fixer: a digit in a hyphenated compound (`The 3-Day Effect`) is no longer read as a
+  book number.
+- Folder Forge: review reasons that vary per book (a path, a chapter count, the exact
+  source series text) no longer break the review-reason filter into one option per
+  book. Every book that trips the same rule now shares one filter entry; the per-book
+  detail shows on the book's own card instead.
+- Folder Forge: the Suspicion Report no longer flags every ordinary standalone book as
+  missing a series, and no longer promotes a purely informational review reason (such
+  as "title matches series name") to a suspect on its own.
+- Settings: Library has a new **Folder Forge scan root** field; Folder Forge starts
+  from it instead of a hard-coded folder, and its note names the built-in default used
+  when it's empty.
 - Author names: a universal initials scheme (a dot after each letter, no spaces, one
   space before the rest of the name; `V A Lewis` and `JK Rowling` become `V.A. Lewis` and
   `J.K. Rowling`) for the author tags and metadata.json written by the fixer and Manual

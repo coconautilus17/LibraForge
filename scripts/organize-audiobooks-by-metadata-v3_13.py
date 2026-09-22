@@ -517,6 +517,24 @@ GENERIC_MARKETING_DESCRIPTOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The individual genre/marketing words the pattern above is built from. Used
+# to tell a real name that merely ENDS in a genre word ("Street Cultivation")
+# apart from a value that is nothing but a coupling of genre buckets
+# ("Fantasy Cultivation", "LitRPG"): the former has a real word in front, the
+# latter does not.
+_GENRE_VOCABULARY_WORDS = {
+    "lit", "rpg", "litrpg", "game", "gamelit", "isekai", "xianxia", "wuxia",
+    "cultivation", "progression", "fantasy", "slice", "life", "adventure",
+}
+_GENRE_STOPWORDS = {"a", "an", "the", "of"}
+
+
+def is_generic_genre_coupling(value: str) -> bool:
+    """True when every real word in `value` is itself genre/marketing
+    vocabulary. Only meaningful together with is_marketing_descriptor()."""
+    tokens = [t for t in re.findall(r"[a-z0-9]+", value.lower()) if t not in _GENRE_STOPWORDS]
+    return bool(tokens) and all(t in _GENRE_VOCABULARY_WORDS for t in tokens)
+
 # Trailing "special edition"-style tags with no real title content of their
 # own, e.g. "(Swimsuit Edition)", "(Series Completion)", "(Director's Cut)".
 # These convey a real fact about the release but aren't a distinct book
@@ -652,14 +670,21 @@ def sanitize_technical_labels(value: str) -> str:
     return value.strip(" -_.:,")
 
 
-def sanitize_book_title(value: str) -> str:
-    """Remove technical and generic marketing text from a book title."""
+def sanitize_book_title(value: str, trusted: bool = False) -> str:
+    """Remove technical and generic marketing text from a book title.
+
+    `trusted` (Audible sidecar/marker data) skips the wholesale drop for a
+    value that merely ENDS in a genre word (e.g. "Street Cultivation" is a
+    real, confirmed name) -- but a value that is nothing but a coupling of
+    genre buckets with no real content of its own ("LitRPG", "Fantasy
+    Cultivation") is dropped either way, trusted or not.
+    """
     value = sanitize_technical_labels(value)
     if not value:
         return ""
 
     value = strip_edition_descriptors(value).strip(" -_.:,")
-    if is_marketing_descriptor(value):
+    if is_marketing_descriptor(value) and (not trusted or is_generic_genre_coupling(value)):
         return ""
 
     value = remove_trailing_marketing_descriptor(value)
@@ -668,9 +693,11 @@ def sanitize_book_title(value: str) -> str:
     return value.strip(" -_.:,")
 
 
-MARKETING_SERIES_DROPPED_REASON = "series name dropped as generic marketing text"
-MARKETING_SERIES_TRIMMED_REASON = "series name trimmed of generic marketing text"
-MARKETING_TITLE_TRIMMED_REASON = "title trimmed of generic marketing text"
+MARKETING_SERIES_DROPPED_REASON = (
+    "series name dropped: it reads like generic marketing/genre text, not a real series name"
+)
+MARKETING_SERIES_TRIMMED_REASON = "series name trimmed of generic marketing/genre text"
+MARKETING_TITLE_TRIMMED_REASON = "title trimmed of generic marketing/genre text"
 MARKETING_REASONS = frozenset({
     MARKETING_SERIES_DROPPED_REASON,
     MARKETING_SERIES_TRIMMED_REASON,
@@ -678,15 +705,16 @@ MARKETING_REASONS = frozenset({
 })
 
 
-def marketing_cleanup_kind(raw: str) -> str:
+def marketing_cleanup_kind(raw: str, trusted: bool = False) -> str:
     """Report, without changing anything, what sanitize_book_title() does to
     `raw` because of generic marketing text: "dropped" (whole value discarded),
-    "trimmed" (trailing descriptor removed) or "" (untouched)."""
+    "trimmed" (trailing descriptor removed) or "" (untouched). See
+    sanitize_book_title() for what `trusted` changes."""
     value = sanitize_technical_labels(raw or "")
     if not value:
         return ""
     value = strip_edition_descriptors(value).strip(" -_.:,")
-    if is_marketing_descriptor(value):
+    if is_marketing_descriptor(value) and (not trusted or is_generic_genre_coupling(value)):
         return "dropped"
     trimmed = strip_edition_descriptors(remove_trailing_marketing_descriptor(value)).strip(" -_.:,")
     return "trimmed" if trimmed != value else ""
@@ -716,8 +744,8 @@ def cleanup_title_artifacts(value: str) -> str:
     return value.strip(" -_.,")
 
 
-def clean_series_name(value: str) -> str:
-    value = sanitize_path_name(sanitize_book_title(value), "") if value else ""
+def clean_series_name(value: str, trusted: bool = False) -> str:
+    value = sanitize_path_name(sanitize_book_title(value, trusted=trusted), "") if value else ""
     value = strip_leading_sort_prefix(value)
     value = re.sub(r"\s+series\s*$", "", value, flags=re.IGNORECASE)
     return sanitize_path_name(value, "") if value else ""
@@ -1472,7 +1500,7 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         without_suffix = remove_trailing_marketing_descriptor(cleaned)
         if without_suffix and without_suffix != cleaned:
             cleaned = without_suffix.strip(" -_.,")
-        series_clean = clean_series_name(series)
+        series_clean = clean_series_name(series, trusted=True)
         # Strip a trailing "(Series Book N)" annotation the same way the
         # untrusted cleanup path does (e.g. "Rebirth (Dread Knight Book 4)"
         # -> "Rebirth"). Trusted Audible/fixer titles occasionally bake this
@@ -3188,10 +3216,16 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     tag_meta = metadata_from_tags(item) if sidecar is None else sidecar
     clues = path_clues(item, root)
     review_reasons: list[str] = []
+    review_details: list[dict[str, str]] = []
 
     def add_review_reason(reason: str) -> None:
         if reason not in review_reasons:
             review_reasons.append(reason)
+
+    def add_review_detail(label: str, value: str) -> None:
+        entry = {"label": label, "value": value}
+        if entry not in review_details:
+            review_details.append(entry)
 
     metadata_title = tag_meta.get("title") or item.representative.stem
     title = metadata_title
@@ -3435,16 +3469,20 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     series = strip_edition_marker(series)
     title = strip_edition_marker(title)
     metadata_title = strip_edition_marker(metadata_title)
-    clean_series = clean_series_name(series)
-    series_marketing = marketing_cleanup_kind(series) if series else ""
+    clean_series = clean_series_name(series, trusted=trusted_metadata)
+    series_marketing = marketing_cleanup_kind(series, trusted=trusted_metadata) if series else ""
     if series_marketing == "dropped" and not clean_series:
         add_review_reason(MARKETING_SERIES_DROPPED_REASON)
+        add_review_detail("Source series", series)
     elif series_marketing == "trimmed":
         add_review_reason(MARKETING_SERIES_TRIMMED_REASON)
+        add_review_detail("Source series", series)
+        add_review_detail("Kept as", clean_series)
     # Trusted (Audible sidecar) titles deliberately keep genre-looking words
     # such as "The Fifth Law of Cultivation", so only flag untrusted ones.
     if not trusted_metadata and marketing_cleanup_kind(metadata_title):
         add_review_reason(MARKETING_TITLE_TRIMMED_REASON)
+        add_review_detail("Source title", metadata_title)
     if clean_series and series_is_author_credit(clean_series, author_full):
         clean_series = ""
 
@@ -3513,6 +3551,7 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         "kind": item.kind,
         "metadata_source": tag_meta.get("source", "unknown"),
         "review_reasons": review_reasons,
+        "review_details": review_details,
         "asin": tag_meta.get("asin", "") or "",
         "publisher": tag_meta.get("publisher", "") or "",
         "genre": tag_meta.get("genre", "") or "",
@@ -4660,12 +4699,15 @@ def title_matches_author_name(title: str, author: str) -> bool:
 def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, Any]:
     """Final target-title cleanup after author/series have stabilized."""
     metadata = dict(metadata)
-    series = clean_series_name(metadata.get("series", ""))
     number = metadata.get("book_number", "")
     title = metadata.get("title", "")
     author = metadata.get("author", "")
     source = metadata.get("metadata_source", "")
     trusted = metadata_source_is_trusted(source)
+    # Re-derives from metadata["series"] rather than trusting it as already
+    # clean: this runs after apply_run_author_correction, which can replace
+    # series with a raw, uncleaned value from a sibling book in the same run.
+    series = clean_series_name(metadata.get("series", ""), trusted=trusted)
 
     cleaned_title = clean_book_title(title, series, number, trusted=trusted)
     if (
@@ -5125,10 +5167,37 @@ def add_metadata_review_reason(metadata: dict[str, Any], reason: str) -> dict[st
     return metadata
 
 
-def conflict_reason_with_paths(reason: str, source: Path, target_dir: Path, claimed_by: Path | None) -> str:
-    """Name the paths behind a conflict: this item, and what it collides with."""
-    other = f"already claimed by {claimed_by}" if claimed_by else f"target {target_dir}"
-    return f"{reason} (this: {source}; conflicts with: {other}; would land in {target_dir})"
+def add_metadata_review_detail(metadata: dict[str, Any], label: str, value: str) -> dict[str, Any]:
+    """Attach a concrete, per-book detail (a source value, a path) alongside a
+    review reason, without putting it in review_reasons itself: review_reasons
+    must stay one fixed string per rule so the report can group and filter by
+    it; a value that varies per book belongs here instead."""
+    metadata = dict(metadata)
+    details = list(metadata.get("review_details", []))
+    entry = {"label": label, "value": value}
+    if entry not in details:
+        details.append(entry)
+    metadata["review_details"] = details
+    return metadata
+
+
+# One fixed sentence per kind of review flag. Kept free of any per-item
+# text (a path, a filename, a count) so every book that trips the same rule
+# reports the identical review reason -- the report/UI group and filter by
+# this exact string, so a value that varies per book would turn one filter
+# option into one option per book. The paths that make it CONCRETE for a
+# given book go in "review_details" instead (see make_skipped_review_move),
+# a separate list of {label, path} the report shows on the book's own card.
+POSSIBLE_DUPLICATE_REASON = "possible duplicate: a merged file sits alongside its own chapter files"
+
+
+def conflict_review_details(target_dir: Path, claimed_by: Path | None) -> list[dict[str, str]]:
+    """The paths behind a conflict, for the report card: what already claimed
+    the destination, and where this item would have landed."""
+    details = [{"label": "Would land in", "value": str(target_dir)}]
+    if claimed_by:
+        details.insert(0, {"label": "Already claimed by", "value": str(claimed_by)})
+    return details
 
 
 def annotate_possible_duplicates(
@@ -5136,10 +5205,11 @@ def annotate_possible_duplicates(
 ) -> int:
     """Handle a merged single file that sits inside a folder planned to move with
     its own chapter files: both look like the same book, so the audio may exist
-    twice. Both get a review warning that names the paths. A merged file that
-    was still planned to move on its own is turned into a skipped review item,
-    so the two editions never land in different library places; the folder's
-    own move is untouched. Returns how many merged files matched such a folder."""
+    twice. Both get the same review reason (see POSSIBLE_DUPLICATE_REASON) plus
+    review_details naming the other side concretely. A merged file that was still
+    planned to move on its own is turned into a skipped review item, so the two
+    editions never land in different library places; the folder's own move is
+    untouched. Returns how many merged files matched such a folder."""
     folders = [m for m in planned_moves if m.get("kind") == "folder" and not m.get("skipped")]
     if not folders:
         return 0
@@ -5156,21 +5226,17 @@ def annotate_possible_duplicates(
             continue
         matched += 1
         chapters = folder.get("audio_count", 0)
-        file_note = (
-            f"possible duplicate: merged file {source} sits inside {folder['source']}, "
-            f"which is planned to move to {folder['target']} with {chapters} chapter file(s); "
-            f"both look like the same book, so the audio may exist twice"
-        )
-        move["metadata"] = add_metadata_review_reason(move["metadata"], file_note)
-        folder["metadata"] = add_metadata_review_reason(
-            folder["metadata"],
-            f"possible duplicate: this folder holds {chapters} chapter file(s) and also the merged file "
-            f"{source}; both look like the same book, so the audio may exist twice",
+        move["metadata"] = add_metadata_review_reason(move["metadata"], POSSIBLE_DUPLICATE_REASON)
+        move["metadata"] = add_metadata_review_detail(move["metadata"], "Chapter folder", str(folder["source"]))
+        move["metadata"] = add_metadata_review_detail(move["metadata"], "Would land in", str(folder["target"]))
+        folder["metadata"] = add_metadata_review_reason(folder["metadata"], POSSIBLE_DUPLICATE_REASON)
+        folder["metadata"] = add_metadata_review_detail(
+            folder["metadata"], f"Merged file (this folder has {chapters} chapter files)", str(source),
         )
         if move in planned_moves:
             planned_moves.remove(move)
             move["skipped"] = True
-            move["skip_reason"] = f"skipped: possible duplicate of the chapter files in {folder['source']}"
+            move["skip_reason"] = "skipped: possible duplicate of the chapter files"
             move["structure"] = "skipped_possible_duplicate"
             skipped_reviews.append(move)
     return matched
@@ -5183,12 +5249,16 @@ def make_skipped_review_move(
     target: Path,
     reason: str,
     structure: str,
+    review_details: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    metadata = add_metadata_review_reason(metadata, reason)
+    for entry in review_details or []:
+        metadata = add_metadata_review_detail(metadata, entry["label"], entry["value"])
     return {
         "kind": item.kind,
         "source": item.source_path,
         "target": target,
-        "metadata": add_metadata_review_reason(metadata, reason),
+        "metadata": metadata,
         "companions": [],
         "audio_count": len(item.audio_files),
         "structure": structure,
@@ -5215,6 +5285,10 @@ def print_move(move: dict[str, Any]) -> None:
     print(f"  Metadata Source: {metadata.get('metadata_source', 'unknown')}")
     if metadata.get("review_reasons"):
         print(f"  Review Reasons: {' | '.join(metadata['review_reasons'])}")
+    if metadata.get("review_details"):
+        print("  REVIEW DETAILS:")
+        for entry in metadata["review_details"]:
+            print(f"    {entry['label']}: {entry['value']}")
     print(f"  Structure: {move.get('structure', 'new')}")
     if metadata.get("series"):
         print(f"  Series: {metadata['series']}")
@@ -5510,9 +5584,9 @@ def main() -> None:
                         item=item,
                         metadata=metadata,
                         target=target_dir,
-                        reason="skipped conflict: " + conflict_reason_with_paths(
-                            reason, item.source_path, target_dir, target_dir_owner.get(target_dir)),
+                        reason=f"skipped conflict: {reason}",
                         structure="skipped_conflict",
+                        review_details=conflict_review_details(target_dir, target_dir_owner.get(target_dir)),
                     ))
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
@@ -5557,9 +5631,9 @@ def main() -> None:
                     item=item,
                     metadata=metadata,
                     target=target_dir,
-                    reason="skipped conflict: " + conflict_reason_with_paths(
-                        reason, item.source_path, target_dir, target_dir_owner.get(target_dir)),
+                    reason=f"skipped conflict: {reason}",
                     structure="skipped_conflict",
+                    review_details=conflict_review_details(target_dir, target_dir_owner.get(target_dir)),
                 ))
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
             continue
