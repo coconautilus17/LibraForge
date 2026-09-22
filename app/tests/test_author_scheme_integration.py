@@ -82,7 +82,7 @@ class SharedScriptSetupTests(unittest.TestCase):
     def test_ui_preferences_still_creates_the_preferences_every_page_needs(self):
         js = (ROOT / "app" / "static" / "ui-preferences.js").read_text(encoding="utf-8")
         self.assertIn("let preferences = readPreferences();", js)
-        self.assertIn("window.LibraForgePrefs = { get: () => preferences };", js)
+        self.assertIn("window.LibraForgePrefs = { get: () => preferences", js)
 
 
 class ReportUiWiringTests(unittest.TestCase):

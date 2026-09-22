@@ -697,6 +697,12 @@ body.settings-open {
   display: flex;
 }
 
+.field-hint {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: var(--font-xs);
+}
+
 .preference-field select {
   width: 100%;
   min-width: 0;

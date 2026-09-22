@@ -245,6 +245,8 @@ def sanitize_path_name(name: str, fallback: str = "Unknown") -> str:
     name = clean_text(name)
     if not name:
         name = fallback
+    # A censored word ("Unfu*k") keeps its letters instead of splitting into "Unfu - k".
+    name = re.sub(r"(?<=\w)\*(?=\w)", "", name)
     name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', " - ", name)
     name = re.sub(r"\s+", " ", name)
     name = re.sub(r"\s+-\s+-\s+", " - ", name)
@@ -666,6 +668,30 @@ def sanitize_book_title(value: str) -> str:
     return value.strip(" -_.:,")
 
 
+MARKETING_SERIES_DROPPED_REASON = "series name dropped as generic marketing text"
+MARKETING_SERIES_TRIMMED_REASON = "series name trimmed of generic marketing text"
+MARKETING_TITLE_TRIMMED_REASON = "title trimmed of generic marketing text"
+MARKETING_REASONS = frozenset({
+    MARKETING_SERIES_DROPPED_REASON,
+    MARKETING_SERIES_TRIMMED_REASON,
+    MARKETING_TITLE_TRIMMED_REASON,
+})
+
+
+def marketing_cleanup_kind(raw: str) -> str:
+    """Report, without changing anything, what sanitize_book_title() does to
+    `raw` because of generic marketing text: "dropped" (whole value discarded),
+    "trimmed" (trailing descriptor removed) or "" (untouched)."""
+    value = sanitize_technical_labels(raw or "")
+    if not value:
+        return ""
+    value = strip_edition_descriptors(value).strip(" -_.:,")
+    if is_marketing_descriptor(value):
+        return "dropped"
+    trimmed = strip_edition_descriptors(remove_trailing_marketing_descriptor(value)).strip(" -_.:,")
+    return "trimmed" if trimmed != value else ""
+
+
 def cleanup_title_artifacts(value: str) -> str:
     value = sanitize_book_title(value)
     if not value:
@@ -772,6 +798,26 @@ def parse_author_narrator_folder(value: str) -> tuple[str, str]:
             return author, narrator
         return "", ""
     return clean_author_credits(cleaned), ""
+
+
+_AUTHOR_ROLE_SUFFIX_RE = re.compile(
+    r"\s+-\s+(?:adaptation|translator|editor|foreword|introduction|illustrator|contributor)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def series_is_author_credit(series: str, author: str) -> bool:
+    """True when a series name is just the author credit (one author, or all
+    of them joined), e.g. a legacy "Authors - adaptation - Title" folder."""
+    key = normalize_for_compare(series)
+    if not key:
+        return False
+    names = [
+        normalize_for_compare(_AUTHOR_ROLE_SUFFIX_RE.sub("", person))
+        for person in split_people(author)
+    ]
+    names = [name for name in names if name]
+    return key in names or key == "".join(names)
 
 
 def author_is_probably_bad_for_series(author: str, series: str) -> bool:
@@ -2813,6 +2859,20 @@ def parse_book_folder_name(name: str) -> dict[str, str]:
         result["sequence_label"] = label
     return result
 
+_SUBTITLE_SERIES_RE = re.compile(
+    r"^\s*(?P<series>[^,]+?)\s*,\s*(?:book|vol\.?|volume)\s*(?P<number>\d{1,3})\s*$",
+    re.IGNORECASE,
+)
+
+
+def series_from_subtitle(subtitle: str) -> tuple[str, str]:
+    """Series and number from a 'Series, Book N' subtitle, else ("", "")."""
+    match = _SUBTITLE_SERIES_RE.match(subtitle or "")
+    if not match:
+        return "", ""
+    return match.group("series").strip(), match.group("number")
+
+
 def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
     paths: list[Path] = []
     if item.kind == "folder":
@@ -2882,6 +2942,8 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
         if audible_data:
             title = audible_data.get("chosen_title") or audible_data.get("title") or ""
             series = audible_data.get("series", "")
+            if not series:
+                series, _subtitle_number = series_from_subtitle(audible_data.get("subtitle", ""))
             author = audible_data.get("author", "")
             # Skip skeletal markers that carry only an ASIN placeholder (e.g.
             # {"asin": "NOREALASIN"}) and no real book data. Returning them here
@@ -3374,6 +3436,17 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
     title = strip_edition_marker(title)
     metadata_title = strip_edition_marker(metadata_title)
     clean_series = clean_series_name(series)
+    series_marketing = marketing_cleanup_kind(series) if series else ""
+    if series_marketing == "dropped" and not clean_series:
+        add_review_reason(MARKETING_SERIES_DROPPED_REASON)
+    elif series_marketing == "trimmed":
+        add_review_reason(MARKETING_SERIES_TRIMMED_REASON)
+    # Trusted (Audible sidecar) titles deliberately keep genre-looking words
+    # such as "The Fifth Law of Cultivation", so only flag untrusted ones.
+    if not trusted_metadata and marketing_cleanup_kind(metadata_title):
+        add_review_reason(MARKETING_TITLE_TRIMMED_REASON)
+    if clean_series and series_is_author_credit(clean_series, author_full):
+        clean_series = ""
 
     if not book_number:
         book_number = (
@@ -3845,10 +3918,20 @@ def folder_name_matches_naming_template(source_name: str, target_leaf_name: str)
     return normalize_for_compare(source_name) == normalize_for_compare(target_leaf_name)
 
 
-def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, root: Path) -> bool:
+def is_likely_existing_book_folder(
+    item: BookItem,
+    computed_target_dir: Path,
+    root: Path,
+    destination_root: Path | None = None,
+) -> bool:
     """True when `item`'s own enclosing folder name already matches what the
     naming template computed for it -- it looks like it's already organized
     under the current scheme, wherever it currently sits.
+
+    The name is only a signal when the whole library is being scanned. When
+    the scan root is a sub-folder of the destination library (the usual
+    `_unorganized` import folder) every item is still waiting to be organized,
+    so a matching name proves nothing and the item is planned normally.
 
     For a folder-kind item that's the item's own source folder. For a
     loose-file item -- the common shape build_book_items() gives a
@@ -3857,6 +3940,8 @@ def is_likely_existing_book_folder(item: BookItem, computed_target_dir: Path, ro
     the scan root itself (a bare loose file with no wrapper folder has
     nothing meaningful to compare).
     """
+    if destination_root is not None and root != destination_root:
+        return False
     if item.kind == "folder":
         folder_name = item.source_path.name
     else:
@@ -5040,6 +5125,57 @@ def add_metadata_review_reason(metadata: dict[str, Any], reason: str) -> dict[st
     return metadata
 
 
+def conflict_reason_with_paths(reason: str, source: Path, target_dir: Path, claimed_by: Path | None) -> str:
+    """Name the paths behind a conflict: this item, and what it collides with."""
+    other = f"already claimed by {claimed_by}" if claimed_by else f"target {target_dir}"
+    return f"{reason} (this: {source}; conflicts with: {other}; would land in {target_dir})"
+
+
+def annotate_possible_duplicates(
+    planned_moves: list[dict[str, Any]], skipped_reviews: list[dict[str, Any]]
+) -> int:
+    """Handle a merged single file that sits inside a folder planned to move with
+    its own chapter files: both look like the same book, so the audio may exist
+    twice. Both get a review warning that names the paths. A merged file that
+    was still planned to move on its own is turned into a skipped review item,
+    so the two editions never land in different library places; the folder's
+    own move is untouched. Returns how many merged files matched such a folder."""
+    folders = [m for m in planned_moves if m.get("kind") == "folder" and not m.get("skipped")]
+    if not folders:
+        return 0
+    matched = 0
+    for move in list(planned_moves) + list(skipped_reviews):
+        if move.get("kind") != "loose_file":
+            continue
+        source = Path(move["source"])
+        folder = next(
+            (f for f in folders if Path(f["source"]) == source.parent or Path(f["source"]) in source.parents),
+            None,
+        )
+        if folder is None:
+            continue
+        matched += 1
+        chapters = folder.get("audio_count", 0)
+        file_note = (
+            f"possible duplicate: merged file {source} sits inside {folder['source']}, "
+            f"which is planned to move to {folder['target']} with {chapters} chapter file(s); "
+            f"both look like the same book, so the audio may exist twice"
+        )
+        move["metadata"] = add_metadata_review_reason(move["metadata"], file_note)
+        folder["metadata"] = add_metadata_review_reason(
+            folder["metadata"],
+            f"possible duplicate: this folder holds {chapters} chapter file(s) and also the merged file "
+            f"{source}; both look like the same book, so the audio may exist twice",
+        )
+        if move in planned_moves:
+            planned_moves.remove(move)
+            move["skipped"] = True
+            move["skip_reason"] = f"skipped: possible duplicate of the chapter files in {folder['source']}"
+            move["structure"] = "skipped_possible_duplicate"
+            skipped_reviews.append(move)
+    return matched
+
+
 def make_skipped_review_move(
     *,
     item: BookItem,
@@ -5249,6 +5385,7 @@ def main() -> None:
     # edition of the same book -- is a real duplicate-content conflict even
     # though their exact file paths never collide.
     reserved_target_dirs: set[Path] = set()
+    target_dir_owner: dict[Path, Path] = {}
 
     skipped_unknown_author = 0
     skipped_already_target = 0
@@ -5256,6 +5393,7 @@ def main() -> None:
     skipped_ambiguous_structure = 0
     skipped_pattern_match = 0
     skipped_existing_book_folders = 0
+    flagged_marketing_cleanup = 0
     matched_existing_structure = 0
     ambiguous_structure = 0
 
@@ -5275,6 +5413,8 @@ def main() -> None:
     for index, item, metadata in inferred_items:
         metadata = apply_run_author_correction(metadata, run_author_corrections)
         metadata = normalize_metadata_title_for_target(metadata)
+        if MARKETING_REASONS & set(metadata.get("review_reasons", [])):
+            flagged_marketing_cleanup += 1
 
         skip_due_to_pattern, skip_pattern = matches_skip_patterns(
             source_path=item.source_path,
@@ -5333,7 +5473,7 @@ def main() -> None:
             print(f"SKIP: ambiguous structure | {item.source_path}", file=sys.stderr)
             continue
 
-        if is_likely_existing_book_folder(item, target_dir, root):
+        if is_likely_existing_book_folder(item, target_dir, root, destination_root):
             if not args.include_existing_book_folders:
                 skipped_existing_book_folders += 1
                 reason = "skipped: folder name already matches the naming template"
@@ -5370,13 +5510,15 @@ def main() -> None:
                         item=item,
                         metadata=metadata,
                         target=target_dir,
-                        reason=f"skipped conflict: {reason}",
+                        reason="skipped conflict: " + conflict_reason_with_paths(
+                            reason, item.source_path, target_dir, target_dir_owner.get(target_dir)),
                         structure="skipped_conflict",
                     ))
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
             reserved_targets.add(target_dir)
             reserved_target_dirs.add(target_dir)
+            target_dir_owner.setdefault(target_dir, item.source_path)
             folder_companions: list[Path] = []
             if not args.no_companions:
                 meta_sidecar = item.representative.with_name(
@@ -5415,7 +5557,8 @@ def main() -> None:
                     item=item,
                     metadata=metadata,
                     target=target_dir,
-                    reason=f"skipped conflict: {reason}",
+                    reason="skipped conflict: " + conflict_reason_with_paths(
+                        reason, item.source_path, target_dir, target_dir_owner.get(target_dir)),
                     structure="skipped_conflict",
                 ))
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
@@ -5423,6 +5566,7 @@ def main() -> None:
         companions = [] if args.no_companions else companion_files_for(item.source_path)
         reserved_targets.add(target_path)
         reserved_target_dirs.add(target_dir)
+        target_dir_owner.setdefault(target_dir, item.source_path)
         planned_moves.append({
             "kind": item.kind,
             "source": item.source_path,
@@ -5444,7 +5588,10 @@ def main() -> None:
     print(f"Skipped unknown author: {skipped_unknown_author}")
     print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
+    possible_duplicates = annotate_possible_duplicates(planned_moves, skipped_reviews)
     print(f"Skipped conflicts: {skipped_conflicts}")
+    print(f"Possible duplicates flagged: {possible_duplicates}")
+    print(f"Flagged by generic marketing cleanup: {flagged_marketing_cleanup}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")
     print(f"Matched existing structure: {matched_existing_structure}")
     print(f"Ambiguous structure matches: {ambiguous_structure}")
