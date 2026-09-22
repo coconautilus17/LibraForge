@@ -112,9 +112,30 @@ the downloads when finished.
 
 ## Settings (`/settings`)
 One consolidated page for everything global: Appearance, Title noise, Publishers,
-Library, Reports (retention policy), Accounts, Audiobookshelf, Goodreads/Kindle,
-Developer, and sidecar cleanup. The gear icon in the header links here from every page;
+Author names, Library, Reports (retention policy), Accounts, Audiobookshelf,
+Goodreads/Kindle, Developer, and sidecar cleanup. The gear icon in the header links here from every page;
 the old `/auth-setup` URL still works and redirects to the Accounts section.
+
+**Patterns (Title noise, Publishers, Author names):** the three pattern sections share
+one layout. **Patterns in use** ship with LibraForge and can each be switched off;
+**Custom patterns** are yours (add, switch off, remove). Publishers you have not seen
+before are learned during runs and listed under custom patterns for review. Every
+change (add, remove, switch on or off) is saved immediately; there is no Save button.
+
+**Author names:** a universal scheme for how initials are written: a dot after each
+letter, no spaces between them, one space before the rest of the name (`V A Lewis` and
+`JK Rowling` become `V.A. Lewis` and `J.K. Rowling`). It applies to the author tags and
+`metadata.json` the fixer and Manual Review write; Folder Forge does not apply it, it names
+author folders from the metadata it finds. It is switched on automatically for new installs and left off when an existing
+install is updated, so an organized library is not touched unless you turn it on
+(Settings → Author names). Names whose letters are not initials (`Mashton XX`, or a
+handle with a digit such as `Comedian0 L`) are covered by the patterns in use and a built-in
+digit rule; add your own under custom patterns. When a run rewrites an author only
+because the scheme unified its initials, the full match report marks the book with an
+**Initials Fixed** badge and lists all of them under the **Author Initials Fixed** filter. Existing folders and
+files are renamed only by the opt-in `scripts/normalize-author-names.py`, which is a dry
+run by default and can be reverted. Saved settings live in the `libraforge-settings`
+volume (`LIBRAFORGE_SETTINGS_DIR`), so they survive image upgrades.
 
 **Accounts:** guided Audible OAuth sign-in - no CLI tools. Connect **multiple accounts**,
 each with a recognisable name, and **switch between them in one click**, rename them, or

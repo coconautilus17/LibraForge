@@ -21,6 +21,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.settings_paths import user_settings_file
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_FILE = Path(
@@ -32,7 +34,7 @@ DEFAULT_POLICY_FILE = Path(
 LOCAL_POLICY_FILE = Path(
     os.environ.get(
         "PUBLISHERS_LOCAL_FILE",
-        PROJECT_ROOT / "config" / "publishers.local.json",
+        user_settings_file("publishers.local.json"),
     )
 )
 
@@ -69,6 +71,10 @@ def normalize_publisher_key(value: str) -> str:
     publishers from absorbing names that are actually authors/narrators.
     """
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+# Tags that mean "no publisher", so a run must not learn them as one.
+_NOT_PUBLISHERS = {"independently published", "self published", "selfpublished", "self publishing"}
 
 
 def _normalize_entry(item: dict[str, Any], source: str, enabled: bool) -> dict[str, Any] | None:
@@ -114,6 +120,18 @@ def load_publisher_policy() -> dict[str, Any]:
         if entry:
             default_entries.append(entry)
 
+    shipped_keys = {
+        normalize_publisher_key(token)
+        for entry in default_entries
+        for token in [entry["name"], *entry.get("aliases", [])]
+    }
+
+    def already_shipped(entry: dict[str, Any]) -> bool:
+        # A learned/custom entry that a later release ships as a pattern in use
+        # (or a joined "A, B" of shipped ones) is shown once, as the known one.
+        parts = [part for part in re.split(r"\s*[,;]\s*", entry["name"]) if part.strip()]
+        return bool(parts) and all(normalize_publisher_key(part) in shipped_keys for part in parts)
+
     custom_entries = []
     for item in local.get("custom_publishers", []):
         if not isinstance(item, dict):
@@ -127,7 +145,8 @@ def load_publisher_policy() -> dict[str, Any]:
             # Preserve the "learned" provenance for entries auto-discovered by runs.
             if entry["source"] not in {"custom", "learned"}:
                 entry["source"] = "custom"
-            custom_entries.append(entry)
+            if not already_shipped(entry):
+                custom_entries.append(entry)
 
     return {
         "schema_version": 1,
@@ -317,6 +336,8 @@ def learn_publishers(
         seen_local.add(key)
         if normalize_publisher_key(name) in exclude_keys:
             continue  # this "publisher" is actually an author/narrator name
+        if normalize_publisher_key(name) in _NOT_PUBLISHERS:
+            continue
         candidates.append(name)
     if not candidates:
         return None

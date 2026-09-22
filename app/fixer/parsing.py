@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import html
 import re
+
+from app.author_names import output_author_credit
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -276,6 +278,7 @@ def canonicalize_author_credits(values: list[str] | str) -> str:
         canonical = aliases.get(value.casefold(), value)
         if canonical == "":
             continue
+        canonical = output_author_credit(canonical)
         key = _initials_dedup_key(canonical)
         if key and key not in seen:
             people.append(canonical)

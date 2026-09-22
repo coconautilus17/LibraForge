@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "names": [
+    {
+      "id": "mashton-xx",
+      "label": "Mashton XX",
+      "description": "XX is part of the name, not initials.",
+      "name": "Mashton XX",
+      "spelling": "Mashton XX"
+    },
+    {
+      "id": "mashton-xy",
+      "label": "Mashton XY",
+      "description": "XY is part of the name, not initials.",
+      "name": "Mashton XY",
+      "spelling": "Mashton XY"
+    },
+    {
+      "id": "comedian0-l",
+      "label": "Comedian0 L",
+      "description": "A handle with a digit and a single trailing letter, not initials.",
+      "name": "Comedian0 L",
+      "spelling": "Comedian0 L"
+    }
+  ]
+}

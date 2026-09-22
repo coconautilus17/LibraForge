@@ -391,140 +391,60 @@
   }
 
   function initializeTitleNoiseSettings() {
-    const defaultsContainer = document.getElementById("titleNoiseDefaults");
-    const customContainer = document.getElementById("titleNoiseCustom");
-    const status = document.getElementById("titleNoiseStatus");
     const labelInput = document.getElementById("titleNoiseLabel");
     const patternInput = document.getElementById("titleNoisePattern");
-    const addButton = document.getElementById("titleNoiseAddBtn");
-    const saveButton = document.getElementById("titleNoiseSaveBtn");
-    if (!defaultsContainer || !customContainer || !status || !labelInput || !patternInput || !addButton || !saveButton) return;
-
-    let policy = null;
-
-    const render = () => {
-      const patterns = policy?.patterns || [];
-      defaultsContainer.replaceChildren(
-        ...patterns.filter((item) => item.source === "default").map((item) => {
-          const row = document.createElement("label");
-          row.className = "pattern-row";
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.checked = item.enabled;
-          input.dataset.titleNoiseDefault = item.id;
-          const copy = document.createElement("span");
-          copy.append(
-            createTextElement("strong", item.label),
-            createTextElement("small", item.description || item.pattern),
-          );
-          row.append(input, copy);
-          return row;
-        }),
-      );
-
-      const custom = patterns.filter((item) => item.source === "custom");
-      if (!custom.length) {
-        customContainer.replaceChildren(createTextElement("p", "No custom patterns.", "note"));
-        return;
-      }
-      customContainer.replaceChildren(...custom.map((item) => {
-        const row = document.createElement("div");
-        row.className = "pattern-row custom-pattern-row";
-        row.dataset.titleNoiseCustom = item.id;
-        const label = document.createElement("label");
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.checked = item.enabled;
-        input.dataset.patternEnabled = "";
-        const copy = document.createElement("span");
-        copy.append(
-          createTextElement("strong", item.label),
-          createTextElement("small", item.phrase || item.pattern, "mono"),
-        );
-        label.append(input, copy);
-        const remove = createTextElement("button", "Remove", "secondary");
-        remove.type = "button";
-        remove.addEventListener("click", () => {
-          policy.patterns = policy.patterns.filter((candidate) => candidate.id !== item.id);
-          render();
-          status.textContent = "Pattern removed locally. Save to apply the change.";
-        });
-        row.append(label, remove);
-        return row;
-      }));
-    };
-
-    const load = async () => {
-      const response = await fetch("/api/settings/title-noise");
-      const data = await response.json();
-      if (!response.ok) {
-        status.textContent = data.detail || "Could not load title patterns.";
-        return;
-      }
-      policy = data;
-      render();
-      status.textContent = "Using shared defaults and local overrides.";
-      reapplyHashScroll();
-    };
-
-    addButton.addEventListener("click", () => {
-      const label = labelInput.value.trim();
-      const phrase = patternInput.value.trim();
-      if (!label || !phrase) {
-        status.textContent = "Enter both a label and a noise phrase.";
-        return;
-      }
-      policy ||= { patterns: [] };
-      policy.patterns.push({
-        id: titleNoiseCustomId(label),
-        label,
-        description: "",
-        phrase,
-        pattern: phrase,
-        source: "custom",
-        enabled: true,
-      });
-      labelInput.value = "";
-      patternInput.value = "";
-      render();
-      status.textContent = "Custom pattern added locally. Save to apply it.";
-    });
-
-    saveButton.addEventListener("click", async () => {
-      const disabledDefaults = [
-        ...defaultsContainer.querySelectorAll("[data-title-noise-default]:not(:checked)"),
-      ].map((input) => input.dataset.titleNoiseDefault);
-      const customPatterns = [
-        ...customContainer.querySelectorAll("[data-title-noise-custom]"),
-      ].map((row) => {
-        const item = policy.patterns.find((candidate) => candidate.id === row.dataset.titleNoiseCustom);
+    const section = window.LibraForgePatterns && window.LibraForgePatterns.createSection({
+      endpoint: "/api/settings/title-noise",
+      listKey: "patterns",
+      customKey: "custom_patterns",
+      elements: {
+        defaults: document.getElementById("titleNoiseDefaults"),
+        custom: document.getElementById("titleNoiseCustom"),
+        status: document.getElementById("titleNoiseStatus"),
+        addButton: document.getElementById("titleNoiseAddBtn"),
+      },
+      requiredInputs: [labelInput, patternInput],
+      describeKnown: (item) => ({ title: item.label, detail: item.description || item.pattern }),
+      describePrivate: (item) => ({ title: item.label, detail: item.phrase || item.pattern, mono: true }),
+      readAddForm: () => {
+        const label = labelInput.value.trim();
+        const phrase = patternInput.value.trim();
+        if (!label || !phrase) return { error: "Enter both a label and a noise phrase." };
         return {
-          id: item.id,
-          label: item.label,
-          description: item.description || "",
-          pattern: item.pattern,
-          enabled: row.querySelector("[data-pattern-enabled]").checked,
+          item: {
+            id: titleNoiseCustomId(label),
+            label,
+            description: "",
+            phrase,
+            pattern: phrase,
+            source: "custom",
+            enabled: true,
+          },
         };
-      });
-      const response = await fetch("/api/settings/title-noise", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          disabled_defaults: disabledDefaults,
-          custom_patterns: customPatterns,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        status.textContent = data.detail || "Could not save title patterns.";
-        return;
-      }
-      policy = data;
-      render();
-      status.textContent = "Saved. New runs now use these title patterns.";
+      },
+      clearAddForm: () => {
+        labelInput.value = "";
+        patternInput.value = "";
+      },
+      serializePrivate: (item, enabled) => ({
+        id: item.id,
+        label: item.label,
+        description: item.description || "",
+        pattern: item.pattern,
+        enabled,
+      }),
+      afterLoad: reapplyHashScroll,
+      text: {
+        emptyPrivate: "No custom patterns yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
+        loadError: "Could not load title patterns.",
+        saveError: "Could not save title patterns.",
+        added: "Custom pattern added and saved.",
+        removed: "Pattern removed.",
+        saved: "Saved. New runs now use these title patterns.",
+      },
     });
-
-    load();
+    if (section) section.load();
   }
 
   function publisherCustomId(name) {
@@ -533,137 +453,219 @@
   }
 
   function initializePublisherSettings() {
-    const defaultsContainer = document.getElementById("publisherDefaults");
-    const customContainer = document.getElementById("publisherCustom");
-    const status = document.getElementById("publisherStatus");
     const nameInput = document.getElementById("publisherName");
     const specialSelect = document.getElementById("publisherSpecial");
-    const addButton = document.getElementById("publisherAddBtn");
-    const saveButton = document.getElementById("publisherSaveBtn");
-    if (!defaultsContainer || !customContainer || !status || !nameInput || !addButton || !saveButton) return;
-
-    let policy = null;
-
-    const specialLabel = (id) => (policy?.special_providers || {})[id] || id;
-
-    const render = () => {
-      const entries = policy?.publishers || [];
-      defaultsContainer.replaceChildren(
-        ...entries.filter((item) => item.source === "default").map((item) => {
-          const row = document.createElement("label");
-          row.className = "pattern-row";
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.checked = item.enabled;
-          input.dataset.publisherDefault = item.id;
-          const copy = document.createElement("span");
-          const detail = [item.aliases?.length ? `aka ${item.aliases.join(", ")}` : "", item.special_provider ? `→ ${specialLabel(item.special_provider)} endpoint` : ""].filter(Boolean).join(" · ");
-          copy.append(createTextElement("strong", item.name), createTextElement("small", detail || "publisher / imprint"));
-          row.append(input, copy);
-          return row;
-        }),
-      );
-
-      const custom = entries.filter((item) => item.source !== "default");
-      if (!custom.length) {
-        customContainer.replaceChildren(createTextElement("p", "No custom or learned publishers.", "note"));
-        return;
-      }
-      customContainer.replaceChildren(...custom.map((item) => {
-        const row = document.createElement("div");
-        row.className = "pattern-row custom-pattern-row";
-        row.dataset.publisherCustom = item.id;
-        const label = document.createElement("label");
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.checked = item.enabled;
-        input.dataset.patternEnabled = "";
-        const copy = document.createElement("span");
-        const detail = [item.source === "learned" ? "learned" : "custom", item.special_provider ? `→ ${specialLabel(item.special_provider)} endpoint` : ""].filter(Boolean).join(" · ");
-        copy.append(createTextElement("strong", item.name), createTextElement("small", detail));
-        label.append(input, copy);
-        const remove = createTextElement("button", "Remove", "secondary");
-        remove.type = "button";
-        remove.addEventListener("click", () => {
-          policy.publishers = policy.publishers.filter((candidate) => candidate.id !== item.id);
-          render();
-          status.textContent = "Publisher removed locally. Save to apply the change.";
-        });
-        row.append(label, remove);
-        return row;
-      }));
-    };
-
-    const load = async () => {
-      const response = await fetch("/api/settings/publishers");
-      const data = await response.json();
-      if (!response.ok) {
-        status.textContent = data.detail || "Could not load publishers.";
-        return;
-      }
-      policy = data;
-      render();
-      status.textContent = "Using shared defaults and local overrides.";
-      reapplyHashScroll();
-    };
-
-    addButton.addEventListener("click", () => {
-      const name = nameInput.value.trim();
-      if (!name) {
-        status.textContent = "Enter a publisher name.";
-        return;
-      }
-      policy ||= { publishers: [] };
-      policy.publishers.push({
-        id: publisherCustomId(name),
-        name,
-        aliases: [],
-        special_provider: specialSelect && specialSelect.value ? specialSelect.value : null,
-        source: "custom",
-        enabled: true,
-      });
-      nameInput.value = "";
-      if (specialSelect) specialSelect.value = "";
-      render();
-      status.textContent = "Publisher added locally. Save to apply it.";
-    });
-
-    saveButton.addEventListener("click", async () => {
-      const disabledDefaults = [
-        ...defaultsContainer.querySelectorAll("[data-publisher-default]:not(:checked)"),
-      ].map((input) => input.dataset.publisherDefault);
-      const customPublishers = [
-        ...customContainer.querySelectorAll("[data-publisher-custom]"),
-      ].map((row) => {
-        const item = policy.publishers.find((candidate) => candidate.id === row.dataset.publisherCustom);
+    const special = (policy, id) => ((policy && policy.special_providers) || {})[id] || id;
+    const section = window.LibraForgePatterns && window.LibraForgePatterns.createSection({
+      endpoint: "/api/settings/publishers",
+      listKey: "publishers",
+      customKey: "custom_publishers",
+      elements: {
+        defaults: document.getElementById("publisherDefaults"),
+        custom: document.getElementById("publisherCustom"),
+        status: document.getElementById("publisherStatus"),
+        addButton: document.getElementById("publisherAddBtn"),
+      },
+      requiredInputs: [nameInput],
+      describeKnown: (item, policy) => {
+        const detail = [
+          item.aliases && item.aliases.length ? `aka ${item.aliases.join(", ")}` : "",
+          item.special_provider ? `→ ${special(policy, item.special_provider)} endpoint` : "",
+        ].filter(Boolean).join(" · ");
+        return { title: item.name, detail: detail || "publisher / imprint" };
+      },
+      describePrivate: (item, policy) => ({
+        title: item.name,
+        detail: [
+          item.source === "learned" ? "learned" : "private",
+          item.special_provider ? `→ ${special(policy, item.special_provider)} endpoint` : "",
+        ].filter(Boolean).join(" · "),
+      }),
+      readAddForm: () => {
+        const name = nameInput.value.trim();
+        if (!name) return { error: "Enter a publisher name." };
         return {
-          id: item.id,
-          name: item.name,
-          aliases: item.aliases || [],
-          special_provider: item.special_provider || null,
-          source: item.source === "learned" ? "learned" : "custom",
-          enabled: row.querySelector("[data-pattern-enabled]").checked,
+          item: {
+            id: publisherCustomId(name),
+            name,
+            aliases: [],
+            special_provider: specialSelect && specialSelect.value ? specialSelect.value : null,
+            source: "custom",
+            enabled: true,
+          },
         };
-      });
-      const response = await fetch("/api/settings/publishers", {
+      },
+      clearAddForm: () => {
+        nameInput.value = "";
+        if (specialSelect) specialSelect.value = "";
+      },
+      serializePrivate: (item, enabled) => ({
+        id: item.id,
+        name: item.name,
+        aliases: item.aliases || [],
+        special_provider: item.special_provider || null,
+        source: item.source === "learned" ? "learned" : "custom",
+        enabled,
+      }),
+      afterLoad: reapplyHashScroll,
+      text: {
+        emptyPrivate: "No custom or learned publishers yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
+        loadError: "Could not load publishers.",
+        saveError: "Could not save publishers.",
+        added: "Publisher added and saved.",
+        removed: "Publisher removed.",
+        saved: "Saved. New runs now use these publishers.",
+      },
+    });
+    if (section) section.load();
+  }
+
+  function initializeAuthorNameSettings() {
+    const toggle = document.getElementById("authorSchemeToggle");
+    const schemeStatus = document.getElementById("authorSchemeStatus");
+    const nameInput = document.getElementById("authorNamePattern");
+    if (!toggle || !schemeStatus) return;
+
+    const describeScheme = (policy) => {
+      toggle.checked = Boolean(policy.scheme_enabled);
+      const origin = policy.origin === "upgraded"
+        ? "Left off because this install was updated from an earlier version."
+        : policy.origin === "fresh"
+        ? "Turned on automatically because this is a new install."
+        : "";
+      schemeStatus.textContent = `${toggle.checked ? "On" : "Off"}. ${origin}`.trim();
+    };
+
+    const section = window.LibraForgePatterns && window.LibraForgePatterns.createSection({
+      endpoint: "/api/settings/author-names",
+      listKey: "names",
+      customKey: "custom_names",
+      elements: {
+        defaults: document.getElementById("authorNameDefaults"),
+        custom: document.getElementById("authorNameCustom"),
+        status: document.getElementById("authorNameStatus"),
+        addButton: document.getElementById("authorNameAddBtn"),
+      },
+      requiredInputs: [nameInput],
+      describeKnown: (item) => ({ title: item.label, detail: item.description || `Always written ${item.spelling}` }),
+      describePrivate: (item) => ({ title: item.spelling, detail: "always kept exactly like this" }),
+      readAddForm: () => {
+        const name = nameInput.value.trim();
+        const spelling = name;
+        if (!name) return { error: "Enter the author name." };
+        return {
+          item: {
+            id: `custom-${name.toLowerCase().replace(/[^a-z0-9]+/g, "")}`,
+            label: spelling,
+            description: "",
+            name,
+            spelling,
+            source: "custom",
+            enabled: true,
+          },
+        };
+      },
+      clearAddForm: () => {
+        nameInput.value = "";
+      },
+      serializePrivate: (item, enabled) => ({
+        id: item.id,
+        label: item.label || item.spelling,
+        description: item.description || "",
+        name: item.name,
+        spelling: item.spelling,
+        enabled,
+      }),
+      onLoaded: describeScheme,
+      afterLoad: reapplyHashScroll,
+      text: {
+        emptyPrivate: "No custom patterns yet.",
+        loaded: "Patterns in use ship with LibraForge; custom patterns are yours.",
+        loadError: "Could not load author name settings.",
+        saveError: "Could not save author name patterns.",
+        added: "Custom pattern added and saved.",
+        removed: "Pattern removed.",
+        saved: "Saved. New runs use these author name patterns.",
+      },
+    });
+    if (!section) return;
+
+    toggle.addEventListener("change", async () => {
+      const wanted = toggle.checked;
+      schemeStatus.textContent = "Saving...";
+      try {
+        const response = await fetch("/api/settings/author-names", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scheme_enabled: wanted }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "save failed");
+        describeScheme(data);
+      } catch (error) {
+        toggle.checked = !wanted;
+        schemeStatus.textContent = "Could not save the setting.";
+      }
+    });
+    section.load();
+  }
+
+  async function initializeAuthorNameNotice() {
+    let state;
+    try {
+      const response = await fetch("/api/install-state");
+      if (!response.ok) return;
+      state = await response.json();
+    } catch (error) {
+      return;
+    }
+    if (!state.author_notice_pending) return;
+
+    const acknowledge = () => fetch("/api/install-state/ack-author-notice", { method: "POST" });
+    const dlg = document.createElement("dialog");
+    dlg.className = "manual-apply-dialog connection-notice-dialog";
+    const title = createTextElement("h3", "Author name scheme updated in 0.2.5", "manual-apply-title");
+    const body = document.createElement("p");
+    body.className = "manual-apply-body";
+    body.append(
+      "LibraForge 0.2.5 adds a universal author-name scheme: initials are always written like ",
+      createTextElement("strong", "J.K. Rowling"),
+      " or ",
+      createTextElement("strong", "V.A. Lewis"),
+      " (a dot after each letter, no spaces between them, one space before the rest of the name), including forms such as JK Rowling or J.K.Rowling. It changes the author tags and metadata.json written by the fixer and Manual Review; Folder Forge names author folders from that metadata. ",
+      createTextElement("strong", "Because you updated an existing install, it is switched off"),
+      ", so your organized library is not affected unless you turn it on. You can turn it on or off, and add your own exceptions, under ",
+      createTextElement("strong", "Settings, Author names"),
+      ".",
+    );
+    const actions = document.createElement("div");
+    actions.className = "manual-apply-actions";
+    const keep = createTextElement("button", "Keep it off", "secondary");
+    const enable = createTextElement("button", "Turn it on", "secondary");
+    const open = createTextElement("button", "Open Author names settings", "secondary");
+    actions.append(keep, enable, open);
+    dlg.append(title, body, actions);
+    document.body.appendChild(dlg);
+    const close = () => { dlg.close(); dlg.remove(); };
+    keep.addEventListener("click", async () => {
+      await acknowledge();
+      close();
+    });
+    enable.addEventListener("click", async () => {
+      await fetch("/api/settings/author-names", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          disabled_defaults: disabledDefaults,
-          custom_publishers: customPublishers,
-        }),
+        body: JSON.stringify({ scheme_enabled: true }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        status.textContent = data.detail || "Could not save publishers.";
-        return;
-      }
-      policy = data;
-      render();
-      status.textContent = "Saved. New runs now use these publishers.";
+      await acknowledge();
+      close();
     });
-
-    load();
+    open.addEventListener("click", async () => {
+      await acknowledge();
+      window.location.href = "/settings#author-names";
+    });
+    dlg.showModal();
   }
 
   let preferences = readPreferences();
@@ -693,6 +695,8 @@
     initializeConnectionNotice();
     initializeTitleNoiseSettings();
     initializePublisherSettings();
+    initializeAuthorNameSettings();
+    initializeAuthorNameNotice();
     const theme = document.getElementById("uiTheme");
     const surface = document.getElementById("uiSurface");
     const accent = document.getElementById("uiAccent");

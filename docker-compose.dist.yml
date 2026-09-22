@@ -7,7 +7,8 @@
 #
 # Then open http://127.0.0.1:5056 and (optionally) connect an Audible account on
 # the Accounts page to enable metadata lookups. Run reports and Audible auth
-# persist in the named volumes below across restarts and image upgrades.
+# persist in the named volumes below across restarts and image upgrades, and so do
+# the settings you save in the UI (patterns, Audiobookshelf connection, retention).
 #
 # To upgrade: `docker compose -f docker-compose.dist.yml pull && ... up -d`.
 services:
@@ -24,6 +25,8 @@ services:
       - "127.0.0.1:${LIBRAFORGE_PORT:-5056}:5056"
     environment:
       - AUDIOBOOKS_ROOT=/audiobooks
+      # Saved settings live in a named volume so they survive `pull` + `up -d`.
+      - LIBRAFORGE_SETTINGS_DIR=/app/settings
     volumes:
       # The only required mount: your audiobook library.
       - ${AUDIOBOOKS_PATH:?Set AUDIOBOOKS_PATH to your audiobook library path}:/audiobooks
@@ -31,6 +34,7 @@ services:
       # here without any host folder setup.
       - libraforge-auth:/auth
       - libraforge-reports:/app/reports
+      - libraforge-settings:/app/settings
     healthcheck:
       test:
         - CMD
@@ -45,3 +49,4 @@ services:
 volumes:
   libraforge-auth:
   libraforge-reports:
+  libraforge-settings:

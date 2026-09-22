@@ -2204,9 +2204,17 @@ summary:focus-visible {
 
 .pattern-editor {
   display: grid;
-  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.3fr) auto;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 5fr) minmax(0, 2fr);
   align-items: end;
   gap: var(--space-md);
+}
+
+.pattern-editor > button {
+  width: 100%;
+}
+
+.pattern-editor-single > label {
+  grid-column: 1 / span 2;
 }
 
 :root[data-density="compact"] .card {
@@ -2325,6 +2333,10 @@ summary:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .pattern-editor-single > label {
+    grid-column: auto;
+  }
+
   .checks {
     gap: var(--space-sm);
   }
@@ -2399,6 +2411,10 @@ summary:focus-visible {
   .settings-grid,
   .pattern-editor {
     grid-template-columns: 1fr;
+  }
+
+  .pattern-editor-single > label {
+    grid-column: auto;
   }
 }
 
@@ -3526,6 +3542,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge,
 .match-write-badge,
 .match-gr-limited-badge,
+.match-initials-badge,
 .match-grouped-badge,
 .match-ebook-badge {
   display: inline-block;
@@ -3542,6 +3559,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge     { background: rgb(0 160 100 / 15%);         color: #00c878;        }
 .match-write-badge      { background: var(--accent-dim);            color: var(--accent-dim-text); }
 .match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
+.match-initials-badge   { background: var(--warning-soft);          color: var(--warning); }
 .match-grouped-badge    { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 .match-ebook-badge      { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 

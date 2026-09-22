@@ -28,6 +28,7 @@ import audible
 
 try:
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
+    from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
         learn_publishers,
         match_canonical_publisher,
@@ -158,6 +159,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
+    from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
         learn_publishers,
         match_canonical_publisher,
@@ -4377,6 +4379,10 @@ def _build_report_item(result: "ItemResult") -> dict:
             "duration_local": duration.get("local_minutes"),
             "duration_diff_pct": duration.get("diff_percent"),
         }
+        # The written author differs from the current tag only in how initials are
+        # written: the universal author-name scheme unified them.
+        if scheme_enabled() and initials_only_change(local["author"], item["match"]["author"]):
+            item["author_initials_fixed"] = True
     return item
 
 def print_plan(
