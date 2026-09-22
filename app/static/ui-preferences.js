@@ -20,6 +20,9 @@
       ["lavender", "Lavender"],
     ],
   };
+  // Folder Forge scans this folder when no scan root is set in Settings, Library.
+  const defaultOrganizerScanRoot = "/audiobooks/_unorganized";
+
   const defaults = {
     theme: "system",
     darkSurface: "charcoal",
@@ -30,6 +33,7 @@
     debugTrace: false,
     debugTraceFile: "",
     defaultRootPath: "",
+    organizerScanRoot: "",
     ignoredFolders: [".", "#", "@"],
     persistentSkipPatterns: "",
     usePersistentSkip: false,
@@ -666,7 +670,7 @@
   applyPreferences(preferences);
 
   // Expose read-only access for page scripts that need preference values.
-  window.LibraForgePrefs = { get: () => preferences };
+  window.LibraForgePrefs = { get: () => preferences, defaultOrganizerScanRoot };
 
   const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
   const handleSystemThemeChange = () => {
@@ -716,6 +720,18 @@
       defaultRootEl.value = preferences.defaultRootPath || "";
       defaultRootEl.addEventListener("change", () => {
         preferences = { ...preferences, defaultRootPath: defaultRootEl.value.trim() };
+        savePreferences(preferences);
+      });
+    }
+
+    const scanRootEl = document.getElementById("organizerScanRoot");
+    if (scanRootEl) {
+      scanRootEl.placeholder = defaultOrganizerScanRoot;
+      scanRootEl.value = preferences.organizerScanRoot || "";
+      const shown = document.getElementById("organizerScanRootDefault");
+      if (shown) shown.textContent = defaultOrganizerScanRoot;
+      scanRootEl.addEventListener("change", () => {
+        preferences = { ...preferences, organizerScanRoot: scanRootEl.value.trim() };
         savePreferences(preferences);
       });
     }

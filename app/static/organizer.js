@@ -726,6 +726,10 @@ $('advancedRunToggle')?.addEventListener('click', () => {
   syncAdvancedRunSettings();
 });
 syncAdvancedRunSettings();
+{
+  const scanRoot = window.LibraForgePrefs?.get()?.organizerScanRoot;
+  if (scanRoot) $('rootPath').value = scanRoot;
+}
 loadScripts();
 resumeActiveRun();
 refreshNamingTemplatePreview();
