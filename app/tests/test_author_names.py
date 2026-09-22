@@ -67,6 +67,22 @@ class SchemeRuleTests(WithTempPolicy):
 
 
 
+class PublisherAcronymTests(unittest.TestCase):
+    def test_a_known_publisher_acronym_is_never_read_as_initials(self):
+        self.assertEqual(
+            an.format_author_credit("BBC - Andrew Marshall & John Lloyd"),
+            "BBC - Andrew Marshall & John Lloyd",
+        )
+        self.assertEqual(
+            an.format_author_credit("BBC - Paul Barnhill & Neil Warhurst"),
+            "BBC - Paul Barnhill & Neil Warhurst",
+        )
+
+    def test_real_initials_that_are_not_a_known_publisher_are_unaffected(self):
+        self.assertEqual(an.format_person_name("JD Kirk"), "J.D. Kirk")
+        self.assertEqual(an.format_person_name("TW Brown"), "T.W. Brown")
+
+
 class PatternPolicyTests(WithTempPolicy):
     def test_known_patterns_ship_with_the_real_exceptions(self):
         names = {e["name"]: e for e in an.load_author_policy()["names"] if e["source"] == "default"}

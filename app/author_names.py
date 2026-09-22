@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.publisher_policy import match_canonical_publisher
 from app.settings_paths import user_settings_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +152,12 @@ def _initial_letters(token: str, index: int, last_index: int) -> list[str] | Non
     # Unspaced capitals such as "JK" or "TJ" are initials only when they are
     # not the final word, so "Mashton XX" and "John Smith III" stay intact.
     if index < last_index and _CAPS_CLUSTER.fullmatch(token) and not _ROMAN.fullmatch(token):
+        # A production/broadcaster credit ("BBC - Andrew Marshall & John
+        # Lloyd") is not a person, even though "BBC" alone is the same shape
+        # as real initials ("JD", "TJ"). Reuse the publisher catalog rather
+        # than a second hardcoded list.
+        if match_canonical_publisher(token):
+            return None
         return list(token)
     return None
 
