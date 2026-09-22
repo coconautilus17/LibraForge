@@ -4008,6 +4008,10 @@ def parse_organizer_line(state: RunState, line: str) -> None:
     if line.strip() == "COMPANION FILES:":
         state.parser_state["organizer_section"] = "companions"
         return
+    if line.strip() == "REVIEW DETAILS:":
+        state.parser_state["organizer_section"] = "review_details"
+        current_move["review_details"] = []
+        return
 
     if not line.startswith("    "):
         return
@@ -4020,6 +4024,10 @@ def parse_organizer_line(state: RunState, line: str) -> None:
         current_move["target"] = value
     elif section == "companions":
         current_move["companions"].append(value)
+    elif section == "review_details":
+        label, _, value_text = value.partition(": ")
+        if value_text:
+            current_move["review_details"].append({"label": label, "value": value_text})
 
 
 def build_organizer_command(req: OrganizerRunRequest) -> list[str]:

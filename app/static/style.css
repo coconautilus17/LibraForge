@@ -2090,6 +2090,16 @@ summary:focus-visible {
   background: var(--danger-soft);
 }
 
+.review-detail-list {
+  margin-top: 8px;
+  max-height: 200px;
+  background: transparent;
+}
+
+.review-detail-list .file-item {
+  color: inherit;
+}
+
 .review-card {
   border-color: rgb(255 126 139 / 45%);
 }

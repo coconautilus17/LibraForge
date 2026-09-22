@@ -68,15 +68,29 @@ class InferMetadataFlagTests(unittest.TestCase):
             item = ORGANIZER.build_book_items(root, Path(tmp) / "dest")[0]
             return ORGANIZER.infer_metadata(item, root)
 
-    def test_dropped_series_adds_review_reason_without_changing_series(self):
+    def test_dropped_series_adds_review_reason_and_names_the_source_series(self):
         md = self._run("Street Cultivation", "Street Cultivation 2")
         self.assertEqual(md["series"], "")
         self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, md["review_reasons"])
+        details = {d["label"]: d["value"] for d in md["review_details"]}
+        self.assertEqual(details["Source series"], "Street Cultivation")
+
+    def test_two_different_dropped_series_share_the_identical_review_reason(self):
+        # The reason itself must group; only review_details may vary per book.
+        a = self._run("Street Cultivation", "Street Cultivation 2")
+        b = self._run("LitRPG", "LitRPG 2")
+        self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, a["review_reasons"])
+        self.assertIn(ORGANIZER.MARKETING_SERIES_DROPPED_REASON, b["review_reasons"])
+        a_details = {d["label"]: d["value"] for d in a["review_details"]}
+        b_details = {d["label"]: d["value"] for d in b["review_details"]}
+        self.assertEqual(a_details["Source series"], "Street Cultivation")
+        self.assertEqual(b_details["Source series"], "LitRPG")
 
     def test_ordinary_series_is_not_flagged(self):
         md = self._run("Pocket Dungeon", "Pocket Dungeon 2")
         self.assertEqual(md["series"], "Pocket Dungeon")
         self.assertFalse(ORGANIZER.MARKETING_REASONS & set(md["review_reasons"]))
+        self.assertEqual(md["review_details"], [])
 
 
 class SanitizePathNameTests(unittest.TestCase):

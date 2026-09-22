@@ -184,6 +184,68 @@ class ReviewOrganizerItemMissingSeriesTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_ordinary_standalone_book_with_no_number_is_not_flagged(self):
+        # No series and no sequence number is the ordinary standalone-book
+        # case (most nonfiction, most one-off novels); it is not a suspect.
+        item = {
+            "title": "Heft", "author": "Liz Moore", "series": "", "number": "",
+            "source": "/lib/Heft.m4b", "target": "/lib/Liz Moore/Heft.m4b",
+        }
+
+        result = REVIEW.review_organizer_item(item, make_args())
+
+        self.assertIsNone(result)
+
+    def test_missing_series_is_not_repeated_when_another_reason_already_explains_it(self):
+        # The organizer's own marketing-cleanup reason already says why the
+        # series is empty; a second, generic "missing series" suspect on the
+        # same book would just be redundant noise.
+        item = {
+            "title": "Street Cultivation 2", "author": "Sarah Lin", "series": "", "number": "2",
+            "source": "/lib/Street Cultivation 2.m4b", "target": "/lib/Sarah Lin/Street Cultivation 2.m4b",
+            "review_reasons": ["series name dropped: it reads like generic marketing/genre text, not a real series name"],
+        }
+
+        result = REVIEW.review_organizer_item(item, make_args())
+
+        codes = {r["code"] for r in result["reasons"]}
+        self.assertNotIn("missing_series", codes)
+        self.assertIn("existing_review_reason", codes)
+
+
+class ReviewOrganizerItemInfoOnlyReasonTests(unittest.TestCase):
+    def test_purely_informational_review_reason_is_not_a_suspect(self):
+        item = {
+            "title": "Pocket Dungeon", "author": "Eric Vall", "series": "Pocket Dungeon", "number": "1",
+            "source": "/lib/Pocket Dungeon 1.m4b", "target": "/lib/Eric Vall/Pocket Dungeon/Book 1",
+            "review_reasons": ["title matches series name; using sequence only"],
+        }
+
+        result = REVIEW.review_organizer_item(item, make_args())
+
+        self.assertIsNone(result)
+
+    def test_a_real_reason_alongside_an_informational_one_still_becomes_a_suspect(self):
+        item = {
+            "title": "Dragon Emperor 13", "author": "Eric Vall", "series": "Dragon Emperor", "number": "13",
+            "source": "/lib/Dragon Emperor 13.m4b", "target": "/lib/Eric Vall/Dragon Emperor/Book 13",
+            "review_reasons": [
+                "title matches series name; using sequence only",
+                "title identity differs between metadata and path",
+            ],
+        }
+
+        result = REVIEW.review_organizer_item(item, make_args())
+
+        self.assertIsNotNone(result)
+        severities = {r["code"]: r["severity"] for r in result["reasons"]}
+        # The exact severity of "existing_review_reason" depends on which
+        # message it carries; each occurrence is checked against the message.
+        info_reason = next(r for r in result["reasons"] if r.get("evidence", {}).get("review_reason", "").startswith("title matches series"))
+        real_reason = next(r for r in result["reasons"] if r.get("evidence", {}).get("review_reason", "").startswith("title identity differs"))
+        self.assertEqual(info_reason["severity"], "info")
+        self.assertEqual(real_reason["severity"], "medium")
+
 
 class SplitTitleBaseAndNumberTests(unittest.TestCase):
     def test_splits_trailing_number(self):

@@ -397,6 +397,13 @@ function renderRisks(items) {
   $("moveRiskSummary").className = risks.length ? "review-alert danger" : "review-alert";
 }
 
+// Capitalizes a review reason for the filter dropdown and the card; the
+// value used for matching/grouping stays the exact raw string so it keeps
+// grouping every book that hit the same rule under one option.
+function reviewReasonLabel(reason) {
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
 function populateReviewReasonFilter(items) {
   const select = $("reviewReasonFilter");
   const current = select.value;
@@ -404,7 +411,7 @@ function populateReviewReasonFilter(items) {
     items.flatMap((item) => item.review_reasons || [])
   )].sort();
   select.innerHTML = '<option value="">All reasons</option>'
-    + reasons.map((r) => `<option value="${escapeHtml(r)}"${r === current ? " selected" : ""}>${escapeHtml(r)}</option>`).join("");
+    + reasons.map((r) => `<option value="${escapeHtml(r)}"${r === current ? " selected" : ""}>${escapeHtml(reviewReasonLabel(r))}</option>`).join("");
 }
 
 function renderMoves(items) {
@@ -445,7 +452,16 @@ function renderMoves(items) {
           <span>Number: ${escapeHtml(item.number || "-")}</span>
           <span>Companions: ${Math.floor((item.companions || []).length / 2)}</span>
         </div>
-        ${(item.review_reasons || []).length ? `<div class="review-alert danger"><strong>Review:</strong> ${(item.review_reasons || []).map(escapeHtml).join("; ")}.</div>` : ""}
+        ${(item.review_reasons || []).length ? `
+        <div class="review-alert danger">
+          <strong>Review:</strong> ${(item.review_reasons || []).map((r) => escapeHtml(reviewReasonLabel(r))).join("; ")}.
+          ${(item.review_details || []).length ? `
+            <div class="file-list review-detail-list">
+              ${item.review_details.map((d) => `<div class="file-item"><strong>${escapeHtml(d.label)}</strong><br>${escapeHtml(d.value)}</div>`).join("")}
+            </div>
+          ` : ""}
+        </div>
+        ` : ""}
         <details class="move-details">
           <summary>Show source, destination, and companion files</summary>
           <div class="file-list">

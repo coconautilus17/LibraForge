@@ -1035,11 +1035,25 @@ def add_series_group_suspects(
         })
 
 
+# Organizer review_reasons that only describe how a value was derived or
+# handled, not something wrong with the book: promoting these to the same
+# "medium" severity as a real conflict is what drowns a suspicion report in
+# noise (every book whose title happens to equal its series name, or whose
+# series/author had to be read from the folder name, is completely normal).
+_ORGANIZER_INFO_ONLY_REASONS = {
+    "title inferred from path",
+    "series inferred from path",
+    "author inferred from path",
+    "title matches series name; using sequence only",
+}
+
+
 def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
     reasons: list[dict[str, Any]] = []
 
     for reason in item.get("review_reasons") or []:
-        add_reason(reasons, "existing_review_reason", "medium", clean_text(reason), {"review_reason": reason})
+        severity = "info" if reason in _ORGANIZER_INFO_ONLY_REASONS else "medium"
+        add_reason(reasons, "existing_review_reason", severity, clean_text(reason), {"review_reason": reason})
 
     target = clean_text(item.get("target"))
     source = clean_text(item.get("source"))
@@ -1052,11 +1066,17 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
         add_reason(reasons, "unknown_author", "high", "Organizer item has unknown/missing author.")
     if not title or title.casefold().startswith("unknown"):
         add_reason(reasons, "unknown_title", "medium", "Organizer item has unknown/missing title.")
-    if not series:
+    # A standalone title with no series at all is the overwhelmingly common,
+    # unremarkable case -- not a suspect. Only raise this when the book DOES
+    # carry a sequence number (a real hint it belongs to a series the
+    # metadata failed to capture) and nothing above already explains why the
+    # series is missing (the marketing-cleanup and possible-duplicate reasons
+    # already cover the cases in this codebase that can drop a series).
+    if not series and number and not reasons:
         add_reason(
             reasons, "missing_series", "high",
-            "No series set for this planned move (may be a standalone title, or missing source data).",
-            {"title": title, "author": author},
+            "Has a sequence number but no series; it may belong to a series the metadata didn't capture.",
+            {"title": title, "author": author, "sequence": number},
         )
 
     visible_source = extract_strong_number_from_text(source) or extract_series_suffix_number(source, series)
@@ -1110,7 +1130,10 @@ def review_organizer_item(item: dict[str, Any], args: argparse.Namespace) -> dic
                    "Organizer title is a generic omnibus label with no identifiable book title.",
                    {"title": title, "series": series})
 
-    if not reasons:
+    # An item whose only reasons are info-severity (how a value was derived,
+    # not something wrong with it) isn't a suspect -- nothing here needs a
+    # human to look at it.
+    if not reasons or all(r["severity"] == "info" for r in reasons):
         return None
 
     return {
