@@ -682,5 +682,16 @@ class SubstringSeriesCoincidentalMatchTests(unittest.TestCase):
         self.assertLess(score, 0.70, f"score={score}")
 
 
+
+class NumberCandidateHyphenTests(unittest.TestCase):
+    def test_hyphenated_compound_is_not_a_book_number(self):
+        for title in ("The 3-Day Effect", "The 5-Minute Journal"):
+            self.assertEqual(FIXER.get_audible_number_candidates({"title": title, "subtitle": ""}), [], title)
+
+    def test_trailing_and_spaced_hyphen_numbers_still_found(self):
+        self.assertEqual(FIXER.get_audible_number_candidates({"title": "Casual Farming 3", "subtitle": ""}), ["3"])
+        self.assertEqual(FIXER.get_audible_number_candidates({"title": "Pocket Dungeon 2 - The Sequel", "subtitle": ""}), ["2"])
+
+
 if __name__ == "__main__":
     unittest.main()
