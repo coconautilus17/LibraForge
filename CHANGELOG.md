@@ -8,6 +8,9 @@ onward is tracked here going forward.
 
 ## v0.2.5 (unreleased)
 
+- Author names: a production/broadcaster credit (`BBC - Andrew Marshall & John Lloyd`)
+  is no longer misread as a person's initials (`B.B.C. - ...`) -- the unspaced-capitals
+  rule now checks against the known publisher catalog first. (Issue #278)
 - Folder Forge: a real series name that merely ends in a genre word (`Street
   Cultivation`) is no longer wiped by the marketing-cleanup filter when it comes from
   trusted (fixer/Manual Review) metadata. A series that is nothing but a genre bucket
