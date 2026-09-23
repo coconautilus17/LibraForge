@@ -217,7 +217,7 @@ bind-mounted - HTML, CSS, and JS edits are live without a restart.
 
 LibraForge wraps and builds on:
 
-- **[FastAPI](https://fastapi.tiangolo.com/)** and **[Uvicorn](https://www.uvicorn.org/)**
+- **[FastAPI](https://fastapi.tiangolo.com/)** and **[Uvicorn](https://www.uvicorn.dev/)**
   - the web framework and ASGI server the whole app runs on.
 - **[audible](https://github.com/mkb79/Audible)** (mkb79) - the Audible API client
   behind account sign-in, catalog search, and the Library Downloader's decryption.
