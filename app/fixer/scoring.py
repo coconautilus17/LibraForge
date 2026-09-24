@@ -172,6 +172,37 @@ def get_people(product: dict, key: str) -> list[str]:
     ]
 
 
+# Audible sometimes bakes the sequence into the series title itself instead of
+# (or in addition to) the separate sequence field -- "Blight, Book 1" rather
+# than series="Blight" + sequence="1". Left alone, that text ends up written
+# verbatim to every sidecar/tag this book ever gets, and the redundant text
+# defeats series grouping (a folder named "Blight, Book 1" never matches its
+# sibling "Blight, Book 2"). Matches "Book"/"Vol."/"Volume" case-insensitively
+# (Audible's own casing is inconsistent: "Book", "BOOK", "book" all seen in
+# the wild) with an optional "#". Deliberately narrow: a BARE trailing number
+# with no such word ("Azarinth Healer 4") is NOT stripped here, because
+# nothing at this call site can tell that apart from a real title that
+# happens to end in a digit -- that broader case needs corroborating
+# evidence (a sibling book sharing the same base name), which only a
+# whole-library pass can provide; see scripts/fix-series-book-number-suffix.py.
+SERIES_TRAILING_NUMBER_RE = re.compile(
+    r"\s*,\s*(?:book|vol\.?|volume)\s*#?\s*(?P<num>\d+(?:\.\d+)?)\s*$", re.IGNORECASE
+)
+
+
+def split_series_trailing_number(series_name: str, sequence: str) -> tuple[str, str]:
+    """Strip a "<Series>, Book N" suffix from `series_name`; use its number to
+    fill `sequence` only when `sequence` is empty. An existing, different
+    `sequence` is never overwritten -- the series text is still cleaned
+    either way, since the wording is noise regardless of which number (if
+    any) turns out to be right."""
+    match = SERIES_TRAILING_NUMBER_RE.search(series_name)
+    if not match:
+        return series_name, sequence
+    cleaned = SERIES_TRAILING_NUMBER_RE.sub("", series_name).strip()
+    return cleaned, sequence or match.group("num")
+
+
 @trace(ALTER, capture=[])
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
@@ -184,7 +215,10 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     series_name = first.get("title") or first.get("name") or ""
     sequence = first.get("sequence") or first.get("position") or ""
 
-    return sanitize_tag(series_name), sanitize_tag(sequence)
+    series_name, sequence = split_series_trailing_number(
+        sanitize_tag(series_name), sanitize_tag(sequence)
+    )
+    return series_name, sequence
 
 
 # ---------------------------------------------------------------------------
