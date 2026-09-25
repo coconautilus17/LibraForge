@@ -171,11 +171,21 @@ def _num_matches(a: str, b: str) -> bool:
 def plan_series_number_changes(root: Path, include_tags: bool = False) -> list[dict]:
     """Every series value (libraforge.json's marker.audible.series, plus the
     embedded series tag when include_tags is set) with a book number baked
-    into the text, classified per the module docstring."""
+    into the text, classified per the module docstring.
+
+    Does its own os.walk (via _iter_libraforge_json/_iter_embedded_tags) --
+    fine for standalone/test use, but main() calls plan_all_changes()
+    instead, which shares one walk across every scan in this module. See
+    _walk_series_sources()'s docstring for why that matters on a real,
+    CIFS-mounted library.
+    """
     records = list(_iter_libraforge_json(root))
     if include_tags:
         records += list(_iter_embedded_tags(root))
+    return _classify_records(records)
 
+
+def _classify_records(records: list[tuple]) -> list[dict]:
     # Bases seen as a genuinely plain series (no suffix at all) -- sibling
     # evidence pattern B needs to fire at all on a single occurrence.
     plain_by_author: dict[str, set[str]] = defaultdict(set)
@@ -272,7 +282,42 @@ def _apply_id3(path: Path, series: str, sequence: str | None) -> None:
     audio.save()
 
 
-_APPLY_BY_KIND = {"json": _apply_json, "mp4": _apply_mp4, "id3": _apply_id3}
+_METADATA_JSON_TRAILING_NUM_RE = re.compile(r"^(?P<base>.+) #(?P<num>\d+(?:\.\d+)?)$")
+
+
+def clean_metadata_json_series_text(current: str) -> str | None:
+    """Clean a redundant book-number suffix baked into metadata.json's own
+    "Name #N" series text (Audiobookshelf's format -- see the module
+    docstring), using only the string itself, never marker data.
+
+    Needed for a book with no marker.audible.series at all -- fixed only at
+    the embedded-tag level (e.g. a --tags-only fix, or one done by hand
+    before this tool existed) leaves nothing for the marker-based sync
+    below to derive "expected" from, and metadata.json is otherwise never
+    revisited once written. Real, confirmed cases: "A Hercule Poirot
+    Mystery, Book #10 #10", "Azarinth Healer #4 #4" (the trailing "#4"
+    appended on top of an already-numbered base by write time), "A Jack
+    Ryan Novel (publication order), Book #3 #5" (the real, correct number
+    is the outer "#5"; "Book #3" is the stale captured number, discarded).
+
+    Returns the corrected string, or None if there's nothing to clean.
+    """
+    match = _METADATA_JSON_TRAILING_NUM_RE.search(current)
+    if not match:
+        return None
+    base, num = match.group("base"), match.group("num")
+
+    book_match = SERIES_TRAILING_NUMBER_RE.search(base)
+    if book_match:
+        cleaned_base = SERIES_TRAILING_NUMBER_RE.sub("", base).strip()
+    else:
+        bare = _bare_number_split(base)
+        if not bare:
+            return None
+        cleaned_base = bare[0]
+
+    new_value = f"{cleaned_base} #{num}"
+    return new_value if new_value != current else None
 
 
 def sync_metadata_json_series(book_folder: Path) -> None:
@@ -285,20 +330,31 @@ def sync_metadata_json_series(book_folder: Path) -> None:
     "#{sequence}" onto an already-dirty series name) simply because
     metadata.json had baked that text in before the marker was ever fixed.
     Called after every apply_change/revert so it never drifts again.
+
+    Falls back to clean_metadata_json_series_text() when there's no marker
+    to derive "expected" from (a book fixed only at the embedded-tag
+    level) -- see its docstring.
     """
     libraforge_json = book_folder / "libraforge.json"
     metadata_json = book_folder / "metadata.json"
-    if not libraforge_json.exists() or not metadata_json.exists():
+    if not metadata_json.exists():
         return
-    marker = (json.loads(libraforge_json.read_text(encoding="utf-8")).get("marker") or {}).get("audible") or {}
-    series = marker.get("series")
-    if not series:
-        return
-    sequence = marker.get("sequence")
-    expected = f"{series} #{sequence}" if sequence else series
+
+    expected = None
+    if libraforge_json.exists():
+        marker = (json.loads(libraforge_json.read_text(encoding="utf-8")).get("marker") or {}).get("audible") or {}
+        series = marker.get("series")
+        if series:
+            sequence = marker.get("sequence")
+            expected = f"{series} #{sequence}" if sequence else series
+
     data = json.loads(metadata_json.read_text(encoding="utf-8"))
     current = (data.get("series") or [None])[0]
-    if current == expected:
+    if current is None:
+        return
+    if expected is None:
+        expected = clean_metadata_json_series_text(current)
+    if expected is None or current == expected:
         return
     data["series"] = [expected]
     tmp = metadata_json.with_suffix(metadata_json.suffix + ".tmp")
@@ -306,10 +362,156 @@ def sync_metadata_json_series(book_folder: Path) -> None:
     os.replace(tmp, metadata_json)
 
 
+def _scan_metadata_json_paths(paths: list[Path]) -> list[dict]:
+    """The actual metadata.json cleanup pass, over an already-gathered list
+    of paths -- see scan_metadata_json_series()'s docstring for why this
+    exists as its own change-producing bucket, and _walk_series_sources()'s
+    for why the caller matters (one shared walk vs. this function's own).
+
+    Produces the same change-dict shape plan_series_number_changes() does
+    (kind/path/old_series/new_series/old_sequence/new_sequence/status) so
+    it flows through the existing apply_change()/revert() machinery
+    unchanged -- kind "metadata_json" never touches a sequence field, only
+    the series string.
+    """
+    changes = []
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        series_list = data.get("series") or []
+        if not series_list:
+            continue
+        current = series_list[0]
+        new_value = clean_metadata_json_series_text(current)
+        if new_value is not None:
+            changes.append({
+                "path": str(path), "kind": "metadata_json", "old_series": current, "new_series": new_value,
+                "old_sequence": None, "new_sequence": None, "status": "CLEAN_ONLY",
+            })
+    return changes
+
+
+def scan_metadata_json_series(root: Path) -> list[dict]:
+    """Whole-library sweep for metadata.json series text needing
+    clean_metadata_json_series_text()'s cleanup, independent of any marker/
+    tag change happening right now. Needed because sync_metadata_json_series
+    only ever runs as a side effect of apply_change/revert -- a book fixed
+    by an older version of this tool, or by hand, before that syncing
+    existed never gets revisited otherwise, exactly how Azarinth Healer 4's
+    metadata.json was found still showing "Azarinth Healer #4 #4" despite
+    its marker and embedded tag both already being correct.
+
+    Does its own os.walk -- fine for standalone/test use, but main() calls
+    plan_all_changes() instead, which shares one walk across every scan
+    this module does. See _walk_series_sources()'s docstring for why that
+    matters on a real, CIFS-mounted library.
+    """
+    paths = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(SERVICE_PREFIXES)]
+        if "metadata.json" in files:
+            paths.append(Path(dirpath) / "metadata.json")
+    return _scan_metadata_json_paths(paths)
+
+
+def _walk_series_sources(root: Path, include_tags: bool) -> tuple[list[tuple], list[Path]]:
+    """One os.walk over root, gathering everything every scan in this
+    module needs: libraforge.json marker records, embedded-tag records
+    (when include_tags), and metadata.json paths for the whole-library
+    sweep -- instead of each of those doing its own separate os.walk over
+    the same tree. Measured on the real library this tool targets: three
+    separate walks (marker + tags + metadata.json) took roughly 50% longer
+    than two did, because directory traversal itself -- not the handful of
+    small file reads once you're already in a directory -- is the dominant
+    cost on a slow, CIFS-mounted share. plan_all_changes() is the one
+    real caller; the individual _iter_libraforge_json/_iter_embedded_tags/
+    scan_metadata_json_series functions keep their own walks for standalone
+    and test use, so this isn't a breaking change to any of them.
+    """
+    marker_tag_records: list[tuple] = []
+    metadata_json_paths: list[Path] = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(SERVICE_PREFIXES)]
+        dirpath_obj = Path(dirpath)
+        rel_parts = dirpath_obj.relative_to(root).parts
+        author_dir = rel_parts[0] if rel_parts else ""
+
+        if "libraforge.json" in files:
+            lf_path = dirpath_obj / "libraforge.json"
+            try:
+                data = json.loads(lf_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            if data is not None:
+                marker = (data.get("marker") or {}).get("audible")
+                if isinstance(marker, dict):
+                    series = marker.get("series")
+                    if isinstance(series, str) and series:
+                        marker_tag_records.append((lf_path, series, marker.get("sequence"), author_dir, "json"))
+
+        if "metadata.json" in files:
+            metadata_json_paths.append(dirpath_obj / "metadata.json")
+
+        if include_tags:
+            for name in files:
+                kind = AUDIO_EXTENSIONS.get(Path(name).suffix.lower())
+                if not kind:
+                    continue
+                audio_path = dirpath_obj / name
+                try:
+                    if kind == "mp4":
+                        from mutagen.mp4 import MP4
+                        tags = MP4(audio_path).tags or {}
+                        series = _mp4_freeform_str(tags, "mvnm")
+                        sequence = _mp4_freeform_str(tags, "mvin") or None
+                    else:
+                        from mutagen.id3 import ID3
+                        tags = ID3(audio_path)
+                        series = str(tags["TXXX:mvnm"].text[0]) if "TXXX:mvnm" in tags else ""
+                        sequence = None
+                        if "TXXX:mvin" in tags:
+                            sequence = str(tags["TXXX:mvin"].text[0])
+                        elif "TXXX:series-part" in tags:
+                            sequence = str(tags["TXXX:series-part"].text[0])
+                except Exception:
+                    continue
+                if series:
+                    marker_tag_records.append((audio_path, series, sequence, author_dir, kind))
+
+    return marker_tag_records, metadata_json_paths
+
+
+def plan_all_changes(root: Path, include_tags: bool = False) -> list[dict]:
+    """The single entry point main() uses: one shared os.walk (see
+    _walk_series_sources()) feeding both the marker/tag classify pass and
+    the metadata.json sweep, instead of each doing its own walk over the
+    same tree."""
+    marker_tag_records, metadata_json_paths = _walk_series_sources(root, include_tags)
+    return _classify_records(marker_tag_records) + _scan_metadata_json_paths(metadata_json_paths)
+
+
+def _apply_metadata_json(path: Path, series: str, sequence: str | None) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["series"][0] = series
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+_APPLY_BY_KIND = {"json": _apply_json, "mp4": _apply_mp4, "id3": _apply_id3, "metadata_json": _apply_metadata_json}
+
+
 def apply_change(change: dict) -> None:
     path = Path(change["path"])
     _APPLY_BY_KIND[change["kind"]](path, change["new_series"], change["new_sequence"])
-    sync_metadata_json_series(path.parent)
+    # A "metadata_json" change already *is* the complete action on
+    # metadata.json -- re-syncing right after would just look at the value
+    # it was written seconds ago (already clean) and correctly find nothing
+    # to do, but it's wasted work and one fewer thing to reason about.
+    if change["kind"] != "metadata_json":
+        sync_metadata_json_series(path.parent)
 
 
 def revert(log_path: Path) -> None:
@@ -318,7 +520,13 @@ def revert(log_path: Path) -> None:
         old_sequence = entry["old_sequence"] if entry["new_sequence"] is not None else None
         path = Path(entry["path"])
         _APPLY_BY_KIND[entry["kind"]](path, entry["old_series"], old_sequence)
-        sync_metadata_json_series(path.parent)
+        # Same reasoning as apply_change() above, but critical here, not
+        # just wasted work: restoring a "metadata_json" entry's old_series
+        # puts the *dirty* text back on purpose. Re-syncing immediately
+        # after would re-detect and re-clean it, silently undoing the
+        # revert.
+        if entry["kind"] != "metadata_json":
+            sync_metadata_json_series(path.parent)
 
 
 def main() -> int:
@@ -335,7 +543,12 @@ def main() -> int:
         print(f"Reverted changes from {args.revert}")
         return 0
 
-    changes = plan_series_number_changes(args.root, include_tags=args.tags)
+    # One shared walk for both the marker/tag classify pass and the
+    # whole-library metadata.json sweep (the latter catches a book whose
+    # metadata.json was never revisited since -- an older run, or a hand
+    # fix, before sync_metadata_json_series existed). See
+    # plan_all_changes()/_walk_series_sources()'s docstrings.
+    changes = plan_all_changes(args.root, include_tags=args.tags)
     by_status: dict[str, list[dict]] = defaultdict(list)
     for change in changes:
         by_status[change["status"]].append(change)

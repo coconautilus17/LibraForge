@@ -296,6 +296,168 @@ class MetadataJsonSeriesSyncTests(unittest.TestCase):
         self.assertEqual(self.metadata_json.read_text(encoding="utf-8"), before)
 
 
+class CleanMetadataJsonSeriesTextTests(unittest.TestCase):
+    """clean_metadata_json_series_text() works from metadata.json's own
+    string alone, no marker needed -- for a book with no marker.audible.series
+    at all (fixed only at the embedded-tag level), sync_metadata_json_series's
+    marker-based path has nothing to derive "expected" from."""
+
+    def test_book_word_suffix_doubled_with_the_real_sequence(self):
+        # Real case: Hercule Poirot, no marker.audible.series at all.
+        result = FIX.clean_metadata_json_series_text("A Hercule Poirot Mystery, Book #10 #10")
+        self.assertEqual(result, "A Hercule Poirot Mystery #10")
+
+    def test_bare_hash_number_doubled_with_the_real_sequence(self):
+        # Real case: Azarinth Healer 4, fixed by an older version of this
+        # tool before sync_metadata_json_series existed.
+        result = FIX.clean_metadata_json_series_text("Azarinth Healer #4 #4")
+        self.assertEqual(result, "Azarinth Healer #4")
+
+    def test_keeps_the_outer_number_discards_the_inner_stale_one(self):
+        # Real case: Cardinal of the Kremlin -- the outer #5 is the real,
+        # already-correct sequence; "Book #3" is the stale captured number.
+        result = FIX.clean_metadata_json_series_text("A Jack Ryan Novel (publication order), Book #3 #5")
+        self.assertEqual(result, "A Jack Ryan Novel (publication order) #5")
+
+    def test_already_clean_is_left_alone(self):
+        self.assertIsNone(FIX.clean_metadata_json_series_text("A Jack Ryan Novel (publication order) #2"))
+
+    def test_no_trailing_hash_number_at_all_is_left_alone(self):
+        self.assertIsNone(FIX.clean_metadata_json_series_text("Some Series With No Sequence"))
+
+    def test_a_real_title_ending_in_a_number_is_left_alone(self):
+        # No "#", "," or "-" separator before the inner number -- same
+        # bare-space rule as _bare_number_split itself.
+        self.assertIsNone(FIX.clean_metadata_json_series_text("Ultimate Level 1 #7"))
+
+
+class SyncMetadataJsonSeriesNoMarkerTests(unittest.TestCase):
+    """sync_metadata_json_series() falls back to the pure-text cleanup when
+    there's no marker.audible.series to derive "expected" from."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.book_dir = self.root / "Author" / "Book 1"
+        self.book_dir.mkdir(parents=True)
+        self.metadata_json = self.book_dir / "metadata.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_cleans_up_with_no_libraforge_json_present_at_all(self):
+        self.metadata_json.write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+        FIX.sync_metadata_json_series(self.book_dir)
+        data = json.loads(self.metadata_json.read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Azarinth Healer #4"])
+
+    def test_cleans_up_when_libraforge_json_exists_but_has_no_marker_series(self):
+        (self.book_dir / "libraforge.json").write_text(
+            json.dumps({"marker": {"audible": {"asin": "NOREALASIN"}}}), encoding="utf-8"
+        )
+        self.metadata_json.write_text(json.dumps({"series": ["A Hercule Poirot Mystery, Book #10 #10"]}), encoding="utf-8")
+        FIX.sync_metadata_json_series(self.book_dir)
+        data = json.loads(self.metadata_json.read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["A Hercule Poirot Mystery #10"])
+
+
+class ScanMetadataJsonSeriesTests(unittest.TestCase):
+    """Whole-library sweep, independent of any marker/tag change happening
+    right now -- catches a book whose metadata.json was never revisited
+    since (an older run, or a hand fix, before this syncing existed)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_finds_and_fixes_a_dirty_metadata_json_with_no_marker_data(self):
+        book_dir = self.root / "Rhaegar" / "Azarinth Healer" / "Book 4"
+        book_dir.mkdir(parents=True)
+        (book_dir / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+
+        changes = FIX.scan_metadata_json_series(self.root)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kind"], "metadata_json")
+        self.assertEqual(changes[0]["new_series"], "Azarinth Healer #4")
+        self.assertEqual(changes[0]["status"], "CLEAN_ONLY")
+
+        FIX.apply_change(changes[0])
+        data = json.loads((book_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Azarinth Healer #4"])
+
+    def test_clean_metadata_json_is_not_flagged(self):
+        book_dir = self.root / "Author" / "Book 1"
+        book_dir.mkdir(parents=True)
+        (book_dir / "metadata.json").write_text(json.dumps({"series": ["A Clean Series #1"]}), encoding="utf-8")
+        self.assertEqual(FIX.scan_metadata_json_series(self.root), [])
+
+    def test_revert_restores_the_scanned_change(self):
+        book_dir = self.root / "Author" / "Book 1"
+        book_dir.mkdir(parents=True)
+        (book_dir / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+        change = FIX.scan_metadata_json_series(self.root)[0]
+        FIX.apply_change(change)
+        log_path = self.root / "log.jsonl"
+        log_path.write_text(json.dumps(change) + "\n", encoding="utf-8")
+        FIX.revert(log_path)
+        data = json.loads((book_dir / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Azarinth Healer #4 #4"])
+
+
+class PlanAllChangesSharedWalkTests(unittest.TestCase):
+    """plan_all_changes() is main()'s real entry point: one shared os.walk
+    (_walk_series_sources) feeding both the marker/tag classify pass and
+    the metadata.json sweep, instead of each doing its own walk over the
+    same tree -- ~50% slower, measured against the real library, when it
+    was three separate walks. These confirm the combined path produces the
+    exact same results the two separate scans (plan_series_number_changes +
+    scan_metadata_json_series) do, just from one walk."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_combines_marker_and_metadata_json_findings_from_one_walk(self):
+        write_libraforge_json(self.root / "Author" / "Book 1" / "libraforge.json", "Blight, Book #1", "")
+        book_dir_2 = self.root / "Rhaegar" / "Azarinth Healer" / "Book 4"
+        book_dir_2.mkdir(parents=True)
+        (book_dir_2 / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+
+        changes = FIX.plan_all_changes(self.root)
+        by_kind = {c["kind"]: c for c in changes}
+        self.assertEqual(len(changes), 2)
+        self.assertEqual(by_kind["json"]["new_series"], "Blight")
+        self.assertEqual(by_kind["metadata_json"]["new_series"], "Azarinth Healer #4")
+
+    def test_matches_the_separate_scans_combined(self):
+        write_libraforge_json(self.root / "Author" / "Book 1" / "libraforge.json", "Blight, Book #1", "")
+        book_dir_2 = self.root / "Rhaegar" / "Azarinth Healer" / "Book 4"
+        book_dir_2.mkdir(parents=True)
+        (book_dir_2 / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+
+        combined = FIX.plan_all_changes(self.root)
+        separate = FIX.plan_series_number_changes(self.root) + FIX.scan_metadata_json_series(self.root)
+        key = lambda c: (c["kind"], c["path"])
+        self.assertEqual(sorted(combined, key=key), sorted(separate, key=key))
+
+    def test_metadata_json_alone_with_no_libraforge_json_is_still_found(self):
+        book_dir = self.root / "Author" / "Book 1"
+        book_dir.mkdir(parents=True)
+        (book_dir / "metadata.json").write_text(
+            json.dumps({"series": ["A Hercule Poirot Mystery, Book #10 #10"]}), encoding="utf-8"
+        )
+        changes = FIX.plan_all_changes(self.root)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kind"], "metadata_json")
+        self.assertEqual(changes[0]["new_series"], "A Hercule Poirot Mystery #10")
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build test fixtures")
 class EmbeddedTagScanTests(unittest.TestCase):
     def setUp(self):
@@ -308,6 +470,19 @@ class EmbeddedTagScanTests(unittest.TestCase):
     def test_json_only_by_default_ignores_a_dirty_embedded_tag(self):
         write_m4b(self.root / "Author" / "Book 1" / "book.m4b", "Blight, Book #1", "")
         self.assertEqual(FIX.plan_series_number_changes(self.root), [])
+
+    def test_plan_all_changes_with_tags_matches_the_separate_scans(self):
+        write_m4b(self.root / "Author" / "Book 1" / "book.m4b", "Blight, Book #1", "1")
+        book_dir = self.root / "Rhaegar" / "Azarinth Healer" / "Book 4"
+        book_dir.mkdir(parents=True)
+        (book_dir / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+
+        combined = FIX.plan_all_changes(self.root, include_tags=True)
+        separate = (
+            FIX.plan_series_number_changes(self.root, include_tags=True) + FIX.scan_metadata_json_series(self.root)
+        )
+        key = lambda c: (c["kind"], c["path"])
+        self.assertEqual(sorted(combined, key=key), sorted(separate, key=key))
 
     def test_include_tags_finds_an_m4b_book_word_suffix(self):
         write_m4b(self.root / "Author" / "Book 1" / "book.m4b", "Blight, Book #1", "1")
