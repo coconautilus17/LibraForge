@@ -219,6 +219,83 @@ class ApplyAndRevertTests(unittest.TestCase):
         self.assertEqual(marker["sequence"], "")
 
 
+class MetadataJsonSeriesSyncTests(unittest.TestCase):
+    """Regression test for a real bug: 14 real books were fixed (marker
+    series/sequence and embedded tags both correct) but still showed the
+    old dirty series text afterward -- some of it doubled, "Name, Book #N
+    #N" -- because metadata.json's "Name #N" field (Audiobookshelf's own
+    format, written once at match time by write_audiobookshelf_metadata_json
+    using the same "{series} #{sequence}" formula) was never regenerated
+    once the marker it was derived from got fixed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.book_dir = self.root / "Author" / "Book 1"
+        self.libraforge_json = self.book_dir / "libraforge.json"
+        self.metadata_json = self.book_dir / "metadata.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_metadata_json(self, series: str) -> None:
+        self.metadata_json.write_text(json.dumps({"title": "T", "series": [series]}), encoding="utf-8")
+
+    def test_apply_regenerates_the_doubled_hash_number_metadata_json_entry(self):
+        # The real "Wax and Wayne, Book #4" / existing seq 7 case: metadata.json
+        # had baked in "Wax and Wayne, Book #4 #7" (dirty series + its own
+        # "#{sequence}" appended) before the marker was ever fixed.
+        write_libraforge_json(self.libraforge_json, "Wax and Wayne, Book #4", "7")
+        self._write_metadata_json("Wax and Wayne, Book #4 #7")
+
+        change = FIX.plan_series_number_changes(self.root)[0]
+        FIX.apply_change(change)
+
+        data = json.loads(self.metadata_json.read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Wax and Wayne #7"])
+        # Nothing else in metadata.json was disturbed.
+        self.assertEqual(data["title"], "T")
+
+    def test_apply_regenerates_metadata_json_when_sequence_gets_filled(self):
+        write_libraforge_json(self.libraforge_json, "Blight, Book #1", "")
+        self._write_metadata_json("Blight, Book #1")
+
+        change = FIX.plan_series_number_changes(self.root)[0]
+        FIX.apply_change(change)
+
+        data = json.loads(self.metadata_json.read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Blight #1"])
+
+    def test_revert_also_resyncs_metadata_json_back_to_the_original(self):
+        write_libraforge_json(self.libraforge_json, "Blight, Book #1", "")
+        self._write_metadata_json("Blight, Book #1")
+
+        change = FIX.plan_series_number_changes(self.root)[0]
+        FIX.apply_change(change)
+        log_path = self.root / "log.jsonl"
+        log_path.write_text(json.dumps(change) + "\n", encoding="utf-8")
+        FIX.revert(log_path)
+
+        data = json.loads(self.metadata_json.read_text(encoding="utf-8"))
+        self.assertEqual(data["series"], ["Blight, Book #1"])
+
+    def test_no_metadata_json_present_is_a_no_op(self):
+        write_libraforge_json(self.libraforge_json, "Blight, Book #1", "")
+        change = FIX.plan_series_number_changes(self.root)[0]
+        FIX.apply_change(change)  # must not raise just because metadata.json is absent
+        self.assertFalse(self.metadata_json.exists())
+
+    def test_already_in_sync_is_left_untouched(self):
+        write_libraforge_json(self.libraforge_json, "Blight, Book #1", "")
+        self._write_metadata_json("Blight #1")
+        before = self.metadata_json.read_text(encoding="utf-8")
+
+        change = FIX.plan_series_number_changes(self.root)[0]
+        FIX.apply_change(change)
+
+        self.assertEqual(self.metadata_json.read_text(encoding="utf-8"), before)
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build test fixtures")
 class EmbeddedTagScanTests(unittest.TestCase):
     def setUp(self):

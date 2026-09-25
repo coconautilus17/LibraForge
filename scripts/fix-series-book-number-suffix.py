@@ -275,15 +275,50 @@ def _apply_id3(path: Path, series: str, sequence: str | None) -> None:
 _APPLY_BY_KIND = {"json": _apply_json, "mp4": _apply_mp4, "id3": _apply_id3}
 
 
+def sync_metadata_json_series(book_folder: Path) -> None:
+    """Keep metadata.json's own "Name #N" series field (Audiobookshelf's
+    format, see the module docstring) in sync with marker.audible.series +
+    sequence -- it's *derived* from those, not edited directly by this
+    script's plan/apply, but nothing else regenerates it either. Real
+    books fixed here still showed the old dirty text afterward (some of it
+    doubled, "Name, Book #N #N", from the write-time formula appending
+    "#{sequence}" onto an already-dirty series name) simply because
+    metadata.json had baked that text in before the marker was ever fixed.
+    Called after every apply_change/revert so it never drifts again.
+    """
+    libraforge_json = book_folder / "libraforge.json"
+    metadata_json = book_folder / "metadata.json"
+    if not libraforge_json.exists() or not metadata_json.exists():
+        return
+    marker = (json.loads(libraforge_json.read_text(encoding="utf-8")).get("marker") or {}).get("audible") or {}
+    series = marker.get("series")
+    if not series:
+        return
+    sequence = marker.get("sequence")
+    expected = f"{series} #{sequence}" if sequence else series
+    data = json.loads(metadata_json.read_text(encoding="utf-8"))
+    current = (data.get("series") or [None])[0]
+    if current == expected:
+        return
+    data["series"] = [expected]
+    tmp = metadata_json.with_suffix(metadata_json.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, metadata_json)
+
+
 def apply_change(change: dict) -> None:
-    _APPLY_BY_KIND[change["kind"]](Path(change["path"]), change["new_series"], change["new_sequence"])
+    path = Path(change["path"])
+    _APPLY_BY_KIND[change["kind"]](path, change["new_series"], change["new_sequence"])
+    sync_metadata_json_series(path.parent)
 
 
 def revert(log_path: Path) -> None:
     entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     for entry in reversed(entries):
         old_sequence = entry["old_sequence"] if entry["new_sequence"] is not None else None
-        _APPLY_BY_KIND[entry["kind"]](Path(entry["path"]), entry["old_series"], old_sequence)
+        path = Path(entry["path"])
+        _APPLY_BY_KIND[entry["kind"]](path, entry["old_series"], old_sequence)
+        sync_metadata_json_series(path.parent)
 
 
 def main() -> int:
