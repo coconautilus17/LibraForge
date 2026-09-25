@@ -5036,6 +5036,40 @@ def companion_files_for(audio_path: Path) -> list[Path]:
     return sorted(set(companions))
 
 
+# A loose_file book's own dedicated wrapper folder often also holds a
+# *generic*, audio-filename-independent sidecar -- "libraforge.json" /
+# "metadata.json", or a cover image named "cover.*" / "book_cover*" --
+# rather than one sharing the audio's filename stem or suffix-appended to
+# it. Neither COMPANION_SUFFIXES nor COMPANION_SIDE_EXTENSIONS in
+# companion_files_for() ever match those, so a real production run silently
+# left every one of them behind: 366 of 391 moved books lost their
+# libraforge.json/metadata.json/cover at the destination, recoverable only
+# because the orphaned source folders hadn't been cleaned up yet. The
+# folder-kind move path never has this problem -- it relocates its whole
+# source folder, sidecars included.
+GENERIC_LOOSE_FILE_SIDECAR_NAMES = {"libraforge.json", "metadata.json"}
+
+
+def generic_sidecars_for_loose_file(audio_path: Path) -> list[Path]:
+    """Generic same-folder sidecar/cover files for a loose_file move.
+
+    Deliberately not folded into companion_files_for() itself: that
+    function also decides which files must stay behind alongside a
+    partial_group's excluded leftover file, and a folder-wide generic
+    sidecar belongs to the whole book, not specifically to that leftover.
+    """
+    companions: list[Path] = []
+    for sibling in audio_path.parent.iterdir():
+        if not sibling.is_file() or sibling == audio_path:
+            continue
+        name_lower = sibling.name.lower()
+        if name_lower in GENERIC_LOOSE_FILE_SIDECAR_NAMES:
+            companions.append(sibling)
+        elif name_lower.startswith(("cover.", "book_cover")) and sibling.suffix.lower() in COMPANION_SIDE_EXTENSIONS:
+            companions.append(sibling)
+    return sorted(companions)
+
+
 def remove_empty_parents(start_dir: Path, root: Path) -> None:
     current = start_dir
     while current != root and root in current.parents:
@@ -5126,7 +5160,15 @@ def execute_planned_move(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
         for companion in move.get("companions", []):
-            if companion.stem == source.stem:
+            if companion.name.lower() in GENERIC_LOOSE_FILE_SIDECAR_NAMES or (
+                companion.name.lower().startswith(("cover.", "book_cover"))
+                and companion.suffix.lower() in COMPANION_SIDE_EXTENSIONS
+            ):
+                # Generic, audio-filename-independent sidecar/cover (see
+                # generic_sidecars_for_loose_file): keep its own name, just
+                # relocate it alongside the renamed audio file.
+                companion_target = target.parent / companion.name
+            elif companion.stem == source.stem:
                 # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
                 # keep the same stem, just change the extension.
                 companion_target = target.with_suffix(companion.suffix)
@@ -5637,7 +5679,9 @@ def main() -> None:
                 ))
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
             continue
-        companions = [] if args.no_companions else companion_files_for(item.source_path)
+        companions = [] if args.no_companions else sorted(set(
+            companion_files_for(item.source_path) + generic_sidecars_for_loose_file(item.source_path)
+        ))
         reserved_targets.add(target_path)
         reserved_target_dirs.add(target_dir)
         target_dir_owner.setdefault(target_dir, item.source_path)
