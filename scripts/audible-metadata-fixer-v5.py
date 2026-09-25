@@ -1954,6 +1954,7 @@ def write_ebook_sidecar(
     source_formats: list[str],
     source_files: dict[str, str],
     book: dict,
+    alone_in_folder: bool = False,
 ) -> None:
     """Write (or update) an ebook's libraforge.json sidecar.
 
@@ -1963,12 +1964,14 @@ def write_ebook_sidecar(
     is stored verbatim under sidecar.book -- the same field
     read_book_sidecar() already reads for any book type, audiobook or not.
 
-    Always writes the per-file sidecar (alone=False), never the
-    folder-level one: ebook bucket folders (EPUB/, PDF/) routinely hold
-    many unrelated books' files, so per-file naming is always safe here,
-    even for a book that happens to be alone in its folder.
+    `alone_in_folder` mirrors the audiobook writer's own signal (see
+    _load_libraforge_raw): default False writes the per-file sidecar, safe
+    for an old-style ebook bucket folder (EPUB/, PDF/) holding many
+    unrelated books' files. Once Folder Forge gives a standalone ebook its
+    own dedicated folder, the caller passes True so it gets the same bare
+    folder-level libraforge.json an audiobook alone in its folder gets.
     """
-    lf_path, payload = _load_libraforge_raw(source, alone=False)
+    lf_path, payload = _load_libraforge_raw(source, alone=alone_in_folder)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
     payload["media_type"] = "ebook"

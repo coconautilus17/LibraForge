@@ -226,6 +226,16 @@ class BookItem:
     # Excluded from the folder move -- each is planned as its own loose_file
     # item and must be left in place for that.
     leftover_files: tuple[Path, ...] = ()
+    # "audiobook" (default) or "ebook". An ebook item reuses audio_files/
+    # representative for its own epub/pdf file -- there's no separate field,
+    # since every downstream consumer (naming templates, companion detection,
+    # move execution) already treats those as "this item's own content
+    # file(s)" generically, not audio-specifically.
+    media_type: str = "audiobook"
+    # An ebook's paired second format (epub+pdf sharing one identity, per
+    # app.library_index.build_ebook_index's bucket-folder grouping), if any.
+    # None for every audiobook item and for a single-format ebook.
+    paired_format_path: Path | None = None
 
 
 def utc_now() -> str:
@@ -2500,6 +2510,35 @@ def build_book_items(root: Path, destination_root: Path, limit: int | None = Non
     return sorted(items, key=lambda item: str(item.source_path))
 
 
+def build_ebook_book_items(root: Path) -> list[BookItem]:
+    """Discover standalone ebooks under root as BookItems, reusing
+    app.library_index.build_ebook_index()'s epub+pdf pairing rule rather
+    than reimplementing it a second time.
+
+    Every ebook item is kind="loose_file" (there's no folder-per-book layout
+    to sweep the way audio's grouped multi-file books have -- an epub+pdf
+    pair can live in different sibling "epub"/"pdf" bucket folders under the
+    old format-first convention). The second format, when present, rides
+    along as paired_format_path rather than a second top-level item.
+    """
+    try:
+        from app.library_index import build_ebook_index
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from app.library_index import build_ebook_index
+
+    items = []
+    for unit in build_ebook_index(root):
+        paired_path = next(
+            (p for p in unit.formats.values() if p != unit.path), None
+        )
+        items.append(BookItem(
+            "loose_file", unit.path, [unit.path], unit.path,
+            media_type="ebook", paired_format_path=paired_path,
+        ))
+    return items
+
+
 def parse_legacy_series_container(name: str) -> dict[str, str]:
     """Parse old collection folders.
 
@@ -2931,8 +2970,16 @@ def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
         except (OSError, json.JSONDecodeError):
             continue
 
-        if isinstance(payload.get("book"), dict):
-            book = payload["book"]
+        # write_ebook_sidecar() (the fixer) writes payload["sidecar"]["book"],
+        # not a top-level payload["book"] -- nothing in the codebase writes
+        # the latter, so check the real (nested) location an ebook's data
+        # actually lives at, falling back to the top-level shape in case
+        # something else ever does write it there.
+        book = payload.get("book")
+        if not isinstance(book, dict):
+            sidecar_section = payload.get("sidecar")
+            book = sidecar_section.get("book") if isinstance(sidecar_section, dict) else None
+        if isinstance(book, dict):
             title = book.get("title", "")
             series = book.get("series", "")
             author = book.get("author", "")
@@ -3549,6 +3596,7 @@ def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = Fal
         "narrator": sanitize_path_name(narrator, "") if narrator else "",
         "audio_count": len(item.audio_files),
         "kind": item.kind,
+        "media_type": item.media_type,
         "metadata_source": tag_meta.get("source", "unknown"),
         "review_reasons": review_reasons,
         "review_details": review_details,
@@ -3621,12 +3669,16 @@ def series_dir_label(metadata: dict[str, Any]) -> str:
     """Series folder name, suffixed with the dramatized imprint when present.
 
     Dramatized adaptations route to "Series [GraphicAudio]" / "[Dramatized]"
-    so they never merge into the straight-reading series folder.
+    so they never merge into the straight-reading series folder. An ebook
+    gets " - EBOOK" appended for the same reason -- so it never collides
+    with (or merges into) the audiobook edition's own series folder.
     """
     series = sanitize_path_name(metadata.get("series", ""), "Unknown Series")
     tag = metadata.get("edition_tag", "")
     if tag:
-        return sanitize_path_name(f"{series} [{tag}]", "Unknown Series")
+        series = sanitize_path_name(f"{series} [{tag}]", "Unknown Series")
+    if metadata.get("media_type") == "ebook":
+        series = sanitize_path_name(f"{series} - EBOOK", "Unknown Series")
     return series
 
 
@@ -3716,6 +3768,12 @@ def build_default_target_dir(destination_root: Path, metadata: dict[str, Any]) -
         # "The Hobbit [Dramatized]", not "[Dramatized]/The Hobbit").
         tagged = sanitize_path_name(f"{book_folder} [{metadata['edition_tag']}]", book_folder)
         return destination_root / author_dir / tagged
+    if metadata.get("media_type") == "ebook":
+        # No series: same reasoning as the edition-tag case above -- ride
+        # " - EBOOK" on the book folder itself rather than inventing a bare
+        # grouping level ("Title - EBOOK", not "EBOOK/Title").
+        tagged = sanitize_path_name(f"{book_folder} - EBOOK", book_folder)
+        return destination_root / author_dir / tagged
     return destination_root / author_dir / book_folder
 
 
@@ -3790,6 +3848,17 @@ def resolve_naming_tokens(metadata: dict[str, Any]) -> dict[str, str]:
     if is_asin_like_token(raw_title):
         raw_title = series
     title = raw_title
+
+    # An ebook edition never merges into (or collides with) the audiobook
+    # edition's own series/title folder -- same reasoning as the dramatized-
+    # adaptation edition tag, but appended directly onto whichever token
+    # actually ends up naming the grouping folder, since {series}/{title}
+    # can land in any template, not just the built-in one.
+    if metadata.get("media_type") == "ebook":
+        if series:
+            series = f"{series} - EBOOK"
+        else:
+            title = f"{title} - EBOOK"
 
     order = build_sequence_prefix(sequence_label, number) if series and number else ""
     number_display = display_book_number(number) if series and number else ""
@@ -5030,7 +5099,14 @@ def companion_files_for(audio_path: Path) -> list[Path]:
 
     for ext in COMPANION_SIDE_EXTENSIONS:
         companion = audio_path.with_suffix(ext)
-        if companion.exists() and companion.is_file():
+        # COMPANION_SIDE_EXTENSIONS includes .epub/.pdf for the case of an
+        # ebook riding alongside an *audiobook* of the same stem -- when
+        # audio_path's own extension is already one of these (a standalone
+        # ebook item), with_suffix(ext) trivially resolves back to itself
+        # for that one extension. Without this check, the file would be
+        # "moved" once as the primary move and again as its own bogus
+        # companion, failing the second time since it's already gone.
+        if companion != audio_path and companion.exists() and companion.is_file():
             companions.append(companion)
 
     return sorted(set(companions))
@@ -5438,7 +5514,7 @@ def main() -> None:
         print("Mode: INDEX ONLY")
         return
 
-    items = build_book_items(root, destination_root)
+    items = build_book_items(root, destination_root) + build_ebook_book_items(root)
     if args.m4b_only:
         items = [item for item in items if all(audio_file.suffix.lower() == ".m4b" for audio_file in item.audio_files)]
     if args.max_items > 0:
@@ -5638,6 +5714,13 @@ def main() -> None:
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
             continue
         companions = [] if args.no_companions else companion_files_for(item.source_path)
+        if item.paired_format_path:
+            # An ebook's second format (epub+pdf sharing one identity) --
+            # same stem as item.source_path, so execute_planned_move's
+            # existing side-extension companion handling relocates it
+            # correctly (Book 1 - Title.epub / Book 1 - Title.pdf) with no
+            # further changes needed there.
+            companions = companions + [item.paired_format_path]
         reserved_targets.add(target_path)
         reserved_target_dirs.add(target_dir)
         target_dir_owner.setdefault(target_dir, item.source_path)
