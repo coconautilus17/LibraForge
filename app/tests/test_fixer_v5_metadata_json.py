@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).parents[2]
@@ -505,6 +506,93 @@ class ReportItemCleanSkipFallbackTests(unittest.TestCase):
         self.assertEqual(item["local"]["title"], "Fresh Local")
         self.assertEqual(item["local"]["series"], "Fresh Series")
         self.assertEqual(item["match"]["title"], "Fresh Match")
+
+
+class SyncOrWriteAbsMetadataTests(unittest.TestCase):
+    """sync_or_write_abs_metadata: the wiring between the fixer script's write
+    call sites and app.abs_client.sync_book_metadata. No ABS API key or a
+    lookup miss must produce byte-identical behavior to the old direct
+    write_audiobookshelf_metadata_json call (regression guard for the
+    metadata.json -> direct-API migration); a lookup hit must never touch
+    metadata.json at all.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.book = self.root / "book.m4b"
+        self.book.write_bytes(b"")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _metadata(self):
+        return {
+            "title": "The Book", "author": "Jane Doe", "narrator": "Reader",
+            "series": "The Series", "sequence": "2", "year": "2021",
+            "asin": "B0ABCDEF12", "genre": "", "summary": "", "isbn": "", "language": "",
+        }
+
+    def test_no_api_key_writes_metadata_json_exactly_as_before(self):
+        result = FIXER.sync_or_write_abs_metadata(
+            self.book, self._metadata(), {}, True, None, "http://abs", "",
+        )
+        target = self.root / "metadata.json"
+        self.assertTrue(target.exists())
+        self.assertEqual(result, str(target))
+
+    def test_abs_index_miss_writes_metadata_json(self):
+        abs_index = {"by_asin": {}, "by_path": {}}
+        result = FIXER.sync_or_write_abs_metadata(
+            self.book, self._metadata(), {}, True, abs_index, "http://abs", "key",
+        )
+        target = self.root / "metadata.json"
+        self.assertTrue(target.exists())
+        self.assertEqual(result, str(target))
+
+    def _hit_index(self):
+        return {
+            "by_asin": {
+                "B0ABCDEF12": {
+                    "library_item_id": "li1", "path": str(self.root), "rel_path": "book",
+                    "updated_at": 100, "media": {"metadata": {}},
+                }
+            },
+            "by_path": {},
+        }
+
+    def test_abs_index_hit_patches_and_never_writes_metadata_json(self):
+        with patch("app.abs_client.abs_get_json", return_value={"media": {"metadata": {"series": []}}}), \
+             patch("app.abs_client.abs_patch_json") as patch_mock:
+            result = FIXER.sync_or_write_abs_metadata(
+                self.book, self._metadata(), {}, True, self._hit_index(), "http://abs", "key",
+            )
+        self.assertFalse((self.root / "metadata.json").exists())
+        self.assertEqual(result, "ABS item li1 (direct API)")
+        patch_mock.assert_called_once()
+
+    def test_abs_index_hit_with_series_does_live_get_and_merges(self):
+        with patch(
+            "app.abs_client.abs_get_json",
+            return_value={"media": {"metadata": {"series": [{"name": "Other Series", "sequence": "9"}]}}},
+        ) as get_mock, patch("app.abs_client.abs_patch_json") as patch_mock:
+            FIXER.sync_or_write_abs_metadata(
+                self.book, self._metadata(), {}, True, self._hit_index(), "http://abs", "key",
+            )
+        get_mock.assert_called_once()
+        sent_series = patch_mock.call_args[0][1]["metadata"]["series"]
+        self.assertIn({"name": "The Series", "sequence": "2"}, sent_series)
+        self.assertIn({"name": "Other Series", "sequence": "9"}, sent_series)
+
+    def test_abs_index_hit_stamps_abs_sync_on_sidecar(self):
+        with patch("app.abs_client.abs_get_json", return_value={"media": {"metadata": {"series": []}}}), \
+             patch("app.abs_client.abs_patch_json"):
+            FIXER.sync_or_write_abs_metadata(
+                self.book, self._metadata(), {}, True, self._hit_index(), "http://abs", "key",
+            )
+        lf = json.loads((self.root / "libraforge.json").read_text())
+        self.assertEqual(lf["abs_sync"]["library_item_id"], "li1")
+        self.assertEqual(lf["abs_sync"]["abs_updated_at_at_patch_time"], 100)
 
 
 if __name__ == "__main__":

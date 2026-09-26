@@ -440,5 +440,72 @@ class WritePolicyTests(unittest.TestCase):
             main.apply_manual_review_result(req)
 
 
+class AbsDirectSyncTests(unittest.TestCase):
+    """apply_manual_review_result -> _write_book_metadata: when ABS already
+    knows the book, metadata goes out via direct API PATCH instead of
+    metadata.json, and the sidecar gets stamped with when/what was synced --
+    regression guard for the metadata.json -> direct-API migration. Reuses
+    WritePolicyTests's context/request fixtures (not a subclass of it, so its
+    other tests aren't re-run here with an unrelated ABS index patched in).
+    """
+
+    _context = WritePolicyTests._context
+    _selected_result = WritePolicyTests._selected_result
+    _request = WritePolicyTests._request
+
+    def _fixer(self, written: dict, mutagen_candidate: bool = True):
+        fixer = WritePolicyTests._fixer(self, written, mutagen_candidate)
+        fixer.update_abs_sync_record = lambda source, clues, alone, library_item_id, abs_updated_at: (
+            written.update(abs_sync_library_item_id=library_item_id, abs_sync_updated_at=abs_updated_at)
+        )
+        return fixer
+
+    def _hit_index(self):
+        return {
+            "by_asin": {
+                "B0WRONGBOOK1": {
+                    "library_item_id": "li1", "path": "/library/Dragon Conjurer 8",
+                    "rel_path": "Dragon Conjurer 8", "updated_at": 100, "media": {"metadata": {}},
+                }
+            },
+            "by_path": {},
+        }
+
+    def test_lookup_hit_patches_directly_and_never_writes_metadata_json(self):
+        written = {}
+        req = self._request("fill", {})
+        with (
+            patch.object(main, "inspect_manual_review_target", return_value=self._context()),
+            patch.object(main, "load_fixer_module", return_value=self._fixer(written)),
+            patch.object(main, "_abs_item_index_cached", return_value=self._hit_index()),
+            patch.object(main, "_get_abs_api_key", return_value="key"),
+            patch("app.abs_client.abs_get_json", return_value={"media": {"metadata": {"series": []}}}),
+            patch("app.abs_client.abs_patch_json") as patch_mock,
+        ):
+            result = main.apply_manual_review_result(req)
+
+        self.assertNotIn("meta_json_skip_blank", written)
+        patch_mock.assert_called_once()
+        self.assertEqual(patch_mock.call_args[0][0], "/api/items/li1/media")
+        self.assertEqual(result["metadata_json_path"], "abs://items/li1")
+        self.assertEqual(written["abs_sync_library_item_id"], "li1")
+        self.assertEqual(written["abs_sync_updated_at"], 100)
+
+    def test_lookup_miss_still_falls_back_to_metadata_json(self):
+        written = {}
+        req = self._request("fill", {})
+        with (
+            patch.object(main, "inspect_manual_review_target", return_value=self._context()),
+            patch.object(main, "load_fixer_module", return_value=self._fixer(written)),
+            patch.object(main, "_abs_item_index_cached", return_value={"by_asin": {}, "by_path": {}}),
+            patch.object(main, "_get_abs_api_key", return_value="key"),
+        ):
+            result = main.apply_manual_review_result(req)
+
+        self.assertIn("meta_json_skip_blank", written)
+        self.assertEqual(result["metadata_json_path"], "/library/Dragon Conjurer 8/metadata.json")
+        self.assertNotIn("abs_sync_library_item_id", written)
+
+
 if __name__ == "__main__":
     unittest.main()

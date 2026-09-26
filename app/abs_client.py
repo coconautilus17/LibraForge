@@ -323,19 +323,23 @@ def sync_book_metadata(
     injection is actually necessary; everything else in this module takes
     explicit params.
 
-    Returns {"branch": "file"|"patch", ...} for the caller/tests to assert on.
+    Returns {"branch": "file", "path": <write_file_fallback()'s return value>,
+    "reason": ...} for branches (a)/(b) -- callers that log the written path
+    (as write_audiobookshelf_metadata_json's callers already do) read it from
+    here instead of capturing the fallback call themselves. Returns
+    {"branch": "patch", "fields": {...}} for branch (c).
     """
     assert not (fill_missing and skip_blank_fields)
 
     if not abs_api_key:
-        write_file_fallback()
-        return {"branch": "file", "reason": "no_api_key"}
+        path = write_file_fallback()
+        return {"branch": "file", "reason": "no_api_key", "path": path}
 
     asin = str(metadata.get("asin") or "")
     record = lookup_item(asin, "")
     if record is None:
-        write_file_fallback()
-        return {"branch": "file", "reason": "unknown_to_abs"}
+        path = write_file_fallback()
+        return {"branch": "file", "reason": "unknown_to_abs", "path": path}
 
     new_payload = build_media_patch_payload(metadata)
     fields = compute_selective_patch_fields(
@@ -354,11 +358,11 @@ def sync_book_metadata(
     if not fields:
         if record_sync is not None:
             record_sync({"library_item_id": record["library_item_id"], "abs_updated_at": record["updated_at"]})
-        return {"branch": "patch", "fields": {}}
+        return {"branch": "patch", "fields": {}, "library_item_id": record["library_item_id"]}
 
     abs_patch_json(f"/api/items/{record['library_item_id']}/media", {"metadata": fields}, abs_url, abs_api_key)
 
     if record_sync is not None:
         record_sync({"library_item_id": record["library_item_id"], "abs_updated_at": record["updated_at"]})
 
-    return {"branch": "patch", "fields": fields}
+    return {"branch": "patch", "fields": fields, "library_item_id": record["library_item_id"]}

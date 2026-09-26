@@ -60,6 +60,7 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
+from app.abs_client import build_item_index, lookup_item_in_index, sync_book_metadata
 from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
@@ -3269,11 +3270,43 @@ def _write_book_metadata(
             field_policy=write_policy,
         )
 
-    # Audiobookshelf metadata.json, placed by the same alone/group rules.
-    metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
-        source_path, metadata, clues, alone,
+    # Push metadata to Audiobookshelf directly (PATCH) when it already knows
+    # this book, instead of writing/relying on a metadata.json ABS could
+    # later re-read stale on some unrelated rescan and silently revert a
+    # human's edit made in the ABS UI. Falls back to the original
+    # metadata.json write, placed by the same alone/group rules as before,
+    # when ABS isn't configured or doesn't know this book yet.
+    abs_index = _abs_item_index_cached()
+
+    def _abs_lookup(asin: str, _path: str) -> dict[str, Any] | None:
+        if abs_index is None:
+            return None
+        return lookup_item_in_index(abs_index, asin=asin, path=str(source_path.parent))
+
+    def _write_metadata_json_fallback() -> Path:
+        return fixer_module.write_audiobookshelf_metadata_json(
+            source_path, metadata, clues, alone,
+            skip_blank_fields=(write_policy == "fill"),
+        )
+
+    def _record_abs_sync(sync_info: dict[str, Any]) -> None:
+        fixer_module.update_abs_sync_record(
+            source_path, clues, alone, sync_info["library_item_id"], sync_info["abs_updated_at"]
+        )
+
+    sync_result = sync_book_metadata(
+        metadata=metadata,
         skip_blank_fields=(write_policy == "fill"),
+        abs_url=_get_abs_url(),
+        abs_api_key=_get_abs_api_key(),
+        lookup_item=_abs_lookup,
+        write_file_fallback=_write_metadata_json_fallback,
+        record_sync=_record_abs_sync,
     )
+    if sync_result["branch"] == "file":
+        metadata_json_path = sync_result["path"]
+    else:
+        metadata_json_path = f"abs://items/{sync_result['library_item_id']}"
 
     # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
     # around WRITE_ACTION_JSON emission): a field counts as "written" whenever
@@ -7259,6 +7292,39 @@ def _owned_asins_cached(root: Path) -> set[str]:
     data = _scan_owned_asins(root)
     _store_owned_asins(root, data, fingerprint)
     return data
+
+
+# Cached ASIN/path -> ABS library item lookup for direct-API metadata sync
+# (app.abs_client.sync_book_metadata). Unlike the owned-ASIN cache above, this
+# is global rather than per-root -- fetch_all_abs_book_items() always walks
+# every ABS library regardless of any local root path.
+_ABS_ITEM_INDEX_CACHE: tuple[float, dict[str, Any]] | None = None
+_ABS_ITEM_INDEX_CACHE_TTL = 1800  # 30 minutes
+_ABS_ITEM_INDEX_LOCK = threading.Lock()
+
+
+def _abs_item_index_cached() -> dict[str, Any] | None:
+    """The ASIN/path -> ABS library item lookup, memory-cached with a TTL.
+
+    Returns None when ABS isn't configured or the fetch fails -- callers
+    treat that exactly like a lookup miss (fall back to metadata.json).
+    """
+    global _ABS_ITEM_INDEX_CACHE
+    if not _get_abs_api_key():
+        return None
+    with _ABS_ITEM_INDEX_LOCK:
+        if _ABS_ITEM_INDEX_CACHE is not None:
+            ts, index = _ABS_ITEM_INDEX_CACHE
+            if time.monotonic() - ts < _ABS_ITEM_INDEX_CACHE_TTL:
+                return index
+    try:
+        items = fetch_all_abs_book_items(_abs_request)
+        index = build_item_index(items)
+    except Exception:
+        return None
+    with _ABS_ITEM_INDEX_LOCK:
+        _ABS_ITEM_INDEX_CACHE = (time.monotonic(), index)
+    return index
 
 
 def _library_item_to_dict(item: dict[str, Any]) -> dict[str, Any]:
