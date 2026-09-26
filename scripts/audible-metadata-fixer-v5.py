@@ -5377,11 +5377,11 @@ def main():
         action="store_true",
         dest="metadata_json_only",
         help=(
-            "Write ONLY the Audiobookshelf metadata.json and do not modify the audio "
-            "files' embedded tags. An Audiobookshelf-compatible metadata.json is always "
-            "written for matched books regardless of this flag; this flag just suppresses "
-            "the in-file tag rewrite. (Loose/multi-file books still get their M4B-tool "
-            "merge sidecar.)"
+            "Push metadata to Audiobookshelf (directly via its API when it already knows "
+            "the book, otherwise to a metadata.json bootstrap file) and do not modify the "
+            "audio files' embedded tags. This always happens for matched books regardless "
+            "of this flag; this flag just suppresses the in-file tag rewrite. (Loose/"
+            "multi-file books still get their M4B-tool merge sidecar.)"
         ),
     )
 

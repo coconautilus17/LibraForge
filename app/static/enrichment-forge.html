@@ -94,7 +94,7 @@
             <label for="explicitCheckbox" class="explicit-toggle-label">Explicit</label>
           </div>
           <div id="explicitEvidence" class="context-note"></div>
-          <p class="explicit-footnote">Leave unchecked to skip. Checking writes <code>explicit: true</code> to metadata.json for every included book below.</p>
+          <p class="explicit-footnote">Leave unchecked to skip. Checking writes <code>explicit: true</code> for every included book below — directly to Audiobookshelf via its API, or to metadata.json if it isn't configured.</p>
         </div>
       </div>
 
@@ -104,7 +104,7 @@
       <div id="bookList"></div>
 
       <div class="dryrun-notice">
-        <strong>Heads up:</strong> Apply only writes metadata.json, it never edits the audio files' own tags. If this library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you apply here.
+        <strong>Heads up:</strong> Apply pushes directly to Audiobookshelf via its API and never edits the audio files' own tags. Only if Audiobookshelf isn't configured does this write to metadata.json instead — in that case, if the library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you applied here.
       </div>
 
       <div class="actions">
