@@ -1235,6 +1235,8 @@ class RunRequest(BaseModel):
     cover_if_missing: bool = False
     replace_cover: bool = False
     metadata_json_only: bool = False
+    trust_abs_metadata: bool = False
+    weight_abs_metadata: bool = False
 
     min_score: float | None = 0.70
     limit: int | None = 50
@@ -1489,6 +1491,7 @@ class OrganizerRunRequest(BaseModel):
     acknowledge_no_sidecars: bool = False
     naming_template: str = ""
     use_default_scheme: bool = True
+    trust_abs_metadata: bool = False
 
 
 class OrganizerNamingTemplateValidateRequest(BaseModel):
@@ -2159,8 +2162,20 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         if req.provider == "abs":
             cmd += ["--provider", "abs"]
             cmd += ["--abs-provider", req.abs_provider]
+        # --abs-url/--abs-api-key are for direct-API metadata sync
+        # (sync_book_metadata) and the --trust-abs-metadata/--weight-abs-metadata
+        # opt-ins, an entirely separate concern from req.provider (which search
+        # provider to use) -- pass them whenever ABS is configured at all, not
+        # only when the user happens to have also selected it as the search
+        # provider. This was a real bug: before this fix, direct-API sync could
+        # never activate unless provider=="abs", even with ABS fully configured.
+        if _get_abs_api_key():
             cmd += ["--abs-url", _get_abs_url()]
             cmd += ["--abs-api-key", _get_abs_api_key()]
+        if req.trust_abs_metadata:
+            cmd.append("--trust-abs-metadata")
+        elif req.weight_abs_metadata:
+            cmd.append("--weight-abs-metadata")
         # Always pass abs-agg URL so the fixer can auto-detect and search
         # GraphicAudio / SoundBooth Theater regardless of the selected provider.
         cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
@@ -4114,6 +4129,10 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         cmd.append("--use-default-scheme")
     elif req.naming_template.strip():
         cmd += ["--naming-template", req.naming_template]
+    if req.trust_abs_metadata and _get_abs_api_key():
+        cmd += ["--abs-url", _get_abs_url()]
+        cmd += ["--abs-api-key", _get_abs_api_key()]
+        cmd.append("--trust-abs-metadata")
 
     return cmd
 

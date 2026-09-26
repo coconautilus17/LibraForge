@@ -104,6 +104,7 @@ function collectRequest() {
     apply: $('apply').checked,
     m4b_only: $('m4bOnly').checked,
     allow_unknown_author: $("allowUnknownAuthor").checked,
+    trust_abs_metadata: Boolean($('trustAbsMetadata')?.checked),
     include_existing_book_folders: $('includeExisting').checked,
     no_companions: $('noCompanions').checked,
     rebuild_structure_cache: $("rebuildStructureCache").checked,

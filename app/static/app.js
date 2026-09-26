@@ -116,6 +116,8 @@ function collectRequest() {
     cover_if_missing: $('coverIfMissing').checked,
     replace_cover: $('replaceCover').checked,
     metadata_json_only: $('metadataJsonOnly').checked,
+    trust_abs_metadata: Boolean($('trustAbsMetadata')?.checked),
+    weight_abs_metadata: Boolean($('weightAbsMetadata')?.checked),
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
     write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
@@ -1371,6 +1373,15 @@ function syncForceOriginal() {
 }
 $('force').addEventListener('change', syncForceOriginal);
 $('forceOriginal').addEventListener('change', syncForceOriginal);
+
+function syncAbsMetadataInputMode(justChecked) {
+  // Mutually exclusive: checking one clears the other. justChecked is which
+  // checkbox the user just interacted with, so the *other* one gets cleared.
+  const other = justChecked === 'trustAbsMetadata' ? 'weightAbsMetadata' : 'trustAbsMetadata';
+  if ($(justChecked).checked) $(other).checked = false;
+}
+$('trustAbsMetadata')?.addEventListener('change', () => syncAbsMetadataInputMode('trustAbsMetadata'));
+$('weightAbsMetadata')?.addEventListener('change', () => syncAbsMetadataInputMode('weightAbsMetadata'));
 $('advancedRunToggle')?.addEventListener('click', () => {
   const open = !isAdvancedRunSettingsOpen();
   $('advancedRunToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
