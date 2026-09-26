@@ -60,7 +60,7 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
-from app.fixer.scoring import clean_provider_genres
+from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
@@ -6446,12 +6446,15 @@ def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
             candidate_author = authors[0] if authors else ""
             score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
             if score >= EBOOK_MATCH_SCORE_FLOOR:
+                ebook_series, ebook_sequence = split_series_trailing_number(
+                    str(candidate.get("series") or ""), str(candidate.get("sequence") or "")
+                )
                 match = {
                     "title": candidate.get("title", ""),
                     "subtitle": candidate.get("subtitle", ""),
                     "author": candidate_author,
-                    "series": candidate.get("series", ""),
-                    "sequence": candidate.get("sequence", ""),
+                    "series": ebook_series,
+                    "sequence": ebook_sequence,
                     "year": candidate.get("year", ""),
                     "genre": "",
                     "isbn": candidate.get("isbn", ""),
@@ -8386,12 +8389,15 @@ def load_manual_review_ebook_target(req: ManualReviewEbookLoadRequest) -> dict[s
         candidate_author = authors[0] if authors else ""
         score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
         if score >= EBOOK_MATCH_SCORE_FLOOR:
+            ebook_series, ebook_sequence = split_series_trailing_number(
+                str(candidate.get("series") or ""), str(candidate.get("sequence") or "")
+            )
             match = {
                 "title": candidate.get("title", ""),
                 "subtitle": candidate.get("subtitle", ""),
                 "author": candidate_author,
-                "series": candidate.get("series", ""),
-                "sequence": candidate.get("sequence", ""),
+                "series": ebook_series,
+                "sequence": ebook_sequence,
                 "year": candidate.get("year", ""),
                 "genre": "",
                 "isbn": candidate.get("isbn", ""),

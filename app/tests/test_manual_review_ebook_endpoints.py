@@ -43,6 +43,21 @@ class EbookLoadEndpointTests(unittest.TestCase):
         self.assertGreater(data["score"], 0.35)
         self.assertEqual(data["formats"], ["epub"])
 
+    def test_load_cleans_a_redundant_book_number_suffix_from_the_series(self):
+        # Same regression guard as ScanEbookUnitsForReportTests: this
+        # endpoint builds its own "match" dict independently and used to
+        # skip cleanup entirely.
+        epub_path = self._touch("Linux/EPUB/kubernetes.epub")
+        candidate = {
+            "title": "Kubernetes Up and Running", "subtitle": "", "authors": ["Kelsey Hightower"],
+            "series": "K8s Guides, Book 1", "sequence": "", "year": "2022", "cover_url": "", "summary": "", "isbn": "",
+        }
+        with patch.object(main, "search_ebook_candidates", return_value=candidate):
+            res = client.post("/api/manual-review/ebook/load", json={"path": str(epub_path)})
+        data = res.json()
+        self.assertEqual(data["match"]["series"], "K8s Guides")
+        self.assertEqual(data["match"]["sequence"], "1")
+
     def test_load_succeeds_with_no_candidate_found(self):
         epub_path = self._touch("Linux/EPUB/totally-unrecoverable.epub")
         with patch.object(main, "search_ebook_candidates", return_value=None):

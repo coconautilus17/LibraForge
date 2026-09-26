@@ -70,6 +70,37 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
             items = scan_ebook_units_for_report(self.root)
         self.assertEqual(items[0]["local"]["title"], "Kubernetes Up and Running")
 
+    def test_a_redundant_book_number_suffix_is_cleaned_from_the_candidates_series(self):
+        # Regression guard: search_ebook_candidates (Open Library/Goodreads)
+        # used to flow straight into "series" with zero cleaning -- unlike
+        # the audiobook side, where every provider (Audible, abs-agg,
+        # abs-tract) already shares get_primary_series's cleanup. Goodreads
+        # especially is known for exactly this kind of messy series text.
+        self._touch("Linux/EPUB/kubernetes.epub")
+        candidate = {
+            "title": "Kubernetes Up and Running", "subtitle": "", "authors": ["Kelsey Hightower"],
+            "series": "K8s Guides, Book 1", "sequence": "", "year": "2022", "cover_url": "https://x/y.jpg",
+            "summary": "...", "isbn": "",
+        }
+        with patch("app.main.search_ebook_candidates", return_value=candidate):
+            items = scan_ebook_units_for_report(self.root)
+        match = items[0]["match"]
+        self.assertEqual(match["series"], "K8s Guides")
+        self.assertEqual(match["sequence"], "1")
+
+    def test_a_clean_series_is_left_alone(self):
+        self._touch("Linux/EPUB/kubernetes.epub")
+        candidate = {
+            "title": "Kubernetes Up and Running", "subtitle": "", "authors": ["Kelsey Hightower"],
+            "series": "K8s Guides", "sequence": "1", "year": "2022", "cover_url": "https://x/y.jpg",
+            "summary": "...", "isbn": "",
+        }
+        with patch("app.main.search_ebook_candidates", return_value=candidate):
+            items = scan_ebook_units_for_report(self.root)
+        match = items[0]["match"]
+        self.assertEqual(match["series"], "K8s Guides")
+        self.assertEqual(match["sequence"], "1")
+
     def test_never_writes_to_the_sidecar(self):
         epub_path = self._touch("Linux/EPUB/kubernetes.epub")
         candidate = {
