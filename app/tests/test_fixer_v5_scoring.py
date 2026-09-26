@@ -693,5 +693,40 @@ class NumberCandidateHyphenTests(unittest.TestCase):
         self.assertEqual(FIXER.get_audible_number_candidates({"title": "Pocket Dungeon 2 - The Sequel", "subtitle": ""}), ["2"])
 
 
+class SplitSeriesTrailingNumberTests(unittest.TestCase):
+    def test_book_word_suffix_is_stripped_and_fills_an_empty_sequence(self):
+        self.assertEqual(FIXER.split_series_trailing_number("Blight, Book 1", ""), ("Blight", "1"))
+
+    def test_matches_regardless_of_case_or_a_hash(self):
+        for raw in ("Blight, Book 1", "Blight, BOOK #1", "Blight, book1", "Blight, Vol. 1", "Blight, VOLUME 1"):
+            series, _ = FIXER.split_series_trailing_number(raw, "")
+            self.assertEqual(series, "Blight", raw)
+
+    def test_an_existing_sequence_is_never_overwritten(self):
+        # The wording is noise either way, so the series text is still cleaned,
+        # but a sequence Audible already gave us separately wins over the
+        # number found in the (possibly wrong) trailing text.
+        self.assertEqual(FIXER.split_series_trailing_number("Blight, Book 1", "2"), ("Blight", "2"))
+
+    def test_no_trailing_number_is_left_alone(self):
+        self.assertEqual(FIXER.split_series_trailing_number("Blight", "1"), ("Blight", "1"))
+        self.assertEqual(FIXER.split_series_trailing_number("Azarinth Healer 4", ""), ("Azarinth Healer 4", ""))
+
+    def test_wired_into_get_primary_series(self):
+        product = {"series": [{"title": "Blight, Book 1"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
+
+    def test_get_primary_series_keeps_its_own_sequence_field_over_the_suffix(self):
+        product = {"series": [{"title": "Blight, Book 1", "sequence": "1"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
+
+    def test_get_primary_series_prefers_its_own_conflicting_sequence_field(self):
+        # An Audible data inconsistency (the title's own number disagrees with
+        # the separate sequence field) still gets the text cleaned; the
+        # already-authoritative sequence field is trusted over the suffix.
+        product = {"series": [{"title": "Blight, Book 1", "sequence": "2"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("Blight", "2"))
+
+
 if __name__ == "__main__":
     unittest.main()
