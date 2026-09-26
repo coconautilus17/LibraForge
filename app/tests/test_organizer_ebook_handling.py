@@ -57,6 +57,18 @@ class BuildEbookBookItemsTests(unittest.TestCase):
         (self.root / "book.m4b").write_bytes(b"fake audio")
         self.assertEqual(ORGANIZER.build_ebook_book_items(self.root), [])
 
+    def test_still_discovers_an_epub_with_a_same_stem_audiobook_present(self):
+        # The whole feature is pointless if a same-stem audiobook makes the
+        # ebook invisible -- confirms discovery isn't blocked by one; see
+        # CompanionFilesForNeverClaimsAnEbookTests for the other half (the
+        # audiobook must not claim it as a companion either).
+        (self.root / "Some Novel.m4b").write_bytes(b"fake audio")
+        epub = self.root / "Some Novel.epub"
+        epub.write_bytes(b"fake epub")
+        items = ORGANIZER.build_ebook_book_items(self.root)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source_path, epub)
+
 
 class MetadataFromSidecarEbookTests(unittest.TestCase):
     """Regression test: write_ebook_sidecar() writes payload["sidecar"]["book"],
@@ -159,6 +171,58 @@ class CompanionFilesForEbookSelfReferenceTests(unittest.TestCase):
             sidecar = root / "Some Novel.epub.libraforge.json"
             sidecar.write_text("{}", encoding="utf-8")
             self.assertEqual(ORGANIZER.companion_files_for(epub), [sidecar])
+
+
+class CompanionFilesForNeverClaimsAnEbookTests(unittest.TestCase):
+    """Regression test for a real bug: COMPANION_SIDE_EXTENSIONS used to
+    include .epub/.pdf so an ebook could ride alongside an audiobook of the
+    same stem -- but build_ebook_book_items() now *always* discovers and
+    organizes every standalone ebook into its own "- EBOOK" folder,
+    unconditionally, per an explicit design decision (an ebook is never
+    left bundled with an audiobook, even when one exists). With .epub/.pdf
+    still in COMPANION_SIDE_EXTENSIONS, an audiobook's own move claimed a
+    same-stem epub as ITS companion first -- dropping it into the
+    audiobook's folder with no "- EBOOK" suffix at all -- and the ebook's
+    own independent move then failed since the file was already gone."""
+
+    def test_a_same_stem_epub_is_not_claimed_as_the_audiobooks_companion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "Some Novel.m4b"
+            audio.write_bytes(b"fake audio")
+            epub = root / "Some Novel.epub"
+            epub.write_bytes(b"fake epub")
+            self.assertEqual(ORGANIZER.companion_files_for(audio), [])
+
+    def test_a_same_stem_pdf_is_not_claimed_as_the_audiobooks_companion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "Some Novel.m4b"
+            audio.write_bytes(b"fake audio")
+            pdf = root / "Some Novel.pdf"
+            pdf.write_bytes(b"fake pdf")
+            self.assertEqual(ORGANIZER.companion_files_for(audio), [])
+
+    def test_mobi_and_azw3_still_ride_along_as_companions(self):
+        # Unaffected: is_ebook_file()/build_ebook_book_items() only ever
+        # recognize .epub/.pdf, so .mobi/.azw3 have no independent
+        # organizing path of their own to collide with.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "Some Novel.m4b"
+            audio.write_bytes(b"fake audio")
+            mobi = root / "Some Novel.mobi"
+            mobi.write_bytes(b"fake mobi")
+            self.assertEqual(ORGANIZER.companion_files_for(audio), [mobi])
+
+    def test_a_cover_image_still_rides_along_as_the_audiobooks_companion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "Some Novel.m4b"
+            audio.write_bytes(b"fake audio")
+            cover = root / "Some Novel.jpg"
+            cover.write_bytes(b"fake jpg")
+            self.assertEqual(ORGANIZER.companion_files_for(audio), [cover])
 
 
 class ResolveNamingTokensEbookTests(unittest.TestCase):

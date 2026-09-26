@@ -123,8 +123,20 @@ COMPANION_SUFFIXES = (
     ".libraforge-ai-review.md",
 )
 
-# Optional ebook/sidecar companions when they clearly share the audio stem.
-COMPANION_SIDE_EXTENSIONS = {".pdf", ".epub", ".mobi", ".azw3", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".txt"}
+# Optional sidecar companions when they clearly share the audio stem.
+#
+# Deliberately excludes .epub/.pdf: those are the two formats
+# build_ebook_book_items() independently discovers and always organizes
+# into their own "- EBOOK" folder now (per an explicit design decision --
+# an ebook is never left bundled with an audiobook of the same stem, even
+# when one exists). Keeping them here caused a real bug: a same-stem
+# audiobook's own move claimed the epub as ITS companion first, dropping it
+# into the audiobook's folder with no "- EBOOK" suffix at all, while the
+# ebook's own independent move then failed since the file was already gone.
+# .mobi/.azw3 stay -- app.library_index.is_ebook_file() (and so
+# build_ebook_book_items) only ever recognizes .epub/.pdf, so those two
+# formats have no independent organizing path of their own to collide with.
+COMPANION_SIDE_EXTENSIONS = {".mobi", ".azw3", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".txt"}
 
 NON_AUTHOR_ROLE_RE = re.compile(
     r"\s+-\s+(?:translator|translations?|introduction|introductions?|editor|foreword|afterword|adapter|adapted by)\s*$",
