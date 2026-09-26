@@ -728,5 +728,46 @@ class SplitSeriesTrailingNumberTests(unittest.TestCase):
         self.assertEqual(FIXER.get_primary_series(product), ("Blight", "2"))
 
 
+class AbsAsinWeightedCandidateTests(unittest.TestCase):
+    """--weight-abs-metadata's scoring bonus: clues["abs_asin"] only ever gets
+    set (by search_item, gated on the opt-in flag) when it differs from the
+    file's own existing_asin -- score_product_for_metadata just needs to
+    apply the bonus correctly when it's present.
+
+    Uses weak-signal clues/candidates (no series, no author/title overlap)
+    so the accumulated score stays well clear of the function's several
+    floor clamps (e.g. "series_match and author_good" forces >= 0.72) --
+    those floors would otherwise absorb a same-sized bonus and make it look
+    like nothing happened, as an earlier, stronger-signal version of this
+    test discovered the hard way.
+    """
+
+    def setUp(self):
+        self.clues = {"title": "Some Standalone Book", "raw_title": "Some Standalone Book", "series": "", "author": "", "narrator": "", "book_number": "", "book_number_source": ""}
+        self.candidate = product(asin="B0ABSMATCH", title="Totally Different Title Text", authors=("Someone",), narrators=("Someone Else",), minutes=700)
+
+    def test_matching_abs_asin_adds_a_bonus(self):
+        without_bonus = FIXER.score_product_for_metadata(self.clues, self.candidate, 700.0)
+        with_abs_asin = dict(self.clues, abs_asin="B0ABSMATCH")
+        with_bonus = FIXER.score_product_for_metadata(with_abs_asin, self.candidate, 700.0)
+        self.assertAlmostEqual(with_bonus - without_bonus, 0.20, places=6)
+
+    def test_non_matching_abs_asin_adds_no_bonus(self):
+        without_bonus = FIXER.score_product_for_metadata(self.clues, self.candidate, 700.0)
+        with_different_abs_asin = dict(self.clues, abs_asin="B0SOMEOTHERASIN")
+        self.assertAlmostEqual(
+            without_bonus,
+            FIXER.score_product_for_metadata(with_different_abs_asin, self.candidate, 700.0),
+            places=6,
+        )
+
+    def test_bonus_does_not_override_a_hard_reject(self):
+        # A wrong author is still a hard reject regardless of ABS agreement --
+        # this is credibility evidence, never a source of truth.
+        clues = dict(self.clues, author="Author X", abs_asin="B0ABSMATCH")
+        wrong_author = product(asin="B0ABSMATCH", title="Some Standalone Book", authors=("Someone Else",), minutes=700)
+        self.assertEqual(FIXER.score_product_for_metadata(clues, wrong_author, 700.0), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

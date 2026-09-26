@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
 from app.fixer.parsing import is_single_numeric_sequence
-from app.fixer.scoring import split_genre_string
+from app.fixer.scoring import split_genre_string, split_series_trailing_number
 
 _COMMA_SPLIT_RE = re.compile(r"\s*,\s*")
 
@@ -187,18 +187,28 @@ def normalize_abs_media_to_internal(media: dict[str, Any]) -> dict[str, Any]:
     """Inverse of build_media_patch_payload: ABS's flattened media.metadata
     (authorName/narratorName/seriesName strings, as returned by the bulk
     /api/libraries/{id}/items endpoint) back to LibraForge's internal field
-    dict shape. Series parsing reuses app/enrichment.py's existing
-    strip_series_sequence_suffix/extract_series_sequence, since ABS's
-    "Name #N" convention is exactly what those already handle."""
+    dict shape.
+
+    Series parsing is two-layered: first strip ABS's own "Name #N" suffix
+    convention (app/enrichment.py's strip_series_sequence_suffix/
+    extract_series_sequence), then also run split_series_trailing_number
+    (the same Pattern-A "<Series>, Book N" wording cleanup every audiobook
+    provider already shares via get_primary_series) -- a human editing the
+    series field by hand directly in Audiobookshelf is not guaranteed to use
+    ABS's own "#N" shorthand, so both need to be checked.
+    """
     metadata = media.get("metadata") or {}
     series_name_raw = str(metadata.get("seriesName") or "")
+    series = strip_series_sequence_suffix(series_name_raw)
+    sequence = extract_series_sequence(series_name_raw) or ""
+    series, sequence = split_series_trailing_number(series, sequence)
     return {
         "title": metadata.get("title") or "",
         "subtitle": metadata.get("subtitle") or "",
         "author": ", ".join(_split_comma_names(metadata.get("authorName", "") or "")),
         "narrator": ", ".join(_split_comma_names(metadata.get("narratorName", "") or "")),
-        "series": strip_series_sequence_suffix(series_name_raw),
-        "sequence": extract_series_sequence(series_name_raw) or "",
+        "series": series,
+        "sequence": sequence,
         "year": str(metadata.get("publishedYear") or ""),
         "publisher": metadata.get("publisher") or "",
         "summary": metadata.get("description") or "",

@@ -107,6 +107,16 @@ class NormalizeAbsMediaToInternalTests(unittest.TestCase):
         self.assertEqual(internal["series"], "")
         self.assertEqual(internal["sequence"], "")
 
+    def test_book_n_wording_is_cleaned_even_without_abs_hash_suffix(self):
+        """A human typing the series field directly into Audiobookshelf isn't
+        guaranteed to use ABS's own "#N" shorthand -- "Blight, Book 4" needs
+        the same Pattern-A cleanup every audiobook provider already shares."""
+        internal = abs_client.normalize_abs_media_to_internal(
+            {"metadata": {"title": "T", "seriesName": "Blight, Book 4"}}
+        )
+        self.assertEqual(internal["series"], "Blight")
+        self.assertEqual(internal["sequence"], "4")
+
     def test_splits_flattened_author_and_narrator_names(self):
         internal = abs_client.normalize_abs_media_to_internal(
             {"metadata": {"authorName": "A, B", "narratorName": "N"}}

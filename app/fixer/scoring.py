@@ -884,6 +884,20 @@ def score_product_for_metadata(
         if has_sequence_conflict(clues, product, local_duration_minutes):
             return 0.0
 
+    # --weight-abs-metadata (opt-in, see build_search_context in the fixer
+    # script): a candidate whose ASIN matches what Audiobookshelf currently
+    # has for this book gets extra credibility. clues["abs_asin"] is only
+    # ever set when it differs from the file's own existing_asin (agreement
+    # there adds no new information beyond what the bullet-proof check above
+    # already covers), so this only fires on a genuine discrepancy -- the
+    # local tags may be stale, and a human likely reviewed/confirmed this
+    # book in Audiobookshelf directly. Additive, not a hard override or a
+    # guard-skip: a candidate that failed a hard reject above is still
+    # rejected regardless of ABS agreement. There is no single "source of
+    # truth" here, just more or less credible evidence.
+    _abs_asin = (clues.get("abs_asin") or "").upper().strip()
+    _abs_asin_bonus = 0.20 if (_abs_asin and _product_asin and _abs_asin == _product_asin) else 0.0
+
     local_series = normalize_for_match(clues.get("series", ""))
     local_author = normalize_for_match(clues.get("author", ""))
     local_narrator = normalize_for_match(clues.get("narrator", ""))
@@ -902,7 +916,7 @@ def score_product_for_metadata(
         audible_minutes=get_audible_duration_minutes(product),
     )
 
-    score = 0.0
+    score = _abs_asin_bonus
     _series_token_jaccard = 0.0  # set in series block, reused for sequence gating
 
     # Duration is the strongest confirmation signal.

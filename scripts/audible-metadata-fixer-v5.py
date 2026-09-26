@@ -157,7 +157,7 @@ try:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -291,7 +291,7 @@ except ModuleNotFoundError:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
 try:
@@ -3364,6 +3364,19 @@ def search_item(
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
                 queries, clues = search_context_cache[match_cache_key]
 
+        # --weight-abs-metadata (opt-in): only when Audiobookshelf's current
+        # ASIN for this book DIFFERS from what's already embedded in the file
+        # (a matching ASIN adds no new information beyond what existing_asin
+        # already provides -- see score_product_for_metadata's _abs_asin bonus).
+        # abs_index is built once per run in main(), never a per-book lookup.
+        if getattr(args, "weight_abs_metadata", False) and abs_index is not None:
+            abs_record = lookup_item_in_index(abs_index, asin="", path=str(file_path.parent))
+            if abs_record is not None:
+                abs_asin = str((abs_record["media"].get("metadata") or {}).get("asin") or "").strip().upper()
+                existing_asin = str(clues.get("existing_asin") or "").strip().upper()
+                if abs_asin and abs_asin != existing_asin:
+                    clues["abs_asin"] = abs_asin
+
         local_duration_minutes = clues.get("local_duration_minutes")
 
         result.queries = queries
@@ -3372,6 +3385,30 @@ def search_item(
         group_search = clues.get("group_search", {}) or {}
         if group_search.get("applied"):
             log.append(f"  Grouped: {group_search.get('file_count', 0)} files")
+
+        # --trust-abs-metadata (opt-in): for a book Audiobookshelf already
+        # has, skip provider search/matching entirely and use its current
+        # record directly -- still routed through normalize_abs_media_to_internal,
+        # which applies the same series cleanup every provider shares, so a
+        # messy-but-correct manual Audiobookshelf edit gets normalized, not
+        # just echoed back verbatim. Checked before marker recovery: a stale
+        # re-applied marker match is exactly the kind of possibly-outdated
+        # data Audiobookshelf's current record should take priority over.
+        if getattr(args, "trust_abs_metadata", False) and abs_index is not None:
+            abs_record = lookup_item_in_index(abs_index, asin="", path=str(file_path.parent))
+            if abs_record is not None:
+                trusted_metadata = normalize_abs_media_to_internal(abs_record["media"])
+                trusted_metadata["edit_mode"] = "full"
+                result.status = "matched"
+                result.metadata = trusted_metadata
+                result.score = 1.0
+                result.edit_mode = "full"
+                result.duration_status = "unknown"
+                log.append(
+                    f"  TRUST: using Audiobookshelf's current record directly "
+                    f"(item {abs_record['library_item_id']})"
+                )
+                return result
 
         if recovering_from_marker:
             rec_md = metadata_from_marker(existing_marker)
@@ -5420,6 +5457,36 @@ def main():
         help="Audiobookshelf API key. Defaults to ABS_API_KEY env var.",
     )
 
+    _abs_input_group = parser.add_mutually_exclusive_group()
+    _abs_input_group.add_argument(
+        "--trust-abs-metadata",
+        action="store_true",
+        dest="trust_abs_metadata",
+        help=(
+            "For a book Audiobookshelf already has, skip provider search/matching "
+            "entirely and use Audiobookshelf's current record as the metadata directly "
+            "-- still run through LibraForge's normal cleanup (series-suffix, title "
+            "noise, author-name scheme) before writing back. For an existing, already-"
+            "organized library where you've manually corrected books in the "
+            "Audiobookshelf UI and want that trusted outright. Mutually exclusive with "
+            "--weight-abs-metadata."
+        ),
+    )
+    _abs_input_group.add_argument(
+        "--weight-abs-metadata",
+        action="store_true",
+        dest="weight_abs_metadata",
+        help=(
+            "Provider matching still runs in full, but when Audiobookshelf's current "
+            "ASIN for a book differs from what's already embedded in the file, a "
+            "provider candidate matching Audiobookshelf's ASIN gets a scoring boost -- "
+            "not an override, a hard-rejected candidate is still rejected. Treats a "
+            "manually-edited Audiobookshelf record as more credible than a stale "
+            "embedded tag, not as a source of truth. Mutually exclusive with "
+            "--trust-abs-metadata."
+        ),
+    )
+
     parser.add_argument(
         "--abs-agg-url",
         default=os.environ.get("ABS_AGG_URL", "http://abs-agg:3000"),
@@ -5524,11 +5591,13 @@ def main():
 
     # Built once for the whole run (never per-book): every book's metadata
     # write checks this to decide PATCH-direct-to-ABS vs. the metadata.json
-    # bootstrap fallback (see sync_or_write_abs_metadata). Only fetched for a
-    # real --apply run -- a dry run never reaches a write call site, so
-    # there's nothing for it to gate.
+    # bootstrap fallback (see sync_or_write_abs_metadata). Also needed for a
+    # dry run when --trust-abs-metadata/--weight-abs-metadata is set, since
+    # those affect matching/scoring (which a dry run still does), not just
+    # the write path.
     abs_index: dict | None = None
-    if args.apply and args.abs_api_key:
+    _needs_abs_index = args.apply or args.trust_abs_metadata or args.weight_abs_metadata
+    if _needs_abs_index and args.abs_api_key:
         try:
             abs_items = fetch_all_abs_book_items(
                 lambda path, params: abs_get_json(path, params, args.abs_url, args.abs_api_key)
