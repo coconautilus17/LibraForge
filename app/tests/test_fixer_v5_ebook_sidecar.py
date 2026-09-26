@@ -95,6 +95,35 @@ class WriteEbookSidecarTests(unittest.TestCase):
         self.assertEqual(FIXER.read_book_sidecar(book_a)["title"], "Kubernetes: Up and Running")
         self.assertEqual(FIXER.read_book_sidecar(book_b)["title"], "Git Pocket Guide")
 
+    def test_alone_in_folder_writes_the_folder_level_sidecar(self):
+        # Once Folder Forge gives a standalone ebook its own dedicated
+        # folder, alone_in_folder=True should get it the same bare
+        # folder-level libraforge.json an audiobook alone in its folder
+        # gets, not a per-file name.
+        source = self._make("Some Author/A Book - EBOOK/A Book.epub")
+        FIXER.write_ebook_sidecar(
+            source, source_formats=["epub"], source_files={"epub": str(source)},
+            book={"title": "A Book", "subtitle": "", "author": "Some Author", "narrator": "",
+                  "series": "", "sequence": "", "year": "", "summary": "", "genre": "", "isbn": "", "cover_url": ""},
+            alone_in_folder=True,
+        )
+        folder_sidecar = source.parent / "libraforge.json"
+        per_file_sidecar = source.with_name(f"{source.name}.libraforge.json")
+        self.assertTrue(folder_sidecar.is_file())
+        self.assertFalse(per_file_sidecar.exists())
+        self.assertEqual(json.loads(folder_sidecar.read_text())["sidecar"]["book"]["title"], "A Book")
+
+    def test_default_alone_in_folder_false_keeps_per_file_naming(self):
+        # Default (no alone_in_folder passed) must stay per-file -- existing
+        # bucket-folder callers/tests rely on this.
+        source = self._make("Linux/EPUB/kubernetes2.epub")
+        FIXER.write_ebook_sidecar(
+            source, source_formats=["epub"], source_files={"epub": str(source)},
+            book={"title": "T", "subtitle": "", "author": "", "narrator": "", "series": "",
+                  "sequence": "", "year": "", "summary": "", "genre": "", "isbn": "", "cover_url": ""},
+        )
+        self.assertTrue(source.with_name(f"{source.name}.libraforge.json").is_file())
+
     def test_no_marker_or_audio_summary_section_is_written(self):
         source = self._make("Linux/EPUB/kubernetes.epub")
         FIXER.write_ebook_sidecar(

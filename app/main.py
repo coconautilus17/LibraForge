@@ -8448,8 +8448,13 @@ def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict
         "isbn": req.book.get("isbn", ""),
         "cover_url": req.book.get("cover_url", ""),
     }
+    alone_in_folder = not any(
+        p.is_file() and p != target_path and library_index.is_ebook_file(p)
+        for p in target_path.parent.iterdir()
+    )
     fixer_module.write_ebook_sidecar(
         target_path, source_formats=source_formats, source_files=source_files, book=book,
+        alone_in_folder=alone_in_folder,
     )
     return {"path": str(target_path), "book": book}
 
