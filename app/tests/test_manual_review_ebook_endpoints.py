@@ -139,6 +139,43 @@ class EbookApplyEndpointTests(unittest.TestCase):
         client.post("/api/manual-review/ebook/apply", json={"path": str(epub_path), "book": new_book})
         self.assertEqual(fixer_module.read_book_sidecar(epub_path)["title"], "New Title")
 
+    def test_abs_index_hit_patches_directly(self):
+        """Ebooks have no ASIN in practice, so the ABS lookup falls back to
+        the folder path -- net-new capability, no prior metadata.json write
+        path exists for ebooks to regress."""
+        epub_path = self._touch("Linux/EPUB/kubernetes.epub")
+        book = {"title": "Kubernetes Up and Running", "subtitle": "", "author": "Kelsey Hightower",
+                "series": "", "sequence": "", "year": "2022", "genre": "", "isbn": "", "summary": "",
+                "cover_url": ""}
+        abs_index = {
+            "by_asin": {},
+            "by_path": {str(epub_path.parent): {
+                "library_item_id": "li1", "path": str(epub_path.parent), "rel_path": "Linux/EPUB",
+                "updated_at": 100, "media": {"metadata": {}},
+            }},
+        }
+        with patch.object(main, "_abs_item_index_cached", return_value=abs_index), \
+             patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch("app.abs_client.abs_patch_json") as patch_mock:
+            res = client.post("/api/manual-review/ebook/apply", json={"path": str(epub_path), "book": book})
+        self.assertEqual(res.status_code, 200)
+        patch_mock.assert_called_once()
+        self.assertEqual(patch_mock.call_args[0][0], "/api/items/li1/media")
+
+    def test_abs_lookup_miss_leaves_sidecar_as_the_only_record(self):
+        epub_path = self._touch("Linux/EPUB/kubernetes.epub")
+        book = {"title": "Kubernetes Up and Running", "subtitle": "", "author": "Kelsey Hightower",
+                "series": "", "sequence": "", "year": "2022", "genre": "", "isbn": "", "summary": "",
+                "cover_url": ""}
+        with patch.object(main, "_abs_item_index_cached", return_value={"by_asin": {}, "by_path": {}}), \
+             patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch("app.abs_client.abs_patch_json") as patch_mock:
+            res = client.post("/api/manual-review/ebook/apply", json={"path": str(epub_path), "book": book})
+        self.assertEqual(res.status_code, 200)
+        patch_mock.assert_not_called()
+        fixer_module = main.load_fixer_module(main.default_fixer_script())
+        self.assertEqual(fixer_module.read_book_sidecar(epub_path)["title"], "Kubernetes Up and Running")
+
 
 if __name__ == "__main__":
     unittest.main()

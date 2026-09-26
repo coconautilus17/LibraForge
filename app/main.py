@@ -60,7 +60,7 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
-from app.abs_client import build_item_index, lookup_item_in_index, sync_book_metadata
+from app.abs_client import abs_patch_json, build_item_index, lookup_item_in_index, sync_book_metadata
 from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
@@ -6210,10 +6210,39 @@ class EnrichmentApplyResponse(BaseModel):
 
 @app.post("/api/enrichment/apply")
 def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
+    """Apply the compiled genre/narrator/explicit to each included book.
+
+    Enrichment Forge's own compile step already sources every book from the
+    ABS API (see get_series_books), so book.id here is always the real ABS
+    library_item_id -- no ASIN/path lookup needed, unlike the fixer's write
+    path. When ABS is configured, PATCH directly (blank genre/narrator/
+    explicit simply aren't included, which is exactly write_metadata_json_
+    partial/merge_metadata_json's existing "blank means don't touch" contract
+    -- no selective-field diffing needed here, unlike Meta Forge's writes).
+    Falls back to the metadata.json merge exactly as before when ABS isn't
+    configured.
+    """
     applied = 0
     failed: list[dict] = []
+    abs_api_key = _get_abs_api_key()
+    abs_url = _get_abs_url() if abs_api_key else ""
     for book in req.books:
         if not book.include:
+            continue
+        if abs_api_key and book.id:
+            try:
+                fields: dict[str, Any] = {}
+                if req.genre:
+                    fields["genres"] = list(req.genre)
+                if req.narrator.strip():
+                    fields["narrators"] = [n.strip() for n in req.narrator.split(",") if n.strip()]
+                if req.explicit:
+                    fields["explicit"] = True
+                if fields:
+                    abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
+                applied += 1
+            except Exception as exc:
+                failed.append({"id": book.id, "path": book.path, "error": str(exc)})
             continue
         try:
             validated_path = validate_audiobook_path(book.path)
@@ -8528,6 +8557,34 @@ def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict
         target_path, source_formats=source_formats, source_files=source_files, book=book,
         alone_in_folder=alone_in_folder,
     )
+
+    # Push to Audiobookshelf directly when it already knows this item -- ABS's
+    # mediaType is a library-level property, not per-item, so an ebook-only
+    # item uses the exact same PATCH endpoint/payload as an audiobook. This is
+    # net-new (no legacy ebook-facing file ever existed to fall back to), so
+    # write_file_fallback is a no-op: on a lookup miss the ebook simply stays
+    # invisible to ABS until it's scanned, exactly like today.
+    abs_index = _abs_item_index_cached()
+
+    def _abs_lookup(asin: str, _path: str) -> dict[str, Any] | None:
+        if abs_index is None:
+            return None
+        return lookup_item_in_index(abs_index, asin=asin, path=str(target_path.parent))
+
+    def _record_abs_sync(sync_info: dict[str, Any]) -> None:
+        fixer_module.update_abs_sync_record(
+            target_path, None, alone_in_folder, sync_info["library_item_id"], sync_info["abs_updated_at"]
+        )
+
+    sync_book_metadata(
+        metadata=book,
+        abs_url=_get_abs_url(),
+        abs_api_key=_get_abs_api_key(),
+        lookup_item=_abs_lookup,
+        write_file_fallback=lambda: None,
+        record_sync=_record_abs_sync,
+    )
+
     return {"path": str(target_path), "book": book}
 
 

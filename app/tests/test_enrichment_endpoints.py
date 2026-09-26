@@ -396,6 +396,63 @@ class EnrichmentApplyEndpointTests(unittest.TestCase):
             escaped_target = container / "root.metadata.json"
             self.assertFalse(escaped_target.exists())
 
+    def test_abs_configured_patches_directly_using_books_own_abs_id(self):
+        """get_series_books already sources book.id straight from the ABS
+        item's own id (see app/enrichment.py) -- when ABS is configured,
+        apply should PATCH that id directly rather than ever touching
+        metadata.json, with no separate lookup step needed."""
+        payload = {
+            "books": [
+                {"id": "abs-item-1", "path": "/audiobooks/Scholomance", "is_file": False, "include": True},
+            ],
+            "genre": ["Fantasy", "LitRPG"],
+            "narrator": "Andrea Parsneau",
+            "explicit": True,
+        }
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "_get_abs_url", return_value="http://abs"), \
+             patch.object(main, "abs_patch_json") as patch_mock:
+            resp = client.post("/api/enrichment/apply", json=payload)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["applied"], 1)
+        self.assertEqual(body["failed"], [])
+        patch_mock.assert_called_once_with(
+            "/api/items/abs-item-1/media",
+            {"metadata": {"genres": ["Fantasy", "LitRPG"], "narrators": ["Andrea Parsneau"], "explicit": True}},
+            "http://abs", "key",
+        )
+
+    def test_abs_configured_blank_fields_apply_with_no_patch_call(self):
+        payload = {
+            "books": [{"id": "abs-item-1", "path": "/audiobooks/Scholomance", "is_file": False, "include": True}],
+            "genre": [], "narrator": "", "explicit": False,
+        }
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "_get_abs_url", return_value="http://abs"), \
+             patch.object(main, "abs_patch_json") as patch_mock:
+            resp = client.post("/api/enrichment/apply", json=payload)
+        body = resp.json()
+        self.assertEqual(body["applied"], 1)
+        patch_mock.assert_not_called()
+
+    def test_abs_configured_patch_failure_reported_without_sinking_batch(self):
+        payload = {
+            "books": [
+                {"id": "abs-item-1", "path": "/audiobooks/A", "is_file": False, "include": True},
+                {"id": "abs-item-2", "path": "/audiobooks/B", "is_file": False, "include": True},
+            ],
+            "genre": ["Fantasy"], "narrator": "", "explicit": False,
+        }
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "_get_abs_url", return_value="http://abs"), \
+             patch.object(main, "abs_patch_json", side_effect=[None, RuntimeError("boom")]):
+            resp = client.post("/api/enrichment/apply", json=payload)
+        body = resp.json()
+        self.assertEqual(body["applied"], 1)
+        self.assertEqual(len(body["failed"]), 1)
+        self.assertEqual(body["failed"][0]["id"], "abs-item-2")
+
 
 if __name__ == "__main__":
     unittest.main()

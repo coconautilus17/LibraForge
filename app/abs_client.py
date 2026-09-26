@@ -346,12 +346,12 @@ def sync_book_metadata(
         record["media"], new_payload["metadata"], fill_missing=fill_missing, skip_blank_fields=skip_blank_fields
     )
 
-    if "series" in fields:
+    series_name = str(metadata.get("series") or "").strip()
+    if "series" in fields and series_name:
         current_item = abs_get_json(
             f"/api/items/{record['library_item_id']}", {}, abs_url, abs_api_key
         )
         current_series = ((current_item.get("media") or {}).get("metadata") or {}).get("series") or []
-        series_name = str(metadata.get("series") or "").strip()
         sequence = str(metadata.get("sequence") or "").strip()
         fields["series"] = merge_series_entries(current_series, series_name, sequence)
 
