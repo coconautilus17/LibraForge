@@ -4328,6 +4328,13 @@ def resolve_asin_for_chaptering(source: Path, override: str = "") -> str:
     asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
     if asin:
         return asin.upper()
+    abs_index = _abs_item_index_cached()
+    if abs_index is not None:
+        record = lookup_item_in_index(abs_index, asin="", path=str(source.parent))
+        if record is not None:
+            abs_asin = str(((record["media"].get("metadata")) or {}).get("asin") or "").strip()
+            if abs_asin:
+                return abs_asin.upper()
     metadata = read_chapter_json_file(chapter_metadata_json_path(source))
     asin = str(metadata.get("asin") or "").strip()
     if asin:

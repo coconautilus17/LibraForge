@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +16,9 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+from app.abs_client import build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
+from app.settings_paths import user_settings_file
 
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".aac", ".wav"}
@@ -2269,11 +2273,57 @@ def read_json_file(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_ABS_CONFIG_FILE = user_settings_file("abs.json")
+# Self-contained, deliberately not shared with app.main's own ABS item-index
+# cache: app.chaptering must not import app.main (same independence rule
+# app.enrichment follows), so the ABS url/key and a short-lived index cache
+# are duplicated here rather than threading them down through however many
+# layers separate app.main's chaptering-run entry point from this call.
+_ABS_CHAPTERING_INDEX_CACHE: tuple[float, dict[str, Any]] | None = None
+_ABS_CHAPTERING_INDEX_CACHE_TTL = 1800  # 30 minutes
+
+
+def _abs_config_for_chaptering() -> tuple[str, str]:
+    """Mirrors app.main's _get_abs_url()/_get_abs_api_key() resolution
+    (config file overrides ABS_URL/ABS_API_KEY env vars) without importing
+    app.main."""
+    config: dict[str, Any] = {}
+    try:
+        if _ABS_CONFIG_FILE.exists():
+            config = json.loads(_ABS_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    url = str(config.get("url") or os.environ.get("ABS_URL", "http://audiobookshelf")).rstrip("/")
+    api_key = str(config.get("api_key") or os.environ.get("ABS_API_KEY", ""))
+    return url, api_key
+
+
+def _abs_item_index_for_chaptering(abs_url: str, abs_api_key: str) -> dict[str, Any] | None:
+    global _ABS_CHAPTERING_INDEX_CACHE
+    if _ABS_CHAPTERING_INDEX_CACHE is not None:
+        ts, index = _ABS_CHAPTERING_INDEX_CACHE
+        if time.monotonic() - ts < _ABS_CHAPTERING_INDEX_CACHE_TTL:
+            return index
+    try:
+        from app.abs_client import abs_get_json
+        from app.enrichment import fetch_all_abs_book_items
+
+        items = fetch_all_abs_book_items(
+            lambda path, params: abs_get_json(path, params, abs_url, abs_api_key)
+        )
+        index = build_item_index(items)
+    except Exception:
+        return None
+    _ABS_CHAPTERING_INDEX_CACHE = (time.monotonic(), index)
+    return index
+
+
 def resolve_book_credits(source: Path) -> dict[str, str]:
     """Author/narrator to cross-check against an Opening Credits reading --
     same fallback chain as resolve_asin_for_chaptering() in app/main.py:
-    the sidecar's curated book.author/book.narrator first, then the sibling
-    Audiobookshelf metadata.json's authors/narrators lists.
+    the sidecar's curated book.author/book.narrator first, then Audiobookshelf
+    directly if it already knows the book, then the sibling Audiobookshelf
+    metadata.json's authors/narrators lists as the last resort.
     """
     sidecar = read_json_file(chapter_sidecar_path(source))
     if "sidecar" in sidecar and isinstance(sidecar["sidecar"], dict):
@@ -2281,6 +2331,15 @@ def resolve_book_credits(source: Path) -> dict[str, str]:
     book = sidecar.get("book", {}) or {}
     author = str(book.get("author") or "").strip()
     narrator = str(book.get("narrator") or "").strip()
+    if (not author or not narrator):
+        abs_url, abs_api_key = _abs_config_for_chaptering()
+        if abs_api_key:
+            index = _abs_item_index_for_chaptering(abs_url, abs_api_key)
+            record = lookup_item_in_index(index, asin="", path=str(source.parent)) if index else None
+            if record is not None:
+                normalized = normalize_abs_media_to_internal(record["media"])
+                author = author or normalized.get("author", "")
+                narrator = narrator or normalized.get("narrator", "")
     if not author or not narrator:
         metadata = read_json_file(metadata_json_path(source))
         if not author:

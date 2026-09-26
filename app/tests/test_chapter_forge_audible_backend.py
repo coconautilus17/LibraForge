@@ -111,6 +111,36 @@ class ResolveAsinForChapteringTests(unittest.TestCase):
             )
             self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
 
+    def test_abs_lookup_is_tried_before_metadata_json_fallback(self):
+        """Inserted between the sidecar check and the metadata.json
+        last-resort: an ABS-known book resolves its ASIN directly, even with
+        a metadata.json present that would otherwise have answered first."""
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"asin": "B0FROMFILE"}), encoding="utf-8"
+            )
+            abs_index = {
+                "by_asin": {},
+                "by_path": {root: {
+                    "library_item_id": "li1", "path": root, "rel_path": "book",
+                    "updated_at": 100, "media": {"metadata": {"asin": "B0FROMABS"}},
+                }},
+            }
+            with patch.object(main_module, "_abs_item_index_cached", return_value=abs_index):
+                self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0FROMABS")
+
+    def test_abs_lookup_miss_still_falls_back_to_metadata_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"asin": "B0FROMFILE"}), encoding="utf-8"
+            )
+            with patch.object(main_module, "_abs_item_index_cached", return_value={"by_asin": {}, "by_path": {}}):
+                self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0FROMFILE")
+
     def test_metadata_json_path_matches_chapter_sidecar_folder_rule(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / "book.mp3"
