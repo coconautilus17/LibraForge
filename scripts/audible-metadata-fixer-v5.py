@@ -157,7 +157,7 @@ try:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -291,7 +291,7 @@ except ModuleNotFoundError:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
 try:
@@ -356,6 +356,10 @@ METADATA_BACKUP_SUFFIX = ".metadata-backup.json"
 MARKER_SUFFIX = ".audible-metadata-fixer.json"
 LIBRAFORGE_SUFFIX = ".libraforge.json"
 M4B_TOOL_METADATA_SUFFIX = ".m4b-tool-metadata.json"
+# Shared with app/main.py -- both write to the same bootstrap-pending
+# registry (app.abs_client.upsert_bootstrapped_file) so the reconciliation
+# sweep sees bootstrap files written by either the script or Manual Review.
+REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/app/reports")).resolve()
 IGNORED_PATH_PARTS = {"#recycle", "@eadir"}
 TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
 
@@ -2490,10 +2494,16 @@ def sync_or_write_abs_metadata(
             file_path, clues, alone, sync_info["library_item_id"], sync_info["abs_updated_at"]
         )
 
+    def _record_bootstrap() -> None:
+        upsert_bootstrapped_file(
+            REPORTS_DIR, file_path, str(metadata.get("asin") or ""), str(file_path.parent)
+        )
+
     result = sync_book_metadata(
         metadata=metadata, fill_missing=fill_missing, skip_blank_fields=skip_blank_fields,
         abs_url=abs_url, abs_api_key=abs_api_key,
         lookup_item=_lookup, write_file_fallback=_write_file, record_sync=_record_sync,
+        record_bootstrap=_record_bootstrap,
     )
     if result["branch"] == "file":
         return str(result["path"])

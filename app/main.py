@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import functools
 import hashlib
@@ -18,6 +19,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -60,7 +62,15 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
-from app.abs_client import abs_patch_json, build_item_index, lookup_item_in_index, sync_book_metadata
+from app.abs_client import (
+    abs_patch_json,
+    build_item_index,
+    load_bootstrap_registry,
+    lookup_item_in_index,
+    reconcile_bootstrap_registry,
+    sync_book_metadata,
+    upsert_bootstrapped_file,
+)
 from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
@@ -3294,6 +3304,9 @@ def _write_book_metadata(
             source_path, clues, alone, sync_info["library_item_id"], sync_info["abs_updated_at"]
         )
 
+    def _record_bootstrap() -> None:
+        upsert_bootstrapped_file(REPORTS_DIR, source_path, str(metadata.get("asin") or ""), str(source_path.parent))
+
     sync_result = sync_book_metadata(
         metadata=metadata,
         skip_blank_fields=(write_policy == "fill"),
@@ -3302,6 +3315,7 @@ def _write_book_metadata(
         lookup_item=_abs_lookup,
         write_file_fallback=_write_metadata_json_fallback,
         record_sync=_record_abs_sync,
+        record_bootstrap=_record_bootstrap,
     )
     if sync_result["branch"] == "file":
         metadata_json_path = sync_result["path"]
@@ -4805,6 +4819,43 @@ def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
             runs.pop(run_id, None)
 
 
+# Once a day is plenty for the bootstrap-file reconciliation sweep -- a
+# bootstrap metadata.json is only a landmine if ABS rescans it in the
+# meantime, and a day-late cleanup in the rare worst case is a non-issue.
+_ABS_BOOTSTRAP_RECONCILE_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _abs_bootstrap_reconcile_tick() -> None:
+    """One reconciliation check, gated so the common steady state (nothing
+    pending, or ABS not configured) does zero work -- no filesystem walk, no
+    API calls, just a cheap registry-file read. Split out from the loop below
+    so it's directly callable/testable without waiting on the real interval.
+    See app.abs_client.reconcile_bootstrap_registry.
+    """
+    try:
+        abs_api_key = _get_abs_api_key()
+        if not abs_api_key:
+            return
+        if not load_bootstrap_registry(REPORTS_DIR):
+            return
+        abs_url = _get_abs_url()
+        await asyncio.to_thread(
+            reconcile_bootstrap_registry,
+            REPORTS_DIR,
+            abs_url=abs_url,
+            abs_api_key=abs_api_key,
+            fetch_items=lambda: fetch_all_abs_book_items(_abs_request),
+        )
+    except Exception:
+        pass
+
+
+async def _abs_bootstrap_reconcile_loop() -> None:
+    while True:
+        await asyncio.sleep(_ABS_BOOTSTRAP_RECONCILE_INTERVAL_SECONDS)
+        await _abs_bootstrap_reconcile_tick()
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Kick off the Manual Review filesystem search index build immediately
@@ -4823,7 +4874,13 @@ async def _lifespan(app: FastAPI):
         )
     except OSError:
         pass
-    yield
+    reconcile_task = asyncio.create_task(_abs_bootstrap_reconcile_loop())
+    try:
+        yield
+    finally:
+        reconcile_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reconcile_task
 
 
 app = FastAPI(title="LibraForge", lifespan=_lifespan)

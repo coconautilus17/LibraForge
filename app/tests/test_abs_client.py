@@ -4,7 +4,9 @@ Pure-function tests only for the payload/index/blank-check helpers (no
 network mocking needed); sync_book_metadata's three-way branch is exercised
 with plain fake lookup/fallback/GET/PATCH callables.
 """
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app import abs_client
@@ -247,6 +249,148 @@ class SyncBookMetadataTests(unittest.TestCase):
                 fill_missing=True, skip_blank_fields=True,
                 lookup_item=lambda a, p: None, write_file_fallback=self._fallback,
             )
+
+    def test_lookup_miss_calls_record_bootstrap(self):
+        calls = []
+        abs_client.sync_book_metadata(
+            metadata=self.metadata, abs_url="http://x", abs_api_key="key",
+            lookup_item=lambda a, p: None, write_file_fallback=self._fallback,
+            record_bootstrap=lambda: calls.append(True),
+        )
+        self.assertEqual(len(calls), 1)
+
+    def test_no_api_key_never_calls_record_bootstrap(self):
+        calls = []
+        abs_client.sync_book_metadata(
+            metadata=self.metadata, abs_url="http://x", abs_api_key="",
+            lookup_item=lambda a, p: (_ for _ in ()).throw(AssertionError("should not be called")),
+            write_file_fallback=self._fallback,
+            record_bootstrap=lambda: calls.append(True),
+        )
+        self.assertEqual(calls, [])
+
+    def test_lookup_hit_never_calls_record_bootstrap(self):
+        record = {"library_item_id": "li1", "path": "/x", "rel_path": "x", "updated_at": 100, "media": {"metadata": {"series": []}}}
+        calls = []
+        with patch.object(abs_client, "abs_get_json", return_value={"media": {"metadata": {"series": []}}}), \
+             patch.object(abs_client, "abs_patch_json"):
+            abs_client.sync_book_metadata(
+                metadata=self.metadata, abs_url="http://x", abs_api_key="key",
+                lookup_item=lambda a, p: record, write_file_fallback=self._fallback,
+                record_bootstrap=lambda: calls.append(True),
+            )
+        self.assertEqual(calls, [])
+
+
+class BootstrapRegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.reports_dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_upsert_then_load_round_trips(self):
+        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN1", "/lib/book")
+        registry = abs_client.load_bootstrap_registry(self.reports_dir)
+        self.assertEqual(registry["/lib/book/metadata.json"], {"asin": "ASIN1", "path": "/lib/book"})
+
+    def test_upsert_same_file_refreshes_not_duplicates(self):
+        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN1", "/lib/book")
+        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN2", "/lib/book")
+        registry = abs_client.load_bootstrap_registry(self.reports_dir)
+        self.assertEqual(len(registry), 1)
+        self.assertEqual(registry["/lib/book/metadata.json"]["asin"], "ASIN2")
+
+    def test_load_missing_registry_returns_empty_dict(self):
+        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
+
+    def test_remove_bootstrapped_file_drops_entry(self):
+        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN1", "/lib/book")
+        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
+        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
+
+    def test_remove_nonexistent_entry_is_a_no_op(self):
+        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
+        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
+
+
+class MetadataJsonTitleMatchesAbsMediaTests(unittest.TestCase):
+    def test_matching_titles_case_insensitive(self):
+        self.assertTrue(abs_client.metadata_json_title_matches_abs_media(
+            {"title": "The Book"}, {"metadata": {"title": "the book"}}
+        ))
+
+    def test_mismatched_titles(self):
+        self.assertFalse(abs_client.metadata_json_title_matches_abs_media(
+            {"title": "The Book"}, {"metadata": {"title": "A Different Book"}}
+        ))
+
+    def test_blank_file_title_never_matches(self):
+        self.assertFalse(abs_client.metadata_json_title_matches_abs_media(
+            {"title": ""}, {"metadata": {"title": ""}}
+        ))
+
+
+class ReconcileBootstrapRegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.reports_dir = Path(self.tmp.name)
+        self.book_dir = self.reports_dir / "book"
+        self.book_dir.mkdir()
+        self.metadata_json = self.book_dir / "metadata.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_metadata_json(self, title: str):
+        import json
+        self.metadata_json.write_text(json.dumps({"title": title}), encoding="utf-8")
+
+    def test_empty_registry_is_a_cheap_no_op(self):
+        result = abs_client.reconcile_bootstrap_registry(
+            self.reports_dir, abs_url="http://x", abs_api_key="key",
+            fetch_items=lambda: (_ for _ in ()).throw(AssertionError("should not fetch when registry is empty")),
+        )
+        self.assertEqual(result, {"checked": 0, "reconciled": 0, "skipped_mismatch": 0})
+
+    def test_lookup_hit_with_matching_title_deletes_file_and_registry_entry(self):
+        self._write_metadata_json("The Book")
+        abs_client.upsert_bootstrapped_file(self.reports_dir, self.metadata_json, "ASIN1", str(self.book_dir))
+        items = [{
+            "id": "li1", "path": str(self.book_dir), "relPath": "book", "updatedAt": 100,
+            "media": {"metadata": {"asin": "ASIN1", "title": "The Book"}},
+        }]
+        result = abs_client.reconcile_bootstrap_registry(
+            self.reports_dir, abs_url="http://x", abs_api_key="key", fetch_items=lambda: items,
+        )
+        self.assertEqual(result["reconciled"], 1)
+        self.assertFalse(self.metadata_json.exists())
+        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
+
+    def test_lookup_hit_with_mismatched_title_leaves_file_and_entry_in_place(self):
+        self._write_metadata_json("The Book")
+        abs_client.upsert_bootstrapped_file(self.reports_dir, self.metadata_json, "ASIN1", str(self.book_dir))
+        items = [{
+            "id": "li1", "path": str(self.book_dir), "relPath": "book", "updatedAt": 100,
+            "media": {"metadata": {"asin": "ASIN1", "title": "A Totally Different Book"}},
+        }]
+        result = abs_client.reconcile_bootstrap_registry(
+            self.reports_dir, abs_url="http://x", abs_api_key="key", fetch_items=lambda: items,
+        )
+        self.assertEqual(result["skipped_mismatch"], 1)
+        self.assertTrue(self.metadata_json.exists())
+        self.assertIn(str(self.metadata_json), abs_client.load_bootstrap_registry(self.reports_dir))
+
+    def test_lookup_miss_leaves_file_and_entry_in_place(self):
+        self._write_metadata_json("The Book")
+        abs_client.upsert_bootstrapped_file(self.reports_dir, self.metadata_json, "ASIN1", str(self.book_dir))
+        result = abs_client.reconcile_bootstrap_registry(
+            self.reports_dir, abs_url="http://x", abs_api_key="key", fetch_items=lambda: [],
+        )
+        self.assertEqual(result["reconciled"], 0)
+        self.assertTrue(self.metadata_json.exists())
+        self.assertIn(str(self.metadata_json), abs_client.load_bootstrap_registry(self.reports_dir))
 
 
 if __name__ == "__main__":

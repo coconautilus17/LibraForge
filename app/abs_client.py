@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Callable
 
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
@@ -307,11 +308,14 @@ def sync_book_metadata(
     lookup_item: Callable[[str, str], dict[str, Any] | None],
     write_file_fallback: Callable[[], Any],
     record_sync: Callable[[dict[str, Any]], None] | None = None,
+    record_bootstrap: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """The three-way branch every write call site needs:
       (a) no abs_api_key -> write_file_fallback(). Zero behavior change.
       (b) lookup_item(asin, path) misses (book unknown to ABS yet) ->
-          write_file_fallback() (bootstrap file -- no library_item_id to PATCH).
+          write_file_fallback() (bootstrap file -- no library_item_id to PATCH),
+          then record_bootstrap() so the reconciliation sweep can find and
+          eventually clean up this file once ABS learns about the book.
       (c) hits -> compute_selective_patch_fields against the cached bulk
           record; a live per-item GET + series merge if the result would
           include `series`; PATCH the diff; record_sync(...) to stamp the
@@ -321,7 +325,10 @@ def sync_book_metadata(
     between the two callers (the standalone fixer script vs. app/main.py's
     dynamically-loaded fixer module) -- this is the one place dependency
     injection is actually necessary; everything else in this module takes
-    explicit params.
+    explicit params. `record_bootstrap` is only ever called in branch (b) --
+    branch (a) has no API key configured at all, so there's no way the
+    reconciliation sweep could ever check it; registering there would just
+    accumulate entries nothing can act on.
 
     Returns {"branch": "file", "path": <write_file_fallback()'s return value>,
     "reason": ...} for branches (a)/(b) -- callers that log the written path
@@ -339,6 +346,8 @@ def sync_book_metadata(
     record = lookup_item(asin, "")
     if record is None:
         path = write_file_fallback()
+        if record_bootstrap is not None:
+            record_bootstrap()
         return {"branch": "file", "reason": "unknown_to_abs", "path": path}
 
     new_payload = build_media_patch_payload(metadata)
@@ -366,3 +375,117 @@ def sync_book_metadata(
         record_sync({"library_item_id": record["library_item_id"], "abs_updated_at": record["updated_at"]})
 
     return {"branch": "patch", "fields": fields, "library_item_id": record["library_item_id"]}
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap-file reconciliation: a metadata.json written because ABS didn't
+# know the book yet (sync_book_metadata's branch (b)) has no owner once
+# written. If nothing ever re-touches that exact book, the file sits there
+# permanently -- even after ABS eventually scans it, that stale file remains
+# a rescan-priority landmine (the original bug this whole module exists to
+# close, just deferred past the first scan instead of prevented). A tracked
+# pending-list -- populated at write time, checked periodically -- closes
+# that gap without a filesystem walk or a live ABS listener (ABS's socket
+# auth only accepts a login-session JWT, not the API key this module uses;
+# see the plan doc for why that was ruled out).
+# ---------------------------------------------------------------------------
+
+_BOOTSTRAP_REGISTRY_FILENAME = "abs-bootstrap-pending.json"
+
+
+def bootstrap_registry_path(reports_dir: Path) -> Path:
+    return reports_dir / _BOOTSTRAP_REGISTRY_FILENAME
+
+
+def load_bootstrap_registry(reports_dir: Path) -> dict[str, dict[str, Any]]:
+    try:
+        return json.loads(bootstrap_registry_path(reports_dir).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_bootstrap_registry(reports_dir: Path, registry: dict[str, dict[str, Any]]) -> None:
+    path = bootstrap_registry_path(reports_dir)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def upsert_bootstrapped_file(reports_dir: Path, file_path: Path, asin: str, path: str) -> None:
+    """Record that `file_path` was just written as a bootstrap metadata.json.
+    Called once per sync_book_metadata branch-(b) write; re-writing the same
+    book's bootstrap file just refreshes its entry, never duplicates it."""
+    registry = load_bootstrap_registry(reports_dir)
+    registry[str(file_path)] = {"asin": asin, "path": path}
+    save_bootstrap_registry(reports_dir, registry)
+
+
+def remove_bootstrapped_file(reports_dir: Path, file_path: Path) -> None:
+    registry = load_bootstrap_registry(reports_dir)
+    if str(file_path) in registry:
+        del registry[str(file_path)]
+        save_bootstrap_registry(reports_dir, registry)
+
+
+def metadata_json_title_matches_abs_media(metadata_json: dict[str, Any], media: dict[str, Any]) -> bool:
+    """Conservative "is this really the same book" sanity check before the
+    reconciliation sweep deletes a bootstrap file -- guards against a
+    partial/bad scan or a race where the file was rewritten since, so an
+    unconfirmed match never causes a delete. Compares title only: it's the
+    one field reliably present and comparable across both metadata.json's
+    shape and ABS's flattened media.metadata shape, and a coincidental exact
+    title match on a genuinely different book is vanishingly unlikely."""
+    file_title = str(metadata_json.get("title") or "").strip().lower()
+    abs_title = str((media.get("metadata") or {}).get("title") or "").strip().lower()
+    return bool(file_title) and file_title == abs_title
+
+
+def reconcile_bootstrap_registry(
+    reports_dir: Path,
+    *,
+    abs_url: str,
+    abs_api_key: str,
+    fetch_items: Callable[[], list[dict[str, Any]]],
+) -> dict[str, int]:
+    """One reconciliation pass: for every tracked bootstrap file, check
+    whether ABS now knows the book and, if its title still matches, delete
+    the file and drop it from the registry. Never touches a file that's
+    still a genuine bootstrap (ABS doesn't know it yet) or whose content no
+    longer matches (left for the next pass rather than risking a bad delete).
+
+    Callers gate this on abs_api_key being configured and the registry being
+    non-empty *before* calling, so a steady-state tick with nothing to do
+    never reaches this function at all -- see the periodic task in app/main.py.
+    """
+    registry = load_bootstrap_registry(reports_dir)
+    if not registry:
+        return {"checked": 0, "reconciled": 0, "skipped_mismatch": 0}
+
+    index = build_item_index(fetch_items())
+    reconciled = 0
+    skipped_mismatch = 0
+    for file_path_str, entry in list(registry.items()):
+        record = lookup_item_in_index(index, asin=entry.get("asin", ""), path=entry.get("path", ""))
+        if record is None:
+            continue
+        file_path = Path(file_path_str)
+        try:
+            metadata_json = json.loads(file_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not metadata_json_title_matches_abs_media(metadata_json, record["media"]):
+            skipped_mismatch += 1
+            continue
+        try:
+            file_path.unlink()
+        except OSError:
+            continue
+        del registry[file_path_str]
+        reconciled += 1
+
+    save_bootstrap_registry(reports_dir, registry)
+    return {"checked": len(registry) + reconciled, "reconciled": reconciled, "skipped_mismatch": skipped_mismatch}
