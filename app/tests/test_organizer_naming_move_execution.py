@@ -107,5 +107,102 @@ class ExecutePlannedMoveFolderRenameTests(unittest.TestCase):
             self.assertTrue((target / "book.m4b").is_file())
 
 
+class GenericSidecarsForLooseFileTests(unittest.TestCase):
+    def test_finds_generic_sidecars_and_cover_ignoring_audio_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp) / "2024 - Book 2 - Soul Harvest"
+            source_dir.mkdir()
+            audio = source_dir / "Soul Harvest.m4b"
+            audio.write_text("audio", encoding="utf-8")
+            (source_dir / "libraforge.json").write_text("{}", encoding="utf-8")
+            (source_dir / "metadata.json").write_text("{}", encoding="utf-8")
+            (source_dir / "cover.jpg").write_bytes(b"jpg")
+            (source_dir / "book_cover_nsfw.webp").write_bytes(b"webp")
+
+            found = {p.name for p in ORGANIZER.generic_sidecars_for_loose_file(audio)}
+            self.assertEqual(
+                found, {"libraforge.json", "metadata.json", "cover.jpg", "book_cover_nsfw.webp"}
+            )
+
+    def test_does_not_include_the_audio_file_itself_or_unrelated_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp) / "Book"
+            source_dir.mkdir()
+            audio = source_dir / "Book.m4b"
+            audio.write_text("audio", encoding="utf-8")
+            (source_dir / "release.nfo").write_text("info", encoding="utf-8")
+            found = ORGANIZER.generic_sidecars_for_loose_file(audio)
+            self.assertEqual(found, [])
+
+
+class ExecutePlannedMoveLooseFileGenericSidecarTests(unittest.TestCase):
+    """Regression test for a real bug: 366 of 391 books moved by a real
+    Folder Forge run lost their libraforge.json/metadata.json/cover at the
+    destination, because a loose_file move only relocates the single audio
+    file plus whatever companion_files_for() finds -- which never matches a
+    generic, audio-filename-independent sidecar like bare "libraforge.json"
+    sitting in the same wrapper folder."""
+
+    def test_generic_sidecars_and_cover_move_alongside_the_renamed_audio_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "_unorganized" / "2024 - Book 2 - Soul Harvest"
+            source_dir.mkdir(parents=True)
+            source_audio = source_dir / "Soul Harvest.m4b"
+            source_audio.write_text("audio", encoding="utf-8")
+            libraforge_json = source_dir / "libraforge.json"
+            libraforge_json.write_text('{"marker": true}', encoding="utf-8")
+            metadata_json = source_dir / "metadata.json"
+            metadata_json.write_text('{"title": "Soul Harvest"}', encoding="utf-8")
+            cover = source_dir / "cover.jpg"
+            cover.write_bytes(b"jpg-bytes")
+
+            target_dir = root / "Sarah Hawke" / "Dread Knight" / "Book 2 - Soul Harvest"
+            target_path = target_dir / "Soul Harvest.m4b"
+            companions = ORGANIZER.generic_sidecars_for_loose_file(source_audio)
+            move = {
+                "kind": "loose_file",
+                "source": source_audio,
+                "target": target_path,
+                "companions": companions,
+            }
+            ORGANIZER.execute_planned_move(
+                move, merge_existing_targets=False, remove_empty_dirs=False, root=root
+            )
+
+            self.assertTrue(target_path.is_file())
+            self.assertTrue((target_dir / "libraforge.json").is_file())
+            self.assertTrue((target_dir / "metadata.json").is_file())
+            self.assertTrue((target_dir / "cover.jpg").is_file())
+            self.assertEqual((target_dir / "libraforge.json").read_text(encoding="utf-8"), '{"marker": true}')
+            # Nothing left behind at the source.
+            self.assertFalse(libraforge_json.exists())
+            self.assertFalse(metadata_json.exists())
+            self.assertFalse(cover.exists())
+
+    def test_generic_sidecar_moves_even_when_the_audio_file_is_renamed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "_unorganized" / "Some Book"
+            source_dir.mkdir(parents=True)
+            source_audio = source_dir / "junk name.m4b"
+            source_audio.write_text("audio", encoding="utf-8")
+            (source_dir / "libraforge.json").write_text("{}", encoding="utf-8")
+
+            target_dir = root / "Author" / "Book 1"
+            target_path = target_dir / "Book 1 - Clean Title.m4b"
+            move = {
+                "kind": "loose_file",
+                "source": source_audio,
+                "target": target_path,
+                "companions": [source_dir / "libraforge.json"],
+            }
+            ORGANIZER.execute_planned_move(
+                move, merge_existing_targets=False, remove_empty_dirs=False, root=root
+            )
+            self.assertTrue(target_path.is_file())
+            self.assertTrue((target_dir / "libraforge.json").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
