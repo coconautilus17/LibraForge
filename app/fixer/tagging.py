@@ -119,9 +119,54 @@ def mp4_set_track(tags: dict, value: str) -> None:
         tags.pop("trkn", None)
 
 
-def mp4_set_freeform(tags, name: str, value: str) -> None:
+def mp4_set_movement_index(tags: dict, value: str) -> None:
+    """`\\xa9mvi` -- Apple's Movement Index atom. Most players show a book's
+    series via the Movement Name/Index pair (`\\xa9mvn`/`\\xa9mvi`), not the
+    freeform `mvnm`/`mvin` atoms this app also writes -- see mp4_set_freeform's
+    docstring and LibraForge #289."""
+    value = clean_sequence(value)
+
+    if value:
+        tags["\xa9mvi"] = [int(value)]
+    else:
+        tags.pop("\xa9mvi", None)
+
+
+_FREEFORM_PREFIX = "----:com.apple.iTunes:"
+
+
+def mp4_clear_freeform_aliases(tags, names: tuple[str, ...]) -> None:
+    """Remove any existing freeform atom whose name case-insensitively
+    matches one of `names`, whatever case a prior tagger wrote it in.
+
+    Mutagen's MP4 tag dict is case-sensitive on the atom name, so a file
+    Audible (or another tool) tagged with uppercase freeform atoms --
+    "SERIES", "SERIES-PART", "SUBTITLE", "ASIN", "ISBN", "PUBLISHER" -- keeps
+    those as separate dict entries forever unless explicitly cleared; this
+    app writes the same semantic fields under different, lowercase names
+    ("mvnm", "mvin", "subtitle", "asin", "isbn", "publisher"), so both ended
+    up coexisting with stale vs. fresh values shown side by side by any
+    reader that surfaces freeform atoms directly (LibraForge #289).
+    """
+    wanted = {n.lower() for n in names}
+    for key in list(tags.keys()):
+        if not key.startswith(_FREEFORM_PREFIX):
+            continue
+        atom_name = key[len(_FREEFORM_PREFIX):]
+        if atom_name.lower() in wanted:
+            tags.pop(key, None)
+
+
+def mp4_set_freeform(tags, name: str, value: str, aliases: tuple[str, ...] = ()) -> None:
+    """`aliases` are other freeform atom names (any case) that mean the same
+    field in files tagged by something other than this app -- see
+    mp4_clear_freeform_aliases. They are always cleared, even when `value`
+    is blank, so a blank edit still removes a stale duplicate."""
     key = f"----:com.apple.iTunes:{name}"
     value = sanitize_tag(value)
+
+    if aliases:
+        mp4_clear_freeform_aliases(tags, aliases)
 
     if value:
         tags[key] = [MP4FreeForm(value.encode("utf-8"))]
@@ -165,9 +210,26 @@ def id3_set_genre_list(tags, frame_cls, values: list[str]) -> None:
         tags.add(frame_cls(encoding=3, text=cleaned))
 
 
-def id3_set_txxx(tags, name: str, value: str) -> None:
+def id3_clear_txxx_aliases(tags, names: tuple[str, ...]) -> None:
+    """ID3 equivalent of mp4_clear_freeform_aliases -- ID3.delall only
+    matches a TXXX frame's desc by exact case, so a case-variant duplicate
+    (e.g. Audible's own "SERIES" TXXX frame vs. this app's "series") never
+    gets cleared by delall(f"TXXX:{name}") alone (LibraForge #289)."""
+    wanted = {n.lower() for n in names}
+    for key in list(tags.keys()):
+        if not key.startswith("TXXX:"):
+            continue
+        desc = key[len("TXXX:"):]
+        if desc.lower() in wanted:
+            del tags[key]
+
+
+def id3_set_txxx(tags, name: str, value: str, aliases: tuple[str, ...] = ()) -> None:
     value = sanitize_tag(value)
     tags.delall(f"TXXX:{name}")
+
+    if aliases:
+        id3_clear_txxx_aliases(tags, aliases)
 
     if value:
         tags.add(TXXX(encoding=3, desc=name, text=[value]))
