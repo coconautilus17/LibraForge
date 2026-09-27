@@ -1341,6 +1341,10 @@ class ManualReviewApplyRequest(BaseModel):
     # "overwrite": write every field exactly as shown, including blanks (a
     # blank clears that tag). See docs/design/manual-review-apply-rewrite-rules.md.
     write_policy: str = "fill"
+    # Mirrors the CLI's --metadata-json-only: leave the audio file's own
+    # embedded tags untouched, relying entirely on the Audiobookshelf
+    # direct-API PATCH (or the metadata.json fallback) instead.
+    skip_tags: bool = False
 
 
 class ManualReviewEditRequest(BaseModel):
@@ -1367,6 +1371,7 @@ class ManualReviewEditRequest(BaseModel):
     explicit: bool = False
     summary: str = ""
     cover_url: str = ""
+    skip_tags: bool = False
 
 
 class SeriesGroupBookEntry(BaseModel):
@@ -1391,6 +1396,7 @@ class SeriesGroupApplyRequest(BaseModel):
     # bool` can't distinguish "leave untouched" from "set to False", since
     # both are the JSON value `false`.
     explicit_set: bool = False
+    skip_tags: bool = False
     books: list[SeriesGroupBookEntry]
 
 
@@ -3232,19 +3238,28 @@ def _write_book_metadata(
     cover_if_missing: bool = False,
     replace_cover: bool = False,
     backup: bool = False,
+    skip_tags: bool = False,
 ) -> dict[str, Any]:
     """Resolves alone/grouped placement and writes tags-or-JSON-sidecar,
     metadata.json, and the marker. Shared by apply_manual_review_result and
     edit_manual_review_book so the two flows can never diverge -- see
     docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
+
+    skip_tags mirrors the CLI's --metadata-json-only: leaves the audio file's
+    own embedded tags untouched, relying entirely on the Audiobookshelf
+    direct-API PATCH (or the metadata.json bootstrap fallback) below. A
+    grouped book's M4B-tool merge sidecar is unaffected either way -- like
+    the CLI flag, that's not "the audio file's own tags" and is still needed
+    downstream regardless.
     """
     # Full Overwrite can't be honestly honored on a file that falls back to
     # the ffmpeg writer (build_metadata_args never clears a tag -- see
     # docs/design/manual-review-apply-rewrite-rules.md). Detect this ahead of
     # time and apply anyway with fill-like behavior, surfacing why instead of
-    # silently doing something other than what was asked.
+    # silently doing something other than what was asked. Moot when skip_tags
+    # is set -- no tags are being written at all.
     write_policy_warning = ""
-    if write_policy == "overwrite" and writer != "mutagen":
+    if write_policy == "overwrite" and writer != "mutagen" and not skip_tags:
         will_use_mutagen = (
             fixer_module.is_mutagen_mp4_candidate(source_path)
             or fixer_module.is_mutagen_mp3_candidate(source_path)
@@ -3280,6 +3295,8 @@ def _write_book_metadata(
             source_path, metadata, clues, score, field_policy=write_policy
         )
         output_path = str(sidecar_path)
+    elif skip_tags:
+        output_kind = "metadata_json"
     else:
         # Back up explicitly so the backup lands in the same (alone-aware)
         # libraforge.json the marker will use, instead of a split per-file copy.
@@ -3421,6 +3438,7 @@ def apply_manual_review_result(req: ManualReviewApplyRequest) -> dict[str, Any]:
         cover_if_missing=req.cover_if_missing,
         replace_cover=req.replace_cover,
         backup=req.backup,
+        skip_tags=req.skip_tags,
     )
 
     result = {
@@ -3484,6 +3502,7 @@ def edit_manual_review_book(req: ManualReviewEditRequest) -> dict[str, Any]:
         cover_if_missing=False,
         replace_cover=bool(req.cover_url),
         backup=False,
+        skip_tags=req.skip_tags,
     )
 
     result = {
@@ -3542,6 +3561,7 @@ def apply_series_group(req: SeriesGroupApplyRequest) -> dict[str, Any]:
                 cover_if_missing=False,
                 replace_cover=False,
                 backup=False,
+                skip_tags=req.skip_tags,
             )
             results.append({
                 "path": book.path,

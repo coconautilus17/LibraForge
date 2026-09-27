@@ -1146,6 +1146,7 @@ function buildManualApplyDialogs() {
       <label>Genre<input id="maeGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
       <label class="mae-full-width">Comment / Summary<textarea id="maeSummary" rows="4"></textarea></label>
     </div>
+    <label class="mae-full-width"><input id="maeSkipTags" type="checkbox" /> Don't modify audio file's tags <span class="info-tip" data-tooltip="Sends this book's metadata to Audiobookshelf directly via its API when it already knows the book, otherwise to a metadata.json bootstrap file -- either way, leaves the audio file's own embedded tags untouched."></span></label>
     <div class="manual-apply-actions">
       <button id="maeCancelBtn" class="secondary">Cancel</button>
       <button id="maeFillBtn">Apply Fill</button>
@@ -1191,6 +1192,9 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
   $('manualApplyEditContext').textContent =
     `Applying ${editMode} mode to: ${manualContext.display_path || manualContext.path}`;
   $('manualApplyEditCoverNote').hidden = !replaceCover;
+  // Reset each time the dialog opens for a book -- otherwise checking it for
+  // one book would silently carry over and apply to the next book too.
+  $('maeSkipTags').checked = false;
   $('maeTitle').value     = chosen.title     || '';
   $('maeSubtitle').value  = chosen.subtitle  || '';
   $('maeAuthor').value    = chosen.author    || '';
@@ -1287,6 +1291,7 @@ async function applyManualMatch(result, editMode, replaceCover = false, applyBtn
         writer: 'auto',
         metadata_override: metadataOverride,
         write_policy: writePolicy,
+        skip_tags: Boolean($('maeSkipTags')?.checked),
       }),
     });
     const data = await res.json();
