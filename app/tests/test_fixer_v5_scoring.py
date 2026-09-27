@@ -716,6 +716,27 @@ class SplitSeriesTrailingNumberTests(unittest.TestCase):
         product = {"series": [{"title": "Blight, Book 1"}]}
         self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
 
+    def test_bare_book_marker_with_no_number_is_stripped(self):
+        # Real case: "Dean Koontz: From the Vault" (a themed reissue
+        # collection with no real reading order) -- Audible's own template
+        # still appends ", Book #" with nothing after the "#". The numbered
+        # regex needs a digit and never matches this at all.
+        self.assertEqual(
+            FIXER.split_series_trailing_number("Dean Koontz: From the Vault, Book #", ""),
+            ("Dean Koontz: From the Vault", ""),
+        )
+
+    def test_bare_book_marker_matches_regardless_of_case_or_hash(self):
+        for raw in ("Blight, Book", "Blight, BOOK #", "Blight, book", "Blight, Vol.", "Blight, VOLUME"):
+            series, sequence = FIXER.split_series_trailing_number(raw, "")
+            self.assertEqual(series, "Blight", raw)
+            self.assertEqual(sequence, "", raw)
+
+    def test_bare_book_marker_never_overwrites_an_existing_sequence(self):
+        self.assertEqual(
+            FIXER.split_series_trailing_number("Blight, Book #", "3"), ("Blight", "3"),
+        )
+
     def test_get_primary_series_keeps_its_own_sequence_field_over_the_suffix(self):
         product = {"series": [{"title": "Blight, Book 1", "sequence": "1"}]}
         self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
