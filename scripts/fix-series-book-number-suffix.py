@@ -502,12 +502,107 @@ def _walk_series_sources(root: Path, include_tags: bool) -> tuple[list[tuple], l
     return marker_tag_records, metadata_json_paths
 
 
+def _walk_series_sources_via_abs(
+    root: Path, abs_url: str, abs_api_key: str, include_tags: bool = False,
+) -> tuple[list[tuple], list[Path]]:
+    """Same output shape as _walk_series_sources(), sourced from ABS's bulk
+    GET /api/libraries/{id}/items instead of an os.walk -- one HTTP request
+    per library page instead of a recursive directory traversal, which
+    _walk_series_sources()'s own docstring already identifies as the
+    dominant real cost on a slow, CIFS-mounted share. Only the exact folder
+    ABS already knows about (its own `path` per item) is touched -- never a
+    directory ABS hasn't indexed.
+
+    Single-level per book folder, not recursive: fine for libraforge.json/
+    metadata.json (this tool only ever looks for those two exact filenames
+    at a book's own folder, matching _walk_series_sources()'s behavior
+    exactly) and for a single-file or flat-folder grouped book's audio
+    files (include_tags). A grouped book whose per-chapter audio sits in a
+    nested subfolder of ABS's own item path won't have those individual
+    files' tags checked -- an existing limitation of this tool's tag scan
+    either way, since it has only ever looked for a folder-level
+    libraforge.json, never per-file sidecars.
+    """
+    from app.abs_client import abs_get_json
+    from app.enrichment import fetch_all_abs_book_items
+
+    def _request(path: str, params: dict[str, str]):
+        return abs_get_json(path, params, abs_url, abs_api_key)
+
+    items = fetch_all_abs_book_items(_request)
+    marker_tag_records: list[tuple] = []
+    metadata_json_paths: list[Path] = []
+    for item in items:
+        item_path = item.get("path")
+        if not item_path:
+            continue
+        folder = Path(item_path)
+        try:
+            rel_parts = folder.relative_to(root).parts
+        except ValueError:
+            rel_parts = ()
+        author_dir = rel_parts[0] if rel_parts else ""
+
+        lf_path = folder / "libraforge.json"
+        if lf_path.is_file():
+            try:
+                data = json.loads(lf_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            if data is not None:
+                marker = (data.get("marker") or {}).get("audible")
+                if isinstance(marker, dict):
+                    series = marker.get("series")
+                    if isinstance(series, str) and series:
+                        marker_tag_records.append((lf_path, series, marker.get("sequence"), author_dir, "json"))
+
+        metadata_path = folder / "metadata.json"
+        if metadata_path.is_file():
+            metadata_json_paths.append(metadata_path)
+
+        if include_tags and folder.is_dir():
+            for audio_path in folder.iterdir():
+                kind = AUDIO_EXTENSIONS.get(audio_path.suffix.lower())
+                if not kind:
+                    continue
+                try:
+                    if kind == "mp4":
+                        from mutagen.mp4 import MP4
+                        tags = MP4(audio_path).tags or {}
+                        series = _mp4_freeform_str(tags, "mvnm")
+                        sequence = _mp4_freeform_str(tags, "mvin") or None
+                    else:
+                        from mutagen.id3 import ID3
+                        tags = ID3(audio_path)
+                        series = str(tags["TXXX:mvnm"].text[0]) if "TXXX:mvnm" in tags else ""
+                        sequence = None
+                        if "TXXX:mvin" in tags:
+                            sequence = str(tags["TXXX:mvin"].text[0])
+                        elif "TXXX:series-part" in tags:
+                            sequence = str(tags["TXXX:series-part"].text[0])
+                except Exception:
+                    continue
+                if series:
+                    marker_tag_records.append((audio_path, series, sequence, author_dir, kind))
+
+    return marker_tag_records, metadata_json_paths
+
+
 def plan_all_changes(root: Path, include_tags: bool = False) -> list[dict]:
     """The single entry point main() uses: one shared os.walk (see
     _walk_series_sources()) feeding both the marker/tag classify pass and
     the metadata.json sweep, instead of each doing its own walk over the
     same tree."""
     marker_tag_records, metadata_json_paths = _walk_series_sources(root, include_tags)
+    return _classify_records(marker_tag_records) + _scan_metadata_json_paths(metadata_json_paths)
+
+
+def plan_all_changes_via_abs(
+    root: Path, abs_url: str, abs_api_key: str, include_tags: bool = False,
+) -> list[dict]:
+    """plan_all_changes()'s ABS-API-driven equivalent -- see
+    _walk_series_sources_via_abs()'s docstring."""
+    marker_tag_records, metadata_json_paths = _walk_series_sources_via_abs(root, abs_url, abs_api_key, include_tags)
     return _classify_records(marker_tag_records) + _scan_metadata_json_paths(metadata_json_paths)
 
 
@@ -555,6 +650,14 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Make the changes (default: dry run)")
     parser.add_argument("--log", type=Path, help="JSONL change log (default: reports/series-booknum-fix-<time>.jsonl)")
     parser.add_argument("--revert", type=Path, help="Undo the changes recorded in this log")
+    parser.add_argument(
+        "--via-abs-api", action="store_true",
+        help="Discover book folders via Audiobookshelf's bulk items API instead of an os.walk "
+             "over root -- much faster on a slow/CIFS-mounted library. Needs --abs-url/--abs-api-key "
+             "(or the ABS_URL/ABS_API_KEY env vars, same as the main app).",
+    )
+    parser.add_argument("--abs-url", default=os.environ.get("ABS_URL", ""), help="Audiobookshelf base URL, only used with --via-abs-api")
+    parser.add_argument("--abs-api-key", default=os.environ.get("ABS_API_KEY", ""), help="Audiobookshelf API key, only used with --via-abs-api")
     args = parser.parse_args()
 
     if args.revert:
@@ -562,12 +665,18 @@ def main() -> int:
         print(f"Reverted changes from {args.revert}")
         return 0
 
-    # One shared walk for both the marker/tag classify pass and the
-    # whole-library metadata.json sweep (the latter catches a book whose
-    # metadata.json was never revisited since -- an older run, or a hand
-    # fix, before sync_metadata_json_series existed). See
-    # plan_all_changes()/_walk_series_sources()'s docstrings.
-    changes = plan_all_changes(args.root, include_tags=args.tags)
+    if args.via_abs_api:
+        if not args.abs_api_key:
+            print("--via-abs-api needs --abs-api-key (or the ABS_API_KEY env var)")
+            return 1
+        changes = plan_all_changes_via_abs(args.root, args.abs_url, args.abs_api_key, include_tags=args.tags)
+    else:
+        # One shared walk for both the marker/tag classify pass and the
+        # whole-library metadata.json sweep (the latter catches a book whose
+        # metadata.json was never revisited since -- an older run, or a hand
+        # fix, before sync_metadata_json_series existed). See
+        # plan_all_changes()/_walk_series_sources()'s docstrings.
+        changes = plan_all_changes(args.root, include_tags=args.tags)
     by_status: dict[str, list[dict]] = defaultdict(list)
     for change in changes:
         by_status[change["status"]].append(change)

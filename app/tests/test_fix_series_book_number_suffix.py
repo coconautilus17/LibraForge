@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).parents[2]
 
@@ -481,6 +482,84 @@ class PlanAllChangesSharedWalkTests(unittest.TestCase):
         self.assertEqual(len(changes), 1)
         self.assertEqual(changes[0]["kind"], "metadata_json")
         self.assertEqual(changes[0]["new_series"], "A Hercule Poirot Mystery #10")
+
+
+class PlanAllChangesViaAbsApiTests(unittest.TestCase):
+    """plan_all_changes_via_abs() must produce identical results to
+    plan_all_changes() for the same library, sourced from ABS's bulk items
+    API instead of an os.walk -- only the discovery mechanism differs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fake_items(self, paths):
+        return [{"id": f"li{i}", "path": str(p)} for i, p in enumerate(paths)]
+
+    def test_matches_the_walk_based_result_for_the_same_library(self):
+        book1 = self.root / "Dean Koontz" / "Shadowfires"
+        write_libraforge_json(book1 / "libraforge.json", "Dean Koontz: From the Vault, Book #", "")
+        book2 = self.root / "Rhaegar" / "Azarinth Healer" / "Book 4"
+        book2.mkdir(parents=True)
+        (book2 / "metadata.json").write_text(json.dumps({"series": ["Azarinth Healer #4 #4"]}), encoding="utf-8")
+
+        with patch(
+            "app.enrichment.fetch_all_abs_book_items",
+            return_value=self._fake_items([book1, book2]),
+        ):
+            via_abs = FIX.plan_all_changes_via_abs(self.root, "http://abs", "key")
+        walked = FIX.plan_all_changes(self.root)
+        key = lambda c: (c["kind"], c["path"])
+        self.assertEqual(sorted(via_abs, key=key), sorted(walked, key=key))
+
+    def test_never_calls_os_walk(self):
+        book1 = self.root / "Dean Koontz" / "Shadowfires"
+        write_libraforge_json(book1 / "libraforge.json", "Dean Koontz: From the Vault, Book #", "")
+
+        with patch(
+            "app.enrichment.fetch_all_abs_book_items",
+            return_value=self._fake_items([book1]),
+        ), patch("os.walk", side_effect=AssertionError("must not walk when driven by the ABS API")):
+            via_abs = FIX.plan_all_changes_via_abs(self.root, "http://abs", "key")
+        self.assertEqual(len(via_abs), 1)
+        self.assertEqual(via_abs[0]["new_series"], "Dean Koontz: From the Vault")
+
+    def test_only_touches_folders_abs_actually_reported(self):
+        # A folder ABS never mentions must never be read, even if it has a
+        # libraforge.json of its own -- the whole point of the API-driven
+        # mode is to never look anywhere ABS hasn't already indexed.
+        reported = self.root / "Dean Koontz" / "Shadowfires"
+        write_libraforge_json(reported / "libraforge.json", "Dean Koontz: From the Vault, Book #", "")
+        unreported = self.root / "Someone Else" / "Untracked Book"
+        write_libraforge_json(unreported / "libraforge.json", "Other Series, Book #", "")
+
+        with patch(
+            "app.enrichment.fetch_all_abs_book_items",
+            return_value=self._fake_items([reported]),
+        ):
+            via_abs = FIX.plan_all_changes_via_abs(self.root, "http://abs", "key")
+        self.assertEqual(len(via_abs), 1)
+        self.assertEqual(via_abs[0]["path"], str(reported / "libraforge.json"))
+
+    def test_passes_abs_credentials_through_to_the_request(self):
+        book1 = self.root / "Dean Koontz" / "Shadowfires"
+        write_libraforge_json(book1 / "libraforge.json", "Dean Koontz: From the Vault, Book #", "")
+
+        captured = {}
+
+        def fake_fetch(request_fn):
+            captured["request_fn"] = request_fn
+            return self._fake_items([book1])
+
+        with patch("app.enrichment.fetch_all_abs_book_items", side_effect=fake_fetch), \
+             patch("app.abs_client.abs_get_json") as get_json:
+            get_json.return_value = {}
+            FIX.plan_all_changes_via_abs(self.root, "http://abs.example", "real-key")
+            captured["request_fn"]("/api/libraries", {})
+        get_json.assert_called_once_with("/api/libraries", {}, "http://abs.example", "real-key")
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build test fixtures")
