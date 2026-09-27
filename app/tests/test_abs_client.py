@@ -507,3 +507,132 @@ class ReconcileBootstrapRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetadataJsonDiffTests(unittest.TestCase):
+    ABS = {"title": "T", "subtitle": "", "authors": [{"id": "a1", "name": "A"}], "narrators": ["N"],
+           "series": [{"id": "s1", "name": "S", "sequence": "1"}], "genres": ["Fantasy"],
+           "publishedYear": "2020", "publisher": "", "description": "Desc  text", "isbn": None,
+           "asin": "B0TEST1234", "language": "english", "explicit": False}
+
+    def test_identical_content_in_file_shape_has_no_diff(self):
+        f = {"title": "T", "subtitle": "", "authors": ["A"], "narrators": ["N"], "series": ["S #1"],
+             "genres": ["Fantasy", "Audiobook"], "publishedYear": "2020", "publisher": "",
+             "description": "Desc text", "isbn": None, "asin": "B0TEST1234", "language": "english", "explicit": False}
+        self.assertEqual(abs_client.metadata_json_diff(f, self.ABS), {})
+
+    def test_blank_file_values_never_count_as_differences(self):
+        self.assertEqual(abs_client.metadata_json_diff({"title": "", "genres": [], "asin": None, "authors": []}, self.ABS), {})
+
+    def test_differences_come_back_in_patch_shape(self):
+        f = {"authors": ["A", "B"], "series": ["Other #2"], "genres": ["Horror"], "publisher": "P"}
+        self.assertEqual(abs_client.metadata_json_diff(f, self.ABS), {
+            "authors": [{"name": "A"}, {"name": "B"}], "series": [{"name": "Other", "sequence": "2"}],
+            "genres": ["Horror"], "publisher": "P"})
+
+    def test_audiobook_only_genre_file_is_not_a_difference(self):
+        self.assertEqual(abs_client.metadata_json_diff({"genres": ["Audiobook"]}, self.ABS), {})
+
+
+class ReconcileLegacyMetadataJsonTests(unittest.TestCase):
+    def setUp(self):
+        import json as _json
+        self._json = _json
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / "A" / "B"; self.folder.mkdir(parents=True)
+        self.item = {"id": "i1", "path": str(self.folder), "isFile": False, "updatedAt": 2_000_000,
+                     "media": {"metadata": {"title": "T", "genres": ["Fantasy"], "authors": [{"name": "A"}],
+                                            "series": [{"name": "S", "sequence": "1"}], "narrators": ["N"]}}}
+        self.patches = []
+
+    def write(self, data):
+        (self.folder / "metadata.json").write_text(self._json.dumps(data), encoding="utf-8")
+
+    def run_it(self, mtime_s, patch_fn=None):
+        return abs_client.reconcile_legacy_metadata_json(
+            str(self.folder), self.item, abs_url="u", abs_api_key="k",
+            patch_fn=patch_fn or (lambda path, body, *a, **k: self.patches.append((path, body))),
+            mtime_fn=lambda p: mtime_s)
+
+    def test_identical_file_is_deleted_without_patching(self):
+        self.write({"title": "T", "genres": ["Fantasy", "Audiobook"], "authors": ["A"], "series": ["S #1"], "narrators": ["N"]})
+        r = self.run_it(mtime_s=1_000)
+        self.assertEqual(r["action"], "deleted_identical"); self.assertEqual(self.patches, [])
+        self.assertFalse((self.folder / "metadata.json").exists())
+
+    def test_abs_newer_wins_and_file_is_deleted(self):
+        self.write({"title": "T", "genres": ["Audiobook", "Horror"]})
+        r = self.run_it(mtime_s=1_000)  # 1_000 s = 1_000_000 ms, older than updatedAt 2_000_000 ms
+        self.assertEqual(r["action"], "deleted_abs_newer"); self.assertEqual(self.patches, [])
+        self.assertFalse((self.folder / "metadata.json").exists())
+
+    def test_file_newer_pushes_differences_then_deletes(self):
+        self.write({"title": "T", "genres": ["Horror"], "publisher": "P", "subtitle": ""})
+        r = self.run_it(mtime_s=3_000)
+        self.assertEqual(r["action"], "consolidated_then_deleted")
+        self.assertEqual(self.patches, [("/api/items/i1/media", {"metadata": {"genres": ["Horror"], "publisher": "P"}})])
+        self.assertFalse((self.folder / "metadata.json").exists())
+
+    def test_patch_failure_keeps_the_file(self):
+        self.write({"title": "T2"})
+        def boom(*a, **k): raise OSError("down")
+        r = self.run_it(mtime_s=3_000, patch_fn=boom)
+        self.assertEqual(r["action"], "kept_patch_failed"); self.assertTrue((self.folder / "metadata.json").exists())
+
+    def test_unreadable_file_is_kept(self):
+        (self.folder / "metadata.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(self.run_it(3_000)["action"], "kept_unreadable")
+        self.assertTrue((self.folder / "metadata.json").exists())
+
+    def test_single_file_items_are_never_touched(self):
+        self.write({"title": "Other"}); self.item["isFile"] = True
+        self.assertEqual(self.run_it(3_000)["action"], "none"); self.assertTrue((self.folder / "metadata.json").exists())
+
+    def test_folder_that_is_not_the_items_own_path_is_never_touched(self):
+        self.write({"title": "Other"}); self.item["path"] = str(self.folder.parent)
+        self.assertEqual(self.run_it(3_000)["action"], "none"); self.assertTrue((self.folder / "metadata.json").exists())
+
+    def test_no_file_is_none(self):
+        self.assertEqual(self.run_it(3_000)["action"], "none")
+
+
+class SyncBookMetadataLegacyJsonTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / "Book"; self.folder.mkdir()
+        self.record = {"library_item_id": "li1", "path": str(self.folder), "rel_path": "Book", "updated_at": 100,
+                       "media": {"metadata": {"title": "Old"}}}
+        self.item = {"id": "li1", "path": str(self.folder), "isFile": False, "updatedAt": 2_000_000,
+                     "media": {"metadata": {"title": "Old", "genres": []}}}
+        self.metadata = {"title": "New", "author": "", "narrator": "", "series": "", "sequence": "",
+                         "genre": "", "year": "", "summary": "", "isbn": "", "asin": "", "language": ""}
+
+    def call(self, calls):
+        with patch.object(abs_client, "abs_patch_json", side_effect=lambda path, body, *a, **k: calls.append(("patch", body))):
+            return abs_client.sync_book_metadata(
+                metadata=self.metadata, expected_path=str(self.folder), abs_url="u", abs_api_key="k",
+                lookup_item=lambda a, p: self.record, write_file_fallback=lambda: None,
+                get_item=lambda item_id: self.item)
+
+    def test_patch_branch_deletes_identical_legacy_file(self):
+        (self.folder / "metadata.json").write_text('{"title": "Old"}', encoding="utf-8")
+        calls = []
+        result = self.call(calls)
+        self.assertEqual(result["legacy_metadata_json"]["action"], "deleted_identical")
+        self.assertFalse((self.folder / "metadata.json").exists())
+
+    def test_newer_file_is_consolidated_before_our_patch(self):
+        import os
+        f = self.folder / "metadata.json"; f.write_text('{"publisher": "P"}', encoding="utf-8")
+        os.utime(f, (3_000, 3_000))
+        calls = []
+        self.call(calls)
+        self.assertEqual(calls[0], ("patch", {"metadata": {"publisher": "P"}}))
+        self.assertEqual(calls[1][1]["metadata"]["title"], "New")
+
+    def test_file_fallback_branch_never_deletes(self):
+        (self.folder / "metadata.json").write_text('{"title": "Old"}', encoding="utf-8")
+        abs_client.sync_book_metadata(metadata=self.metadata, expected_path=str(self.folder), abs_url="u", abs_api_key="",
+                                      lookup_item=lambda a, p: self.record, write_file_fallback=lambda: None,
+                                      get_item=lambda item_id: self.item)
+        self.assertTrue((self.folder / "metadata.json").exists())

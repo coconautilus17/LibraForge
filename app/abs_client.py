@@ -17,13 +17,14 @@ sync_book_metadata's three-way branch.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable
 
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
 from app.fixer.parsing import is_single_numeric_sequence
-from app.fixer.scoring import split_genre_string, split_series_trailing_number
+from app.fixer.scoring import GENRE_BLOCKLIST, split_genre_string, split_series_trailing_number
 
 _COMMA_SPLIT_RE = re.compile(r"\s*,\s*")
 
@@ -347,6 +348,123 @@ def compute_selective_patch_fields(
 # Orchestration
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Legacy metadata.json: reconcile into ABS, then delete (LibraForge #298)
+#
+# metadata.json is retired -- LibraForge writes ABS through its API. But older
+# versions left a metadata.json in most book folders, and ABS re-reads it on
+# every rescan of that folder and prefers it over its own database, silently
+# reverting API edits. Verified 2026-09-28: with the file present a rescan
+# reverts an API edit; with it gone, API edits survive rescans (even ones that
+# re-read the audio tags). So on every direct write we compare the file with
+# the ABS record: identical -> delete; different -> whichever side was edited
+# last wins (file mtime vs the item's updatedAt), a newer file's values are
+# pushed to ABS first, then the file is deleted.
+# ---------------------------------------------------------------------------
+
+_LEGACY_JSON_STRING_FIELDS = ("title", "subtitle", "publishedYear", "publisher", "description", "isbn", "asin", "language")
+
+
+def _norm_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _parse_legacy_series(entry: Any) -> tuple[str, str]:
+    if isinstance(entry, dict):
+        return str(entry.get("name") or "").strip(), str(entry.get("sequence") or "").strip()
+    text = str(entry or "").strip()
+    m = re.match(r"^(.*?)\s*#\s*([^#]*)$", text)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return text, ""
+
+
+def _names(values: Any) -> list[str]:
+    out = []
+    for v in values or []:
+        name = v.get("name") if isinstance(v, dict) else v
+        name = str(name or "").strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def _real_genres(values: Any) -> set[str]:
+    return {g.strip().lower() for g in (values or []) if str(g).strip() and str(g).strip().lower() not in GENRE_BLOCKLIST}
+
+
+def metadata_json_diff(metadata_json: dict[str, Any], abs_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Fields where a legacy metadata.json holds a NON-BLANK value that differs
+    from the ABS record, in PATCH /api/items/{id}/media `metadata` shape.
+    Blocklisted genre labels ("Audiobook") are ignored on both sides."""
+    diff: dict[str, Any] = {}
+    for key in _LEGACY_JSON_STRING_FIELDS:
+        value = metadata_json.get(key)
+        if _blank(value):
+            continue
+        if _norm_text(value) != _norm_text(abs_metadata.get(key)):
+            diff[key] = value
+    for key in ("authors", "narrators"):
+        names = _names(metadata_json.get(key))
+        if names and [n.lower() for n in names] != [n.lower() for n in _names(abs_metadata.get(key))]:
+            diff[key] = [{"name": n} for n in names] if key == "authors" else names
+    series = [_parse_legacy_series(s) for s in (metadata_json.get("series") or [])]
+    series = [s for s in series if s[0]]
+    if series:
+        current = {(n.lower(), q) for n, q in (_parse_legacy_series(s) for s in (abs_metadata.get("series") or []))}
+        if {(n.lower(), q) for n, q in series} != current:
+            diff["series"] = [{"name": n, "sequence": q} for n, q in series]
+    genres = [g for g in (metadata_json.get("genres") or []) if str(g).strip().lower() not in GENRE_BLOCKLIST]
+    if genres and _real_genres(genres) != _real_genres(abs_metadata.get("genres")):
+        diff["genres"] = genres
+    if isinstance(metadata_json.get("explicit"), bool) and metadata_json["explicit"] != bool(abs_metadata.get("explicit")):
+        diff["explicit"] = metadata_json["explicit"]
+    return diff
+
+
+def reconcile_legacy_metadata_json(
+    folder: str,
+    abs_item: dict[str, Any],
+    *,
+    abs_url: str,
+    abs_api_key: str,
+    patch_fn: Callable[..., Any] | None = None,
+    mtime_fn: Callable[[str], float] = os.path.getmtime,
+) -> dict[str, Any]:
+    """Reconcile the legacy metadata.json in `folder` against `abs_item` (the
+    expanded /api/items/{id} record) and delete it. Never touches single-file
+    items (their folder is shared with other books) or a folder that isn't the
+    item's own path. Returns {"action": ..., "fields": [...]}."""
+    patch_fn = patch_fn or abs_patch_json
+    if not folder or abs_item.get("isFile") or Path(folder) != Path(str(abs_item.get("path") or "")):
+        return {"action": "none", "fields": []}
+    legacy = Path(folder) / "metadata.json"
+    if not legacy.is_file():
+        return {"action": "none", "fields": []}
+    try:
+        data = json.loads(legacy.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("metadata.json is not an object")
+    except (OSError, ValueError):
+        return {"action": "kept_unreadable", "fields": []}
+    diff = metadata_json_diff(data, ((abs_item.get("media") or {}).get("metadata") or {}))
+    action = "deleted_identical"
+    if diff:
+        if mtime_fn(str(legacy)) * 1000 > float(abs_item.get("updatedAt") or 0):
+            try:
+                patch_fn(f"/api/items/{abs_item['id']}/media", {"metadata": diff}, abs_url, abs_api_key)
+            except Exception:
+                return {"action": "kept_patch_failed", "fields": sorted(diff)}
+            action = "consolidated_then_deleted"
+        else:
+            action = "deleted_abs_newer"
+    try:
+        legacy.unlink()
+    except OSError:
+        return {"action": "kept_unreadable", "fields": sorted(diff)}
+    return {"action": action, "fields": sorted(diff)}
+
+
 def sync_book_metadata(
     *,
     metadata: dict[str, Any],
@@ -359,6 +477,7 @@ def sync_book_metadata(
     write_file_fallback: Callable[[], Any],
     record_sync: Callable[[dict[str, Any]], None] | None = None,
     record_bootstrap: Callable[[], None] | None = None,
+    get_item: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The three-way branch every write call site needs:
       (a) no abs_api_key -> write_file_fallback(). Zero behavior change.
@@ -416,6 +535,19 @@ def sync_book_metadata(
             path = write_file_fallback()
             return {"branch": "file", "reason": "path_mismatch", "path": path}
 
+    # A legacy on-disk metadata.json is the only thing that reverts a direct
+    # API write on rescan (LibraForge #298), so reconcile it into ABS and
+    # delete it before our own PATCH lands.
+    fetch = get_item or (lambda item_id: abs_get_json(f"/api/items/{item_id}", {"expanded": "1"}, abs_url, abs_api_key))
+    live_item: dict[str, Any] | None = None
+    legacy: dict[str, Any] | None = None
+    if expected_path:
+        try:
+            live_item = fetch(record["library_item_id"])
+            legacy = reconcile_legacy_metadata_json(expected_path, live_item, abs_url=abs_url, abs_api_key=abs_api_key)
+        except Exception:
+            legacy = {"action": "kept_unreadable", "fields": []}
+
     new_payload = build_media_patch_payload(metadata)
     fields = compute_selective_patch_fields(
         record["media"], new_payload["metadata"], fill_missing=fill_missing, skip_blank_fields=skip_blank_fields
@@ -423,9 +555,7 @@ def sync_book_metadata(
 
     series_name = str(metadata.get("series") or "").strip()
     if "series" in fields and series_name:
-        current_item = abs_get_json(
-            f"/api/items/{record['library_item_id']}", {}, abs_url, abs_api_key
-        )
+        current_item = live_item if live_item is not None else fetch(record["library_item_id"])
         current_series = ((current_item.get("media") or {}).get("metadata") or {}).get("series") or []
         sequence = str(metadata.get("sequence") or "").strip()
         fields["series"] = merge_series_entries(current_series, series_name, sequence)
@@ -433,14 +563,14 @@ def sync_book_metadata(
     if not fields:
         if record_sync is not None:
             record_sync({"library_item_id": record["library_item_id"], "abs_updated_at": record["updated_at"]})
-        return {"branch": "patch", "fields": {}, "library_item_id": record["library_item_id"]}
+        return {"branch": "patch", "fields": {}, "library_item_id": record["library_item_id"], "legacy_metadata_json": legacy}
 
     abs_patch_json(f"/api/items/{record['library_item_id']}/media", {"metadata": fields}, abs_url, abs_api_key)
 
     if record_sync is not None:
         record_sync({"library_item_id": record["library_item_id"], "abs_updated_at": record["updated_at"]})
 
-    return {"branch": "patch", "fields": fields, "library_item_id": record["library_item_id"]}
+    return {"branch": "patch", "fields": fields, "library_item_id": record["library_item_id"], "legacy_metadata_json": legacy}
 
 
 # ---------------------------------------------------------------------------
