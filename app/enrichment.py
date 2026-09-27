@@ -389,22 +389,28 @@ def is_flagged_explicit(product: dict[str, Any] | None) -> bool:
     return False
 
 
-def explicit_evidence_note(flagged_count: int, total_count: int) -> str:
+def explicit_evidence_note(flagged_count: int, total_count: int, goodreads_count: int = 0) -> str:
     """Deterministic, count-only evidence sentence.
 
     Never names individual books (the per-book warning pills in the UI
     already do that, and it gets grammatically awkward at variable list
     lengths), and never a generated sentence, this is plain templating.
+    `goodreads_count` = books whose Goodreads readers significantly shelve
+    them as erotica/smut/nsfw.
     """
-    if flagged_count == 0:
+    if flagged_count == 0 and goodreads_count == 0:
         headline = "No book in this series returned a positive Erotica/adult signal from Audible or Goodreads."
-    elif flagged_count == total_count:
-        headline = f"All {total_count} books in this series show a positive Erotica/adult signal from Audible."
     else:
-        headline = (
-            f"{flagged_count} of {total_count} books in this series show a positive "
-            "Erotica/adult signal from Audible (marked below)."
-        )
+        parts = []
+        if flagged_count == total_count:
+            parts.append(f"All {total_count} books in this series show a positive Erotica/adult signal from Audible.")
+        elif flagged_count:
+            parts.append(f"{flagged_count} of {total_count} books in this series show a positive "
+                         "Erotica/adult signal from Audible (marked below).")
+        if goodreads_count:
+            parts.append(f"{goodreads_count} of {total_count} books are shelved as erotica/smut/nsfw by "
+                         "Goodreads readers (marked below).")
+        headline = " ".join(parts)
     caveat = (
         "That doesn't confirm the rest are clean, the same signal has missed equally "
         "explicit books before, so use your own judgment for the whole series."
@@ -472,6 +478,7 @@ def compile_series_enrichment(
     all_genres: list[str] = []
     all_narrators: list[str] = []
     flagged_count = 0
+    goodreads_explicit_count = 0
 
     for book in books:
         product = audible_results.get(book["id"])
@@ -485,6 +492,8 @@ def compile_series_enrichment(
         )
         goodreads_genres = clean_provider_genres_fn(shelves_to_genres(gr.get("shelves") or [])) if gr_found else []
         goodreads_explicit = shelves_explicit_evidence(gr.get("shelves") or []) if gr_found else None
+        if goodreads_explicit and goodreads_explicit["significant"] and book.get("has_audio", True):
+            goodreads_explicit_count += 1
         flagged = is_flagged_explicit(product)
         if flagged:
             flagged_count += 1
@@ -523,7 +532,8 @@ def compile_series_enrichment(
         "narrator": ", ".join(_dedupe_preserve_order(all_narrators)),
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),
-        "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books)),
+        "explicit_goodreads_count": goodreads_explicit_count,
+        "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books), goodreads_explicit_count),
         "sequence_range": _compute_sequence_range(books),
     }
 

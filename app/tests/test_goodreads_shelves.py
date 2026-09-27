@@ -152,6 +152,17 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(ev["votes"], 6)
         self.assertAlmostEqual(ev["share"], 6 / 27, places=3)
 
+    def test_adult_fiction_is_an_audience_not_explicit_content(self):
+        # Real data: Dune carries adult-fiction x261 (vs sci-fi x24246); 220
+        # books in the library have that shelf. It means "not YA".
+        ev = shelves_explicit_evidence([("sci-fi", 24246), ("adult", 743), ("adult-fiction", 261)])
+        self.assertEqual(ev["votes"], 0)
+        self.assertFalse(ev["significant"])
+
+    def test_significant_only_at_five_percent_of_the_top_genre_shelf(self):
+        self.assertTrue(shelves_explicit_evidence([("fantasy", 27), ("harem", 11), ("erotica", 4), ("nsfw", 2)])["significant"])
+        self.assertFalse(shelves_explicit_evidence([("fantasy", 3000), ("smut", 20)])["significant"])
+
     def test_no_shelves_means_no_genres_and_no_evidence(self):
         self.assertEqual(shelves_to_genres([]), [])
         self.assertEqual(shelves_explicit_evidence([])["votes"], 0)

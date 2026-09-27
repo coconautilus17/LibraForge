@@ -210,7 +210,10 @@ _BROAD = {
     "literary-fiction": "Literary Fiction", "non-fiction": "Non-Fiction", "nonfiction": "Non-Fiction",
     "history": "History", "biography": "Biography", "memoir": "Biography",
 }
-_EXPLICIT = {"erotica", "smut", "nsfw", "explicit", "adult-fiction", "erotic", "spicy", "steamy", "porn", "explicit-content"}
+# "adult"/"adult-fiction" mean an adult (not YA) audience, not sexual content:
+# Dune carries adult-fiction x261, and 220 books in one real library had it.
+_EXPLICIT = {"erotica", "smut", "nsfw", "explicit", "erotic", "spicy", "steamy", "porn", "explicit-content"}
+EXPLICIT_SHARE, EXPLICIT_MIN_VOTES = 0.05, 3
 NICHE_SHARE, AUDIENCE_SHARE, BROAD_SHARE, NICHE_MIN_VOTES = 0.05, 0.10, 0.15, 3
 
 
@@ -239,4 +242,7 @@ def shelves_explicit_evidence(shelves: list[tuple[str, int]]) -> dict[str, Any]:
     """Reader shelving as erotica/smut/nsfw etc.: total votes and their share of
     the top genre shelf. Evidence for the user to judge, never a verdict."""
     votes = sum(c for n, c in shelves if n in _EXPLICIT)
-    return {"votes": votes, "share": round(votes / _top_broad(shelves), 3) if shelves else 0.0}
+    share = round(votes / _top_broad(shelves), 3) if shelves else 0.0
+    # "significant": enough readers relative to the book's top genre shelf that
+    # it isn't a handful of stray shelvings on a very popular book.
+    return {"votes": votes, "share": share, "significant": votes >= EXPLICIT_MIN_VOTES and share >= EXPLICIT_SHARE}

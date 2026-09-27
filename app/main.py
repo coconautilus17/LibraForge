@@ -6257,6 +6257,7 @@ class EnrichmentCompileResponse(BaseModel):
     sequence_range: str
     explicit_flagged_count: int
     explicit_total_count: int
+    explicit_goodreads_count: int = 0
     explicit_evidence_note: str
     source_status: dict[str, EnrichmentSourceStatus] = Field(default_factory=dict)
 

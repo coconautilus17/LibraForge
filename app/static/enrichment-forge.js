@@ -19,7 +19,7 @@ function renderSeriesResults(rows) {
     return;
   }
   container.innerHTML = rows.map((row) => `
-    <div class="series-result-row" data-name="${escapeHtml(row.name)}">
+    <div class="series-result-row" data-name="${escapeHtml(row.name)}" data-key="${escapeHtml(row.key || "")}">
       <span class="series-result-name">${escapeHtml(row.name)}</span>
       <span class="series-result-count">${row.book_count} books</span>
     </div>
@@ -28,7 +28,7 @@ function renderSeriesResults(rows) {
     el.addEventListener("click", () => {
       $("seriesSearch").value = el.dataset.name;
       container.innerHTML = "";
-      compileSeries(el.dataset.name);
+      compileSeries(el.dataset.name, el.dataset.key);
     });
   });
 }
@@ -58,22 +58,32 @@ function addGenreChip(value) {
 }
 
 function renderBookList(books) {
-  $("bookList").innerHTML = books.map((book) => `
-    <div class="book-row" data-id="${escapeHtml(book.id)}">
+  $("bookList").innerHTML = books.map((book) => {
+    // Items with no audio (placeholders, ebooks) come back excluded by default (#301).
+    const included = book.default_include !== false;
+    const grExplicit = book.goodreads_explicit && book.goodreads_explicit.significant;
+    return `
+    <div class="book-row${included ? "" : " excluded"}" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
         <div class="book-title">${escapeHtml(book.title)}</div>
         <div class="book-src-line">
           <span class="audible">Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
           <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
+        </div>
+        <div class="book-src-line">
+          <span class="local">Current genres: ${escapeHtml((book.existing_genres || []).join(", ") || "none")}</span>
           &nbsp;&middot;&nbsp;
-          <span class="local">Local: ${escapeHtml((book.existing_genres || []).join(", ") || "none")}</span>
+          <span class="local">Tags: ${escapeHtml((book.existing_tags || []).join(", ") || "none")}</span>
         </div>
       </div>
+      ${book.has_audio === false ? '<span class="badge evidence-pill" title="No audio files: not searched, excluded by default">No audio</span>' : ""}
       ${book.flagged_explicit ? '<span class="badge evidence-pill">&#9888; Erotica</span>' : ""}
-      <button type="button" class="secondary include-toggle in" data-included="true">In</button>
+      ${grExplicit ? `<span class="badge evidence-pill" title="Goodreads readers shelved this as erotica/smut/nsfw">&#9888; Goodreads explicit shelves &times;${book.goodreads_explicit.votes}</span>` : ""}
+      <button type="button" class="secondary include-toggle${included ? " in" : ""}" data-included="${included}">${included ? "In" : "Excluded"}</button>
     </div>
-  `).join("");
+  `;
+  }).join("");
 
   $("bookList").querySelectorAll(".include-toggle").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -96,7 +106,14 @@ function updateIncludedCount() {
 function sourceChipHtml(key, status, total) {
   if (!status) return "";
   const searched = Number(status.searched || 0);
-  const state = status.state === "searched" ? `${searched} of ${total} searched` : "not used";
+  let state = "not used";
+  if (status.state === "searched") {
+    state = key === "goodreads" && status.found !== undefined
+      ? `found ${Number(status.found || 0)} of ${searched} searched`
+      : `${searched} of ${total} searched`;
+    if (Number(status.failed || 0)) state += `, ${status.failed} failed`;
+    if (status.rate_limited) state += ", rate-limited, paused";
+  }
   const detail = status.detail ? ` title="${escapeHtml(status.detail)}"` : "";
   return `<span class="source-chip ${key} ${status.state || ""}"${detail}><span class="dot"></span> ${escapeHtml(status.label || key)}, ${state}</span>`;
 }
@@ -121,7 +138,7 @@ function renderExplicitEvidence(note) {
   $("explicitEvidence").innerHTML = `<span class="dot">&#9679;</span><span>${body}</span>`;
 }
 
-async function compileSeries(seriesName) {
+async function compileSeries(seriesName, seriesKey) {
   // Compile always reads the series from ABS first -- it's the mandatory
   // library source here. Audible is only an optional, better-quality search
   // source (the backend falls back to ABS's own Audible provider when direct
@@ -138,11 +155,14 @@ async function compileSeries(seriesName) {
   const res = await fetch("/api/enrichment/compile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ series_name: seriesName }),
+    body: JSON.stringify({ series_name: seriesName, series_key: seriesKey || "" }),
   }).catch(() => null);
 
   if (!res || !res.ok) {
-    $("compileSub").textContent = "Compile failed. Check that Audiobookshelf and Audible auth are configured.";
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("compileSub").textContent = detail
+      ? `Compile failed: ${detail}`
+      : "Compile failed. Check that Audiobookshelf is reachable and configured.";
     return;
   }
 
@@ -153,7 +173,11 @@ async function compileSeries(seriesName) {
   $("compileSub").textContent = `${seriesName}, ${data.books.length} books.`;
   renderSourceStrip(currentSourceStatus, data.books.length, elapsedSeconds);
   renderGenreChips(data.genre);
-  $("narratorInput").value = data.narrator;
+  // Narrators differ per book and edition, so nothing is pre-filled (#299).
+  $("narratorInput").value = "";
+  $("applyNarratorCheckbox").checked = false;
+  $("narratorSuggestions").textContent = data.narrator ? `Narrators found across this series: ${data.narrator}` : "";
+  $("explicitSelect").value = "";
   $("sequenceRangeInput").value = data.sequence_range;
   renderExplicitEvidence(data.explicit_evidence_note);
   renderBookList(data.books);
@@ -168,9 +192,11 @@ async function applyEnrichment() {
       id: row.dataset.id,
       path: book.path,
       is_file: book.is_file,
+      title: book.title,
       include: row.querySelector(".include-toggle").dataset.included === "true",
     };
   });
+  const explicitValue = $("explicitSelect").value;
 
   const res = await fetch("/api/enrichment/apply", {
     method: "POST",
@@ -179,18 +205,28 @@ async function applyEnrichment() {
       books,
       genre: currentGenreList(),
       narrator: $("narratorInput").value,
-      explicit: $("explicitCheckbox").checked,
+      apply_narrator: $("applyNarratorCheckbox").checked,
+      explicit: explicitValue === "" ? null : explicitValue === "true",
     }),
   }).catch(() => null);
 
-  if (res && res.ok) {
-    const data = await res.json();
-    if (data.failed && data.failed.length) {
-      $("compileSub").textContent = `Applied to ${data.applied} books. ${data.failed.length} failed.`;
-    } else {
-      $("compileSub").textContent = `Applied to ${data.applied} books.`;
-    }
+  if (!res || !res.ok) {
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("compileSub").textContent = `Apply failed${detail ? `: ${detail}` : ". Check that Audiobookshelf is reachable."}`;
+    return;
   }
+  const data = await res.json();
+  const parts = [`Applied to ${data.applied} book${data.applied === 1 ? "" : "s"}.`];
+  const legacy = data.legacy_json || {};
+  const merged = legacy.consolidated_then_deleted || 0;
+  const removed = (legacy.deleted_identical || 0) + (legacy.deleted_abs_newer || 0) + merged;
+  if (removed > 0) {
+    parts.push(`Removed ${removed} old metadata.json file${removed === 1 ? "" : "s"}${merged ? ` (${merged} merged into Audiobookshelf first)` : ""}.`);
+  }
+  if (data.failed && data.failed.length) {
+    parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.title || f.path} (${f.error})`).join("; ")}`);
+  }
+  $("compileSub").textContent = parts.join(" ");
 }
 
 let searchDebounce = null;

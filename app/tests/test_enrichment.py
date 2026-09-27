@@ -411,6 +411,16 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["books"][0]["is_file"], False)
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
 
+    def test_evidence_note_counts_significant_goodreads_explicit_shelving(self):
+        books = [{"id": "1", "title": "A", "existing_genres": [], "existing_narrator": "", "existing_explicit": False},
+                 {"id": "2", "title": "B", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        gr = {"1": {"status": "found", "shelves": [("fantasy", 27), ("erotica", 4), ("nsfw", 2)]},
+              "2": {"status": "found", "shelves": [("sci-fi", 24246), ("adult-fiction", 261)]}}
+        compiled = enrichment.compile_series_enrichment(books, {}, gr, self._clean_genres)
+        self.assertIn("1 of 2 books", compiled["explicit_evidence_note"])
+        self.assertIn("Goodreads", compiled["explicit_evidence_note"])
+        self.assertEqual(compiled["explicit_goodreads_count"], 1)
+
     def test_not_found_or_failed_goodreads_results_add_no_genres(self):
         books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
         compiled = enrichment.compile_series_enrichment(
