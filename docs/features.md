@@ -87,16 +87,39 @@ each book one at a time.
 
 - **Series lookup is ABS-native:** searches series already in your Audiobookshelf
   library index (not a provider search), with tag variants normalized into one entry.
-- **Compiled, editable result:** genre is a deduped union across the series and both
-  sources, shown as removable chips with a free-text add; narrator is a union you can
-  edit if narrators changed mid-series; sequence range is shown for context.
-- **Explicit content is a judgment call, not an auto-fill:** evidence from both
-  providers is shown alongside the toggle, but never pre-checked - neither provider's
-  signal is reliable proof a book is clean, only a hint it might not be. Checking it
-  writes `explicit: true` for every included book.
-- **Per-book include/exclude** before applying, and a heads-up that Apply only writes
-  `metadata.json` - it never edits audio tags, and if Audiobookshelf's "Store metadata
-  with item" setting is on, ABS will overwrite it on its next scan.
+- **Compiled, editable result:** genre is a deduped union across the series from
+  Audible (every level of its category path, so a Space Opera book also gets Science
+  Fiction), Goodreads reader shelves, and the books' current genres and tags, shown as
+  removable chips with a free-text add. "Audiobook" is a format label and is never
+  proposed or written as a genre. Sequence range is shown for context.
+- **Goodreads shelves, read directly:** Enrichment Forge reads each book's Goodreads
+  reader shelves with their vote counts (not through abs-tract, whose Goodreads output is
+  limited to three generic genres), so LitRPG, progression fantasy, cultivation, harem and
+  young adult come through when enough readers agree. Requests are paced like Metadata
+  Forge's Goodreads calls and pause automatically if Goodreads starts rate-limiting; the
+  source strip shows how many books were found, failed or skipped.
+- **Narrator is opt-in:** narrators differ per book and per edition, so the narrator box
+  starts empty with the narrators found listed underneath; it is only written when you
+  tick "Also set this narrator on every included book".
+- **Explicit content is a judgment call, not an auto-fill:** evidence from Audible's
+  adult/Erotica categories and from Goodreads readers shelving a book as erotica/smut/nsfw
+  is shown alongside the choice, but nothing is pre-selected - neither signal is reliable
+  proof a book is clean, only a hint it might not be. Choose Don't change (the default),
+  Explicit, or Not explicit (clears a wrong flag) for every included book.
+- **Per-book include/exclude** before applying. Items with no audio files (for example
+  an ebook checklist in a series folder) are never searched and start excluded.
+- **Same-named series by different authors are listed separately**, for example
+  `Scholomance [Naomi Novik]` and `Scholomance [Logan Jacobs]`; co-written and
+  continuation series stay together.
+- **Apply writes straight to Audiobookshelf** via its API and never edits audio tags. An
+  old `metadata.json` left in a book's folder by earlier LibraForge versions would undo
+  the change on Audiobookshelf's next scan, so it is first compared with Audiobookshelf
+  (the more recently edited side wins) and then removed. Only if Audiobookshelf isn't
+  configured does Apply write `metadata.json` instead; if Audiobookshelf's "Store
+  metadata with item" setting is on, ABS will overwrite it on its next scan.
+- **Clearing old metadata.json files library-wide:** `scripts/migrate-legacy-metadata-json.py`
+  does the same compare-then-remove for every book at once. It is a dry run by default
+  (writes a JSON report of what it would do); add `--apply` to perform it.
 
 ## Library Downloader (`/library`)
 Browse your Audible library and download purchases straight into a mounted folder,
