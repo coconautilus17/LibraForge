@@ -17,7 +17,7 @@ class BuildItemIndexTests(unittest.TestCase):
         items = [
             {
                 "id": "li1", "path": "/audiobooks/A/Book", "relPath": "A/Book", "updatedAt": 111,
-                "media": {"metadata": {"asin": "b0abc1234", "title": "Book"}},
+                "media": {"metadata": {"asin": "b0abc12345", "title": "Book"}},
             },
             {
                 "id": "li2", "path": "/audiobooks/Linux/EPUB", "relPath": "Linux/EPUB", "updatedAt": 222,
@@ -25,8 +25,8 @@ class BuildItemIndexTests(unittest.TestCase):
             },
         ]
         index = abs_client.build_item_index(items)
-        self.assertIn("B0ABC1234", index["by_asin"])
-        self.assertEqual(index["by_asin"]["B0ABC1234"]["library_item_id"], "li1")
+        self.assertIn("B0ABC12345", index["by_asin"])
+        self.assertEqual(index["by_asin"]["B0ABC12345"]["library_item_id"], "li1")
         self.assertIn("/audiobooks/Linux/EPUB", index["by_path"])
         self.assertIn("Linux/EPUB", index["by_path"])
         self.assertNotIn("", index["by_asin"])
@@ -37,15 +37,68 @@ class BuildItemIndexTests(unittest.TestCase):
         self.assertEqual(index["by_asin"], {})
         self.assertIn("/x", index["by_path"])
 
+    def test_placeholder_asin_shared_by_several_items_is_never_a_lookup_key(self):
+        """LibraForge #291: NOREALASIN and abs-agg-* are sentinel values the
+        fixer stores when no real ASIN exists. Many unrelated books share the
+        exact same placeholder -- indexing by it caused one book's edit to
+        silently PATCH a different, arbitrary book in ABS."""
+        items = [
+            {"id": f"li{i}", "path": f"/audiobooks/Book{i}", "relPath": f"Book{i}", "updatedAt": i,
+             "media": {"metadata": {"asin": "NOREALASIN"}}}
+            for i in range(3)
+        ] + [
+            {"id": f"gc{i}", "path": f"/audiobooks/GC{i}", "relPath": f"GC{i}", "updatedAt": i,
+             "media": {"metadata": {"asin": "abs-agg-graphicaudio-0"}}}
+            for i in range(2)
+        ]
+        index = abs_client.build_item_index(items)
+        self.assertNotIn("NOREALASIN", index["by_asin"])
+        self.assertNotIn("ABS-AGG-GRAPHICAUDIO-0", index["by_asin"])
+        # Every item is still reachable by its own unambiguous path.
+        for i in range(3):
+            self.assertIn(f"/audiobooks/Book{i}", index["by_path"])
+        for i in range(2):
+            self.assertIn(f"/audiobooks/GC{i}", index["by_path"])
+
+    def test_two_items_sharing_a_real_shaped_asin_are_never_indexable_by_it(self):
+        """Never guess among duplicates, even if both ASINs look real (e.g. a
+        genuine duplicate edition) -- drop the key entirely and let callers
+        fall through to the always-unambiguous path."""
+        items = [
+            {"id": "li1", "path": "/a", "relPath": "a", "updatedAt": 1,
+             "media": {"metadata": {"asin": "B0ABC12345"}}},
+            {"id": "li2", "path": "/b", "relPath": "b", "updatedAt": 2,
+             "media": {"metadata": {"asin": "b0abc12345"}}},
+        ]
+        index = abs_client.build_item_index(items)
+        self.assertNotIn("B0ABC12345", index["by_asin"])
+        self.assertIn("/a", index["by_path"])
+        self.assertIn("/b", index["by_path"])
+
 
 class LookupItemInIndexTests(unittest.TestCase):
     def setUp(self):
         self.index = abs_client.build_item_index([
-            {"id": "li1", "path": "/p", "relPath": "p", "updatedAt": 1, "media": {"metadata": {"asin": "ASIN1"}}},
+            {"id": "li1", "path": "/p", "relPath": "p", "updatedAt": 1,
+             "media": {"metadata": {"asin": "B0ABC12345"}}},
         ])
 
-    def test_asin_takes_priority_over_path(self):
-        record = abs_client.lookup_item_in_index(self.index, asin="asin1", path="/somewhere/else")
+    def test_path_beats_asin_when_both_match_different_items(self):
+        """The caller always knows the book's own current folder -- that must
+        win even when a (real, unique) ASIN match points somewhere else, e.g.
+        because a book was copied/duplicated. Never let ASIN override an
+        exact path hit (LibraForge #291)."""
+        other_item_index = abs_client.build_item_index([
+            {"id": "li1", "path": "/p", "relPath": "p", "updatedAt": 1,
+             "media": {"metadata": {"asin": "B0ABC12345"}}},
+            {"id": "li2", "path": "/somewhere/else", "relPath": "somewhere/else", "updatedAt": 2,
+             "media": {"metadata": {}}},
+        ])
+        record = abs_client.lookup_item_in_index(other_item_index, asin="b0abc12345", path="/somewhere/else")
+        self.assertEqual(record["library_item_id"], "li2")
+
+    def test_falls_back_to_asin_when_path_misses(self):
+        record = abs_client.lookup_item_in_index(self.index, asin="b0abc12345", path="/moved/elsewhere")
         self.assertEqual(record["library_item_id"], "li1")
 
     def test_falls_back_to_path_when_no_asin(self):
@@ -58,6 +111,20 @@ class LookupItemInIndexTests(unittest.TestCase):
 
     def test_miss_returns_none(self):
         self.assertIsNone(abs_client.lookup_item_in_index(self.index, asin="NOPE", path="/nope"))
+
+
+class IsRealAsinTests(unittest.TestCase):
+    def test_real_shaped_asin_is_accepted(self):
+        self.assertTrue(abs_client._is_real_asin("B0ABC12345"))
+
+    def test_norealasin_placeholder_is_rejected(self):
+        self.assertFalse(abs_client._is_real_asin("NOREALASIN"))
+
+    def test_abs_agg_placeholder_is_rejected(self):
+        self.assertFalse(abs_client._is_real_asin("ABS-AGG-GRAPHICAUDIO-0"))
+
+    def test_blank_is_rejected(self):
+        self.assertFalse(abs_client._is_real_asin(""))
 
 
 class BuildMediaPatchPayloadTests(unittest.TestCase):
@@ -278,6 +345,41 @@ class SyncBookMetadataTests(unittest.TestCase):
             record_bootstrap=lambda: calls.append(True),
         )
         self.assertEqual(calls, [])
+
+    def test_resolved_item_path_mismatch_refuses_patch_and_falls_back(self):
+        """Last-line defense (LibraForge #291): if the lookup ever resolves to
+        an item other than the one the caller is actually editing, refuse the
+        PATCH rather than silently overwriting the wrong book."""
+        record = {
+            "library_item_id": "li1", "path": "/some/other/book", "rel_path": "some/other/book",
+            "updated_at": 100, "media": {"metadata": {"series": []}},
+        }
+        with patch.object(abs_client, "abs_patch_json") as patch_mock:
+            result = abs_client.sync_book_metadata(
+                metadata=self.metadata, expected_path="/the/actual/book",
+                abs_url="http://x", abs_api_key="key",
+                lookup_item=lambda a, p: record, write_file_fallback=self._fallback,
+            )
+        self.assertEqual(result["branch"], "file")
+        self.assertEqual(result["reason"], "path_mismatch")
+        self.assertEqual(len(self.fallback_calls), 1)
+        patch_mock.assert_not_called()
+
+    def test_resolved_item_matching_rel_path_is_not_a_mismatch(self):
+        record = {
+            "library_item_id": "li1", "path": "/x", "rel_path": "the/actual/book",
+            "updated_at": 100, "media": {"metadata": {"series": []}},
+        }
+        with patch.object(abs_client, "abs_get_json", return_value={"media": {"metadata": {"series": []}}}), \
+             patch.object(abs_client, "abs_patch_json") as patch_mock:
+            result = abs_client.sync_book_metadata(
+                metadata=self.metadata, expected_path="the/actual/book",
+                abs_url="http://x", abs_api_key="key",
+                lookup_item=lambda a, p: record, write_file_fallback=self._fallback,
+            )
+        self.assertEqual(result["branch"], "patch")
+        self.assertEqual(len(self.fallback_calls), 0)
+        patch_mock.assert_called_once()
 
     def test_lookup_hit_never_calls_record_bootstrap(self):
         record = {"library_item_id": "li1", "path": "/x", "rel_path": "x", "updated_at": 100, "media": {"metadata": {"series": []}}}

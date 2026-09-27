@@ -2500,7 +2500,8 @@ def sync_or_write_abs_metadata(
         )
 
     result = sync_book_metadata(
-        metadata=metadata, fill_missing=fill_missing, skip_blank_fields=skip_blank_fields,
+        metadata=metadata, expected_path=str(file_path.parent),
+        fill_missing=fill_missing, skip_blank_fields=skip_blank_fields,
         abs_url=abs_url, abs_api_key=abs_api_key,
         lookup_item=_lookup, write_file_fallback=_write_file, record_sync=_record_sync,
         record_bootstrap=_record_bootstrap,
