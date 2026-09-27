@@ -530,6 +530,12 @@ class MetadataJsonDiffTests(unittest.TestCase):
             "authors": [{"name": "A"}, {"name": "B"}], "series": [{"name": "Other", "sequence": "2"}],
             "genres": ["Horror"], "publisher": "P"})
 
+    def test_author_and_narrator_order_alone_is_not_a_difference(self):
+        # ABS reorders co-authors itself; seen on 7 Dune books in the real-library dry run.
+        abs_meta = dict(self.ABS, authors=[{"name": "Brian Herbert"}, {"name": "Kevin J. Anderson"}], narrators=["N1", "N2"])
+        f = {"authors": ["Kevin J. Anderson", "Brian Herbert"], "narrators": ["N2", "N1"]}
+        self.assertEqual(abs_client.metadata_json_diff(f, abs_meta), {})
+
     def test_audiobook_only_genre_file_is_not_a_difference(self):
         self.assertEqual(abs_client.metadata_json_diff({"genres": ["Audiobook"]}, self.ABS), {})
 

@@ -406,7 +406,8 @@ def metadata_json_diff(metadata_json: dict[str, Any], abs_metadata: dict[str, An
             diff[key] = value
     for key in ("authors", "narrators"):
         names = _names(metadata_json.get(key))
-        if names and [n.lower() for n in names] != [n.lower() for n in _names(abs_metadata.get(key))]:
+        # Compared as sets: ABS reorders co-authors itself, so order alone isn't a change.
+        if names and {n.lower() for n in names} != {n.lower() for n in _names(abs_metadata.get(key))}:
             diff[key] = [{"name": n} for n in names] if key == "authors" else names
     series = [_parse_legacy_series(s) for s in (metadata_json.get("series") or [])]
     series = [s for s in series if s[0]]
