@@ -85,7 +85,7 @@ class EnrichmentSeriesEndpointTests(unittest.TestCase):
              patch("app.main.load_review_module", return_value=_FakeReviewModule):
             resp = client.get("/api/enrichment/series?q=schol")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"series": [{"name": "Scholomance", "book_count": 2}]})
+        self.assertEqual(resp.json(), {"series": [{"key": "scholomance", "name": "Scholomance", "book_count": 2}]})
 
 
 class EnrichmentItemsCacheTests(unittest.TestCase):
@@ -148,6 +148,19 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
         with patch("app.main._get_abs_api_key", return_value=""):
             resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance"})
         self.assertEqual(resp.status_code, 400)
+
+    def test_compile_by_series_key(self):
+        """LibraForge #304: compile resolves the key /series returned, even when
+        the display name would re-normalize to a different key."""
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}):
+            series = client.get("/api/enrichment/series").json()["series"]
+            resp = client.post("/api/enrichment/compile", json={"series_key": series[0]["key"], "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(len(resp.json()["books"]), series[0]["book_count"])
 
     def test_unknown_series_404s(self):
         with patch("app.main._get_abs_api_key", return_value="key"), \

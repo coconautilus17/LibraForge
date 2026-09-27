@@ -111,20 +111,60 @@ def _display_series_name(group_items: list[dict[str, Any]]) -> str:
     return max(counts.items(), key=lambda pair: pair[1])[0]
 
 
+_SERIES_KEY_AUTHOR_SEP = "\x1f"
+
+
+def _item_authors(item: dict[str, Any]) -> list[str]:
+    """Credited authors of an ABS item, minus role suffixes like
+    'Ben Aaranovitch - introduction'."""
+    raw = str(((item.get("media") or {}).get("metadata") or {}).get("authorName") or "")
+    return [a.split(" - ")[0].strip() for a in raw.split(",") if a.split(" - ")[0].strip()]
+
+
+def split_group_by_author(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Split a same-named series group into separate works by primary author
+    (LibraForge #305), e.g. Naomi Novik's and Logan Jacobs' "Scholomance".
+
+    Splits only when 2+ primary authors each have 2+ books AND no book credits
+    two of them together -- co-written/continuation series (Dune: Brian Herbert
+    and Kevin J. Anderson) and a single stray book stay one group. Returns
+    {"": items} when no split applies.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        authors = _item_authors(item)
+        buckets.setdefault(authors[0] if authors else "", []).append(item)
+    big = [a for a, group in buckets.items() if a and len(group) >= 2]
+    if len(big) < 2:
+        return {"": items}
+    big_lower = {a.lower() for a in big}
+    for item in items:
+        if len(big_lower & {a.lower() for a in _item_authors(item)}) >= 2:
+            return {"": items}
+    return buckets
+
+
 def list_series_summary(
     groups: dict[str, list[dict[str, Any]]],
     query: str = "",
 ) -> list[dict[str, Any]]:
-    """Return [{name, book_count}] sorted by book_count descending, filtered
-    by a case-insensitive substring match on the display name.
+    """Return [{key, name, book_count}] sorted by book_count descending,
+    filtered by a case-insensitive substring match on the display name.
+
+    `key` is the group's own key (plus the author for a split group) and is
+    what compile should look up -- re-normalizing a display name can land on
+    a different key for odd series names (LibraForge #304).
     """
     query_lower = query.strip().lower()
     summary = []
-    for group_items in groups.values():
-        display_name = _display_series_name(group_items)
-        if query_lower and query_lower not in display_name.lower():
-            continue
-        summary.append({"name": display_name, "book_count": len(group_items)})
+    for group_key, group_items in groups.items():
+        base_name = _display_series_name(group_items)
+        for author, bucket in split_group_by_author(group_items).items():
+            display_name = f"{base_name} [{author}]" if author else base_name
+            if query_lower and query_lower not in display_name.lower():
+                continue
+            key = f"{group_key}{_SERIES_KEY_AUTHOR_SEP}{author}" if author else group_key
+            summary.append({"key": key, "name": display_name, "book_count": len(bucket)})
     summary.sort(key=lambda row: (-row["book_count"], row["name"].lower()))
     return summary
 
@@ -133,12 +173,19 @@ def get_series_books(
     groups: dict[str, list[dict[str, Any]]],
     series_name: str,
     normalize_series_fn: Callable[[str], str],
+    by_key: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the lightweight per-book dicts for a chosen series (matched by
     its display or normalized name), used to drive the compile step.
     """
-    query_key = normalize_abs_series_name(series_name, normalize_series_fn)
-    group_items = groups.get(query_key, [])
+    if by_key:
+        group_key, _, author = series_name.partition(_SERIES_KEY_AUTHOR_SEP)
+        group_items = groups.get(group_key, [])
+        if author:
+            group_items = split_group_by_author(group_items).get(author, [])
+    else:
+        query_key = normalize_abs_series_name(series_name, normalize_series_fn)
+        group_items = groups.get(query_key, [])
     books = []
     for item in group_items:
         media = item.get("media") or {}

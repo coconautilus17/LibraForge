@@ -6154,6 +6154,7 @@ def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
 
 
 class EnrichmentSeriesRow(BaseModel):
+    key: str = ""
     name: str
     book_count: int
 
@@ -6209,7 +6210,9 @@ def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
 
 
 class EnrichmentCompileRequest(BaseModel):
-    series_name: str
+    series_name: str = ""
+    # Preferred: the key /api/enrichment/series returned (LibraForge #304).
+    series_key: str = ""
     auth_file: str = "/auth/audible-metadata.json"
 
 
@@ -6255,9 +6258,12 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     review_module = load_review_module()
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
-    books = get_series_books(groups, req.series_name, review_module.normalize_series)
+    if req.series_key:
+        books = get_series_books(groups, req.series_key, review_module.normalize_series, by_key=True)
+    else:
+        books = get_series_books(groups, req.series_name, review_module.normalize_series)
     if not books:
-        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name}")
+        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name or req.series_key}")
 
     source_status: dict[str, dict[str, Any]] = {}
     audible_results: dict[str, dict | None] = {}

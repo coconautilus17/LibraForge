@@ -79,8 +79,8 @@ class ListSeriesSummaryTests(unittest.TestCase):
         }
         summary = enrichment.list_series_summary(groups)
         self.assertEqual(summary, [
-            {"name": "Scholomance", "book_count": 2},
-            {"name": "Dungeon Core", "book_count": 1},
+            {"key": "scholomance", "name": "Scholomance", "book_count": 2},
+            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1},
         ])
 
     def test_query_filters_case_insensitively(self):
@@ -89,7 +89,7 @@ class ListSeriesSummaryTests(unittest.TestCase):
             "dungeon core": [{"media": {"metadata": {"seriesName": "Dungeon Core #1"}}}],
         }
         summary = enrichment.list_series_summary(groups, query="scho")
-        self.assertEqual(summary, [{"name": "Scholomance", "book_count": 1}])
+        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1}])
 
 
 class GetSeriesBooksTests(unittest.TestCase):
@@ -594,3 +594,61 @@ class NonAudioItemsTests(unittest.TestCase):
         self.assertTrue(rows["y"]["default_include"])
         self.assertNotIn("Literary Fiction", out["genre"])
         self.assertNotIn("Fantasy", out["genre"])
+
+
+def _item(item_id, series, author, title=None):
+    return {"id": item_id, "path": "/audiobooks/" + item_id, "isFile": False,
+            "media": {"numAudioFiles": 1, "tags": [],
+                      "metadata": {"title": title or item_id, "seriesName": series, "authorName": author}}}
+
+
+class StableSeriesKeyTests(unittest.TestCase):
+    """LibraForge #304: a listed series must always be compilable."""
+
+    def test_summary_rows_carry_a_key_that_resolves_even_for_odd_names(self):
+        groups = enrichment.group_items_by_series([_item("1", "Life Lines, Book-5 #1 #1", "BBC")], _fake_normalize_series)
+        [row] = enrichment.list_series_summary(groups)
+        self.assertIn("key", row)
+        self.assertEqual(len(enrichment.get_series_books(groups, row["key"], _fake_normalize_series, by_key=True)), 1)
+
+    def test_name_lookup_still_works(self):
+        groups = enrichment.group_items_by_series([_item("1", "Dune #1", "Frank Herbert")], _fake_normalize_series)
+        self.assertEqual(len(enrichment.get_series_books(groups, "Dune", _fake_normalize_series)), 1)
+
+
+class SplitGroupByAuthorTests(unittest.TestCase):
+    """LibraForge #305: same-named series by different authors were merged."""
+
+    def test_two_authors_with_two_plus_books_each_and_no_shared_credit_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("n1", "Scholomance #1", "Naomi Novik"), _item("n2", "Scholomance #2", "Naomi Novik"),
+            _item("l1", "Scholomance #1", "Logan Jacobs"), _item("l2", "Scholomance #2", "Logan Jacobs")])
+        self.assertEqual(sorted(groups), ["Logan Jacobs", "Naomi Novik"])
+        self.assertEqual(len(groups["Naomi Novik"]), 2)
+
+    def test_continuation_authors_with_a_shared_credit_do_not_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "Dune #1", "Brian Herbert, Kevin J. Anderson"), _item("b", "Dune #2", "Brian Herbert, Kevin J. Anderson"),
+            _item("c", "Dune #3", "Kevin J. Anderson, Brian Herbert"), _item("d", "Dune #4", "Kevin J. Anderson, Brian Herbert")])
+        self.assertEqual(list(groups), [""])
+
+    def test_a_single_stray_book_by_another_author_does_not_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "HP #1", "J.K. Rowling"), _item("b", "HP #2", "J.K. Rowling"), _item("c", "HP #3", "Eliezer Yudkowsky")])
+        self.assertEqual(list(groups), [""])
+
+    def test_role_suffixes_are_ignored(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "D #1", "Terry Pratchett"), _item("b", "D #2", "Terry Pratchett"),
+            _item("c", "D #3", "Ben Aaranovitch - introduction")])
+        self.assertEqual(list(groups), [""])
+
+    def test_summary_lists_split_groups_separately_and_keys_resolve(self):
+        items = [_item("n1", "Scholomance #1", "Naomi Novik"), _item("n2", "Scholomance #2", "Naomi Novik"),
+                 _item("l1", "Scholomance #1", "Logan Jacobs"), _item("l2", "Scholomance #2", "Logan Jacobs")]
+        groups = enrichment.group_items_by_series(items, _fake_normalize_series)
+        rows = enrichment.list_series_summary(groups)
+        self.assertEqual(sorted(r["name"] for r in rows), ["Scholomance [Logan Jacobs]", "Scholomance [Naomi Novik]"])
+        for r in rows:
+            books = enrichment.get_series_books(groups, r["key"], _fake_normalize_series, by_key=True)
+            self.assertEqual({b["author"] for b in books}, {r["name"].split("[")[1].rstrip("]")})
