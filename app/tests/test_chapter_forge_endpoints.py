@@ -6,7 +6,9 @@ runs require faster-whisper to be installed -- these tests only exercise the
 FastAPI wiring (page renders, path validation, request shape), not ASR.
 """
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -79,9 +81,36 @@ class ChapteringResourcesEndpointTests(unittest.TestCase):
         response = client.get("/api/chaptering/resources")
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        for key in ("cpu_cores", "cpu_percent", "memory_percent", "asr_models"):
+        for key in ("cpu_cores", "cpu_percent", "memory_percent", "asr_models", "asr_available"):
             self.assertIn(key, data)
         self.assertIsInstance(data["asr_models"], list)
+        self.assertIsInstance(data["asr_available"], bool)
+
+    def test_asr_available_true_reports_models(self):
+        # faster_whisper isn't installed in this test image (matches the
+        # default, non-chaptering image) -- inject a fake module into
+        # sys.modules so the endpoint's `from faster_whisper import
+        # available_models` succeeds without the real package.
+        fake_module = types.ModuleType("faster_whisper")
+        fake_module.available_models = lambda: ["small", "medium"]
+        with patch.object(main, "chaptering_asr_available", return_value=True), \
+             patch.dict(sys.modules, {"faster_whisper": fake_module}):
+            response = client.get("/api/chaptering/resources")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["asr_available"])
+        self.assertEqual({m["name"] for m in data["asr_models"]}, {"small", "medium"})
+
+    def test_asr_available_false_skips_model_listing_entirely(self):
+        # Real symptom this guards: the default (non-chaptering) image has no
+        # faster_whisper module to import at all -- must not even attempt it,
+        # since `import faster_whisper` itself would raise ModuleNotFoundError.
+        with patch.object(main, "chaptering_asr_available", return_value=False):
+            response = client.get("/api/chaptering/resources")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["asr_available"])
+        self.assertEqual(data["asr_models"], [])
 
 
 class ChapteringSaveEndpointTests(unittest.TestCase):

@@ -1335,6 +1335,19 @@ def _missing_chaptering_dependency_error(exc: ImportError, feature_label: str) -
     )
 
 
+def chaptering_asr_available() -> bool:
+    """Whether the optional Hybrid/Full-transcription ASR stack (faster-whisper,
+    installed only via Dockerfile.unified/requirements-chaptering.txt) is present
+    in this environment. A cheap import check, not a model load -- used to warn
+    the UI up front rather than let a user hit a run-time failure after already
+    picking a backend that can't work. Audible chapters needs none of this."""
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _sos_script_path() -> Path:
     root = _workspace_root()
     candidates = [

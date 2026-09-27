@@ -97,6 +97,7 @@ from app.chaptering import (
     ChapterDetectionCancelled,
     HYBRID_LLM_REVIEW_INSTRUCTIONS,
     chapter_sidecar_path,
+    chaptering_asr_available,
     load_existing_result as load_existing_chapter_result,
     metadata_json_path as chapter_metadata_json_path,
     read_json_file as read_chapter_json_file,
@@ -8312,12 +8313,15 @@ def chaptering_resources() -> dict[str, Any]:
                 cached_names.add(repo_dir.name.removeprefix("models--Systran--faster-whisper-"))
     except Exception:
         cached_names = set()
-    try:
-        from faster_whisper import available_models
+    asr_available = chaptering_asr_available()
+    names: list[str] = []
+    if asr_available:
+        try:
+            from faster_whisper import available_models
 
-        names = list(available_models())
-    except Exception:
-        names = []
+            names = list(available_models())
+        except Exception:
+            names = []
     for name in names:
         models.append({
             "name": name,
@@ -8327,6 +8331,7 @@ def chaptering_resources() -> dict[str, Any]:
         })
     snapshot["asr_models"] = models
     snapshot["asr_model_source"] = "faster_whisper.available_models"
+    snapshot["asr_available"] = asr_available
     return snapshot
 
 

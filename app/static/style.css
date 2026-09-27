@@ -4149,6 +4149,11 @@ button.ghost:hover:not(:disabled) {
   outline-offset: 1px;
 }
 
+.cf-seg-option:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .seg-rec {
   font-size: 9px;
   text-transform: uppercase;
