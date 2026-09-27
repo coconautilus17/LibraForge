@@ -44,6 +44,8 @@ try:
         is_title_noise,
         remove_trailing_title_noise,
     )
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
+    from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import (
@@ -51,6 +53,8 @@ except ModuleNotFoundError:
         is_title_noise,
         remove_trailing_title_noise,
     )
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
+    from app.enrichment import fetch_all_abs_book_items
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
 # Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
@@ -2952,7 +2956,34 @@ def series_from_subtitle(subtitle: str) -> tuple[str, str]:
     return match.group("series").strip(), match.group("number")
 
 
-def metadata_from_sidecar(item: BookItem) -> dict[str, Any] | None:
+def abs_metadata_as_sidecar_candidate(media: dict[str, Any], library_item_id: str) -> dict[str, Any]:
+    """--trust-abs-metadata (opt-in): shape Audiobookshelf's current record
+    into metadata_from_sidecar()'s own candidate dict, so a book the user has
+    already manually corrected directly in the Audiobookshelf UI can be
+    trusted as the naming/organizing source, ahead of any local sidecar file.
+    """
+    internal = normalize_abs_media_to_internal(media)
+    title = internal["title"]
+    return {
+        "title": title,
+        "author": internal["author"],
+        "series": internal["series"],
+        "book_number": normalize_book_number(str(internal["sequence"])),
+        "sequence_label": choose_sequence_label("", "", title),
+        "narrator": internal["narrator"],
+        "asin": clean_asin_token(internal["asin"]),
+        "publisher": internal["publisher"],
+        "genre": internal["genre"],
+        "year": internal["year"],
+        "subtitle": internal["subtitle"],
+        "source": f"abs:{library_item_id}",
+    }
+
+
+def metadata_from_sidecar(item: BookItem, abs_candidate: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if abs_candidate is not None:
+        return abs_candidate
+
     paths: list[Path] = []
     if item.kind == "folder":
         # Folder-level libraforge.json (alone-in-folder single-file books and
@@ -3270,8 +3301,16 @@ def title_conflict_should_trigger_review(
     return SequenceMatcher(None, metadata_key, path_key).ratio() < 0.72
 
 
-def infer_metadata(item: BookItem, root: Path, prefer_path_structure: bool = False) -> dict[str, Any]:
-    sidecar = metadata_from_sidecar(item)
+def infer_metadata(
+    item: BookItem, root: Path, prefer_path_structure: bool = False, abs_index: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    abs_candidate = None
+    if abs_index is not None:
+        book_folder = item.source_path if item.kind == "folder" else item.source_path.parent
+        record = lookup_item_in_index(abs_index, asin="", path=str(book_folder))
+        if record is not None:
+            abs_candidate = abs_metadata_as_sidecar_candidate(record["media"], record["library_item_id"])
+    sidecar = metadata_from_sidecar(item, abs_candidate=abs_candidate)
     tag_meta = metadata_from_tags(item) if sidecar is None else sidecar
     clues = path_clues(item, root)
     review_reasons: list[str] = []
@@ -5524,6 +5563,29 @@ def main() -> None:
         action="store_true",
         help="Use the built-in ABS structure scheme (author/series/title) and ignore --naming-template.",
     )
+    parser.add_argument(
+        "--abs-url",
+        default=os.environ.get("ABS_URL", "http://audiobookshelf"),
+        dest="abs_url",
+        help="Base URL of the Audiobookshelf instance. Defaults to ABS_URL env var or http://audiobookshelf.",
+    )
+    parser.add_argument(
+        "--abs-api-key",
+        default=os.environ.get("ABS_API_KEY", ""),
+        dest="abs_api_key",
+        help="Audiobookshelf API key. Defaults to ABS_API_KEY env var.",
+    )
+    parser.add_argument(
+        "--trust-abs-metadata",
+        action="store_true",
+        dest="trust_abs_metadata",
+        help=(
+            "For a book Audiobookshelf already has, use its current record as the "
+            "naming/organizing source ahead of any local sidecar file. For an "
+            "existing, already-organized library where you've manually corrected "
+            "books in the Audiobookshelf UI and want that trusted outright."
+        ),
+    )
     args = parser.parse_args()
 
     # The template only matters when a custom scheme is in play; the built-in
@@ -5537,6 +5599,20 @@ def main() -> None:
     # so toggling the default checkbox invalidates the cache like editing the
     # template does.
     scheme_cache_key = DEFAULT_SCHEME_KEY if args.use_default_scheme else args.naming_template
+
+    # Built once for the whole run (never per-book): --trust-abs-metadata uses
+    # this to find a book Audiobookshelf already has and prefer its current
+    # record over any local sidecar file.
+    abs_index: dict[str, Any] | None = None
+    if args.trust_abs_metadata and args.abs_api_key:
+        try:
+            abs_items = fetch_all_abs_book_items(
+                lambda path, params: abs_get_json(path, params, args.abs_url, args.abs_api_key)
+            )
+            abs_index = build_item_index(abs_items)
+            print(f"Fetched {len(abs_items)} items from Audiobookshelf for --trust-abs-metadata.")
+        except Exception as exc:
+            print(f"  WARNING: Audiobookshelf lookup unavailable this run ({exc}); local sidecars will be used instead.")
 
     root = Path(args.root).resolve()
     if not root.is_dir():
@@ -5607,7 +5683,11 @@ def main() -> None:
         if args.progress_every > 0 and (index == 1 or index % args.progress_every == 0 or index == total):
             print(f"Scanning {index}/{total}: {item.source_path}", file=sys.stderr)
 
-        metadata = infer_metadata(item, root, prefer_path_structure=args.consolidate_structures and root == destination_root)
+        metadata = infer_metadata(
+            item, root,
+            prefer_path_structure=args.consolidate_structures and root == destination_root,
+            abs_index=abs_index,
+        )
         metadata = apply_overrides_to_metadata(metadata, overrides)
         metadata = apply_cache_prefix_fallback(metadata, item, cache)
         inferred_items.append((index, item, metadata))

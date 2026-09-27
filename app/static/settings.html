@@ -158,7 +158,7 @@
           <li>Examples: <code>J. R. R. Tolkien</code> and <code>J.R.R Tolkien</code> become <code>J.R.R. Tolkien</code>; <code>V A Lewis</code> becomes <code>V.A. Lewis</code>; <code>Kevin J Anderson</code> becomes <code>Kevin J. Anderson</code>. With the scheme on, <code>JK Rowling</code> and <code>J.K.Rowling</code> become <code>J.K. Rowling</code>, and <code>TJ Klune</code> becomes <code>T.J. Klune</code>.</li>
           <li>The last word of a name is never treated as initials, so <code>Mashton XX</code> and <code>John Smith III</code> stay as they are. A name containing a digit, such as <code>Comedian0 L</code>, is never treated as initials either. Names that would still be misread go in the patterns below.</li>
           <li>Off: author tags are written as they come, so <code>JK Rowling</code> and <code>J.K.Rowling</code> are left alone.</li>
-          <li>Applies to the author tags and <code>metadata.json</code> written by the fixer and Manual Review. Folder Forge does not apply it: it names author folders from the metadata it finds, so folders follow once the metadata is updated. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> updates metadata and folders together when you choose to run it.</li>
+          <li>Applies to the author tags and to whatever the fixer/Manual Review writes to Audiobookshelf — directly via its API when a book is already known to it, or to <code>metadata.json</code> when it isn't. Folder Forge does not apply it: it names author folders from the metadata it finds, so folders follow once the metadata is updated. Folders and files already in your library are not renamed automatically; <code>scripts/normalize-author-names.py</code> updates metadata and folders together when you choose to run it.</li>
         </ul>
       </details>
       <h3>Patterns in use</h3>
@@ -419,7 +419,7 @@
         </label>
         <label class="cleanup-mode">
           <input type="radio" name="cleanupMode" value="metadata" />
-          <span><strong>libraforge files + metadata.json</strong><span class="cleanup-mode-desc">Also deletes the Audiobookshelf <code>metadata.json</code> and per-file <code>*.metadata.json</code> companions, whether LibraForge wrote them or they shipped with the download.</span></span>
+          <span><strong>libraforge files + metadata.json</strong><span class="cleanup-mode-desc">Also deletes the Audiobookshelf <code>metadata.json</code> and per-file <code>*.metadata.json</code> companions, whether LibraForge wrote them or they shipped with the download. A book Audiobookshelf already knows about gets its own metadata.json cleaned up automatically once Audiobookshelf catches up to it, so this mode is mainly for legacy leftovers and libraries without Audiobookshelf configured.</span></span>
         </label>
       </div>
       <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap">

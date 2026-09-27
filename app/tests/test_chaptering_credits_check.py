@@ -80,6 +80,61 @@ class ResolveBookCreditsTests(unittest.TestCase):
             source.write_bytes(b"")
             self.assertEqual(resolve_book_credits(source), {"author": "", "narrator": ""})
 
+    def test_abs_lookup_tried_before_metadata_json_when_no_sidecar_data(self):
+        """Inserted between the sidecar check and the metadata.json
+        last-resort: an ABS-known book's credits win even with a
+        metadata.json present that would otherwise have answered first."""
+        import app.chaptering as chaptering_module
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"authors": ["File Author"], "narrators": ["File Narrator"]}),
+                encoding="utf-8",
+            )
+            abs_media = {"metadata": {"authorName": "ABS Author", "narratorName": "ABS Narrator"}}
+            with patch.object(
+                chaptering_module, "_abs_config_for_chaptering", return_value=("http://abs", "key")
+            ), patch.object(
+                chaptering_module, "_abs_item_index_for_chaptering",
+                return_value={"by_asin": {}, "by_path": {root: {
+                    "library_item_id": "li1", "path": root, "rel_path": "book",
+                    "updated_at": 100, "media": abs_media,
+                }}},
+            ):
+                credits = resolve_book_credits(source)
+        self.assertEqual(credits, {"author": "ABS Author", "narrator": "ABS Narrator"})
+
+    def test_abs_lookup_miss_still_falls_back_to_metadata_json(self):
+        import app.chaptering as chaptering_module
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"authors": ["File Author"], "narrators": ["File Narrator"]}),
+                encoding="utf-8",
+            )
+            with patch.object(
+                chaptering_module, "_abs_config_for_chaptering", return_value=("http://abs", "key")
+            ), patch.object(
+                chaptering_module, "_abs_item_index_for_chaptering", return_value={"by_asin": {}, "by_path": {}},
+            ):
+                credits = resolve_book_credits(source)
+        self.assertEqual(credits, {"author": "File Author", "narrator": "File Narrator"})
+
+    def test_no_abs_api_key_skips_lookup_and_uses_metadata_json(self):
+        import app.chaptering as chaptering_module
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "book.mp3"
+            source.write_bytes(b"")
+            (Path(root) / "metadata.json").write_text(
+                json.dumps({"authors": ["File Author"], "narrators": ["File Narrator"]}),
+                encoding="utf-8",
+            )
+            with patch.object(chaptering_module, "_abs_config_for_chaptering", return_value=("http://abs", "")):
+                credits = resolve_book_credits(source)
+        self.assertEqual(credits, {"author": "File Author", "narrator": "File Narrator"})
+
 
 def _result_with_chapters(chapters):
     return {"source_path": "/audiobooks/Book/book.mp3", "chapters": chapters, "hybrid": {}}

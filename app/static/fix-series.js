@@ -27,7 +27,7 @@ function fsBuildDialog() {
       <label class="mae-full-width">Narrator<input id="fsNarrator" placeholder="leave blank to skip" /></label>
       <label><input type="checkbox" id="fsExplicit" /> Mark as explicit</label>
       <label>Language<input id="fsLanguage" placeholder="leave blank to skip" /></label>
-      <p class="note mae-full-width">Explicit + Language are written only to metadata.json and picked up by ABS, can leave blank to skip.</p>
+      <p class="note mae-full-width">Explicit + Language are sent to Audiobookshelf directly via its API when it already knows the book, otherwise written to metadata.json for it to pick up; can leave blank to skip.</p>
     </div>
     <p class="note" style="margin-top:14px">Books in this group</p>
     <div class="fs-sibling-bar">

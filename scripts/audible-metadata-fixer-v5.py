@@ -157,6 +157,8 @@ try:
         get_thread_client,
         cached_audible_search,
     )
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -289,6 +291,8 @@ except ModuleNotFoundError:
         get_thread_client,
         cached_audible_search,
     )
+    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.enrichment import fetch_all_abs_book_items
 
 try:
     from mutagen.mp4 import MP4, MP4FreeForm, MP4Cover
@@ -352,6 +356,10 @@ METADATA_BACKUP_SUFFIX = ".metadata-backup.json"
 MARKER_SUFFIX = ".audible-metadata-fixer.json"
 LIBRAFORGE_SUFFIX = ".libraforge.json"
 M4B_TOOL_METADATA_SUFFIX = ".m4b-tool-metadata.json"
+# Shared with app/main.py -- both write to the same bootstrap-pending
+# registry (app.abs_client.upsert_bootstrapped_file) so the reconciliation
+# sweep sees bootstrap files written by either the script or Manual Review.
+REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/app/reports")).resolve()
 IGNORED_PATH_PARTS = {"#recycle", "@eadir"}
 TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
 
@@ -2429,6 +2437,85 @@ def write_audiobookshelf_metadata_json(
         target.write_text(content, encoding="utf-8")
     return target
 
+def update_abs_sync_record(
+    source: Path, clues: dict | None, alone: bool, library_item_id: str, abs_updated_at: Any
+) -> None:
+    """Stamp the sidecar with when/what LibraForge last wrote to ABS directly.
+
+    Read side (Meta Forge/Folder Forge) compares a fresh abs_updated_at
+    against this to decide whether ABS's current record is newer than what
+    we last wrote (a human edited it since) and should be trusted over the
+    sidecar's own recorded values. abs_updated_at is stored as ABS returned
+    it (an epoch-ms int) rather than re-derived as an ISO string, so the
+    comparison never has to reason about client/server clock skew.
+    """
+    lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
+    payload["abs_sync"] = {
+        "library_item_id": library_item_id,
+        "last_patched_at": datetime.now(timezone.utc).isoformat(),
+        "abs_updated_at_at_patch_time": abs_updated_at,
+    }
+    _write_libraforge(lf_path, payload)
+
+def sync_or_write_abs_metadata(
+    file_path: Path,
+    metadata: dict,
+    clues: dict | None,
+    alone: bool,
+    abs_index: dict | None,
+    abs_url: str,
+    abs_api_key: str,
+    *,
+    fill_missing: bool = False,
+    skip_blank_fields: bool = False,
+) -> str:
+    """Push this book's metadata to Audiobookshelf: PATCH directly if ABS
+    already knows the book (abs_index has an ASIN or folder-path hit),
+    otherwise fall back to writing metadata.json exactly as before -- a
+    bootstrap file, since there's no library_item_id yet to PATCH.
+
+    Returns a short description for the caller's existing log line (mirrors
+    write_audiobookshelf_metadata_json's old return value, which callers only
+    ever used for logging, never re-read).
+    """
+    def _lookup(asin: str, _path: str) -> dict | None:
+        if abs_index is None:
+            return None
+        return lookup_item_in_index(abs_index, asin=asin, path=str(file_path.parent))
+
+    def _write_file() -> Path:
+        return write_audiobookshelf_metadata_json(
+            file_path, metadata, clues, alone,
+            fill_missing=fill_missing, skip_blank_fields=skip_blank_fields,
+        )
+
+    def _record_sync(sync_info: dict) -> None:
+        update_abs_sync_record(
+            file_path, clues, alone, sync_info["library_item_id"], sync_info["abs_updated_at"]
+        )
+
+    def _record_bootstrap() -> None:
+        upsert_bootstrapped_file(
+            REPORTS_DIR, file_path, str(metadata.get("asin") or ""), str(file_path.parent)
+        )
+
+    result = sync_book_metadata(
+        metadata=metadata, fill_missing=fill_missing, skip_blank_fields=skip_blank_fields,
+        abs_url=abs_url, abs_api_key=abs_api_key,
+        lookup_item=_lookup, write_file_fallback=_write_file, record_sync=_record_sync,
+        record_bootstrap=_record_bootstrap,
+    )
+    if result["branch"] == "file":
+        return str(result["path"])
+    return f"ABS item {result['library_item_id']} (direct API)"
+
+def determine_metadata_write_via(metadata_json_pending: bool, abs_known: bool) -> str:
+    """"via" for WRITE_ACTION_JSON: which channel this book's metadata write
+    went (or would go, in a dry run) through -- surfaced per-book in the run
+    report so it's visible which books are synced directly vs. still on the
+    metadata.json bootstrap path, without having to read the raw log."""
+    return "abs_api" if (metadata_json_pending and abs_known) else "metadata_json"
+
 def refresh_multipart_sidecar_audio_profile(
     folder: Path,
     chapter_files: list[Path],
@@ -3223,6 +3310,7 @@ def search_item(
     search_cache_lock: threading.Lock,
     search_in_flight: dict,
     folder_audio_counts: dict | None = None,
+    abs_index: dict | None = None,
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
@@ -3283,6 +3371,19 @@ def search_item(
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
                 queries, clues = search_context_cache[match_cache_key]
 
+        # --weight-abs-metadata (opt-in): only when Audiobookshelf's current
+        # ASIN for this book DIFFERS from what's already embedded in the file
+        # (a matching ASIN adds no new information beyond what existing_asin
+        # already provides -- see score_product_for_metadata's _abs_asin bonus).
+        # abs_index is built once per run in main(), never a per-book lookup.
+        if getattr(args, "weight_abs_metadata", False) and abs_index is not None:
+            abs_record = lookup_item_in_index(abs_index, asin="", path=str(file_path.parent))
+            if abs_record is not None:
+                abs_asin = str((abs_record["media"].get("metadata") or {}).get("asin") or "").strip().upper()
+                existing_asin = str(clues.get("existing_asin") or "").strip().upper()
+                if abs_asin and abs_asin != existing_asin:
+                    clues["abs_asin"] = abs_asin
+
         local_duration_minutes = clues.get("local_duration_minutes")
 
         result.queries = queries
@@ -3291,6 +3392,30 @@ def search_item(
         group_search = clues.get("group_search", {}) or {}
         if group_search.get("applied"):
             log.append(f"  Grouped: {group_search.get('file_count', 0)} files")
+
+        # --trust-abs-metadata (opt-in): for a book Audiobookshelf already
+        # has, skip provider search/matching entirely and use its current
+        # record directly -- still routed through normalize_abs_media_to_internal,
+        # which applies the same series cleanup every provider shares, so a
+        # messy-but-correct manual Audiobookshelf edit gets normalized, not
+        # just echoed back verbatim. Checked before marker recovery: a stale
+        # re-applied marker match is exactly the kind of possibly-outdated
+        # data Audiobookshelf's current record should take priority over.
+        if getattr(args, "trust_abs_metadata", False) and abs_index is not None:
+            abs_record = lookup_item_in_index(abs_index, asin="", path=str(file_path.parent))
+            if abs_record is not None:
+                trusted_metadata = normalize_abs_media_to_internal(abs_record["media"])
+                trusted_metadata["edit_mode"] = "full"
+                result.status = "matched"
+                result.metadata = trusted_metadata
+                result.score = 1.0
+                result.edit_mode = "full"
+                result.duration_status = "unknown"
+                log.append(
+                    f"  TRUST: using Audiobookshelf's current record directly "
+                    f"(item {abs_record['library_item_id']})"
+                )
+                return result
 
         if recovering_from_marker:
             rec_md = metadata_from_marker(existing_marker)
@@ -3839,7 +3964,15 @@ def search_item(
             )
             alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
             meta_target = get_audiobookshelf_metadata_path(file_path, clues, alone)
-            if skip_write and meta_target.exists():
+            # A book already known to Audiobookshelf has no metadata.json of
+            # its own to check (it's synced via direct API PATCH instead, see
+            # sync_or_write_abs_metadata) -- treat an ABS lookup hit as
+            # equally "already synced" so a smart-mode no-op doesn't PATCH on
+            # every single run just because there's no local file to find.
+            abs_known = abs_index is not None and lookup_item_in_index(
+                abs_index, asin=str(metadata.get("asin") or ""), path=str(file_path.parent)
+            ) is not None
+            if skip_write and (abs_known or meta_target.exists()):
                 log.append(f"  {write_note} (metadata.json unchanged)")
                 log.append(
                     "WRITE_ACTION_JSON: "
@@ -3853,8 +3986,9 @@ def search_item(
                     })
                 )
             else:
-                abs_path = write_audiobookshelf_metadata_json(
-                    file_path, effective_metadata, clues, alone,
+                abs_path = sync_or_write_abs_metadata(
+                    file_path, effective_metadata, clues, alone, abs_index,
+                    args.abs_url, args.abs_api_key,
                     fill_missing=(write_mode != "overwrite"),
                 )
                 suffix = f" [{write_note}]" if write_note else ""
@@ -3868,6 +4002,7 @@ def search_item(
                         "write_mode": write_mode,
                         "metadata_json_pending": True,
                         "tag_write_pending": False,
+                        "via": determine_metadata_write_via(True, abs_known),
                     })
                 )
             write_marker(
@@ -5287,11 +5422,11 @@ def main():
         action="store_true",
         dest="metadata_json_only",
         help=(
-            "Write ONLY the Audiobookshelf metadata.json and do not modify the audio "
-            "files' embedded tags. An Audiobookshelf-compatible metadata.json is always "
-            "written for matched books regardless of this flag; this flag just suppresses "
-            "the in-file tag rewrite. (Loose/multi-file books still get their M4B-tool "
-            "merge sidecar.)"
+            "Push metadata to Audiobookshelf (directly via its API when it already knows "
+            "the book, otherwise to a metadata.json bootstrap file) and do not modify the "
+            "audio files' embedded tags. This always happens for matched books regardless "
+            "of this flag; this flag just suppresses the in-file tag rewrite. (Loose/"
+            "multi-file books still get their M4B-tool merge sidecar.)"
         ),
     )
 
@@ -5328,6 +5463,36 @@ def main():
         default=os.environ.get("ABS_API_KEY", ""),
         dest="abs_api_key",
         help="Audiobookshelf API key. Defaults to ABS_API_KEY env var.",
+    )
+
+    _abs_input_group = parser.add_mutually_exclusive_group()
+    _abs_input_group.add_argument(
+        "--trust-abs-metadata",
+        action="store_true",
+        dest="trust_abs_metadata",
+        help=(
+            "For a book Audiobookshelf already has, skip provider search/matching "
+            "entirely and use Audiobookshelf's current record as the metadata directly "
+            "-- still run through LibraForge's normal cleanup (series-suffix, title "
+            "noise, author-name scheme) before writing back. For an existing, already-"
+            "organized library where you've manually corrected books in the "
+            "Audiobookshelf UI and want that trusted outright. Mutually exclusive with "
+            "--weight-abs-metadata."
+        ),
+    )
+    _abs_input_group.add_argument(
+        "--weight-abs-metadata",
+        action="store_true",
+        dest="weight_abs_metadata",
+        help=(
+            "Provider matching still runs in full, but when Audiobookshelf's current "
+            "ASIN for a book differs from what's already embedded in the file, a "
+            "provider candidate matching Audiobookshelf's ASIN gets a scoring boost -- "
+            "not an override, a hard-rejected candidate is still rejected. Treats a "
+            "manually-edited Audiobookshelf record as more credible than a stale "
+            "embedded tag, not as a source of truth. Mutually exclusive with "
+            "--trust-abs-metadata."
+        ),
     )
 
     parser.add_argument(
@@ -5431,6 +5596,28 @@ def main():
         args.workers = 5 if args.metadata_json_only else 1
     if args.write_workers is None:
         args.write_workers = args.workers
+
+    # Built once for the whole run (never per-book): every book's metadata
+    # write checks this to decide PATCH-direct-to-ABS vs. the metadata.json
+    # bootstrap fallback (see sync_or_write_abs_metadata). Also needed for a
+    # dry run when --trust-abs-metadata/--weight-abs-metadata is set, since
+    # those affect matching/scoring (which a dry run still does), not just
+    # the write path.
+    abs_index: dict | None = None
+    _needs_abs_index = args.apply or args.trust_abs_metadata or args.weight_abs_metadata
+    if _needs_abs_index and args.abs_api_key:
+        try:
+            abs_items = fetch_all_abs_book_items(
+                lambda path, params: abs_get_json(path, params, args.abs_url, args.abs_api_key)
+            )
+            abs_index = build_item_index(abs_items)
+            print(f"Fetched {len(abs_items)} items from Audiobookshelf for direct metadata sync.", flush=True)
+        except Exception as exc:
+            print(
+                f"  WARNING: Audiobookshelf lookup unavailable this run ({exc}); "
+                "metadata.json will be used for every book instead.",
+                flush=True,
+            )
 
     root = Path(args.root).resolve()
 
@@ -5541,6 +5728,7 @@ def main():
                 search_cache_lock=search_cache_lock,
                 search_in_flight=search_in_flight,
                 folder_audio_counts=folder_audio_counts,
+                abs_index=abs_index,
             )
             for index, file_path in enumerate(processing_items, start=1)
         ]
@@ -5779,15 +5967,22 @@ def main():
                         effective_metadata, skip_write, write_note = metadata, False, ""
 
                     meta_target = get_audiobookshelf_metadata_path(file_path, clues, _alone)
+                    # abs_index is also built for a dry run when --trust-abs-metadata/
+                    # --weight-abs-metadata is set (see main()), since those affect
+                    # matching/scoring, which a dry run still does -- so abs_known can
+                    # be accurate here too, not just for --apply's real write decision.
+                    abs_known = abs_index is not None and lookup_item_in_index(
+                        abs_index, asin=str(metadata.get("asin") or ""), path=str(file_path.parent)
+                    ) is not None
                     metadata_json_pending = (
                         not result.metadata_json_done
-                        and not (skip_write and meta_target.exists())
+                        and not (skip_write and (abs_known or meta_target.exists()))
                     )
 
                     if not args.apply:
                         plan_parts = []
                         if metadata_json_pending:
-                            plan_parts.append("metadata.json")
+                            plan_parts.append("Audiobookshelf (direct API)" if abs_known else "metadata.json")
                         if not skip_write:
                             if is_sidecar:
                                 plan_parts.append("json_sidecar")
@@ -5812,6 +6007,7 @@ def main():
                                 "write_mode": write_mode,
                                 "metadata_json_pending": metadata_json_pending,
                                 "tag_write_pending": not skip_write and not only_json,
+                                "via": determine_metadata_write_via(metadata_json_pending, abs_known),
                             })
                         )
                         out.append("")
@@ -5820,8 +6016,9 @@ def main():
                         primary_output_kind = "tags"
 
                         if metadata_json_pending:
-                            abs_path = write_audiobookshelf_metadata_json(
-                                file_path, effective_metadata, clues, _alone,
+                            abs_path = sync_or_write_abs_metadata(
+                                file_path, effective_metadata, clues, _alone, abs_index,
+                                args.abs_url, args.abs_api_key,
                                 fill_missing=(write_mode != "overwrite"),
                             )
                             applied_parts.append(f"metadata_json={abs_path}")
@@ -5894,6 +6091,7 @@ def main():
                                 "write_mode": write_mode,
                                 "metadata_json_pending": metadata_json_pending,
                                 "tag_write_pending": not skip_write and not only_json,
+                                "via": determine_metadata_write_via(metadata_json_pending, abs_known),
                             })
                         )
                         out.append("")

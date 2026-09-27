@@ -42,7 +42,7 @@ function mreBuildDialog() {
         <label>Genre<input id="mreGenre" placeholder="e.g. Fantasy, LitRPG" /></label>
         <label>Language<input id="mreLanguage" placeholder="e.g. english" /></label>
         <label>Explicit<input type="checkbox" id="mreExplicit" /></label>
-        <p class="note mae-full-width">Language and Explicit are only written to metadata.json (picked up by Audiobookshelf) - not embedded in the audio file's own tags.</p>
+        <p class="note mae-full-width">Language and Explicit go to Audiobookshelf directly via its API when it already knows the book, otherwise to metadata.json for it to pick up - not embedded in the audio file's own tags.</p>
         <label class="mae-full-width">Comment / Summary<textarea id="mreSummary" rows="4"></textarea></label>
       </div>
     </div>

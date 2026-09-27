@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import functools
 import hashlib
@@ -18,6 +19,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -59,6 +61,15 @@ from app.enrichment import (
     search_series_audible,
     search_series_goodreads,
     write_metadata_json_partial,
+)
+from app.abs_client import (
+    abs_patch_json,
+    build_item_index,
+    load_bootstrap_registry,
+    lookup_item_in_index,
+    reconcile_bootstrap_registry,
+    sync_book_metadata,
+    upsert_bootstrapped_file,
 )
 from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
@@ -1224,6 +1235,8 @@ class RunRequest(BaseModel):
     cover_if_missing: bool = False
     replace_cover: bool = False
     metadata_json_only: bool = False
+    trust_abs_metadata: bool = False
+    weight_abs_metadata: bool = False
 
     min_score: float | None = 0.70
     limit: int | None = 50
@@ -1478,6 +1491,7 @@ class OrganizerRunRequest(BaseModel):
     acknowledge_no_sidecars: bool = False
     naming_template: str = ""
     use_default_scheme: bool = True
+    trust_abs_metadata: bool = False
 
 
 class OrganizerNamingTemplateValidateRequest(BaseModel):
@@ -2148,8 +2162,20 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         if req.provider == "abs":
             cmd += ["--provider", "abs"]
             cmd += ["--abs-provider", req.abs_provider]
+        # --abs-url/--abs-api-key are for direct-API metadata sync
+        # (sync_book_metadata) and the --trust-abs-metadata/--weight-abs-metadata
+        # opt-ins, an entirely separate concern from req.provider (which search
+        # provider to use) -- pass them whenever ABS is configured at all, not
+        # only when the user happens to have also selected it as the search
+        # provider. This was a real bug: before this fix, direct-API sync could
+        # never activate unless provider=="abs", even with ABS fully configured.
+        if _get_abs_api_key():
             cmd += ["--abs-url", _get_abs_url()]
             cmd += ["--abs-api-key", _get_abs_api_key()]
+        if req.trust_abs_metadata:
+            cmd.append("--trust-abs-metadata")
+        elif req.weight_abs_metadata:
+            cmd.append("--weight-abs-metadata")
         # Always pass abs-agg URL so the fixer can auto-detect and search
         # GraphicAudio / SoundBooth Theater regardless of the selected provider.
         cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
@@ -3269,11 +3295,47 @@ def _write_book_metadata(
             field_policy=write_policy,
         )
 
-    # Audiobookshelf metadata.json, placed by the same alone/group rules.
-    metadata_json_path = fixer_module.write_audiobookshelf_metadata_json(
-        source_path, metadata, clues, alone,
+    # Push metadata to Audiobookshelf directly (PATCH) when it already knows
+    # this book, instead of writing/relying on a metadata.json ABS could
+    # later re-read stale on some unrelated rescan and silently revert a
+    # human's edit made in the ABS UI. Falls back to the original
+    # metadata.json write, placed by the same alone/group rules as before,
+    # when ABS isn't configured or doesn't know this book yet.
+    abs_index = _abs_item_index_cached()
+
+    def _abs_lookup(asin: str, _path: str) -> dict[str, Any] | None:
+        if abs_index is None:
+            return None
+        return lookup_item_in_index(abs_index, asin=asin, path=str(source_path.parent))
+
+    def _write_metadata_json_fallback() -> Path:
+        return fixer_module.write_audiobookshelf_metadata_json(
+            source_path, metadata, clues, alone,
+            skip_blank_fields=(write_policy == "fill"),
+        )
+
+    def _record_abs_sync(sync_info: dict[str, Any]) -> None:
+        fixer_module.update_abs_sync_record(
+            source_path, clues, alone, sync_info["library_item_id"], sync_info["abs_updated_at"]
+        )
+
+    def _record_bootstrap() -> None:
+        upsert_bootstrapped_file(REPORTS_DIR, source_path, str(metadata.get("asin") or ""), str(source_path.parent))
+
+    sync_result = sync_book_metadata(
+        metadata=metadata,
         skip_blank_fields=(write_policy == "fill"),
+        abs_url=_get_abs_url(),
+        abs_api_key=_get_abs_api_key(),
+        lookup_item=_abs_lookup,
+        write_file_fallback=_write_metadata_json_fallback,
+        record_sync=_record_abs_sync,
+        record_bootstrap=_record_bootstrap,
     )
+    if sync_result["branch"] == "file":
+        metadata_json_path = sync_result["path"]
+    else:
+        metadata_json_path = f"abs://items/{sync_result['library_item_id']}"
 
     # Mirror the CLI path's written_fields computation (audible-metadata-fixer-v5.py,
     # around WRITE_ACTION_JSON emission): a field counts as "written" whenever
@@ -4067,6 +4129,10 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         cmd.append("--use-default-scheme")
     elif req.naming_template.strip():
         cmd += ["--naming-template", req.naming_template]
+    if req.trust_abs_metadata and _get_abs_api_key():
+        cmd += ["--abs-url", _get_abs_url()]
+        cmd += ["--abs-api-key", _get_abs_api_key()]
+        cmd.append("--trust-abs-metadata")
 
     return cmd
 
@@ -4281,6 +4347,13 @@ def resolve_asin_for_chaptering(source: Path, override: str = "") -> str:
     asin = str(book.get("asin") or audible_meta.get("asin") or "").strip()
     if asin:
         return asin.upper()
+    abs_index = _abs_item_index_cached()
+    if abs_index is not None:
+        record = lookup_item_in_index(abs_index, asin="", path=str(source.parent))
+        if record is not None:
+            abs_asin = str(((record["media"].get("metadata")) or {}).get("asin") or "").strip()
+            if abs_asin:
+                return abs_asin.upper()
     metadata = read_chapter_json_file(chapter_metadata_json_path(source))
     asin = str(metadata.get("asin") or "").strip()
     if asin:
@@ -4772,6 +4845,43 @@ def run_organizer_worker(run_id: str, req: OrganizerRunRequest) -> None:
             runs.pop(run_id, None)
 
 
+# Once a day is plenty for the bootstrap-file reconciliation sweep -- a
+# bootstrap metadata.json is only a landmine if ABS rescans it in the
+# meantime, and a day-late cleanup in the rare worst case is a non-issue.
+_ABS_BOOTSTRAP_RECONCILE_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _abs_bootstrap_reconcile_tick() -> None:
+    """One reconciliation check, gated so the common steady state (nothing
+    pending, or ABS not configured) does zero work -- no filesystem walk, no
+    API calls, just a cheap registry-file read. Split out from the loop below
+    so it's directly callable/testable without waiting on the real interval.
+    See app.abs_client.reconcile_bootstrap_registry.
+    """
+    try:
+        abs_api_key = _get_abs_api_key()
+        if not abs_api_key:
+            return
+        if not load_bootstrap_registry(REPORTS_DIR):
+            return
+        abs_url = _get_abs_url()
+        await asyncio.to_thread(
+            reconcile_bootstrap_registry,
+            REPORTS_DIR,
+            abs_url=abs_url,
+            abs_api_key=abs_api_key,
+            fetch_items=lambda: fetch_all_abs_book_items(_abs_request),
+        )
+    except Exception:
+        pass
+
+
+async def _abs_bootstrap_reconcile_loop() -> None:
+    while True:
+        await asyncio.sleep(_ABS_BOOTSTRAP_RECONCILE_INTERVAL_SECONDS)
+        await _abs_bootstrap_reconcile_tick()
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Kick off the Manual Review filesystem search index build immediately
@@ -4790,7 +4900,13 @@ async def _lifespan(app: FastAPI):
         )
     except OSError:
         pass
-    yield
+    reconcile_task = asyncio.create_task(_abs_bootstrap_reconcile_loop())
+    try:
+        yield
+    finally:
+        reconcile_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reconcile_task
 
 
 app = FastAPI(title="LibraForge", lifespan=_lifespan)
@@ -6177,10 +6293,39 @@ class EnrichmentApplyResponse(BaseModel):
 
 @app.post("/api/enrichment/apply")
 def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
+    """Apply the compiled genre/narrator/explicit to each included book.
+
+    Enrichment Forge's own compile step already sources every book from the
+    ABS API (see get_series_books), so book.id here is always the real ABS
+    library_item_id -- no ASIN/path lookup needed, unlike the fixer's write
+    path. When ABS is configured, PATCH directly (blank genre/narrator/
+    explicit simply aren't included, which is exactly write_metadata_json_
+    partial/merge_metadata_json's existing "blank means don't touch" contract
+    -- no selective-field diffing needed here, unlike Meta Forge's writes).
+    Falls back to the metadata.json merge exactly as before when ABS isn't
+    configured.
+    """
     applied = 0
     failed: list[dict] = []
+    abs_api_key = _get_abs_api_key()
+    abs_url = _get_abs_url() if abs_api_key else ""
     for book in req.books:
         if not book.include:
+            continue
+        if abs_api_key and book.id:
+            try:
+                fields: dict[str, Any] = {}
+                if req.genre:
+                    fields["genres"] = list(req.genre)
+                if req.narrator.strip():
+                    fields["narrators"] = [n.strip() for n in req.narrator.split(",") if n.strip()]
+                if req.explicit:
+                    fields["explicit"] = True
+                if fields:
+                    abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
+                applied += 1
+            except Exception as exc:
+                failed.append({"id": book.id, "path": book.path, "error": str(exc)})
             continue
         try:
             validated_path = validate_audiobook_path(book.path)
@@ -7259,6 +7404,39 @@ def _owned_asins_cached(root: Path) -> set[str]:
     data = _scan_owned_asins(root)
     _store_owned_asins(root, data, fingerprint)
     return data
+
+
+# Cached ASIN/path -> ABS library item lookup for direct-API metadata sync
+# (app.abs_client.sync_book_metadata). Unlike the owned-ASIN cache above, this
+# is global rather than per-root -- fetch_all_abs_book_items() always walks
+# every ABS library regardless of any local root path.
+_ABS_ITEM_INDEX_CACHE: tuple[float, dict[str, Any]] | None = None
+_ABS_ITEM_INDEX_CACHE_TTL = 1800  # 30 minutes
+_ABS_ITEM_INDEX_LOCK = threading.Lock()
+
+
+def _abs_item_index_cached() -> dict[str, Any] | None:
+    """The ASIN/path -> ABS library item lookup, memory-cached with a TTL.
+
+    Returns None when ABS isn't configured or the fetch fails -- callers
+    treat that exactly like a lookup miss (fall back to metadata.json).
+    """
+    global _ABS_ITEM_INDEX_CACHE
+    if not _get_abs_api_key():
+        return None
+    with _ABS_ITEM_INDEX_LOCK:
+        if _ABS_ITEM_INDEX_CACHE is not None:
+            ts, index = _ABS_ITEM_INDEX_CACHE
+            if time.monotonic() - ts < _ABS_ITEM_INDEX_CACHE_TTL:
+                return index
+    try:
+        items = fetch_all_abs_book_items(_abs_request)
+        index = build_item_index(items)
+    except Exception:
+        return None
+    with _ABS_ITEM_INDEX_LOCK:
+        _ABS_ITEM_INDEX_CACHE = (time.monotonic(), index)
+    return index
 
 
 def _library_item_to_dict(item: dict[str, Any]) -> dict[str, Any]:
@@ -8462,6 +8640,34 @@ def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict
         target_path, source_formats=source_formats, source_files=source_files, book=book,
         alone_in_folder=alone_in_folder,
     )
+
+    # Push to Audiobookshelf directly when it already knows this item -- ABS's
+    # mediaType is a library-level property, not per-item, so an ebook-only
+    # item uses the exact same PATCH endpoint/payload as an audiobook. This is
+    # net-new (no legacy ebook-facing file ever existed to fall back to), so
+    # write_file_fallback is a no-op: on a lookup miss the ebook simply stays
+    # invisible to ABS until it's scanned, exactly like today.
+    abs_index = _abs_item_index_cached()
+
+    def _abs_lookup(asin: str, _path: str) -> dict[str, Any] | None:
+        if abs_index is None:
+            return None
+        return lookup_item_in_index(abs_index, asin=asin, path=str(target_path.parent))
+
+    def _record_abs_sync(sync_info: dict[str, Any]) -> None:
+        fixer_module.update_abs_sync_record(
+            target_path, None, alone_in_folder, sync_info["library_item_id"], sync_info["abs_updated_at"]
+        )
+
+    sync_book_metadata(
+        metadata=book,
+        abs_url=_get_abs_url(),
+        abs_api_key=_get_abs_api_key(),
+        lookup_item=_abs_lookup,
+        write_file_fallback=lambda: None,
+        record_sync=_record_abs_sync,
+    )
+
     return {"path": str(target_path), "book": book}
 
 
