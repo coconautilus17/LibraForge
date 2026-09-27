@@ -17,14 +17,18 @@ sync_book_metadata's three-way branch.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
 from app.fixer.parsing import is_single_numeric_sequence
 from app.fixer.scoring import GENRE_BLOCKLIST, split_genre_string, split_series_trailing_number
+
+logger = logging.getLogger(__name__)
 
 _COMMA_SPLIT_RE = re.compile(r"\s*,\s*")
 
@@ -379,9 +383,20 @@ def _parse_legacy_series(entry: Any) -> tuple[str, str]:
     return text, ""
 
 
+def _as_list(value: Any) -> list[Any]:
+    """A list field as a list: a hand-edited file may hold one bare string
+    ("genres": "Fantasy"), which must stay one value, not be iterated into
+    characters. Anything else that isn't a list is ignored."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []
+
+
 def _names(values: Any) -> list[str]:
     out = []
-    for v in values or []:
+    for v in _as_list(values):
         name = v.get("name") if isinstance(v, dict) else v
         name = str(name or "").strip()
         if name:
@@ -390,7 +405,7 @@ def _names(values: Any) -> list[str]:
 
 
 def _real_genres(values: Any) -> set[str]:
-    return {g.strip().lower() for g in (values or []) if str(g).strip() and str(g).strip().lower() not in GENRE_BLOCKLIST}
+    return {g.strip().lower() for g in _as_list(values) if str(g).strip() and str(g).strip().lower() not in GENRE_BLOCKLIST}
 
 
 def metadata_json_diff(metadata_json: dict[str, Any], abs_metadata: dict[str, Any]) -> dict[str, Any]:
@@ -409,13 +424,13 @@ def metadata_json_diff(metadata_json: dict[str, Any], abs_metadata: dict[str, An
         # Compared as sets: ABS reorders co-authors itself, so order alone isn't a change.
         if names and {n.lower() for n in names} != {n.lower() for n in _names(abs_metadata.get(key))}:
             diff[key] = [{"name": n} for n in names] if key == "authors" else names
-    series = [_parse_legacy_series(s) for s in (metadata_json.get("series") or [])]
+    series = [_parse_legacy_series(s) for s in _as_list(metadata_json.get("series"))]
     series = [s for s in series if s[0]]
     if series:
-        current = {(n.lower(), q) for n, q in (_parse_legacy_series(s) for s in (abs_metadata.get("series") or []))}
+        current = {(n.lower(), q) for n, q in (_parse_legacy_series(s) for s in _as_list(abs_metadata.get("series")))}
         if {(n.lower(), q) for n, q in series} != current:
             diff["series"] = [{"name": n, "sequence": q} for n, q in series]
-    genres = [g for g in (metadata_json.get("genres") or []) if str(g).strip().lower() not in GENRE_BLOCKLIST]
+    genres = [g for g in _as_list(metadata_json.get("genres")) if str(g).strip().lower() not in GENRE_BLOCKLIST]
     if genres and _real_genres(genres) != _real_genres(abs_metadata.get("genres")):
         diff["genres"] = genres
     if isinstance(metadata_json.get("explicit"), bool) and metadata_json["explicit"] != bool(abs_metadata.get("explicit")):
@@ -441,7 +456,11 @@ def _decide_legacy_metadata_json(folder: str, abs_item: dict[str, Any], mtime_fn
     diff = metadata_json_diff(data, ((abs_item.get("media") or {}).get("metadata") or {}))
     if not diff:
         return "delete_identical", {}
-    if mtime_fn(str(legacy)) * 1000 > float(abs_item.get("updatedAt") or 0):
+    try:
+        file_newer = mtime_fn(str(legacy)) * 1000 > float(abs_item.get("updatedAt") or 0)
+    except OSError:
+        return "keep_unreadable", {}
+    if file_newer:
         return "consolidate_then_delete", diff
     return "delete_abs_newer", diff
 
@@ -496,7 +515,42 @@ def reconcile_legacy_metadata_json(
         legacy.unlink()
     except OSError:
         return {"action": "kept_unreadable", "fields": sorted(diff)}
-    return {"action": action, "fields": sorted(diff)}
+    result: dict[str, Any] = {"action": action, "fields": sorted(diff)}
+    if action == "consolidated_then_deleted":
+        result["patched"] = diff
+    return result
+
+
+def apply_legacy_metadata_json_migration(
+    rows: list[dict[str, Any]],
+    *,
+    get_item: Callable[[str], dict[str, Any]],
+    reconcile: Callable[[str, dict[str, Any]], dict[str, Any]],
+    backup_dir: Path,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, int]:
+    """--apply for the planner's rows. Each file is copied in full to
+    backup_dir/<item id>.json before it can be deleted (the report only holds
+    the compared fields), and a failing book is recorded on its row
+    ("result": "error") instead of aborting the run. A book whose backup
+    can't be written is never reconciled."""
+    outcome: dict[str, int] = {}
+    for n, row in enumerate(rows, 1):
+        if row["action"] == "keep_unreadable":
+            row["result"] = "kept_unreadable"
+        else:
+            try:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup = backup_dir / f"{row['id']}.json"
+                shutil.copy2(Path(row["path"]) / "metadata.json", backup)
+                row["backup"] = str(backup)
+                row["result"] = reconcile(row["path"], get_item(row["id"]))["action"]
+            except Exception as exc:
+                row["result"], row["error"] = "error", str(exc)
+        outcome[row["result"]] = outcome.get(row["result"], 0) + 1
+        if on_progress:
+            on_progress(n, len(rows))
+    return outcome
 
 
 def sync_book_metadata(
@@ -581,16 +635,28 @@ def sync_book_metadata(
             legacy = reconcile_legacy_metadata_json(expected_path, live_item, abs_url=abs_url, abs_api_key=abs_api_key)
         except Exception:
             legacy = {"action": "kept_unreadable", "fields": []}
+        if legacy["action"].startswith("kept_"):
+            logger.warning(
+                "Legacy metadata.json in %s could not be reconciled (%s); the next ABS rescan may revert this write",
+                expected_path, legacy["action"],
+            )
+
+    # Values a newer legacy file just pushed to ABS are now ABS's values: diff
+    # and merge against them, not the pre-consolidation snapshot.
+    patched = (legacy or {}).get("patched") or {}
+    base_media = record["media"]
+    if patched:
+        base_media = {**base_media, "metadata": {**(base_media.get("metadata") or {}), **patched}}
 
     new_payload = build_media_patch_payload(metadata)
     fields = compute_selective_patch_fields(
-        record["media"], new_payload["metadata"], fill_missing=fill_missing, skip_blank_fields=skip_blank_fields
+        base_media, new_payload["metadata"], fill_missing=fill_missing, skip_blank_fields=skip_blank_fields
     )
 
     series_name = str(metadata.get("series") or "").strip()
     if "series" in fields and series_name:
         current_item = live_item if live_item is not None else fetch(record["library_item_id"])
-        current_series = ((current_item.get("media") or {}).get("metadata") or {}).get("series") or []
+        current_series = patched.get("series") or ((current_item.get("media") or {}).get("metadata") or {}).get("series") or []
         sequence = str(metadata.get("sequence") or "").strip()
         fields["series"] = merge_series_entries(current_series, series_name, sequence)
 

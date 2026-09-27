@@ -223,6 +223,10 @@ async function applyEnrichment() {
   if (removed > 0) {
     parts.push(`Removed ${removed} old metadata.json file${removed === 1 ? "" : "s"}${merged ? ` (${merged} merged into Audiobookshelf first)` : ""}.`);
   }
+  const kept = Object.entries(legacy).filter(([action]) => action.startsWith("kept_")).reduce((sum, [, n]) => sum + n, 0);
+  if (kept > 0) {
+    parts.push(`Warning: ${kept} old metadata.json file${kept === 1 ? "" : "s"} could not be removed; Audiobookshelf may undo ${kept === 1 ? "that book's" : "those books'"} changes on its next scan. Check ${kept === 1 ? "the file is" : "the files are"} readable and writable.`);
+  }
   if (data.failed && data.failed.length) {
     parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.title || f.path} (${f.error})`).join("; ")}`);
   }

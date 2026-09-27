@@ -119,7 +119,9 @@ each book one at a time.
   metadata with item" setting is on, ABS will overwrite it on its next scan.
 - **Clearing old metadata.json files library-wide:** `scripts/migrate-legacy-metadata-json.py`
   does the same compare-then-remove for every book at once. It is a dry run by default
-  (writes a JSON report of what it would do); add `--apply` to perform it.
+  (writes a JSON report of what it would do); add `--apply` to perform it. `--apply` first
+  copies every file it touches to `--backup-dir` (default `./legacy-metadata-json-backup`),
+  records a failing book in the report and moves on, and writes the report even if interrupted.
 
 ## Library Downloader (`/library`)
 Browse your Audible library and download purchases straight into a mounted folder,

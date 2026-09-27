@@ -642,3 +642,75 @@ class SyncBookMetadataLegacyJsonTests(unittest.TestCase):
                                       lookup_item=lambda a, p: self.record, write_file_fallback=lambda: None,
                                       get_item=lambda item_id: self.item)
         self.assertTrue((self.folder / "metadata.json").exists())
+
+
+class LegacyMetadataJsonReviewFixTests(unittest.TestCase):
+    """Final-review fixes: malformed list fields, mtime errors, fill_missing
+    after a consolidation, and kept files being logged."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / "Book"; self.folder.mkdir()
+
+    def test_string_list_fields_are_one_value_not_characters(self):
+        diff = abs_client.metadata_json_diff(
+            {"genres": "Fantasy", "authors": "Jane Doe", "narrators": "Bob", "series": "Saga #2"},
+            {"genres": [], "authors": [], "narrators": [], "series": []})
+        self.assertEqual(diff["genres"], ["Fantasy"])
+        self.assertEqual(diff["authors"], [{"name": "Jane Doe"}])
+        self.assertEqual(diff["narrators"], ["Bob"])
+        self.assertEqual(diff["series"], [{"name": "Saga", "sequence": "2"}])
+
+    def test_non_list_non_string_list_fields_are_ignored(self):
+        self.assertEqual(abs_client.metadata_json_diff({"genres": 5, "authors": {"x": 1}}, {"genres": []}), {})
+
+    def test_mtime_error_keeps_the_file_instead_of_raising(self):
+        (self.folder / "metadata.json").write_text('{"publisher": "P"}', encoding="utf-8")
+        item = {"id": "i1", "path": str(self.folder), "isFile": False, "updatedAt": 1, "media": {"metadata": {}}}
+
+        def boom(p):
+            raise OSError("stale NFS handle")
+
+        r = abs_client.reconcile_legacy_metadata_json(str(self.folder), item, abs_url="u", abs_api_key="k",
+                                                      patch_fn=lambda *a, **k: None, mtime_fn=boom)
+        self.assertEqual(r["action"], "kept_unreadable")
+        self.assertTrue((self.folder / "metadata.json").exists())
+
+    def _sync(self, calls, *, fill_missing=False, metadata=None, record_media=None, live_meta=None):
+        record = {"library_item_id": "li1", "path": str(self.folder), "rel_path": "Book", "updated_at": 100,
+                  "media": {"metadata": record_media if record_media is not None else {"title": "T"}}}
+        item = {"id": "li1", "path": str(self.folder), "isFile": False, "updatedAt": 1,
+                "media": {"metadata": live_meta if live_meta is not None else {"title": "T"}}}
+        md = {"title": "T", "author": "", "narrator": "", "series": "", "sequence": "", "genre": "", "year": "",
+              "summary": "", "isbn": "", "asin": "", "language": ""}
+        md.update(metadata or {})
+        with patch.object(abs_client, "abs_patch_json", side_effect=lambda path, body, *a, **k: calls.append(body)):
+            return abs_client.sync_book_metadata(
+                metadata=md, expected_path=str(self.folder), fill_missing=fill_missing, abs_url="u", abs_api_key="k",
+                lookup_item=lambda a, p: record, write_file_fallback=lambda: None, get_item=lambda i: item)
+
+    def test_fill_missing_never_overwrites_a_value_just_consolidated_from_a_newer_file(self):
+        import os
+        f = self.folder / "metadata.json"; f.write_text('{"publisher": "From File"}', encoding="utf-8")
+        os.utime(f, (3_000, 3_000))
+        calls = []
+        self._sync(calls, fill_missing=True, metadata={"publisher": "From Meta Forge"})
+        self.assertEqual(calls[0], {"metadata": {"publisher": "From File"}})
+        self.assertTrue(all("publisher" not in c["metadata"] for c in calls[1:]), calls)
+
+    def test_series_merge_starts_from_the_consolidated_series(self):
+        import os
+        f = self.folder / "metadata.json"; f.write_text('{"series": ["Other #3"]}', encoding="utf-8")
+        os.utime(f, (3_000, 3_000))
+        calls = []
+        self._sync(calls, metadata={"series": "Saga", "sequence": "1"}, live_meta={"title": "T", "series": []})
+        names = {s["name"] for s in calls[-1]["metadata"]["series"]}
+        self.assertEqual(names, {"Other", "Saga"})
+
+    def test_a_kept_legacy_file_is_logged_as_a_revert_risk(self):
+        (self.folder / "metadata.json").write_text("{broken", encoding="utf-8")
+        with self.assertLogs("app.abs_client", level="WARNING") as logs:
+            result = self._sync([])
+        self.assertEqual(result["legacy_metadata_json"]["action"], "kept_unreadable")
+        self.assertIn("metadata.json", logs.output[0])
+        self.assertIn(str(self.folder), logs.output[0])

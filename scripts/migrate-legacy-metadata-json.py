@@ -17,7 +17,8 @@ with the ABS record:
 
 Default is a DRY RUN: nothing is written, deleted or PATCHed; a JSON report of
 what would happen is written. Pass --apply to perform it (each book is
-re-fetched right before it is reconciled). Run it where the library is mounted
+re-fetched right before it is reconciled, and each file is first copied in full
+to --backup-dir). Run it where the library is mounted
 at the same path ABS uses (e.g. inside the LibraForge container, /audiobooks).
 """
 from __future__ import annotations
@@ -34,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.abs_client import (  # noqa: E402
     abs_get_json,
+    apply_legacy_metadata_json_migration,
     plan_legacy_metadata_json_migration,
     reconcile_legacy_metadata_json,
 )
@@ -54,6 +56,9 @@ def main() -> int:
     parser.add_argument("--abs-api-key", default=os.environ.get("ABS_API_KEY", ""))
     parser.add_argument("--report", type=Path, default=Path("legacy-metadata-json-migration.json"),
                         help="Where to write the JSON report (default: ./legacy-metadata-json-migration.json).")
+    parser.add_argument("--backup-dir", type=Path, default=Path("legacy-metadata-json-backup"),
+                        help="--apply copies every file here (<item id>.json) before it can be deleted "
+                             "(default: ./legacy-metadata-json-backup).")
     parser.add_argument("--limit", type=int, default=0, help="Only process the first N candidate books (testing).")
     args = parser.parse_args()
 
@@ -90,31 +95,31 @@ def main() -> int:
     planned = Counter(r["action"] for r in rows)
     print(f"{len(rows)} legacy metadata.json file(s): " + ", ".join(f"{k}={v}" for k, v in sorted(planned.items())))
 
-    outcome: Counter = Counter()
-    if args.apply:
-        for n, row in enumerate(rows, 1):
-            if row["action"] == "keep_unreadable":
-                outcome["kept_unreadable"] += 1
-                continue
-            result = reconcile_legacy_metadata_json(
-                row["path"], get_item(row["id"]), abs_url=abs_url, abs_api_key=abs_api_key,
+    outcome: dict[str, int] = {}
+    try:
+        if args.apply:
+            outcome = apply_legacy_metadata_json_migration(
+                rows, get_item=get_item, backup_dir=args.backup_dir,
+                reconcile=lambda path, item: reconcile_legacy_metadata_json(
+                    path, item, abs_url=abs_url, abs_api_key=abs_api_key),
+                on_progress=lambda n, total: print(f"  applied {n}/{total}", end="\r", flush=True)
+                if n % 25 == 0 or n == total else None,
             )
-            row["result"] = result["action"]
-            outcome[result["action"]] += 1
-            if n % 25 == 0 or n == len(rows):
-                print(f"  applied {n}/{len(rows)}", end="\r", flush=True)
-        print()
-        print("Applied: " + ", ".join(f"{k}={v}" for k, v in sorted(outcome.items())))
-    else:
-        print("Dry run: nothing changed. Re-run with --apply to perform it.")
-
-    args.report.write_text(json.dumps({
-        "mode": "apply" if args.apply else "dry-run",
-        "planned": dict(planned),
-        "applied": dict(outcome),
-        "rows": rows,
-    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Report: {args.report}")
+            print()
+            print("Applied: " + ", ".join(f"{k}={v}" for k, v in sorted(outcome.items())))
+            print(f"Backups of every processed file: {args.backup_dir}")
+        else:
+            print("Dry run: nothing changed. Re-run with --apply to perform it.")
+    finally:
+        # Written even if the run is interrupted: rows carry "result" for
+        # everything that was already processed.
+        args.report.write_text(json.dumps({
+            "mode": "apply" if args.apply else "dry-run",
+            "planned": dict(planned),
+            "applied": dict(outcome),
+            "rows": rows,
+        }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"Report: {args.report}")
     return 0
 
 
