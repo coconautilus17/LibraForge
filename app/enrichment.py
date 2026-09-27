@@ -200,6 +200,8 @@ def search_series_audible(
     -> Audible product dict, or None if nothing was found or the call failed.
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        if not book.get("has_audio", True):
+            return book["id"], None  # #301: never match placeholders/ebooks to audiobooks
         try:
             if book.get("asin"):
                 return book["id"], audible_lookup_by_asin_fn(client, book["asin"])
@@ -233,6 +235,8 @@ def search_series_goodreads(
     mixed Goodreads+Amazon load, not pure Goodreads).
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, list[dict]]:
+        if not book.get("has_audio", True):
+            return book["id"], []  # #301
         try:
             return book["id"], abs_tract_search_fn(
                 title=book.get("title", ""),
@@ -264,6 +268,8 @@ def search_series_abs(
     ABS search plumbing as the manual review and M4B flows.
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        if not book.get("has_audio", True):
+            return book["id"], None  # #301
         try:
             query = str(book.get("title", "") or "").strip()
             if not query:
@@ -428,10 +434,12 @@ def compile_series_enrichment(
         if not narrators:
             narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
-        all_genres.extend(audible_genres)
-        all_genres.extend(goodreads_genres)
-        all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", []) + book.get("existing_tags", [])))
-        all_narrators.extend(narrators)
+        has_audio = book.get("has_audio", True)
+        if has_audio:  # #301: a placeholder/ebook's genres are not evidence about the series
+            all_genres.extend(audible_genres)
+            all_genres.extend(goodreads_genres)
+            all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", []) + book.get("existing_tags", [])))
+            all_narrators.extend(narrators)
 
         rows.append({
             "id": book["id"],
@@ -443,7 +451,8 @@ def compile_series_enrichment(
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),
             "existing_tags": book.get("existing_tags", []),
-            "has_audio": book.get("has_audio", True),
+            "has_audio": has_audio,
+            "default_include": has_audio,
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
         })

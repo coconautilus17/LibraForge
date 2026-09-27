@@ -6224,6 +6224,7 @@ class EnrichmentBookRow(BaseModel):
     existing_genres: list[str]
     existing_tags: list[str] = []
     has_audio: bool = True
+    default_include: bool = True
     existing_narrator: str
     existing_explicit: bool
 

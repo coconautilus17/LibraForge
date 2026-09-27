@@ -554,3 +554,36 @@ class WriteMetadataJsonPartialTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NonAudioItemsTests(unittest.TestCase):
+    """LibraForge #301: ebook-only / placeholder items ("Missing Dune Books")
+    were searched like audiobooks and their random matches' genres leaked
+    into the whole series."""
+
+    BOOK = {"id": "x", "title": "Missing Dune Books", "author": "Frank Herbert", "asin": "", "has_audio": False}
+
+    def test_audible_search_skips_non_audio_books(self):
+        calls = []
+        out = enrichment.search_series_audible([self.BOOK], lambda *a, **k: calls.append(1) or [{"asin": "B0X"}],
+                                               lambda *a, **k: calls.append(1), client=None)
+        self.assertEqual(calls, [])
+        self.assertIsNone(out["x"])
+
+    def test_abs_search_skips_non_audio_books(self):
+        calls = []
+        out = enrichment.search_series_abs([self.BOOK], lambda **k: calls.append(1) or {"results": [{}]})
+        self.assertEqual(calls, [])
+        self.assertIsNone(out["x"])
+
+    def test_non_audio_rows_default_to_excluded_and_add_nothing_to_the_union(self):
+        books = [dict(self.BOOK, existing_genres=["Fantasy"], existing_tags=[]),
+                 {"id": "y", "title": "Dune", "has_audio": True, "existing_genres": [], "existing_tags": []}]
+        audible = {"x": {"category_ladders": [{"ladder": [{"name": "Literature & Fiction"}, {"name": "Literary Fiction"}]}]},
+                   "y": {"category_ladders": [{"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}]}]}}
+        out = enrichment.compile_series_enrichment(books, audible, {}, lambda g: [x for x in g if x])
+        rows = {r["id"]: r for r in out["books"]}
+        self.assertFalse(rows["x"]["default_include"])
+        self.assertTrue(rows["y"]["default_include"])
+        self.assertNotIn("Literary Fiction", out["genre"])
+        self.assertNotIn("Fantasy", out["genre"])
