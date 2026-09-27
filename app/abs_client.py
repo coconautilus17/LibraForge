@@ -422,6 +422,50 @@ def metadata_json_diff(metadata_json: dict[str, Any], abs_metadata: dict[str, An
     return diff
 
 
+def _decide_legacy_metadata_json(folder: str, abs_item: dict[str, Any], mtime_fn: Callable[[str], float]) -> tuple[str, dict[str, Any]]:
+    """Side-effect-free decision shared by the live reconcile and the dry-run
+    planner: "none" | "keep_unreadable" | "delete_identical" |
+    "delete_abs_newer" | "consolidate_then_delete", plus the diff."""
+    if not folder or abs_item.get("isFile") or Path(folder) != Path(str(abs_item.get("path") or "")):
+        return "none", {}
+    legacy = Path(folder) / "metadata.json"
+    if not legacy.is_file():
+        return "none", {}
+    try:
+        data = json.loads(legacy.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("metadata.json is not an object")
+    except (OSError, ValueError):
+        return "keep_unreadable", {}
+    diff = metadata_json_diff(data, ((abs_item.get("media") or {}).get("metadata") or {}))
+    if not diff:
+        return "delete_identical", {}
+    if mtime_fn(str(legacy)) * 1000 > float(abs_item.get("updatedAt") or 0):
+        return "consolidate_then_delete", diff
+    return "delete_abs_newer", diff
+
+
+def plan_legacy_metadata_json_migration(
+    items: list[dict[str, Any]],
+    *,
+    get_item: Callable[[str], dict[str, Any]],
+    mtime_fn: Callable[[str], float] = os.path.getmtime,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Dry-run plan for the whole library: one row per book whose own folder
+    holds a legacy metadata.json. Only those books are fetched (expanded).
+    Never writes, deletes or PATCHes anything."""
+    candidates = [it for it in items if not it.get("isFile") and (Path(str(it.get("path") or "")) / "metadata.json").is_file()]
+    rows: list[dict[str, Any]] = []
+    for n, it in enumerate(candidates, 1):
+        decision, diff = _decide_legacy_metadata_json(str(it["path"]), get_item(it["id"]), mtime_fn)
+        if decision != "none":
+            rows.append({"id": it["id"], "path": str(it["path"]), "action": decision, "fields": sorted(diff), "diff": diff})
+        if on_progress:
+            on_progress(n, len(candidates))
+    return rows
+
+
 def reconcile_legacy_metadata_json(
     folder: str,
     abs_item: dict[str, Any],
@@ -436,28 +480,17 @@ def reconcile_legacy_metadata_json(
     items (their folder is shared with other books) or a folder that isn't the
     item's own path. Returns {"action": ..., "fields": [...]}."""
     patch_fn = patch_fn or abs_patch_json
-    if not folder or abs_item.get("isFile") or Path(folder) != Path(str(abs_item.get("path") or "")):
-        return {"action": "none", "fields": []}
+    decision, diff = _decide_legacy_metadata_json(folder, abs_item, mtime_fn)
+    if decision in ("none", "keep_unreadable"):
+        return {"action": {"none": "none", "keep_unreadable": "kept_unreadable"}[decision], "fields": []}
     legacy = Path(folder) / "metadata.json"
-    if not legacy.is_file():
-        return {"action": "none", "fields": []}
-    try:
-        data = json.loads(legacy.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("metadata.json is not an object")
-    except (OSError, ValueError):
-        return {"action": "kept_unreadable", "fields": []}
-    diff = metadata_json_diff(data, ((abs_item.get("media") or {}).get("metadata") or {}))
-    action = "deleted_identical"
-    if diff:
-        if mtime_fn(str(legacy)) * 1000 > float(abs_item.get("updatedAt") or 0):
-            try:
-                patch_fn(f"/api/items/{abs_item['id']}/media", {"metadata": diff}, abs_url, abs_api_key)
-            except Exception:
-                return {"action": "kept_patch_failed", "fields": sorted(diff)}
-            action = "consolidated_then_deleted"
-        else:
-            action = "deleted_abs_newer"
+    action = {"delete_identical": "deleted_identical", "delete_abs_newer": "deleted_abs_newer"}.get(decision, "")
+    if decision == "consolidate_then_delete":
+        try:
+            patch_fn(f"/api/items/{abs_item['id']}/media", {"metadata": diff}, abs_url, abs_api_key)
+        except Exception:
+            return {"action": "kept_patch_failed", "fields": sorted(diff)}
+        action = "consolidated_then_deleted"
     try:
         legacy.unlink()
     except OSError:
