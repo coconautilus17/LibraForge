@@ -734,6 +734,20 @@ function syncNamingSchemeToggle() {
 $('useDefaultScheme').addEventListener('change', syncNamingSchemeToggle);
 syncNamingSchemeToggle();
 
+(async () => {
+  // Meaningless without Audiobookshelf configured -- disable and grey it out
+  // rather than let the user check a box that silently does nothing
+  // (build_organizer_command only passes --abs-url/--abs-api-key/
+  // --trust-abs-metadata at all when ABS is configured).
+  await window.UiCommon?.checkAbsReachable();
+  if (window.UiCommon?.isAbsConfigured()) return;
+  const input = $('trustAbsMetadata');
+  if (!input) return;
+  input.disabled = true;
+  const label = input.closest('label');
+  if (label) label.style.opacity = '0.4';
+})();
+
 $('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
 $('cleanupBtn').addEventListener('click', runCleanup);

@@ -2509,6 +2509,13 @@ def sync_or_write_abs_metadata(
         return str(result["path"])
     return f"ABS item {result['library_item_id']} (direct API)"
 
+def determine_metadata_write_via(metadata_json_pending: bool, abs_known: bool) -> str:
+    """"via" for WRITE_ACTION_JSON: which channel this book's metadata write
+    went (or would go, in a dry run) through -- surfaced per-book in the run
+    report so it's visible which books are synced directly vs. still on the
+    metadata.json bootstrap path, without having to read the raw log."""
+    return "abs_api" if (metadata_json_pending and abs_known) else "metadata_json"
+
 def refresh_multipart_sidecar_audio_profile(
     folder: Path,
     chapter_files: list[Path],
@@ -3995,6 +4002,7 @@ def search_item(
                         "write_mode": write_mode,
                         "metadata_json_pending": True,
                         "tag_write_pending": False,
+                        "via": determine_metadata_write_via(True, abs_known),
                     })
                 )
             write_marker(
@@ -5959,9 +5967,10 @@ def main():
                         effective_metadata, skip_write, write_note = metadata, False, ""
 
                     meta_target = get_audiobookshelf_metadata_path(file_path, clues, _alone)
-                    # abs_index is only built for --apply runs (see main()), so a dry
-                    # run's plan preview stays file-based -- purely informational, no
-                    # actual write happens either way in that mode.
+                    # abs_index is also built for a dry run when --trust-abs-metadata/
+                    # --weight-abs-metadata is set (see main()), since those affect
+                    # matching/scoring, which a dry run still does -- so abs_known can
+                    # be accurate here too, not just for --apply's real write decision.
                     abs_known = abs_index is not None and lookup_item_in_index(
                         abs_index, asin=str(metadata.get("asin") or ""), path=str(file_path.parent)
                     ) is not None
@@ -5973,7 +5982,7 @@ def main():
                     if not args.apply:
                         plan_parts = []
                         if metadata_json_pending:
-                            plan_parts.append("metadata.json")
+                            plan_parts.append("Audiobookshelf (direct API)" if abs_known else "metadata.json")
                         if not skip_write:
                             if is_sidecar:
                                 plan_parts.append("json_sidecar")
@@ -5998,6 +6007,7 @@ def main():
                                 "write_mode": write_mode,
                                 "metadata_json_pending": metadata_json_pending,
                                 "tag_write_pending": not skip_write and not only_json,
+                                "via": determine_metadata_write_via(metadata_json_pending, abs_known),
                             })
                         )
                         out.append("")
@@ -6081,6 +6091,7 @@ def main():
                                 "write_mode": write_mode,
                                 "metadata_json_pending": metadata_json_pending,
                                 "tag_write_pending": not skip_write and not only_json,
+                                "via": determine_metadata_write_via(metadata_json_pending, abs_known),
                             })
                         )
                         out.append("")

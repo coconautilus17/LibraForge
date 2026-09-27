@@ -1382,6 +1382,22 @@ function syncAbsMetadataInputMode(justChecked) {
 }
 $('trustAbsMetadata')?.addEventListener('change', () => syncAbsMetadataInputMode('trustAbsMetadata'));
 $('weightAbsMetadata')?.addEventListener('change', () => syncAbsMetadataInputMode('weightAbsMetadata'));
+
+(async () => {
+  // Both options are meaningless without Audiobookshelf configured -- disable
+  // and grey them out rather than let the user check a box that silently
+  // does nothing (build_command only passes --abs-url/--abs-api-key at all
+  // when ABS is configured).
+  await window.UiCommon?.checkAbsReachable();
+  if (window.UiCommon?.isAbsConfigured()) return;
+  for (const id of ['trustAbsMetadata', 'weightAbsMetadata']) {
+    const input = $(id);
+    if (!input) continue;
+    input.disabled = true;
+    const label = input.closest('label');
+    if (label) label.style.opacity = '0.4';
+  }
+})();
 $('advancedRunToggle')?.addEventListener('click', () => {
   const open = !isAdvancedRunSettingsOpen();
   $('advancedRunToggle').setAttribute('aria-expanded', open ? 'true' : 'false');

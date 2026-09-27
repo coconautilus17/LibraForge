@@ -595,5 +595,29 @@ class SyncOrWriteAbsMetadataTests(unittest.TestCase):
         self.assertEqual(lf["abs_sync"]["abs_updated_at_at_patch_time"], 100)
 
 
+class DetermineMetadataWriteViaTests(unittest.TestCase):
+    """The per-book "via" field surfaced in WRITE_ACTION_JSON, so the run
+    report shows which books actually went through the direct-API PATCH path
+    vs. the metadata.json bootstrap fallback -- discovered as a real gap
+    while smoke-testing --trust-abs-metadata against a live Audiobookshelf
+    instance: the dry-run preview said "would write metadata.json" even for
+    a book confirmed known to ABS, which would have actually PATCHed under
+    --apply.
+    """
+
+    def test_pending_and_known_is_abs_api(self):
+        self.assertEqual(FIXER.determine_metadata_write_via(True, True), "abs_api")
+
+    def test_pending_and_not_known_is_metadata_json(self):
+        self.assertEqual(FIXER.determine_metadata_write_via(True, False), "metadata_json")
+
+    def test_not_pending_is_metadata_json_regardless_of_known(self):
+        # Nothing is actually being written in this call, so "via" defaults
+        # to the file label rather than implying an ABS PATCH that isn't
+        # happening.
+        self.assertEqual(FIXER.determine_metadata_write_via(False, True), "metadata_json")
+        self.assertEqual(FIXER.determine_metadata_write_via(False, False), "metadata_json")
+
+
 if __name__ == "__main__":
     unittest.main()
