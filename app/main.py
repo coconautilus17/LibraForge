@@ -6222,6 +6222,8 @@ class EnrichmentBookRow(BaseModel):
     goodreads_genres: list[str]
     flagged_explicit: bool
     existing_genres: list[str]
+    existing_tags: list[str] = []
+    has_audio: bool = True
     existing_narrator: str
     existing_explicit: bool
 

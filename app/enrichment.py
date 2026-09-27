@@ -141,7 +141,8 @@ def get_series_books(
     group_items = groups.get(query_key, [])
     books = []
     for item in group_items:
-        metadata = ((item.get("media") or {}).get("metadata") or {})
+        media = item.get("media") or {}
+        metadata = media.get("metadata") or {}
         raw_series_name = str(metadata.get("seriesName") or "").strip()
         books.append({
             "id": item.get("id", ""),
@@ -150,7 +151,14 @@ def get_series_books(
             "title": metadata.get("title", "") or "",
             "asin": str(metadata.get("asin", "") or "").strip().upper(),
             "author": metadata.get("authorName", "") or "",
-            "existing_genres": list((item.get("media") or {}).get("tags") or []),
+            # The genres field is what Enrichment Forge overwrites, so that's
+            # what "existing" shows (#300); tags carry historical genre data in
+            # many libraries and stay a separate, still-contributing input.
+            "existing_genres": list(metadata.get("genres") or []),
+            "existing_tags": list(media.get("tags") or []),
+            # Ebook-only / placeholder items have no audio and must not be
+            # searched as audiobooks (#301). Unknown count = assume audio.
+            "has_audio": media.get("numAudioFiles") is None or int(media.get("numAudioFiles") or 0) > 0,
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),
@@ -422,7 +430,7 @@ def compile_series_enrichment(
 
         all_genres.extend(audible_genres)
         all_genres.extend(goodreads_genres)
-        all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", [])))
+        all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", []) + book.get("existing_tags", [])))
         all_narrators.extend(narrators)
 
         rows.append({
@@ -434,6 +442,8 @@ def compile_series_enrichment(
             "goodreads_genres": goodreads_genres,
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),
+            "existing_tags": book.get("existing_tags", []),
+            "has_audio": book.get("has_audio", True),
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
         })

@@ -125,11 +125,31 @@ class GetSeriesBooksTests(unittest.TestCase):
             "title": "Scholomance",
             "asin": "B0XXXXXXXX",
             "author": "Logan Jacobs",
-            "existing_genres": ["Fantasy", "LitRPG"],
+            "existing_genres": [],
+            "existing_tags": ["Fantasy", "LitRPG"],
+            "has_audio": True,
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
             "sequence": None,
         }])
+
+    def test_existing_genres_come_from_the_genres_field_and_tags_are_separate(self):
+        # LibraForge #300: the genres field is what Enrichment Forge overwrites,
+        # so it is what "existing genres" must show; tags stay a separate input.
+        item = {"id": "1", "path": "/a", "isFile": False,
+                "media": {"numAudioFiles": 1, "tags": ["Epic"],
+                          "metadata": {"title": "T", "seriesName": "S #1", "genres": ["Fantasy"]}}}
+        [book] = enrichment.get_series_books({"s": [item]}, "S", _fake_normalize_series)
+        self.assertEqual(book["existing_genres"], ["Fantasy"])
+        self.assertEqual(book["existing_tags"], ["Epic"])
+        self.assertTrue(book["has_audio"])
+
+    def test_ebook_only_item_has_no_audio(self):
+        item = {"id": "2", "path": "/b", "isFile": False,
+                "media": {"numAudioFiles": 0, "tags": [],
+                          "metadata": {"title": "Missing X Books", "seriesName": "S #0"}}}
+        [book] = enrichment.get_series_books({"s": [item]}, "S", _fake_normalize_series)
+        self.assertFalse(book["has_audio"])
 
     def test_captures_sequence_from_series_name(self):
         groups = {
@@ -403,6 +423,14 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
         self.assertEqual(compiled["genre"], ["Romance", "Fantasy"])
         self.assertEqual(compiled["books"][0]["audible_genres"], [])
+
+    def test_tags_still_feed_the_union_and_are_returned_separately(self):
+        books = [{"id": "1", "title": "T", "existing_genres": ["Fantasy"], "existing_tags": ["Epic"],
+                  "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["genre"], ["Fantasy", "Epic"])
+        self.assertEqual(compiled["books"][0]["existing_tags"], ["Epic"])
+        self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
 
     def test_existing_genres_are_unioned_in_even_when_audible_found_some(self):
         # Local genres are part of the full genre equation, not a
