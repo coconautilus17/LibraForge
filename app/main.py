@@ -3360,6 +3360,7 @@ def _write_book_metadata(
 
     sync_result = sync_book_metadata(
         metadata=metadata,
+        expected_path=str(source_path.parent),
         skip_blank_fields=(write_policy == "fill"),
         abs_url=_get_abs_url(),
         abs_api_key=_get_abs_api_key(),
@@ -8700,6 +8701,7 @@ def apply_manual_review_ebook_target(req: ManualReviewEbookApplyRequest) -> dict
 
     sync_book_metadata(
         metadata=book,
+        expected_path=str(target_path.parent),
         abs_url=_get_abs_url(),
         abs_api_key=_get_abs_api_key(),
         lookup_item=_abs_lookup,

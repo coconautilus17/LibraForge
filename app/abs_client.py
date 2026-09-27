@@ -101,6 +101,8 @@ def build_item_index(items: list[dict[str, Any]]) -> dict[str, dict[str, dict[st
     string and can't safely be merged from.
     """
     by_asin: dict[str, dict[str, Any]] = {}
+    _seen_asins: set[str] = set()
+    _ambiguous_asins: set[str] = set()
     by_path: dict[str, dict[str, Any]] = {}
     for item in items:
         media = item.get("media") or {}
@@ -113,30 +115,67 @@ def build_item_index(items: list[dict[str, Any]]) -> dict[str, dict[str, dict[st
             "media": media,
         }
         asin = str(metadata.get("asin") or "").strip().upper()
-        if asin:
-            by_asin[asin] = record
+        if asin and _is_real_asin(asin):
+            if asin in _seen_asins:
+                # Two different items share what claims to be the same real
+                # ASIN (e.g. duplicate editions) -- never guess between them.
+                # Drop it as a lookup key entirely; callers fall through to
+                # path, which is always unambiguous for the exact item.
+                _ambiguous_asins.add(asin)
+            else:
+                _seen_asins.add(asin)
+                by_asin[asin] = record
         path = item.get("path")
         if path:
             by_path[str(path)] = record
         rel_path = item.get("relPath")
         if rel_path:
             by_path.setdefault(str(rel_path), record)
+    for asin in _ambiguous_asins:
+        by_asin.pop(asin, None)
     return {"by_asin": by_asin, "by_path": by_path}
+
+
+_REAL_ASIN_RE = re.compile(r"^B0[0-9A-Z]{8}$")
+
+
+def _is_real_asin(asin: str) -> bool:
+    """True only for a real-shaped Audible ASIN.
+
+    Excludes placeholder/sentinel values the fixer stores when no real ASIN
+    exists (NOREALASIN, abs-agg-<provider>-<i> synthetic ids for GraphicAudio/
+    SoundBooth Theater matches) -- several unrelated books can share the
+    exact same placeholder, so it must never be usable as a lookup key. A
+    shared placeholder previously caused one book's Manual Review edit to
+    silently PATCH a completely different book in ABS (LibraForge #291) --
+    confirmed live: 14 real-library items shared "NOREALASIN", 6 shared
+    "abs-agg-graphicaudio-0". The strict B0-prefixed shape already excludes
+    every known placeholder on its own; no separate sentinel list needed.
+    """
+    return bool(_REAL_ASIN_RE.fullmatch(asin))
 
 
 def lookup_item_in_index(
     index: dict[str, dict[str, dict[str, Any]]], *, asin: str = "", path: str = "", rel_path: str = ""
 ) -> dict[str, Any] | None:
-    """ASIN first (survives a Folder Forge move/rename), then path, then relPath."""
+    """Path first, then relPath, then ASIN as a last resort.
+
+    The caller always knows the book's own current folder -- that's
+    unambiguous and must win. ASIN only helps recover a book that was moved
+    or renamed since ABS last scanned it (a path miss); it must never
+    override a path hit, and build_item_index already guarantees any ASIN
+    reaching this function is real and unique, never a shared placeholder
+    (see LibraForge #291).
+    """
     by_asin = index.get("by_asin") or {}
     by_path = index.get("by_path") or {}
-    asin_key = str(asin or "").strip().upper()
-    if asin_key and asin_key in by_asin:
-        return by_asin[asin_key]
     if path and str(path) in by_path:
         return by_path[str(path)]
     if rel_path and str(rel_path) in by_path:
         return by_path[str(rel_path)]
+    asin_key = str(asin or "").strip().upper()
+    if asin_key and asin_key in by_asin:
+        return by_asin[asin_key]
     return None
 
 
@@ -311,6 +350,7 @@ def compute_selective_patch_fields(
 def sync_book_metadata(
     *,
     metadata: dict[str, Any],
+    expected_path: str = "",
     fill_missing: bool = False,
     skip_blank_fields: bool = False,
     abs_url: str = "",
@@ -326,10 +366,15 @@ def sync_book_metadata(
           write_file_fallback() (bootstrap file -- no library_item_id to PATCH),
           then record_bootstrap() so the reconciliation sweep can find and
           eventually clean up this file once ABS learns about the book.
-      (c) hits -> compute_selective_patch_fields against the cached bulk
-          record; a live per-item GET + series merge if the result would
-          include `series`; PATCH the diff; record_sync(...) to stamp the
-          sidecar. Never touches metadata.json.
+      (c) hits but the resolved item's own path/rel_path doesn't match
+          expected_path -> refuse to PATCH, write_file_fallback() instead
+          ("path_mismatch"). Last-line defense against patching the wrong
+          book (LibraForge #291) if a lookup ever resolves to an item other
+          than the one the caller is actually editing.
+      (d) hits and the path matches -> compute_selective_patch_fields against
+          the cached bulk record; a live per-item GET + series merge if the
+          result would include `series`; PATCH the diff; record_sync(...) to
+          stamp the sidecar. Never touches metadata.json.
 
     `lookup_item` and `write_file_fallback` are injected because both differ
     between the two callers (the standalone fixer script vs. app/main.py's
@@ -353,12 +398,23 @@ def sync_book_metadata(
         return {"branch": "file", "reason": "no_api_key", "path": path}
 
     asin = str(metadata.get("asin") or "")
-    record = lookup_item(asin, "")
+    record = lookup_item(asin, expected_path)
     if record is None:
         path = write_file_fallback()
         if record_bootstrap is not None:
             record_bootstrap()
         return {"branch": "file", "reason": "unknown_to_abs", "path": path}
+
+    if expected_path:
+        resolved_path = str(record.get("path") or "")
+        resolved_rel_path = str(record.get("rel_path") or "")
+        if expected_path != resolved_path and expected_path != resolved_rel_path:
+            # The lookup resolved to a DIFFERENT item than the one we're actually
+            # editing -- e.g. an ASIN collision that slipped past build_item_index,
+            # or a stale/cached index entry. Refuse the PATCH rather than silently
+            # overwriting the wrong book in ABS (LibraForge #291).
+            path = write_file_fallback()
+            return {"branch": "file", "reason": "path_mismatch", "path": path}
 
     new_payload = build_media_patch_payload(metadata)
     fields = compute_selective_patch_fields(
