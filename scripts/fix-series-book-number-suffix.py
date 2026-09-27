@@ -653,8 +653,15 @@ def main() -> int:
     parser.add_argument(
         "--via-abs-api", action="store_true",
         help="Discover book folders via Audiobookshelf's bulk items API instead of an os.walk "
-             "over root -- much faster on a slow/CIFS-mounted library. Needs --abs-url/--abs-api-key "
-             "(or the ABS_URL/ABS_API_KEY env vars, same as the main app).",
+             "over root -- much faster on a slow/CIFS-mounted library. Needs credentials from "
+             "--abs-config-file, --abs-url/--abs-api-key, or the ABS_URL/ABS_API_KEY env vars.",
+    )
+    parser.add_argument(
+        "--abs-config-file", type=Path,
+        help="Path to a JSON file shaped like {\"url\": ..., \"api_key\": ...} (the same shape "
+             "app/main.py's own config/abs.json uses) -- reads credentials from this file directly "
+             "instead of taking the key as a --abs-api-key argument or env var. Prefer this: it never "
+             "puts the key on the command line or in an env var another process/log could see.",
     )
     parser.add_argument("--abs-url", default=os.environ.get("ABS_URL", ""), help="Audiobookshelf base URL, only used with --via-abs-api")
     parser.add_argument("--abs-api-key", default=os.environ.get("ABS_API_KEY", ""), help="Audiobookshelf API key, only used with --via-abs-api")
@@ -666,10 +673,15 @@ def main() -> int:
         return 0
 
     if args.via_abs_api:
-        if not args.abs_api_key:
-            print("--via-abs-api needs --abs-api-key (or the ABS_API_KEY env var)")
+        abs_url, abs_api_key = args.abs_url, args.abs_api_key
+        if args.abs_config_file:
+            abs_config = json.loads(args.abs_config_file.read_text(encoding="utf-8"))
+            abs_url = abs_config.get("url") or abs_url
+            abs_api_key = abs_config.get("api_key") or abs_api_key
+        if not abs_api_key:
+            print("--via-abs-api needs --abs-config-file, --abs-api-key, or the ABS_API_KEY env var")
             return 1
-        changes = plan_all_changes_via_abs(args.root, args.abs_url, args.abs_api_key, include_tags=args.tags)
+        changes = plan_all_changes_via_abs(args.root, abs_url, abs_api_key, include_tags=args.tags)
     else:
         # One shared walk for both the marker/tag classify pass and the
         # whole-library metadata.json sweep (the latter catches a book whose

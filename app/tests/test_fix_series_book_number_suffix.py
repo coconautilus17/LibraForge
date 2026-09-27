@@ -544,6 +544,30 @@ class PlanAllChangesViaAbsApiTests(unittest.TestCase):
         self.assertEqual(len(via_abs), 1)
         self.assertEqual(via_abs[0]["path"], str(reported / "libraforge.json"))
 
+    def test_cli_reads_credentials_from_a_config_file_not_the_command_line(self):
+        # --abs-config-file exists so the key never has to be typed into a
+        # command or env var -- main() reads the file itself and passes the
+        # values straight into plan_all_changes_via_abs.
+        config_path = self.root / "abs.json"
+        config_path.write_text(json.dumps({"url": "http://abs.example", "api_key": "real-key"}), encoding="utf-8")
+        book_root = self.root / "library"
+        book_root.mkdir()
+
+        captured = {}
+
+        def fake_plan(root, abs_url, abs_api_key, include_tags=False):
+            captured["abs_url"] = abs_url
+            captured["abs_api_key"] = abs_api_key
+            return []
+
+        with patch("sys.argv", [
+            "fix-series-book-number-suffix.py", str(book_root), "--via-abs-api",
+            "--abs-config-file", str(config_path),
+        ]), patch.object(FIX, "plan_all_changes_via_abs", side_effect=fake_plan):
+            FIX.main()
+        self.assertEqual(captured["abs_url"], "http://abs.example")
+        self.assertEqual(captured["abs_api_key"], "real-key")
+
     def test_passes_abs_credentials_through_to_the_request(self):
         book1 = self.root / "Dean Koontz" / "Shadowfires"
         write_libraforge_json(book1 / "libraforge.json", "Dean Koontz: From the Vault, Book #", "")
