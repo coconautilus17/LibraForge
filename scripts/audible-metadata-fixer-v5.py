@@ -133,6 +133,7 @@ try:
         is_mutagen_candidate,
         mp4_set_text,
         mp4_set_track,
+        mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
         id3_set_text,
@@ -267,6 +268,7 @@ except ModuleNotFoundError:
         is_mutagen_candidate,
         mp4_set_text,
         mp4_set_track,
+        mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
         id3_set_text,
@@ -1426,8 +1428,20 @@ def mutagen_write_mp4_tags(
 
     if should_write_field(series, field_policy, legacy_conditional=False):
         mp4_set_text(tags, "\xa9grp", series)
-        # ffprobe exposes this freeform MP4 tag as mvnm.
-        mp4_set_freeform(tags, "mvnm", series)
+        # Correct MP4 tagging in its own right (native Movement Name atom),
+        # but verified to have NO effect on Audiobookshelf itself -- ffprobe
+        # never exposes ©mvn as a tag, and ABS's reader is ffprobe-based. See
+        # mp4_set_movement_index's docstring (LibraForge #289).
+        mp4_set_text(tags, "\xa9mvn", series)
+        # ffprobe exposes this freeform MP4 tag as mvnm. "SERIES" is the
+        # freeform name Audible's own tagger uses for the same field, and is
+        # what actually causes ABS to revert to a stale value (its reader
+        # tries "series" before "mvnm") -- clear it so it can't linger.
+        mp4_set_freeform(tags, "mvnm", series, aliases=("SERIES",))
+        # Audible's tagger also derives an album sort-order from series +
+        # sequence + title; we have no reliable way to rebuild that exact
+        # format, so drop it rather than leave it stale.
+        tags.pop("soal", None)
 
     if should_write_field(narrator, field_policy, legacy_conditional=False):
         mp4_set_text(tags, "\xa9wrt", narrator)
@@ -1440,20 +1454,22 @@ def mutagen_write_mp4_tags(
 
     if should_write_field(sequence, field_policy, legacy_conditional=False):
         mp4_set_track(tags, sequence)
-        # ffprobe exposes this freeform MP4 tag as mvin.
-        mp4_set_freeform(tags, "mvin", sequence)
+        mp4_set_movement_index(tags, sequence)
+        # ffprobe exposes this freeform MP4 tag as mvin. "SERIES-PART" is
+        # Audible's own freeform name for the same field.
+        mp4_set_freeform(tags, "mvin", sequence, aliases=("SERIES-PART",))
 
     if should_write_field(subtitle, field_policy, legacy_conditional=True):
-        mp4_set_freeform(tags, "subtitle", subtitle)
+        mp4_set_freeform(tags, "subtitle", subtitle, aliases=("SUBTITLE",))
 
     if should_write_field(asin, field_policy, legacy_conditional=True):
-        mp4_set_freeform(tags, "asin", asin)
+        mp4_set_freeform(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
-        mp4_set_freeform(tags, "isbn", isbn)
+        mp4_set_freeform(tags, "isbn", isbn, aliases=("ISBN",))
 
     if should_write_field(publisher, field_policy, legacy_conditional=True):
-        mp4_set_freeform(tags, "publisher", publisher)
+        mp4_set_freeform(tags, "publisher", publisher, aliases=("PUBLISHER",))
 
     # write_summary gates this field's involvement at all (a separate,
     # pre-existing switch, orthogonal to field_policy). Once involved, its
@@ -1564,9 +1580,11 @@ def mutagen_write_mp3_tags(
 
     if should_write_field(series, field_policy, legacy_conditional=False):
         id3_set_text(tags, "TIT1", TIT1, series)
-        # TXXX frames give ffprobe/other scanners multiple chances to expose series.
+        # TXXX frames give ffprobe/other scanners multiple chances to expose
+        # series. "SERIES" is the same desc a case-sensitive duplicate (e.g.
+        # Audible's own tagger) may have left behind -- clear it too.
         id3_set_txxx(tags, "mvnm", series)
-        id3_set_txxx(tags, "series", series)
+        id3_set_txxx(tags, "series", series, aliases=("SERIES",))
 
     if should_write_field(subtitle, field_policy, legacy_conditional=True) and TIT3 is not None:
         id3_set_text(tags, "TIT3", TIT3, subtitle)
@@ -1574,13 +1592,13 @@ def mutagen_write_mp3_tags(
     if should_write_field(sequence, field_policy, legacy_conditional=False):
         id3_set_track(tags, sequence)
         id3_set_txxx(tags, "mvin", sequence)
-        id3_set_txxx(tags, "series-part", sequence)
+        id3_set_txxx(tags, "series-part", sequence, aliases=("SERIES-PART",))
 
     if should_write_field(asin, field_policy, legacy_conditional=True):
-        id3_set_txxx(tags, "asin", asin)
+        id3_set_txxx(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
-        id3_set_txxx(tags, "isbn", isbn)
+        id3_set_txxx(tags, "isbn", isbn, aliases=("ISBN",))
 
     if should_write_field(publisher, field_policy, legacy_conditional=True) and TPUB is not None:
         id3_set_text(tags, "TPUB", TPUB, publisher)
