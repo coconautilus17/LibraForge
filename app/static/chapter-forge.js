@@ -1384,6 +1384,33 @@ function renderModelSelectors(models = []) {
   }
 }
 
+const ASR_ONLY_BACKENDS = ['hybrid-sos-focused', 'faster-whisper'];
+
+function applyAsrAvailability(available) {
+  $('asrUnavailableNotice').hidden = available !== false;
+  if (available !== false) return;
+  document.querySelectorAll('input[name="backend"]').forEach((radio) => {
+    radio.disabled = ASR_ONLY_BACKENDS.includes(radio.value);
+  });
+  [$('compareMethodA'), $('compareMethodB')].forEach((select) => {
+    if (!select) return;
+    Array.from(select.options).forEach((option) => {
+      option.disabled = ASR_ONLY_BACKENDS.includes(option.value);
+    });
+    // A <select> doesn't auto-deselect a disabled option that was already
+    // selected -- reroute it explicitly, same reasoning as the radio below.
+    if (ASR_ONLY_BACKENDS.includes(select.value)) select.value = 'audible-chapters';
+  });
+  // Route away from a now-disabled backend rather than leave a disabled
+  // radio checked -- the browser lets a pre-checked radio stay disabled
+  // and "selected" at once, which would silently block Detect entirely.
+  if (ASR_ONLY_BACKENDS.includes(getBackend())) {
+    const fallback = document.querySelector('input[name="backend"][value="audible-chapters"]');
+    if (fallback) fallback.checked = true;
+  }
+  syncFieldVisibility();
+}
+
 async function loadResourceStatus() {
   try {
     const res = await fetch('/api/chaptering/resources');
@@ -1391,6 +1418,7 @@ async function loadResourceStatus() {
     if (res.ok) {
       renderResourceStatus(data);
       renderModelSelectors(data.asr_models || []);
+      applyAsrAvailability(data.asr_available);
       const cores = Number(data.cpu_cores || 0);
       if (cores > 0) $('cpuThreads').max = String(cores);
     }

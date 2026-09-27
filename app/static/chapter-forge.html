@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Chapter Forge</title>
   <script src="/static/ui-preferences.js?v=20260711-6"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260719-2" />
+  <link rel="stylesheet" href="/static/style.css?v=20260927-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -50,6 +50,10 @@
         <h2 class="page-descriptor-title">Chapter Forge</h2>
         <p class="page-descriptor-text">Find spoken chapter markers in single-file audiobooks using silence detection and speech-to-text, then review and correct them before saving.</p>
       </div>
+    </div>
+
+    <div id="asrUnavailableNotice" class="dryrun-notice danger" hidden>
+      <strong>Heads up - ASR not installed:</strong> this image was built without Chapter Forge's optional transcription dependencies (faster-whisper), so <b>Hybrid</b> and <b>Full transcription</b> won't work -- they're disabled below. <b>Audible chapters</b> still works with no extra dependencies. To enable local transcription, rebuild using <code>Dockerfile.unified</code> (see its header comment) or, in a dev environment, <code>pip install -r requirements-chaptering.txt</code>.
     </div>
 
     <div class="side-nav-layout">
@@ -356,6 +360,6 @@
     </div>
   </main>
   <script src="/static/ui-common.js?v=20260711-6"></script>
-  <script src="/static/chapter-forge.js?v=20260719-3"></script>
+  <script src="/static/chapter-forge.js?v=20260927-1"></script>
 </body>
 </html>

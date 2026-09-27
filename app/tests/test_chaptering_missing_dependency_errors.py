@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from app.chaptering import (
     _load_sos_module,
     _missing_chaptering_dependency_error,
+    chaptering_asr_available,
     transcribe_faster_whisper,
 )
 
@@ -76,6 +77,34 @@ class TranscribeFasterWhisperMissingDependencyTests(unittest.TestCase):
         self.assertIn("Full transcription", str(ctx.exception))
         self.assertIn("faster_whisper", str(ctx.exception))
         self.assertIn("Dockerfile.unified", str(ctx.exception))
+
+
+class ChapteringAsrAvailableTests(unittest.TestCase):
+    def test_false_when_faster_whisper_is_not_installed(self):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "faster_whisper":
+                raise ModuleNotFoundError("No module named 'faster_whisper'", name="faster_whisper")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            self.assertFalse(chaptering_asr_available())
+
+    def test_true_when_faster_whisper_imports_cleanly(self):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "faster_whisper":
+                return MagicMock()
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            self.assertTrue(chaptering_asr_available())
 
 
 if __name__ == "__main__":
