@@ -295,21 +295,37 @@ def search_series_abs(
 _EROTICA_ROOT = "erotica"
 
 
+# Audible's audience roots carry the only children's/teen signal, so they are
+# kept; every other root is a broad store section. Generic umbrella nodes are
+# dropped here (Enrichment Forge only -- Meta Forge's genre output is untouched).
+_AUDIENCE_ROOTS = {"children's audiobooks", "teen & young adult"}
+_UMBRELLA_NODES = {"literature & fiction", "genre fiction", "science fiction & fantasy"}
+
+
 def audible_category_ladder_genres(product: dict[str, Any] | None) -> list[str]:
-    """Return the deepest (leaf) genre name from each of a product's
-    category_ladders entries, e.g. 'Science Fiction & Fantasy > Fantasy >
-    Epic' becomes 'Epic'.
+    """Every level of each of a product's category_ladders below its root,
+    deduped in order (LibraForge #302), e.g. 'Science Fiction & Fantasy >
+    Science Fiction > Space Opera' gives Science Fiction and Space Opera.
+    Audience roots (Children's Audiobooks, Teen & Young Adult) are kept;
+    generic umbrella nodes are dropped.
     """
     if not product:
         return []
-    genres = []
+    out: list[str] = []
+    seen: set[str] = set()
     for ladder in (product.get("category_ladders") or []):
-        nodes = ladder.get("ladder") or []
-        if nodes:
-            name = nodes[-1].get("name", "")
-            if name:
-                genres.append(name)
-    return genres
+        names = [str(n.get("name") or "").strip() for n in (ladder.get("ladder") or [])]
+        names = [n for n in names if n]
+        if not names:
+            continue
+        keep = names if names[0].lower() in _AUDIENCE_ROOTS else (names[1:] or names)
+        for name in keep:
+            key = name.lower()
+            if key in _UMBRELLA_NODES or key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+    return out
 
 
 def is_flagged_explicit(product: dict[str, Any] | None) -> bool:

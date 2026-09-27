@@ -310,14 +310,21 @@ class SearchSeriesAbsTests(unittest.TestCase):
 
 
 class AudibleCategoryLadderGenresTests(unittest.TestCase):
-    def test_takes_leaf_name_of_each_ladder(self):
-        product = {
-            "category_ladders": [
-                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}, {"name": "Epic"}]},
-                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}]},
-            ]
-        }
-        self.assertEqual(enrichment.audible_category_ladder_genres(product), ["Epic", "Fantasy"])
+    def test_keeps_every_level_below_the_root_deduped(self):
+        # LibraForge #302: the leaf alone loses the parent genre ("Space Opera"
+        # without "Science Fiction") and the children's/teen audience.
+        product = {"category_ladders": [
+            {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}, {"name": "Space Opera"}]},
+            {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}, {"name": "Military"}]},
+            {"ladder": [{"name": "Children's Audiobooks"}, {"name": "Literature & Fiction"}, {"name": "Fantasy & Magic"}]},
+            {"ladder": [{"name": "Literature & Fiction"}, {"name": "Genre Fiction"}, {"name": "Coming of Age"}]},
+        ]}
+        self.assertEqual(enrichment.audible_category_ladder_genres(product),
+                         ["Science Fiction", "Space Opera", "Military", "Children's Audiobooks", "Fantasy & Magic", "Coming of Age"])
+
+    def test_single_node_ladder_keeps_its_node(self):
+        product = {"category_ladders": [{"ladder": [{"name": "Fantasy"}]}]}
+        self.assertEqual(enrichment.audible_category_ladder_genres(product), ["Fantasy"])
 
     def test_none_product_returns_empty(self):
         self.assertEqual(enrichment.audible_category_ladder_genres(None), [])
