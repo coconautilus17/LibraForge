@@ -63,11 +63,13 @@ from app.enrichment import (
     write_metadata_json_partial,
 )
 from app.abs_client import (
+    abs_get_json,
     abs_patch_json,
     build_item_index,
     load_bootstrap_registry,
     lookup_item_in_index,
     reconcile_bootstrap_registry,
+    reconcile_legacy_metadata_json,
     sync_book_metadata,
     upsert_bootstrapped_file,
 )
@@ -6318,17 +6320,24 @@ class EnrichmentApplyBook(BaseModel):
     path: str
     is_file: bool
     include: bool
+    title: str = ""
 
 
 class EnrichmentApplyRequest(BaseModel):
     books: list[EnrichmentApplyBook]
     genre: list[str] = []
     narrator: str = ""
-    explicit: bool = False
+    # Narrators differ per book and per edition, so the series-wide narrator is
+    # only written when the user explicitly opts in (LibraForge #299).
+    apply_narrator: bool = False
+    # None = don't touch, True = set, False = clear (LibraForge #303).
+    explicit: bool | None = None
 
 
 class EnrichmentApplyResponse(BaseModel):
     applied: int
+    # Counts per legacy metadata.json reconcile action (LibraForge #298).
+    legacy_json: dict[str, int] = {}
     failed: list[dict] = []
 
 
@@ -6348,8 +6357,10 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     """
     applied = 0
     failed: list[dict] = []
+    legacy_json: dict[str, int] = {}
     abs_api_key = _get_abs_api_key()
     abs_url = _get_abs_url() if abs_api_key else ""
+    narrators = [n.strip() for n in req.narrator.split(",") if n.strip()] if req.apply_narrator else []
     for book in req.books:
         if not book.include:
             continue
@@ -6358,31 +6369,38 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
                 fields: dict[str, Any] = {}
                 if req.genre:
                     fields["genres"] = list(req.genre)
-                if req.narrator.strip():
-                    fields["narrators"] = [n.strip() for n in req.narrator.split(",") if n.strip()]
-                if req.explicit:
-                    fields["explicit"] = True
+                if narrators:
+                    fields["narrators"] = narrators
+                if req.explicit is not None:
+                    fields["explicit"] = bool(req.explicit)
+                # A legacy metadata.json in the book's folder would revert this
+                # write on the next rescan: reconcile it into ABS and delete it
+                # first (LibraForge #298).
+                item = abs_get_json(f"/api/items/{book.id}", {"expanded": "1"}, abs_url, abs_api_key)
+                legacy = reconcile_legacy_metadata_json(book.path, item, abs_url=abs_url, abs_api_key=abs_api_key)
+                if legacy.get("action") and legacy["action"] != "none":
+                    legacy_json[legacy["action"]] = legacy_json.get(legacy["action"], 0) + 1
                 if fields:
                     abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
                 applied += 1
             except Exception as exc:
-                failed.append({"id": book.id, "path": book.path, "error": str(exc)})
+                failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
             continue
         try:
             validated_path = validate_audiobook_path(book.path)
         except HTTPException as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc.detail)})
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
             continue
         target = resolve_metadata_json_path(str(validated_path), book.is_file)
         try:
             assert_under_audiobooks(target)
-            write_metadata_json_partial(target, req.genre, req.narrator, req.explicit)
+            write_metadata_json_partial(target, req.genre, ", ".join(narrators), bool(req.explicit))
             applied += 1
         except HTTPException as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc.detail)})
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
         except Exception as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc)})
-    return EnrichmentApplyResponse(applied=applied, failed=failed)
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
+    return EnrichmentApplyResponse(applied=applied, legacy_json=legacy_json, failed=failed)
 
 
 # ---------------------------------------------------------------------------
