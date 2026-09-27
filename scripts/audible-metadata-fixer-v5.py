@@ -1428,12 +1428,15 @@ def mutagen_write_mp4_tags(
 
     if should_write_field(series, field_policy, legacy_conditional=False):
         mp4_set_text(tags, "\xa9grp", series)
-        # Most players show a book's series via the Movement Name atom, not
-        # grouping -- see mp4_set_freeform's docstring (LibraForge #289).
+        # Correct MP4 tagging in its own right (native Movement Name atom),
+        # but verified to have NO effect on Audiobookshelf itself -- ffprobe
+        # never exposes ©mvn as a tag, and ABS's reader is ffprobe-based. See
+        # mp4_set_movement_index's docstring (LibraForge #289).
         mp4_set_text(tags, "\xa9mvn", series)
         # ffprobe exposes this freeform MP4 tag as mvnm. "SERIES" is the
-        # freeform name Audible's own tagger uses for the same field -- clear
-        # it too so it can't linger stale alongside our fresh value.
+        # freeform name Audible's own tagger uses for the same field, and is
+        # what actually causes ABS to revert to a stale value (its reader
+        # tries "series" before "mvnm") -- clear it so it can't linger.
         mp4_set_freeform(tags, "mvnm", series, aliases=("SERIES",))
         # Audible's tagger also derives an album sort-order from series +
         # sequence + title; we have no reliable way to rebuild that exact

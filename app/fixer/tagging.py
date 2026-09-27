@@ -120,10 +120,19 @@ def mp4_set_track(tags: dict, value: str) -> None:
 
 
 def mp4_set_movement_index(tags: dict, value: str) -> None:
-    """`\\xa9mvi` -- Apple's Movement Index atom. Most players show a book's
-    series via the Movement Name/Index pair (`\\xa9mvn`/`\\xa9mvi`), not the
-    freeform `mvnm`/`mvin` atoms this app also writes -- see mp4_set_freeform's
-    docstring and LibraForge #289."""
+    """`\\xa9mvi` -- Apple's Movement Index atom, the native pair to
+    `\\xa9mvn` (Movement Name). Writing these is correct, harmless MP4
+    tagging in its own right, but verified (LibraForge #289) to have NO
+    effect on Audiobookshelf specifically: ABS's tag reader is built on
+    ffprobe's exposed tags, and ffprobe's mov demuxer does not surface
+    `\\xa9mvn`/`\\xa9mvi` as tags at all (confirmed empirically -- writing them
+    via mutagen then reading back with `ffprobe -show_format` shows nothing
+    for either). ABS actually reads series via the "series"/"show"/"mvnm"
+    freeform-atom priority list in its prober.js, which is what
+    mp4_set_freeform's `aliases` clearing (below) targets. Any benefit here
+    is limited to non-ffprobe-based readers (e.g. Apple's own apps, which
+    parse the container atoms directly) and is unverified in this codebase's
+    test environment."""
     value = clean_sequence(value)
 
     if value:
@@ -145,8 +154,17 @@ def mp4_clear_freeform_aliases(tags, names: tuple[str, ...]) -> None:
     those as separate dict entries forever unless explicitly cleared; this
     app writes the same semantic fields under different, lowercase names
     ("mvnm", "mvin", "subtitle", "asin", "isbn", "publisher"), so both ended
-    up coexisting with stale vs. fresh values shown side by side by any
-    reader that surfaces freeform atoms directly (LibraForge #289).
+    up coexisting with stale vs. fresh values (LibraForge #289).
+
+    Verified against Audiobookshelf's own source (server/utils/prober.js,
+    `tryGrabTags`): ABS resolves each field by trying a fixed candidate-name
+    list case-insensitively -- series: "series", "show", "mvnm" (in that
+    priority order). Reproduced live: writing a stale "SERIES" freeform atom
+    alongside a fresh "mvnm" one, `ffprobe -show_format` exposes both as
+    separate tags ("SERIES" and "mvnm", case preserved); ABS tries "series"
+    first and matches the stale uppercase one, never reaching "mvnm" at all.
+    This is the actual mechanism behind the reported bug, not a case
+    variant of this app's own "mvnm" -- clearing it is what fixes ABS.
     """
     wanted = {n.lower() for n in names}
     for key in list(tags.keys()):

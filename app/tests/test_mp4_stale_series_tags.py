@@ -7,6 +7,16 @@ exact-case name string. This app writes lowercase names ("mvnm"/"mvin"/
 "subtitle"/"asin"/"isbn"/"publisher"/"series"/"series-part") while Audible's
 own tagger writes uppercase ones for the same semantic fields -- so both
 coexisted as separate dict entries, one fresh and one stale, after any edit.
+
+Verified against Audiobookshelf's real source (server/utils/prober.js) and a
+live ffprobe/mutagen round-trip, not just the issue's own repro table: ABS
+resolves series case-insensitively via a candidate list ("series", "show",
+"mvnm", in that priority order), so a stale "SERIES" freeform atom wins over
+a freshly-written "mvnm" one every time -- that's the actual mechanism this
+fix closes. The ©mvn/©mvi writes added alongside it are correct, harmless
+MP4 tagging, but confirmed to have zero effect on ABS specifically (ffprobe
+never surfaces those atoms as tags at all); kept for other MP4-aware
+readers, unverified here. See mp4_clear_freeform_aliases's docstring.
 """
 import importlib.util
 import shutil
