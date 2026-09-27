@@ -444,6 +444,10 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
             "http://abs", "key",
         )
 
+    def test_audiobook_can_never_be_written_as_a_genre(self):
+        self.post(genre=["Audiobook", "Fantasy", "Audio Book"])
+        self.assertEqual(self.sent()["genres"], ["Fantasy"])
+
     def test_explicit_false_clears_the_flag(self):
         self.post(genre=[], explicit=False)
         self.assertEqual(self.sent(), {"explicit": False})

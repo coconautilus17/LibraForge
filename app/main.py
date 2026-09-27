@@ -73,7 +73,7 @@ from app.abs_client import (
     sync_book_metadata,
     upsert_bootstrapped_file,
 )
-from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
+from app.fixer.scoring import GENRE_BLOCKLIST, clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
@@ -117,7 +117,6 @@ AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
-_GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
 
 
 def _pick_genre(genres: list[str]) -> str:
@@ -132,7 +131,7 @@ def _pick_genre(genres: list[str]) -> str:
     for g in genres:
         cleaned = g.strip()
         key = cleaned.lower()
-        if not cleaned or key in _GENRE_BLOCKLIST or key in seen:
+        if not cleaned or key in GENRE_BLOCKLIST or key in seen:
             continue
         seen.add(key)
         kept.append(cleaned)
@@ -3813,7 +3812,14 @@ def enforce_m4b_output_metadata(
     set_mp4_text(tags, "\xa9wrt", metadata.narrator)
     set_mp4_text(tags, "\xa9grp", metadata.series)
     set_mp4_text(tags, "\xa9day", metadata.year)
-    set_mp4_text(tags, "\xa9gen", "Audiobook")
+    # Keep a real genre the merged output inherited from its source files, but
+    # never leave (or stamp) a format label like "Audiobook" as the genre: ABS
+    # fills an empty genre from file tags on first scan (LibraForge #306).
+    real_genres = [str(g) for g in (tags.get("\xa9gen") or []) if str(g).strip().lower() not in GENRE_BLOCKLIST]
+    if real_genres:
+        tags["\xa9gen"] = real_genres
+    else:
+        tags.pop("\xa9gen", None)
     set_mp4_text(tags, "desc", metadata.summary[:240])
     set_mp4_text(tags, "ldes", metadata.summary)
     set_mp4_text(tags, "\xa9cmt", metadata.summary)
@@ -6361,14 +6367,16 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     abs_api_key = _get_abs_api_key()
     abs_url = _get_abs_url() if abs_api_key else ""
     narrators = [n.strip() for n in req.narrator.split(",") if n.strip()] if req.apply_narrator else []
+    # "Audiobook" (and any other format label) can never be written as a genre.
+    genres = clean_provider_genres(req.genre)
     for book in req.books:
         if not book.include:
             continue
         if abs_api_key and book.id:
             try:
                 fields: dict[str, Any] = {}
-                if req.genre:
-                    fields["genres"] = list(req.genre)
+                if genres:
+                    fields["genres"] = genres
                 if narrators:
                     fields["narrators"] = narrators
                 if req.explicit is not None:
@@ -6394,7 +6402,7 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
         target = resolve_metadata_json_path(str(validated_path), book.is_file)
         try:
             assert_under_audiobooks(target)
-            write_metadata_json_partial(target, req.genre, ", ".join(narrators), bool(req.explicit))
+            write_metadata_json_partial(target, genres, ", ".join(narrators), bool(req.explicit))
             applied += 1
         except HTTPException as exc:
             failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
