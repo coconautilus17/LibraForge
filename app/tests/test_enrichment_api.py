@@ -39,29 +39,34 @@ class EnrichmentCompileEndpointFallbackTests(unittest.TestCase):
             patch("app.main.get_series_books", return_value=self.books),
         ]
 
-    def test_missing_audible_auth_uses_abs_and_skips_unconfigured_goodreads(self):
+    def _run(self, goodreads_result):
         patches = self._base_patches() + [
             patch("app.main.search_series_abs", return_value={"1": {"genre": "Fantasy", "narrators": ["ABS Narrator"]}}),
             patch("app.main.search_series_audible", side_effect=AssertionError("direct Audible should not run")),
-            patch("app.main.search_series_goodreads", side_effect=AssertionError("Goodreads should not run without abs-tract URL")),
-            patch("app.main._load_abs_tract_config", return_value={"url": ""}),
+            patch("app.main.search_series_goodreads", return_value=goodreads_result),
+            patch("app.main._load_abs_tract_config", side_effect=AssertionError("Goodreads no longer needs abs-tract")),
         ]
         for item in patches:
             item.start()
         self.addCleanup(lambda: [item.stop() for item in reversed(patches)])
+        return main.enrichment_compile(main.EnrichmentCompileRequest(series_name="Series", auth_file=self.missing_auth))
 
-        result = main.enrichment_compile(
-            main.EnrichmentCompileRequest(series_name="Series", auth_file=self.missing_auth)
-        )
-
+    def test_missing_audible_auth_uses_abs_and_goodreads_runs_without_abs_tract(self):
+        result = self._run({"1": {"status": "found", "title": "Book", "shelves": [("fantasy", 50), ("litrpg", 20)]}})
         self.assertEqual(result.source_status["audible"].state, "searched")
         self.assertIn("ABS's Audible provider", result.source_status["audible"].detail)
         self.assertNotIn("abs", result.source_status)
-        self.assertEqual(result.source_status["goodreads"].state, "skipped")
-        self.assertIn("abs-tract is not connected", result.source_status["goodreads"].detail)
+        gr = result.source_status["goodreads"]
+        self.assertEqual((gr.state, gr.searched, gr.found, gr.failed), ("searched", 1, 1, 0))
+        self.assertEqual(result.books[0].goodreads_genres, ["Fantasy", "LitRPG"])
         self.assertEqual(result.books[0].audible_genres, ["Fantasy"])
-        self.assertEqual(result.books[0].existing_genres, ["Local Fantasy"])
         self.assertEqual(result.narrator, "ABS Narrator")
+
+    def test_goodreads_failures_and_breaker_are_reported_honestly(self):
+        result = self._run({"1": {"status": "skipped", "title": None, "shelves": []}})
+        gr = result.source_status["goodreads"]
+        self.assertEqual((gr.found, gr.skipped), (0, 1))
+        self.assertTrue(gr.rate_limited)
 
 
 if __name__ == "__main__":

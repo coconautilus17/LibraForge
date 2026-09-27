@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
+
 _SERIES_SEQUENCE_SUFFIX_RE = re.compile(r"\s*#\d+\s*$")
 _SERIES_SEQUENCE_NUMBER_RE = re.compile(r"#(\d+(?:\.\d+)?)\s*$")
 
@@ -269,36 +271,29 @@ def search_series_audible(
 
 def search_series_goodreads(
     books: list[dict[str, Any]],
-    abs_tract_search_fn: Callable[..., list[dict]],
-    abs_tract_url: str,
+    fetch_fn: Callable[..., dict[str, Any]],
+    pacer: Any,
     workers: int = ENRICHMENT_SEARCH_WORKERS,
-) -> dict[str, list[dict]]:
-    """Search Goodreads (via abs-tract) for every book in a series, up to
-    `workers` concurrently. Always called for every book, unlike the fixer's
-    silent-fallback pattern used during batch runs. This phase only starts
-    after search_series_audible() has fully completed for the whole series
-    (enforced by the caller, see app/main.py), so Audible and Goodreads
-    calls never interleave (abs-tract's upstream rate limit only trips under
-    mixed Goodreads+Amazon load, not pure Goodreads).
+) -> dict[str, dict[str, Any]]:
+    """Look every audio book up on Goodreads directly (app/goodreads_shelves.py),
+    up to `workers` concurrently, all sharing one pacer so the whole library
+    stays under Meta Forge's Goodreads pacing (0.5 s global gap, breaker 2 -> 180 s).
+    Runs after the Audible phase has finished (enforced by the caller). Returns
+    book id -> {"status": found|not_found|failed|skipped, "title", "shelves"}.
     """
-    def _search_one(book: dict[str, Any]) -> tuple[str, list[dict]]:
+    def _search_one(book: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         if not book.get("has_audio", True):
-            return book["id"], []  # #301
+            return book["id"], {"status": "skipped", "title": None, "shelves": []}  # #301
+        author = (str(book.get("author", "") or "").split(",")[0]).strip()
         try:
-            return book["id"], abs_tract_search_fn(
-                title=book.get("title", ""),
-                author=book.get("author", ""),
-                provider="goodreads",
-                abs_tract_url=abs_tract_url,
-                limit=3,
-            )
+            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer)
         except Exception:
-            return book["id"], []
+            return book["id"], {"status": "failed", "title": None, "shelves": []}
 
-    results: dict[str, list[dict]] = {}
+    results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for book_id, products in pool.map(_search_one, books):
-            results[book_id] = products
+        for book_id, result in pool.map(_search_one, books):
+            results[book_id] = result
     return results
 
 
@@ -481,14 +476,15 @@ def compile_series_enrichment(
     for book in books:
         product = audible_results.get(book["id"])
         abs_product = (abs_results or {}).get(book["id"])
-        gr_products = goodreads_results.get(book["id"]) or []
-        gr_product = gr_products[0] if gr_products else None
+        gr = goodreads_results.get(book["id"]) or {}
+        gr_found = gr.get("status") == "found"
 
         audible_genres = clean_provider_genres_fn(
             audible_category_ladder_genres(product)
             or _split_abs_genre((abs_product or {}).get("genre", ""))
         )
-        goodreads_genres = clean_provider_genres_fn((gr_product or {}).get("_abs_genres") or [])
+        goodreads_genres = clean_provider_genres_fn(shelves_to_genres(gr.get("shelves") or [])) if gr_found else []
+        goodreads_explicit = shelves_explicit_evidence(gr.get("shelves") or []) if gr_found else None
         flagged = is_flagged_explicit(product)
         if flagged:
             flagged_count += 1
@@ -511,6 +507,7 @@ def compile_series_enrichment(
             "title": book.get("title", ""),
             "audible_genres": audible_genres,
             "goodreads_genres": goodreads_genres,
+            "goodreads_explicit": goodreads_explicit,
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),
             "existing_tags": book.get("existing_tags", []),

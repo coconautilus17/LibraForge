@@ -128,7 +128,7 @@ class EnrichmentItemsCacheTests(unittest.TestCase):
                  patch("app.main._abs_request", side_effect=counting_abs_request), \
                  patch("app.main.load_review_module", return_value=_FakeReviewModule), \
                  patch("app.main.search_series_abs", return_value={}), \
-                 patch("app.main.abs_tract_search", return_value=[]), \
+                 patch("app.main.search_series_goodreads", return_value={}), \
                  patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}):
                 client.get("/api/enrichment/series?q=schol")
                 calls_after_search = len(calls)
@@ -189,7 +189,7 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
              patch("app.main.audible.Authenticator.from_file", return_value=MagicMock()), \
              patch("app.main.audible.Client", return_value=fake_audible_client), \
              patch("app.main.audible_lookup_by_asin", side_effect=fake_lookup), \
-             patch("app.main.abs_tract_search", return_value=[]), \
+             patch("app.main.search_series_goodreads", return_value={}), \
              patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}), \
              tempfile.NamedTemporaryFile(suffix=".json") as auth_file:
             resp = client.post(
@@ -248,7 +248,7 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
              patch("app.main.load_review_module", return_value=_FakeReviewModule), \
              patch("app.main.audible.Authenticator.from_file", return_value=MagicMock()), \
              patch("app.main.audible.Client", return_value=fake_audible_client), \
-             patch("app.main.abs_tract_search", return_value=[]), \
+             patch("app.main.search_series_goodreads", return_value={}), \
              patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}), \
              tempfile.NamedTemporaryFile(suffix=".json") as auth_file:
             resp = client.post(

@@ -262,27 +262,31 @@ class SearchSeriesAudibleTests(unittest.TestCase):
 
 
 class SearchSeriesGoodreadsTests(unittest.TestCase):
-    def test_calls_for_every_book_unconditionally(self):
-        books = [{"id": "1", "title": "T1", "author": "A1"}, {"id": "2", "title": "T2", "author": "A2"}]
+    """Direct Goodreads shelves (app/goodreads_shelves.py), one result per book."""
+
+    def test_fetches_every_audio_book_with_first_author_and_shares_the_pacer(self):
+        books = [{"id": "1", "title": "Cradle - Book 001 - Unsouled", "author": "Will Wight, Someone Else"},
+                 {"id": "2", "title": "T2", "author": "A2"},
+                 {"id": "3", "title": "Missing Books", "author": "A3", "has_audio": False}]
         calls = []
+        pacer = object()
 
-        def abs_tract(**kwargs):
-            calls.append(kwargs["title"])
-            return [{"title": kwargs["title"]}]
+        def fetch(title, author, *, pacer):
+            calls.append((title, author, pacer))
+            return {"status": "found", "title": title, "shelves": [("fantasy", 5)]}
 
-        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
-        self.assertEqual(sorted(calls), ["T1", "T2"])
-        self.assertEqual(result["1"], [{"title": "T1"}])
-        self.assertEqual(result["2"], [{"title": "T2"}])
+        result = enrichment.search_series_goodreads(books, fetch, pacer)
+        self.assertEqual(sorted(c[:2] for c in calls), [("Cradle - Book 001 - Unsouled", "Will Wight"), ("T2", "A2")])
+        self.assertTrue(all(c[2] is pacer for c in calls))
+        self.assertEqual(result["1"]["status"], "found")
+        self.assertEqual(result["3"]["status"], "skipped")
 
-    def test_book_failure_yields_empty_list_not_exception(self):
-        books = [{"id": "1", "title": "T", "author": "A"}]
+    def test_an_exception_is_a_failed_result_not_a_crash(self):
+        def fetch(title, author, *, pacer):
+            raise RuntimeError("boom")
 
-        def abs_tract(**kwargs):
-            raise RuntimeError("upstream blocked")
-
-        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
-        self.assertEqual(result, {"1": []})
+        result = enrichment.search_series_goodreads([{"id": "1", "title": "T", "author": "A"}], fetch, None)
+        self.assertEqual(result["1"]["status"], "failed")
 
 
 class SearchSeriesAbsTests(unittest.TestCase):
@@ -388,13 +392,15 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
             },
         }
         goodreads_results = {
-            "1": [{"_abs_genres": ["Young Adult"]}],
-            "2": [{"_abs_genres": ["Fantasy"]}],
+            "1": {"status": "found", "shelves": [("fantasy", 100), ("young-adult", 40)]},
+            "2": {"status": "found", "shelves": [("fantasy", 10), ("erotica", 4)]},
         }
         compiled = enrichment.compile_series_enrichment(
             books, audible_results, goodreads_results, self._clean_genres
         )
         self.assertEqual(compiled["genre"], ["Fantasy", "Young Adult", "Erotica"])
+        self.assertEqual(compiled["books"][1]["goodreads_explicit"]["votes"], 4)
+        self.assertEqual(compiled["books"][0]["goodreads_explicit"]["votes"], 0)
         self.assertEqual(compiled["narrator"], "Andrea Parsneau")
         self.assertEqual(compiled["explicit_flagged_count"], 1)
         self.assertEqual(compiled["explicit_total_count"], 2)
@@ -404,6 +410,13 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["books"][0]["path"], "/audiobooks/Scholomance")
         self.assertEqual(compiled["books"][0]["is_file"], False)
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
+
+    def test_not_found_or_failed_goodreads_results_add_no_genres(self):
+        books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(
+            books, {}, {"1": {"status": "failed", "shelves": [("horror", 99)]}}, self._clean_genres)
+        self.assertEqual(compiled["genre"], [])
+        self.assertIsNone(compiled["books"][0]["goodreads_explicit"])
 
     def test_missing_audible_and_goodreads_results_do_not_crash(self):
         books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]

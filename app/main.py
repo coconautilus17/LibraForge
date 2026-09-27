@@ -62,6 +62,7 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
+from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
     abs_get_json,
     abs_patch_json,
@@ -6198,6 +6199,11 @@ def _reset_enrichment_items_cache_for_tests() -> None:
         _ENRICHMENT_ITEMS_CACHE = None
 
 
+# One Goodreads pacer for the whole process, so consecutive compiles share the
+# request budget and the breaker survives across series.
+_GOODREADS_PACER = GoodreadsPacer()
+
+
 @app.get("/api/enrichment/series")
 def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
     if not _get_abs_api_key():
@@ -6223,6 +6229,7 @@ class EnrichmentBookRow(BaseModel):
     title: str
     audible_genres: list[str]
     goodreads_genres: list[str]
+    goodreads_explicit: dict | None = None
     flagged_explicit: bool
     existing_genres: list[str]
     existing_tags: list[str] = []
@@ -6237,6 +6244,10 @@ class EnrichmentSourceStatus(BaseModel):
     state: str
     detail: str = ""
     searched: int = 0
+    found: int = 0
+    failed: int = 0
+    skipped: int = 0
+    rate_limited: bool = False
 
 
 class EnrichmentCompileResponse(BaseModel):
@@ -6304,26 +6315,27 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
             "searched": len(books),
         }
 
-    # Phase 2: Goodreads, 5 workers, starts only after phase 1 is fully done
-    # (never interleaved with Audible calls, see app/enrichment.py's
-    # search_series_goodreads docstring).
-    abs_tract_config = _load_abs_tract_config()
-    abs_tract_url = (abs_tract_config.get("url") or "").strip()
-    if abs_tract_url:
-        goodreads_results = search_series_goodreads(books, abs_tract_search, abs_tract_url)
-        source_status["goodreads"] = {
-            "label": "Goodreads",
-            "state": "searched",
-            "searched": len(books),
-        }
-    else:
-        goodreads_results = {}
-        source_status["goodreads"] = {
-            "label": "Goodreads",
-            "state": "skipped",
-            "detail": "abs-tract is not connected, so Goodreads was not used.",
-            "searched": 0,
-        }
+    # Phase 2: Goodreads shelves, read directly (app/goodreads_shelves.py --
+    # abs-tract's filtered 3-shelf output can't supply LitRPG/progression/
+    # harem/YA). Starts only after phase 1 is fully done; every compile shares
+    # one process-wide pacer (Meta Forge pacing: 0.5 s gap, breaker 2 -> 180 s).
+    trips_before = _GOODREADS_PACER.trips
+    goodreads_results = search_series_goodreads(books, fetch_book_shelves, _GOODREADS_PACER)
+    audio_books = [b for b in books if b.get("has_audio", True)]
+    statuses = [goodreads_results.get(b["id"], {}).get("status") for b in audio_books]
+    skipped = statuses.count("skipped")
+    rate_limited = skipped > 0 or _GOODREADS_PACER.trips > trips_before
+    source_status["goodreads"] = {
+        "label": "Goodreads",
+        "state": "searched",
+        "searched": len(audio_books),
+        "found": statuses.count("found"),
+        "failed": statuses.count("failed"),
+        "skipped": skipped,
+        "rate_limited": rate_limited,
+        "detail": ("Goodreads is rate-limiting; paused for a few minutes, the remaining books were skipped."
+                   if rate_limited else ""),
+    }
 
     compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres, abs_results)
     compiled["source_status"] = source_status
