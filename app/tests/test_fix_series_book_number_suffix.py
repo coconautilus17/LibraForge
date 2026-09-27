@@ -102,6 +102,31 @@ class PlanSeriesNumberChangesTests(unittest.TestCase):
         self.assertEqual(changes[0]["status"], "CONFLICT")
         self.assertIsNone(changes[0]["new_sequence"])
 
+    def test_book_word_suffix_with_no_number_at_all_is_cleaned_with_no_sibling_needed(self):
+        # Real case: "Dean Koontz: From the Vault, Book #" -- a themed
+        # reissue collection with no real reading order. Audible's own
+        # template still appends ", Book #" with nothing after the "#".
+        # Previously fell through both patterns entirely and was silently
+        # skipped -- never even reached UNCERTAIN.
+        write_libraforge_json(
+            self.root / "Dean Koontz" / "Shadowfires" / "libraforge.json",
+            "Dean Koontz: From the Vault, Book #", "",
+        )
+        changes = self._plan()
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["status"], "CLEAN_ONLY")
+        self.assertEqual(changes[0]["new_series"], "Dean Koontz: From the Vault")
+        self.assertEqual(changes[0]["new_sequence"], "")
+
+    def test_book_word_suffix_with_no_number_never_overwrites_an_existing_sequence(self):
+        write_libraforge_json(
+            self.root / "Dean Koontz" / "Servants" / "libraforge.json",
+            "Dean Koontz: From the Vault, Book #", "3",
+        )
+        changes = self._plan()
+        self.assertEqual(changes[0]["status"], "CLEAN_ONLY")
+        self.assertEqual(changes[0]["new_sequence"], "3")
+
     def test_bare_number_with_a_plain_sibling_series_is_cleaned(self):
         # "#" right before the number is the separator that makes this
         # worth matching at all -- see the no-separator tests below.

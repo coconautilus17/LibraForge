@@ -70,11 +70,19 @@ from collections import defaultdict
 from pathlib import Path
 
 try:
-    from app.fixer.scoring import SERIES_TRAILING_NUMBER_RE, split_series_trailing_number
+    from app.fixer.scoring import (
+        SERIES_TRAILING_BARE_MARKER_RE,
+        SERIES_TRAILING_NUMBER_RE,
+        split_series_trailing_number,
+    )
     from app.fixer.tagging import id3_set_txxx, mp4_set_freeform
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app.fixer.scoring import SERIES_TRAILING_NUMBER_RE, split_series_trailing_number
+    from app.fixer.scoring import (
+        SERIES_TRAILING_BARE_MARKER_RE,
+        SERIES_TRAILING_NUMBER_RE,
+        split_series_trailing_number,
+    )
     from app.fixer.tagging import id3_set_txxx, mp4_set_freeform
 
 SERVICE_PREFIXES = ("_", "#", "@", ".")
@@ -219,6 +227,17 @@ def _classify_records(records: list[tuple]) -> list[dict]:
                 status, new_seq = "CONFLICT", None
             changes.append({"path": str(path), "kind": kind, "old_series": series, "new_series": cleaned,
                              "old_sequence": existing_seq, "new_sequence": new_seq, "status": status})
+            continue
+
+        # Same wording as Pattern A, but Audible left the number off entirely
+        # ("Dean Koontz: From the Vault, Book #") -- no number was ever
+        # baked in, so there's nothing to fill or conflict with; always
+        # safe to clean, no sibling evidence needed.
+        bare_marker_match = SERIES_TRAILING_BARE_MARKER_RE.search(series)
+        if bare_marker_match:
+            cleaned = SERIES_TRAILING_BARE_MARKER_RE.sub("", series).strip()
+            changes.append({"path": str(path), "kind": kind, "old_series": series, "new_series": cleaned,
+                             "old_sequence": existing_seq, "new_sequence": existing_seq, "status": "CLEAN_ONLY"})
             continue
 
         bare = _bare_number_split(series)

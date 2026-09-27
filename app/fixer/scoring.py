@@ -189,18 +189,32 @@ SERIES_TRAILING_NUMBER_RE = re.compile(
     r"\s*,\s*(?:book|vol\.?|volume)\s*#?\s*(?P<num>\d+(?:\.\d+)?)\s*$", re.IGNORECASE
 )
 
+# Same wording, but Audible left the number itself off entirely -- seen live
+# on "Dean Koontz: From the Vault, Book #", a themed reissue collection with
+# no real reading order, where Audible's own template still appends ", Book
+# #" with nothing after the "#". SERIES_TRAILING_NUMBER_RE requires a digit
+# and so never matches this at all, leaving the noise suffix in place. No
+# number to fill `sequence` with here -- this pattern only ever cleans the
+# text.
+SERIES_TRAILING_BARE_MARKER_RE = re.compile(
+    r"\s*,\s*(?:book|vol\.?|volume)\s*#?\s*$", re.IGNORECASE
+)
+
 
 def split_series_trailing_number(series_name: str, sequence: str) -> tuple[str, str]:
-    """Strip a "<Series>, Book N" suffix from `series_name`; use its number to
-    fill `sequence` only when `sequence` is empty. An existing, different
-    `sequence` is never overwritten -- the series text is still cleaned
-    either way, since the wording is noise regardless of which number (if
-    any) turns out to be right."""
+    """Strip a "<Series>, Book N" (or number-less "<Series>, Book #") suffix
+    from `series_name`; a captured number fills `sequence` only when `sequence`
+    is empty. An existing, different `sequence` is never overwritten -- the
+    series text is still cleaned either way, since the wording is noise
+    regardless of which number (if any) turns out to be right."""
     match = SERIES_TRAILING_NUMBER_RE.search(series_name)
-    if not match:
-        return series_name, sequence
-    cleaned = SERIES_TRAILING_NUMBER_RE.sub("", series_name).strip()
-    return cleaned, sequence or match.group("num")
+    if match:
+        cleaned = SERIES_TRAILING_NUMBER_RE.sub("", series_name).strip()
+        return cleaned, sequence or match.group("num")
+    if SERIES_TRAILING_BARE_MARKER_RE.search(series_name):
+        cleaned = SERIES_TRAILING_BARE_MARKER_RE.sub("", series_name).strip()
+        return cleaned, sequence
+    return series_name, sequence
 
 
 @trace(ALTER, capture=[])
