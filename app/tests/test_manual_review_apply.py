@@ -507,5 +507,53 @@ class AbsDirectSyncTests(unittest.TestCase):
         self.assertNotIn("abs_sync_library_item_id", written)
 
 
+class SkipTagsTests(unittest.TestCase):
+    """skip_tags mirrors the CLI's --metadata-json-only: for a single-file
+    (non-grouped) book, leave the audio file's own embedded tags untouched
+    and rely entirely on the Audiobookshelf direct-API PATCH / metadata.json
+    fallback. Reuses WritePolicyTests's fixtures (not a subclass, so its
+    other tests aren't re-run here) -- see AbsDirectSyncTests above for the
+    same composition pattern.
+    """
+
+    _context = WritePolicyTests._context
+    _selected_result = WritePolicyTests._selected_result
+    _request = WritePolicyTests._request
+
+    def _fixer(self, written: dict, mutagen_candidate: bool = True):
+        fixer = WritePolicyTests._fixer(self, written, mutagen_candidate)
+        fixer.write_tags = lambda *a, **k: self.fail("skip_tags=True must never call write_tags")
+        return fixer
+
+    def test_skip_tags_true_never_writes_tags_and_output_kind_is_metadata_json(self):
+        written = {}
+        req = self._request("fill", {})
+        req.skip_tags = True
+        with (
+            patch.object(main, "inspect_manual_review_target", return_value=self._context()),
+            patch.object(main, "load_fixer_module", return_value=self._fixer(written)),
+        ):
+            result = main.apply_manual_review_result(req)
+        self.assertEqual(result["output_kind"], "metadata_json")
+        self.assertNotIn("tags_metadata", written)
+
+    def test_skip_tags_false_writes_tags_as_before(self):
+        written = {}
+        req = self._request("fill", {})
+        req.skip_tags = False
+        with (
+            patch.object(main, "inspect_manual_review_target", return_value=self._context()),
+            patch.object(main, "load_fixer_module", return_value=WritePolicyTests._fixer(self, written)),
+        ):
+            result = main.apply_manual_review_result(req)
+        self.assertEqual(result["output_kind"], "tags")
+        self.assertIn("tags_metadata", written)
+
+    def test_skip_tags_defaults_to_false(self):
+        self.assertFalse(main.ManualReviewApplyRequest(
+            path="/library/Book", selected_result={}, edit_mode="full",
+        ).skip_tags)
+
+
 if __name__ == "__main__":
     unittest.main()
