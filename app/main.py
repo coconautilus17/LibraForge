@@ -2036,6 +2036,25 @@ def report_for_api(report: dict[str, Any]) -> dict[str, Any]:
     )
     return result
 
+# CLI flags whose *value* (the very next argv entry) is a secret and must
+# never reach a log file, a persisted report.json, or an API response --
+# state.command is the real argv handed to subprocess.Popen (it must keep
+# the real value for that), so every other consumer redacts through this
+# first. --abs-api-key is passed on nearly every fixer/organizer run now
+# that direct-API sync doesn't require selecting "abs" as the search
+# provider (see build_command) -- found via a real run's /api/runs/{id}
+# response leaking the live Audiobookshelf token in plaintext.
+_SENSITIVE_CLI_FLAGS = {"--abs-api-key"}
+
+
+def redact_command(cmd: list[str]) -> list[str]:
+    redacted = list(cmd)
+    for i, part in enumerate(redacted):
+        if part in _SENSITIVE_CLI_FLAGS and i + 1 < len(redacted):
+            redacted[i + 1] = "***REDACTED***"
+    return redacted
+
+
 def write_final_report(state: RunState) -> None:
     items, categories = build_report_items(state.files_by_category)
     manual_review_items = derive_manual_review_items(state.stats, state.files_by_category)
@@ -2049,7 +2068,7 @@ def write_final_report(state: RunState) -> None:
         "started_at": state.started_at,
         "finished_at": state.finished_at,
         "returncode": state.returncode,
-        "command": state.command,
+        "command": redact_command(state.command),
         "stats": state.stats,
         "items": items,
         "categories": categories,
@@ -2070,7 +2089,7 @@ def stream_process_output(
 ) -> None:
     with state.log_path.open("w", encoding="utf-8", errors="replace") as log:
         log.write("COMMAND:\n")
-        log.write(" ".join(shlex.quote(part) for part in cmd) + "\n\n")
+        log.write(" ".join(shlex.quote(part) for part in redact_command(cmd)) + "\n\n")
         log.flush()
 
         proc = subprocess.Popen(
@@ -4648,7 +4667,7 @@ def run_chaptering_worker(run_id: str, req: ChapteringRunRequest) -> None:
 
         if state.log_path:
             state.log_path.write_text(
-                "COMMAND:\n" + " ".join(shlex.quote(part) for part in state.command) + "\n\n",
+                "COMMAND:\n" + " ".join(shlex.quote(part) for part in redact_command(state.command)) + "\n\n",
                 encoding="utf-8",
             )
         run_tmp = Path(tempfile.mkdtemp(prefix=f"{run_id}-chaptering-", dir=str(REPORTS_DIR)))
@@ -8882,7 +8901,7 @@ def get_run(run_id: str) -> dict[str, Any]:
         "finished_at": state.finished_at,
         "returncode": state.returncode,
         "error": state.error,
-        "command": state.command,
+        "command": redact_command(state.command),
         "run_type": state.run_type,
         "current_file": state.current_file,
         "current": state.current,
