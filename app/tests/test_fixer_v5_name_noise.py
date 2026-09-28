@@ -89,6 +89,46 @@ class SeriesNoiseTests(unittest.TestCase):
         self.assertEqual(clean_series_value("Aaron Crash (American Dragons)"), "American Dragons")
 
 
+class NeverASeriesTests(unittest.TestCase):
+    """Values that make no sense as a series name are dropped wherever a
+    series is read: genre names, marketing phrases, format/generic words,
+    publishers and bare numbers."""
+
+    def test_genre_and_marketing_values_are_not_series(self):
+        for value in ["LitRPG", "Fantasy", "Science Fiction", "A LitRPG Series",
+                      "A LitRPG Adventure", "An Epic Fantasy Novel"]:
+            with self.subTest(value=value):
+                self.assertEqual(clean_series_value(value), "")
+
+    def test_generic_format_and_publisher_values_are_not_series(self):
+        for value in ["Series", "Standalone", "Novella", "Box Set", "Light Novel",
+                      "Unabridged Audiobook", "Podium Audio", "Book #1-5", "Book 3", "#2"]:
+            with self.subTest(value=value):
+                self.assertEqual(clean_series_value(value), "")
+
+    def test_real_series_names_survive(self):
+        for value in ["Cradle", "The Titan Series", "A Jack Ryan Novel", "Dungeon Crawler Carl",
+                      "Mythos", "The Tower Series", "Detroit Free Zone (DFZ)",
+                      "Star Force Universe (Jyr)", "Origins (Robinson)"]:
+            with self.subTest(value=value):
+                self.assertEqual(clean_series_value(value), value)
+
+    def test_edition_descriptor_parentheticals_are_dropped(self):
+        self.assertEqual(clean_series_value("Harry Potter (Full-Cast Editions)"), "Harry Potter")
+        self.assertEqual(clean_series_value("Star Wars Legends (Chronological)"), "Star Wars Legends")
+
+    def test_audible_series_that_is_a_genre_is_not_written(self):
+        from app.fixer.scoring import get_primary_series
+
+        # Audible files Arthur Stone's "The Weirdest Noob" under series "LitRPG" #1.
+        self.assertEqual(
+            get_primary_series({"series": [{"title": "LitRPG", "sequence": "1"}]}), ("", "")
+        )
+        self.assertEqual(
+            get_primary_series({"series": [{"title": "Cradle", "sequence": "1"}]}), ("Cradle", "1")
+        )
+
+
 class AsinTagTests(unittest.TestCase):
     def test_audible_asin_tag_is_read(self):
         from app.fixer.clues import read_current_book_metadata

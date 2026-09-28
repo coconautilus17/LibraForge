@@ -377,16 +377,76 @@ def extract_series_from_trailing_segment(value: str) -> str:
 
 
 SERIES_DESCRIPTOR_PHRASES = {
+    "abridged",
     "audiobook",
+    "chronological",
     "chronological order",
     "complete",
     "dramatized adaptation",
+    "full cast",
+    "full cast edition",
+    "full cast editions",
+    "full-cast",
+    "full-cast edition",
+    "full-cast editions",
     "light novel",
     "publication order",
     "reading order",
     "retail",
     "unabridged",
 }
+
+# Words that name a format or a kind of book, never one series.
+NEVER_SERIES_WORDS = SERIES_DESCRIPTOR_PHRASES | {
+    "audio drama",
+    "audiobooks",
+    "book",
+    "books",
+    "box set",
+    "boxed set",
+    "collection",
+    "n a",
+    "na",
+    "none",
+    "novel",
+    "a novel",
+    "novella",
+    "omnibus",
+    "series",
+    "short stories",
+    "short story",
+    "stand alone",
+    "standalone",
+    "unabridged audiobook",
+    "unknown",
+    "untitled",
+    "various",
+    "vol",
+    "volume",
+}
+_NUMBER_ONLY_SERIES_RE = re.compile(
+    r"^(?:(?:book|vol(?:ume)?|part|no)\.?\s*)?[#\-\s]*\d+(?:\.\d+)?(?:\s*[-#]+\s*\d+)*$",
+    re.IGNORECASE,
+)
+
+
+def is_never_series(value: str) -> bool:
+    """True for values that make no sense as a series name: a genre
+    ("LitRPG"), a marketing phrase ("A LitRPG Series"), a format or generic
+    word ("Standalone", "Box Set"), a publisher, or a bare book number."""
+    from app.genre_taxonomy import _canonical, _is_known_genre
+
+    text = clean_text(value)
+    if not text:
+        return False
+    lowered = re.sub(r"\s+", " ", text.lower())
+    if lowered in NEVER_SERIES_WORDS or _NUMBER_ONLY_SERIES_RE.match(lowered):
+        return True
+    if is_title_noise(text) or not normalize_for_match(text):
+        return True
+    if _canonical(text) or _is_known_genre(text):
+        return True
+    return not strip_publisher_noise(text)
 
 
 def is_descriptor_parenthetical(value: str) -> bool:
@@ -404,35 +464,32 @@ def is_descriptor_parenthetical(value: str) -> bool:
 
 @trace(ALTER, capture=["value"])
 def clean_series_value(value: str) -> str:
-    """Prefer the series-looking value inside parentheses when metadata is polluted.
+    """Clean a series value read from tags or a path.
 
-    Example:
-      'Aaron Crash (American Dragons)' -> 'American Dragons'
+    A multi-word parenthetical is taken as the series only when the text
+    outside it is a person's name (an author tag polluted with the series:
+    'Aaron Crash (American Dragons)' -> 'American Dragons'). A descriptor
+    parenthetical ("(light novel)", "(Chronological)") is dropped, and any
+    other one is part of the real name ('Detroit Free Zone (DFZ)'). Values
+    that are never a series (see is_never_series) become "".
     """
     value = sanitize_technical_labels(value)
-    if normalize_for_match(value) in {
-        "audiobook",
-        "complete",
-        "retail",
-        "unabridged",
-    }:
-        return ""
-
     parenthetical = extract_first_parenthetical(value)
 
-    if parenthetical and is_descriptor_parenthetical(parenthetical):
-        # "(light novel)", "(A LitRPG series, Book 7)", "(publication order)"
-        # describe the series; the name is outside them.
-        value = remove_parenthetical(value) or value
-    elif parenthetical and not re.search(r"#|\d+\s*-\s*\d+", parenthetical):
-        value = parenthetical
+    if parenthetical:
+        outer = remove_parenthetical(value)
+        if is_descriptor_parenthetical(parenthetical):
+            value = outer or value
+        elif (
+            looks_like_person_name(outer)
+            and len(parenthetical.split()) >= 2
+            and not re.search(r"#|\d+\s*-\s*\d+", parenthetical)
+        ):
+            # Multi-word only: a one-word or acronym parenthetical is part
+            # of a real name ("Star Force Universe (Jyr)", "(DFZ)").
+            value = parenthetical
 
-    if normalize_for_match(value) in {
-        "audiobook",
-        "complete",
-        "retail",
-        "unabridged",
-    }:
+    if is_never_series(value):
         return ""
 
     return value
