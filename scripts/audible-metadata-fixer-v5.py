@@ -78,7 +78,7 @@ try:
         extract_author_from_title, goodreads_title_query_variants,
         normalize_book_label_for_match, strip_leading_sequence_from_title,
         # misc utilities
-        is_generic_chapter_title, pick_most_common_value,
+        is_generic_chapter_title, pick_majority_value, pick_most_common_value,
     )
     from app.fixer.clues import (
         apply_structured_path_override,
@@ -215,7 +215,7 @@ except ModuleNotFoundError:
         extract_author_from_title, goodreads_title_query_variants,
         normalize_book_label_for_match, strip_leading_sequence_from_title,
         # misc utilities
-        is_generic_chapter_title, pick_most_common_value,
+        is_generic_chapter_title, pick_majority_value, pick_most_common_value,
     )
     from app.fixer.clues import (
         apply_structured_path_override,
@@ -3028,8 +3028,8 @@ def build_multi_file_search_context(
         folder_structured.get("title")
         or folder_descriptive.get("title")
         or (folder_name if not is_generic_chapter_title(folder_name) else "")
-        or pick_most_common_value(specific_titles)
-        or pick_most_common_value(raw_titles)
+        or pick_majority_value(specific_titles, len(clues_list))
+        or pick_majority_value(raw_titles, len(clues_list))
     )
     author = (
         folder_identity.get("author")

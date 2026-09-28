@@ -1833,3 +1833,14 @@ def pick_most_common_value(values: list[str]) -> str:
 
     counts = Counter(cleaned_values)
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+
+
+def pick_majority_value(values: list[str], total: int) -> str:
+    """The most common value only when more than half of `total` files carry
+    it. Values that differ from file to file (part numbers, chapter titles)
+    describe the files, not the book."""
+    chosen = pick_most_common_value(values)
+    if not chosen:
+        return ""
+    count = sum(1 for value in values if sanitize_technical_labels(value) == chosen)
+    return chosen if count * 2 > total else ""

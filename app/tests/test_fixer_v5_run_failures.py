@@ -57,6 +57,16 @@ class PartNumbersAreNotABookNumberTests(unittest.TestCase):
         self.assertEqual(clues["book_number"], "")
         self.assertEqual(clues["series"], "")
 
+    def test_distinct_chapter_titles_are_not_the_book_title(self):
+        # Supreme Magus Volume 1: every "Ep N - <chapter>" file has its own
+        # title, and one of them became the book's title.
+        per_file = [{"title": t, "book_number": str(n), "book_number_source": "path"}
+                    for n, t in enumerate(["A Bad Beginning", "True Magic and Fake Magic, Part 2",
+                                           "Screams of Terror", "Family Matters"], start=1)]
+        clues = group_clues("/u/supreme magus/Volume 1", per_file)
+        self.assertNotIn(clues["title"], {"A Bad Beginning", "True Magic and Fake Magic, Part 2",
+                                          "Screams of Terror", "Family Matters"})
+
     def test_a_number_all_parts_agree_on_is_the_book_number(self):
         per_file = [{"title": "Deeper", "series": "Tunnels", "book_number": "2",
                      "book_number_source": "path"} for _ in range(4)]

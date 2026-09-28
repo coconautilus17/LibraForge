@@ -21,6 +21,7 @@ from app.fixer.parsing import (
     normalize_book_number,
     strip_leading_sequence_from_title,
     strip_publisher_search_noise,
+    pick_majority_value,
     pick_most_common_value,
     extract_folder_book_number,
     sanitize_technical_labels,
@@ -362,10 +363,10 @@ def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[
             for clues in clues_list
             if clues.get("book_number_source") == source and clues.get("book_number")
         ]
-        chosen = pick_most_common_value(values)
         # Only a number most of the files agree on names the book; a spread of
         # different numbers is the part numbering.
-        if chosen and values.count(chosen) * 2 > len(clues_list):
+        chosen = pick_majority_value(values, len(clues_list))
+        if chosen:
             return chosen, source
 
     folder_number = extract_folder_book_number(folder_name)
