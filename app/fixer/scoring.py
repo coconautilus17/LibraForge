@@ -1309,10 +1309,19 @@ def determine_edit_mode(
         gr_title = normalize_for_match(product.get("title", "") or "")
         gr_local_title_bookless = normalize_book_label_for_match(clues.get("title", ""))
         gr_title_bookless = normalize_book_label_for_match(product.get("title", "") or "")
+        # A longer candidate title counts only when the extra is a separated
+        # subtitle ("Moonrise: Rise of the ..."), not run-on text ("48 Laws of
+        # Power Robert and Joost Elffers Greene" is a notebook listing).
+        gr_raw_local = clean_text(clues.get("title", "")).lower()
+        gr_raw_title = clean_text(product.get("title", "") or "").lower()
+        gr_candidate_adds_subtitle = bool(
+            gr_raw_local
+            and re.match(re.escape(gr_raw_local) + r"\s*[:(\[\-\u2013\u2014]", gr_raw_title)
+        )
         gr_title_ok = bool(gr_local_title and (
             gr_local_title == gr_title
             or gr_local_title_bookless == gr_title_bookless
-            or gr_local_title in gr_title
+            or gr_candidate_adds_subtitle
             or gr_title in gr_local_title
         ))
         # Series + sequence identity is an alternative to title-string identity:
@@ -1589,6 +1598,18 @@ def metadata_from_product(
         narrator_to_write = sanitize_tag(clues.get("narrator", ""))
         year_to_write = ""
         summary_to_write = ""
+
+    # Goodreads/Open Library often list no series. That is missing data, not
+    # a statement that the book has none, so keep the file's own series tag
+    # instead of blanking it on a full write.
+    if (
+        edit_mode == "full"
+        and not series_name
+        and product.get("_abs_provider") in SPARSE_PROVIDERS
+    ):
+        current = clues.get("current") or {}
+        series_name = sanitize_tag(current.get("series", ""))
+        sequence_to_write = clean_sequence(current.get("sequence", "")) if series_name else ""
 
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])

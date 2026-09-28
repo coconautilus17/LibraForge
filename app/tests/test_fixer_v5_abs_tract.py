@@ -412,6 +412,56 @@ class GoodreadsEditModeGateTests(unittest.TestCase):
         )
         self.assertEqual(mode, "full")
 
+    def test_none_when_candidate_title_only_starts_with_local_title(self):
+        # Run 20260928-194730: a lined notebook "48 Laws of Power Robert and
+        # Joost Elffers Greene" was accepted as the book "48 Laws of Power".
+        mode = fixer.determine_edit_mode(
+            self._product("48 Laws of Power Robert and Joost Elffers Greene", "Robert Greene"),
+            {"title": "48 Laws of Power", "author": "Robert Greene"},
+            0.29,
+        )
+        self.assertEqual(mode, "none")
+
+    def test_full_when_candidate_adds_a_separated_subtitle(self):
+        mode = fixer.determine_edit_mode(
+            self._product("Moonrise: Rise of the Bloodmoon Witch", "Chad J. Maske"),
+            {"title": "Moonrise", "author": "Chad J Maske"},
+            0.3,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_full_when_local_title_carries_the_subtitle(self):
+        # Troy / Nebula Lord: the local title includes the subtitle.
+        mode = fixer.determine_edit_mode(
+            self._product("Troy", "Stephen Fry"),
+            {"title": "Troy: The Siege of Troy Retold", "author": "Stephen Fry"},
+            0.35,
+        )
+        self.assertEqual(mode, "full")
+
+    def test_sparse_match_without_series_keeps_the_files_series(self):
+        # Run 20260928-194730: Moonrise's file has series "Rise of the
+        # Bloodmoon Witch" #1; the Goodreads result lists none, and a full
+        # write would have erased it.
+        clues = {"title": "Moonrise", "author": "Chad J Maske",
+                 "series": "Rise of the Bloodmoon Witch", "book_number": "1",
+                 "current": {"series": "Rise of the Bloodmoon Witch", "sequence": "1"}}
+        metadata = fixer.metadata_from_product(
+            self._product("Moonrise", "Chad J. Maske"), clues, 0.22
+        )
+        self.assertEqual(metadata["edit_mode"], "full")
+        self.assertEqual(metadata["series"], "Rise of the Bloodmoon Witch")
+        self.assertEqual(metadata["sequence"], "1")
+
+    def test_sparse_match_with_series_still_writes_its_own(self):
+        clues = {"title": "Unsouled", "author": "Will Wight",
+                 "current": {"series": "Old Tag", "sequence": "9"}}
+        metadata = fixer.metadata_from_product(
+            self._product("Unsouled", "Will Wight", series="Cradle", sequence="1"), clues, 0.3
+        )
+        self.assertEqual(metadata["series"], "Cradle")
+        self.assertEqual(metadata["sequence"], "1")
+
     def test_none_on_wrong_book_same_author_unrelated_title(self):
         mode = fixer.determine_edit_mode(
             self._product("The Glade of Dreams 1", "Logan Jacobs"),
