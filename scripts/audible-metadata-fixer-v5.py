@@ -86,6 +86,7 @@ try:
         capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
+        group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
         read_current_book_metadata,
@@ -222,6 +223,7 @@ except ModuleNotFoundError:
         capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
+        group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
         read_current_book_metadata,
@@ -2985,6 +2987,7 @@ def build_multi_file_search_context(
     ):
         folder_identity = {}
 
+    parts_numbered = group_numbers_are_part_indices(clues_list)
     specific_titles = [
         clues.get("title", "")
         for clues in clues_list
@@ -3012,6 +3015,9 @@ def build_multi_file_search_context(
         or pick_most_common_value([clues.get("author", "") for clues in clues_list])
         or path_author
     )
+    if not author:
+        # "... By Eric H. Cline": the same recovery single files get.
+        author = extract_author_from_title(sanitize_book_title(title))
     if title == folder_name:
         title = clean_group_folder_title(title, author) or title
     narrator = pick_most_common_value(
@@ -3020,7 +3026,9 @@ def build_multi_file_search_context(
     series = (
         folder_identity.get("series")
         or folder_structured.get("series")
-        or pick_most_common_value([clues.get("series", "") for clues in clues_list])
+        or pick_most_common_value([
+            clues.get("tag_series" if parts_numbered else "series", "") for clues in clues_list
+        ])
         or path_series
     )
     book_number, book_number_source = choose_group_book_number(clues_list, folder_name)

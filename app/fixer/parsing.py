@@ -1581,8 +1581,11 @@ SEARCH_TITLE_PREFIX_NOISE = [
 ]
 
 _TRAILING_BY_AUTHOR_RE = re.compile(
-    r"\s+by\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
+    r"\s+(?i:by)\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
 )
+# A name with an initial ("Eric H. Cline") is a person, not a title phrase
+# like "Death by Black Hole".
+_NAME_INITIAL_RE = re.compile(r"\b[A-Z]\.(?:\s|$)")
 
 
 @trace(ALTER, capture=["text"])
@@ -1640,15 +1643,16 @@ def strip_title_search_noise(text: str, author: str = "") -> str:
 def extract_author_from_title(text: str) -> str:
     """Recover an author name baked into a title as "... by <Name> <number>".
 
-    A trailing book/part number is required so legitimate titles like
-    "Death by Black Hole" are not misread as having author "Black Hole".
+    A trailing book/part number, or an initial in the name ("By Eric H.
+    Cline"), is required so legitimate titles like "Death by Black Hole" are
+    not misread as having author "Black Hole".
     Returns "" when no such pattern is present.
     """
     if not text:
         return ""
 
     match = _TRAILING_BY_AUTHOR_RE.search(clean_text(text))
-    if match and match.group(2):
+    if match and (match.group(2) or _NAME_INITIAL_RE.search(match.group(1))):
         return match.group(1).strip()
     return ""
 
@@ -1704,6 +1708,11 @@ def strip_leading_sequence_from_title(value: str) -> str:
     value = clean_text(value)
     if not value:
         return ""
+    # A bare 3-4 digit number followed by just a space is part of the title
+    # ("1177 B.C.", "2001 A Space Odyssey"); ordering prefixes are short,
+    # zero-padded, or set off by a separator ("01 Title", "2011 - Title").
+    if re.match(r"^[1-9]\d{2,3} +[^\s\-_.:]", value):
+        return sanitize_book_title(value)
 
     cleaned = re.sub(
         r"^\s*(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)?\s*"
