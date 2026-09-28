@@ -129,6 +129,7 @@ class GetSeriesBooksTests(unittest.TestCase):
             "existing_tags": ["Fantasy", "LitRPG"],
             "has_audio": True,
             "description": "",
+            "duration_minutes": None,
             "series_name": "",
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
@@ -273,7 +274,7 @@ class SearchSeriesGoodreadsTests(unittest.TestCase):
         calls = []
         pacer = object()
 
-        def fetch(title, author, *, pacer):
+        def fetch(title, author, *, pacer, book=None):
             calls.append((title, author, pacer))
             return {"status": "found", "title": title, "shelves": [("fantasy", 5)]}
 

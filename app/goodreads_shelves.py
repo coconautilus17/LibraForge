@@ -111,16 +111,6 @@ def clean_query_title(title: str) -> str:
     return t or (title or "").strip()
 
 
-def title_matches(found: str, wanted: str) -> bool:
-    """True when the returned book is plausibly the one asked for: word overlap
-    of at least 60% of the smaller title (series suffix '(X, #n)' ignored)."""
-    a = _words(re.sub(r"\s*\([^)]*#[^)]*\)\s*$", "", found or ""))
-    b = _words(wanted)
-    if not a or not b:
-        return False
-    return len(a & b) / min(len(a), len(b)) >= 0.6
-
-
 def _default_http_get(url: str, timeout: float) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -134,6 +124,7 @@ def fetch_book_shelves(
     pacer: GoodreadsPacer,
     http_get: Callable[[str, float], bytes] | None = None,
     timeout: float = 20,
+    book: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Look one book up on Goodreads. Returns {"status": "found" | "not_found" |
     "failed" | "skipped", "title": str | None, "shelves": [(name, count), ...]}.
@@ -165,14 +156,20 @@ def fetch_book_shelves(
         pacer.record(False)
         return {"status": "failed", "title": None, "shelves": []}
     pacer.record(True)
-    book = root.find("book")
-    if book is None:
+    book_el = root.find("book")
+    if book_el is None:
         return {"status": "not_found", "title": None, "shelves": []}
-    found_title = (book.findtext("title") or "").strip()
-    if not title_matches(found_title, wanted):
+    found_title = (book_el.findtext("title") or "").strip()
+    found_authors = [a.strip() for a in (n.text or "" for n in book_el.findall("authors/author/name")) if a.strip()]
+    # Same book? Metadata Forge's own decision for sparse Goodreads results.
+    from app.source_matching import best_candidate, provider_product  # lazy: it imports this module
+
+    library_book = book or {"title": title, "author": author}
+    product = provider_product({"title": found_title, "author": ", ".join(found_authors)}, "goodreads")
+    if best_candidate(library_book, [(product, True)]) is None:
         return {"status": "not_found", "title": found_title, "shelves": []}
     shelves = []
-    for shelf in book.findall("popular_shelves/shelf"):
+    for shelf in book_el.findall("popular_shelves/shelf"):
         name = (shelf.get("name") or "").strip().lower()
         try:
             count = int(shelf.get("count") or 0)

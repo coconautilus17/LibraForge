@@ -17,7 +17,6 @@ from app.goodreads_shelves import (
     fetch_book_shelves,
     shelves_explicit_evidence,
     shelves_to_genres,
-    title_matches,
 )
 
 XML = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -176,7 +175,11 @@ class TitleTests(unittest.TestCase):
         self.assertEqual(clean_query_title("Dragon Emperor 9"), "Dragon Emperor")
         self.assertEqual(clean_query_title("Dune"), "Dune")
 
-    def test_title_matches(self):
-        self.assertTrue(title_matches("Unsouled (Cradle, #1)", "Unsouled"))
-        self.assertTrue(title_matches("The Way of Kings", "Way of Kings"))
-        self.assertFalse(title_matches("Blue Moon Australia", "Australia: A History"))
+
+class GoodreadsMatchTests(unittest.TestCase):
+    """Same-book decisions come from Metadata Forge's matcher (sparse rule)."""
+
+    def test_another_authors_book_is_not_found(self):
+        xml = XML.replace(b"Will Wight", b"Someone Else")
+        r = fetch_book_shelves("Unsouled", "Will Wight", pacer=GoodreadsPacer(sleep=_no_sleep), http_get=lambda url, timeout: xml)
+        self.assertEqual(r["status"], "not_found")

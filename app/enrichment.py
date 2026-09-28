@@ -248,6 +248,7 @@ def get_series_books(
             # searched as audiobooks (#301). Unknown count = assume audio.
             "has_audio": _has_audio(item),
             "description": str(metadata.get("description") or ""),
+            "duration_minutes": round(float(media.get("duration") or 0) / 60, 1) or None,
             "series_name": strip_series_sequence_suffix(raw_series_name),
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
@@ -327,7 +328,7 @@ def search_series_goodreads(
             return book["id"], {"status": "skipped", "title": None, "shelves": []}  # #301
         author = (str(book.get("author", "") or "").split(",")[0]).strip()
         try:
-            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer)
+            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer, book=book)
         except Exception:
             return book["id"], {"status": "failed", "title": None, "shelves": []}
 

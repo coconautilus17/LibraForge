@@ -26,8 +26,10 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
+from app.abs_client import _is_real_asin
 from app.genre_taxonomy import LABEL_MAP, labels_from_genres, normalize_label
-from app.goodreads_shelves import GoodreadsPacer, clean_query_title, title_matches
+from app.goodreads_shelves import GoodreadsPacer, clean_query_title
+from app.source_matching import best_candidate, provider_product
 
 SourcePacer = GoodreadsPacer
 # Measured in the 2026-09-27 full-library run: AudioSilo showed no limiting at
@@ -40,7 +42,14 @@ HAREMLIT_PACER = SourcePacer(gap_s=0.5, fail_threshold=3, cooldown_s=60)
 AUDIOSILO_SEARCH_URL = "https://meta.audiosilo.app/abs/search"
 OPENLIBRARY_SEARCH_URL = "https://openlibrary.org/search.json"
 _USER_AGENT = "Mozilla/5.0"  # progressionfantasy.co.uk 403s descriptive UAs
-_REAL_ASIN_RE = re.compile(r"B0[0-9A-Z]{8}")
+# Audible's older ASINs have the ISBN-10 shape (Dune: House Atreides is
+# 1004027907). abs_client._is_real_asin stays B0-only because it guards writes
+# (#291); a read-only lookup can also try this shape, a miss is just a 404.
+_ISBN10_SHAPED_ASIN_RE = re.compile(r"[0-9]{9}[0-9X]")
+
+
+def _lookup_asin(asin: str) -> bool:
+    return _is_real_asin(asin) or bool(_ISBN10_SHAPED_ASIN_RE.fullmatch(asin))
 SOURCE_WORKERS = 2
 
 HttpGet = Callable[[str, float], Any]
@@ -76,16 +85,17 @@ def _primary_author(book: dict[str, Any]) -> str:
     return str(book.get("author") or "").split(",")[0].split(" - ")[0].strip()
 
 
-def _same_author(found_author: Any, wanted_author: str) -> bool:
-    """A title match alone isn't enough for one-word titles ("Blackflame"):
-    when the source names an author, it must share the wanted surname."""
-    if not str(found_author or "").strip() or not wanted_author:
-        return True
-    return _author_matches(str(found_author), [wanted_author])
-
-
 AUDIOSILO_LOOKUP_URL = "https://meta.audiosilo.app/api/v1/lookup"
 AUDIOSILO_WORK_URL = "https://meta.audiosilo.app/api/v1/works/"
+
+
+def _audiosilo_product(match: dict[str, Any]) -> dict[str, Any]:
+    """The fixer's ABS-provider product, plus the runtime AudioSilo does return
+    (in minutes) so the matcher can use duration like it does for Audible."""
+    product = provider_product(match, "audiosilo", str(match.get("asin") or ""))
+    if match.get("duration"):
+        product["runtime_length_min"] = match["duration"]
+    return product
 
 
 def _audiosilo_labels(genres: Any) -> list[str]:
@@ -111,7 +121,7 @@ def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_
     wanted = clean_query_title(str(book.get("title") or ""))
     author = _primary_author(book)
     asin = str(book.get("asin") or "").upper()
-    if _REAL_ASIN_RE.fullmatch(asin):
+    if _lookup_asin(asin):
         status, data = _paced_get(AUDIOSILO_LOOKUP_URL + "?" + urllib.parse.urlencode({"asin": asin}), pacer, http_get)
         if status in ("failed", "skipped"):
             return _result(status)
@@ -135,11 +145,11 @@ def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_
         if status in ("failed", "skipped"):
             return _result(status)
         matches = ((data or {}).get("matches") or []) if isinstance(data, dict) else []
-        for match in matches:
-            title = str(match.get("title") or "")
-            last_title = last_title or title
-            if title_matches(title, wanted) and _same_author(match.get("author"), author):
-                return _result("found", title, _audiosilo_labels(match.get("genres")))
+        last_title = last_title or (matches[0].get("title") if matches else None)
+        # Same book? Metadata Forge's matcher over every result, not just the first.
+        match = best_candidate(book, [(_audiosilo_product(m), m) for m in matches])
+        if match is not None:
+            return _result("found", match.get("title"), _audiosilo_labels(match.get("genres")))
     return _result("not_found", last_title)
 
 
@@ -148,16 +158,16 @@ def openlibrary_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = OPENLIBR
     """Open Library subjects, kept only when they map into the taxonomy
     (its subjects are noisy: 'Fiction', 'Wizards', place names...)."""
     wanted = clean_query_title(str(book.get("title") or ""))
-    params = {"title": wanted, "author": _primary_author(book), "fields": "title,author_name,subject", "limit": "1"}
+    params = {"title": wanted, "author": _primary_author(book), "fields": "title,author_name,subject", "limit": "5"}
     status, data = _paced_get(OPENLIBRARY_SEARCH_URL + "?" + urllib.parse.urlencode(params), pacer, http_get)
     if status != "ok":
         return _result(status)
-    docs = (data or {}).get("docs") or [] if isinstance(data, dict) else []
-    if not docs:
-        return _result("not_found")
-    doc = docs[0]
-    if not title_matches(str(doc.get("title") or ""), wanted) or not _same_author(", ".join(doc.get("author_name") or []), _primary_author(book)):
-        return _result("not_found", doc.get("title"))
+    docs = ((data or {}).get("docs") or []) if isinstance(data, dict) else []
+    # Same book? Metadata Forge's sparse-source rule (title and author only).
+    doc = best_candidate(book, [(provider_product({"title": d.get("title") or "", "author": ", ".join(d.get("author_name") or [])},
+                                                   "openlibrary"), d) for d in docs])
+    if doc is None:
+        return _result("not_found", docs[0].get("title") if docs else None)
     labels = []
     for subject in doc.get("subject") or []:
         label = normalize_label(subject)

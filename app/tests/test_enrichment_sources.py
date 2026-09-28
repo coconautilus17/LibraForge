@@ -51,17 +51,21 @@ class AudioSiloTests(unittest.TestCase):
             seen.append(url)
             if "/api/v1/lookup" in url:
                 raise urllib.error.HTTPError(url, 404, "nf", {}, None)
-            return {"matches": [{"title": "Unsouled", "genres": ["Fantasy"]}]}
+            return {"matches": [{"title": "Unsouled", "author": "Will Wight", "genres": ["Fantasy"],
+                                 "series": [{"series": "Cradle", "sequence": "1"}]}]}
 
-        self.assertEqual(s.audiosilo_lookup(BOOK, pacer=P(), http_get=get)["status"], "found")
+        book = {**BOOK, "series_name": "Cradle", "sequence": "1"}
+        self.assertEqual(s.audiosilo_lookup(book, pacer=P(), http_get=get)["status"], "found")
         self.assertEqual(len(seen), 2)
 
     def test_title_search_looks_past_other_authors_books(self):
         # 12 Miles Below: "The Warlock" by Mark Arrows sits below Dante King's.
         get = lambda url, timeout: {"matches": [
             {"title": "The Warlock 2", "author": "Dante King", "genres": ["Harem"]},
-            {"title": "12 Miles Below V: The Warlock", "author": "Mark Arrows", "genres": ["Fantasy"]}]}
-        book = {**BOOK, "title": "12 Miles Below - Book 005 - The Warlock", "author": "Mark Arrows", "asin": ""}
+            {"title": "12 Miles Below V: The Warlock", "author": "Mark Arrows", "genres": ["Fantasy"],
+             "series": [{"series": "12 Miles Below", "sequence": "5"}]}]}
+        book = {**BOOK, "title": "12 Miles Below - Book 005 - The Warlock", "author": "Mark Arrows", "asin": "",
+                "series_name": "12 Miles Below", "sequence": "5"}
         r = s.audiosilo_lookup(book, pacer=P(), http_get=get)
         self.assertEqual((r["status"], r["title"]), ("found", "12 Miles Below V: The Warlock"))
 
@@ -71,10 +75,12 @@ class AudioSiloTests(unittest.TestCase):
         def get(url, timeout):
             seen.append(url)
             if "Miles" in url:
-                return {"matches": [{"title": "12 Miles Below: The Frozen Realm", "author": "Mark Arrows", "genres": ["Fantasy"]}]}
+                return {"matches": [{"title": "12 Miles Below: The Frozen Realm", "author": "Mark Arrows", "genres": ["Fantasy"],
+                                     "series": [{"series": "12 Miles Below", "sequence": "1"}]}]}
             return {"matches": []}
 
-        book = {**BOOK, "title": "The Frozen Realm", "author": "Mark Arrows", "asin": "", "series_name": "12 Miles Below"}
+        book = {**BOOK, "title": "The Frozen Realm", "author": "Mark Arrows", "asin": "", "series_name": "12 Miles Below",
+                "sequence": "1"}
         r = s.audiosilo_lookup(book, pacer=P(), http_get=get)
         self.assertEqual(r["status"], "found")
         self.assertIn("query=12+Miles+Below+The+Frozen+Realm", seen[-1])
@@ -302,3 +308,27 @@ class HaremLitAuthorExplicitTests(unittest.TestCase):
 
         r = s.haremlit_lookup("Chaos God", ["Eric Vall"], http_get=get, pacer=P())
         self.assertEqual((r["status"], r["via"], r["explicit"]), ("found", "author", "Yes"))
+
+
+class AudioSiloAsinShapeTests(unittest.TestCase):
+    def looked_up(self, asin):
+        seen = []
+
+        def get(url, timeout):
+            seen.append(url)
+            if "/api/v1/lookup" in url:
+                return {"work": {"id": "w", "title": "Dune: House Atreides"}}
+            if "/api/v1/works/" in url:
+                return {"title": "Dune: House Atreides", "genres": ["science-fiction"]}
+            return {"matches": []}
+
+        s.audiosilo_lookup({**BOOK, "asin": asin}, pacer=P(), http_get=get)
+        return any("/api/v1/lookup" in u for u in seen)
+
+    def test_older_numeric_asins_are_looked_up_too(self):
+        self.assertTrue(self.looked_up("1004027907"))   # Dune: House Atreides
+        self.assertTrue(self.looked_up("B06XKXD6QR"))
+
+    def test_placeholders_are_never_looked_up(self):
+        self.assertFalse(self.looked_up("NOREALASIN"))
+        self.assertFalse(self.looked_up("abs-agg-graphicaudio-0"))
