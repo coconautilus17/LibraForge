@@ -101,21 +101,28 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "non-fiction":"non fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
-# Genres whose own name contains "&" / "and" (not a store merging two genres).
-COMPOUND_GENRES = {"sword & sorcery", "sword and sorcery"}
 _COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
+
+
+def _is_known_genre(text: str) -> bool:
+    known = set(LABEL_MAP) | {n.lower() for m, sub in LABEL_MAP.values() for n in m + sub}
+    label = normalize_label(text)
+    return label in known or (label.endswith("s") and label[:-1] in known)
 
 
 def split_compound_genres(genres: Any) -> list[str]:
     """Split store-style merged genres for a library: "Action & Adventure" ->
     Action, Adventure; "Mystery, Thriller & Suspense" -> Mystery, Thriller,
-    Suspense. Real compound names (Sword & Sorcery) stay whole. Deduped
-    case-insensitively, first spelling and order kept."""
+    Suspense. A name is split only when one of its parts is a genre in its own
+    right, so real compound names (Sword & Sorcery, Cloak & Dagger) stay
+    whole. Deduped case-insensitively, first spelling and order kept."""
     out: list[str] = []
     seen: set[str] = set()
     for genre in genres or []:
         text = str(genre or "").strip()
-        parts = [text] if text.lower() in COMPOUND_GENRES else _COMPOUND_SPLIT_RE.split(text)
+        parts = _COMPOUND_SPLIT_RE.split(text)
+        if len(parts) > 1 and not any(_is_known_genre(part) for part in parts):
+            parts = [text]
         for part in parts:
             part = part.strip()
             if part and part.lower() not in seen:
@@ -251,5 +258,5 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
 LABEL_MAP.update({
     label: (mains, split_compound_genres(subs))
     for label, (mains, subs) in LABEL_MAP.items()
-    if any(("&" in sub or " and " in sub.lower()) and sub.lower() not in COMPOUND_GENRES for sub in subs)
+    if split_compound_genres(subs) != subs
 })

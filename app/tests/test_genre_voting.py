@@ -152,3 +152,28 @@ class ProgressionHierarchyTests(unittest.TestCase):
                  series_labels=["haremlit"], series_evidence=["HaremLit wiki: X"])
         self.assertIn("Harem", r["main"])
         self.assertIn("Romance", r["main"])
+
+
+class PinnedGenresTests(unittest.TestCase):
+    """Genres the user set by hand in Audiobookshelf are pinned: always kept,
+    never outvoted; sources only add to them."""
+
+    def test_pinned_main_survives_without_any_source_support(self):
+        votes = [book_vote({"audible": ["fantasy"]}) for _ in range(3)]
+        r = unit(votes, pinned={"Horror": 1})
+        self.assertIn("Horror", r["main"])
+        self.assertEqual(r["evidence"]["Horror"], {"yours": 1})
+        self.assertIn("Horror", r["pinned"])
+
+    def test_pinned_unknown_genre_keeps_the_users_wording_as_subgenre(self):
+        r = unit([book_vote({"audible": ["thriller"]})], pinned={"Small Town": 2})
+        self.assertIn("Small Town", r["sub"])
+        self.assertIn("Small Town", r["pinned"])
+
+    def test_pinned_beats_conflict_rules(self):
+        votes = [book_vote({"audible": ["science fiction"]}) for _ in range(5)]
+        self.assertIn("Fantasy", unit(votes, pinned={"Fantasy": 1})["main"])
+
+    def test_pinned_alone_is_agreement(self):
+        r = unit([book_vote({})], pinned={"Thriller": 1}, standalone=True)
+        self.assertEqual((r["main"], r["agreement"]), (["Thriller"], "ok"))

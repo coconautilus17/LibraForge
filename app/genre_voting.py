@@ -16,9 +16,10 @@ import collections
 import math
 from typing import Any
 
-from app.genre_taxonomy import MAIN_ORDER, PROGRESSION_KINDS, STRONG_MAINS, classify
+from app.genre_taxonomy import LABEL_MAP, MAIN_ORDER, PROGRESSION_KINDS, STRONG_MAINS, classify, normalize_label
 
 SERIES_SOURCE = "series-source"
+PINNED_SOURCE = "yours"
 _MAINSTREAM = ("Mystery", "Thriller", "Horror", "Romance")
 _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology", "Religion", "Society",
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
@@ -67,6 +68,17 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
             "sub_evidence": dict(sub_evidence), "other": set(votes) - main}
 
 
+def place_pinned(name: str) -> tuple[list[str], list[str]]:
+    """Where a user's own genre lands: its controlled main/sub names when the
+    taxonomy knows it, else the user's own wording as a subgenre."""
+    label = normalize_label(name)
+    mains, subs = LABEL_MAP.get(label, ([], []))
+    subs = [s for s in subs if not s.endswith("?")]
+    if mains or subs:
+        return list(mains), subs
+    return [], [str(name).strip()]
+
+
 def vote_unit(
     book_votes: list[dict[str, Any]],
     *,
@@ -74,9 +86,11 @@ def vote_unit(
     series_evidence: list[str],
     pf_progression: bool,
     standalone: bool,
+    pinned: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Series (or standalone) result: main genres, subgenres, per-genre
-    evidence {genre: {source: books}}, series evidence and agreement."""
+    evidence {genre: {source: books}}, series evidence and agreement.
+    `pinned` ({genre: books}) are the user's own ABS genres: always kept."""
     voted = [v for v in book_votes if v["main"]]
     n = len(voted) or 1  # books with no vote (no matches, no audio) never dilute
     threshold = 1 if n < 4 else math.ceil(0.25 * n)
@@ -150,13 +164,30 @@ def vote_unit(
         sub_evidence["Progression Fantasy"].update(evidence.get("Progression Fantasy", {}))
         if not sub_evidence["Progression Fantasy"]:
             sub_evidence["Progression Fantasy"]["implied"] = 1
+
+    # The user's own genres are pinned last, so no rule above can drop them.
+    pinned_names: list[str] = []
+    for name, books in (pinned or {}).items():
+        pin_mains, pin_subs = place_pinned(name)
+        for genre in pin_mains:
+            if genre not in mains:
+                mains.append(genre)
+            subs = [s for s in subs if s != genre]
+            evidence[genre][PINNED_SOURCE] = max(evidence[genre][PINNED_SOURCE], books)
+        for genre in pin_subs:
+            if genre not in mains and genre not in subs:
+                subs.insert(0, genre)
+            sub_evidence[genre][PINNED_SOURCE] = max(sub_evidence[genre][PINNED_SOURCE], books)
+        pinned_names.extend(pin_mains + pin_subs)
+    mains = sorted(mains, key=MAIN_ORDER.index)
     excluded_subs = _NON_FICTION_SUBS if "Non-Fiction" not in mains else set()
     candidates = [g for g, _c in sorted(mentioned.items(), key=lambda kv: (-kv[1], kv[0]))
                   if g not in mains and g not in subs and not g.endswith("?") and g not in excluded_subs][:MAX_CANDIDATES]
     return {
         "main": mains,
         "sub": subs,
-        "candidates": candidates,
+        "candidates": [c for c in candidates if c not in pinned_names],
+        "pinned": list(dict.fromkeys(pinned_names)),
         "evidence": {**{g: dict(evidence[g]) for g in mains}, **{s: dict(sub_evidence[s]) for s in subs}},
         "series_evidence": list(series_evidence) if not standalone else [],
         "agreement": "ok" if mains else "none",

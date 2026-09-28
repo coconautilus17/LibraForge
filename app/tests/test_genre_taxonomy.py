@@ -68,7 +68,12 @@ class CompoundGenreSplitTests(unittest.TestCase):
         self.assertEqual(t.split_compound_genres(["Mystery, Thriller & Suspense"]), ["Mystery", "Thriller", "Suspense"])
 
     def test_true_compound_names_stay_whole(self):
+        # Rule, not a list: split only when a part is a genre in its own right.
         self.assertEqual(t.split_compound_genres(["Sword & Sorcery"]), ["Sword & Sorcery"])
+        self.assertEqual(t.split_compound_genres(["Cloak & Dagger"]), ["Cloak & Dagger"])
+        self.assertEqual(t.split_compound_genres(["Dragons & Mythical Creatures"]), ["Dragons", "Mythical Creatures"])
+        self.assertEqual(t.split_compound_genres(["Biographies & Memoirs"]), ["Biographies", "Memoirs"])
+        self.assertFalse(hasattr(t, "COMPOUND_GENRES"))
 
     def test_taxonomy_never_outputs_a_merged_name_except_real_compounds(self):
         names = {n for m, s in t.LABEL_MAP.values() for n in m + s} | set(t.MAIN_ORDER)
