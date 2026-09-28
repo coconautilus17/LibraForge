@@ -2844,11 +2844,16 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         file_path, known_author=clues.get("author", "")
     )
     if descriptive_path_meta:
+        path_narrator = normalize_for_match(descriptive_path_meta.get("narrator", ""))
         if (
             descriptive_path_meta.get("author")
-            and should_prefer_path_author(
-                clues.get("author", ""),
-                descriptive_path_meta.get("author", ""),
+            and (
+                should_prefer_path_author(
+                    clues.get("author", ""),
+                    descriptive_path_meta.get("author", ""),
+                )
+                # The tag "author" is the reader the path credits ("Read by").
+                or (path_narrator and path_narrator == normalize_for_match(clues.get("author", "")))
             )
         ):
             clues["author"] = descriptive_path_meta["author"]
@@ -3022,7 +3027,7 @@ def build_multi_file_search_context(
         title = clean_group_folder_title(title, author) or title
     narrator = pick_most_common_value(
         [clues.get("narrator", "") for clues in clues_list]
-    )
+    ) or folder_descriptive.get("narrator", "")
     series = (
         folder_identity.get("series")
         or folder_structured.get("series")

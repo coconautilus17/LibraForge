@@ -161,5 +161,30 @@ class TitleIsItsOwnSeriesTests(unittest.TestCase):
         self.assertNotEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "full")
 
 
+class ReadByNarratorTests(unittest.TestCase):
+    """The Aeneid: folder "Virgil - The Aeneid (Read by David Collins)", and
+    the rip's artist tag is the reader, so every Aeneid was rejected as a
+    different author."""
+
+    FOLDER = "/u/Virgil - The Aeneid (Read by David Collins)"
+
+    def test_read_by_folder_names_author_title_and_narrator(self):
+        parsed = FIXER.parse_descriptive_book_text("Virgil - The Aeneid (Read by David Collins)")
+        self.assertEqual((parsed["author"], parsed["title"], parsed["narrator"]),
+                         ("Virgil", "The Aeneid", "David Collins"))
+
+    def test_grouped_book_takes_the_author_from_the_path_not_the_reader(self):
+        per_file = [{"title": f"The Aeneid - Part {n:02d}", "author": "David Collins"} for n in range(1, 4)]
+        clues = group_clues(self.FOLDER, per_file)
+        self.assertEqual(clues["author"], "Virgil")
+        self.assertEqual(clues["narrator"], "David Collins")
+
+    def test_single_file_takes_the_author_from_the_path_not_the_reader(self):
+        path = Path(f"{self.FOLDER}/Virgil - The Aeneid (Read by David Collins).mp3")
+        clues = FIXER.build_search_clues_from_file(path, tags={"title": "The Aeneid", "artist": "David Collins"})
+        self.assertEqual(clues["author"], "Virgil")
+        self.assertEqual(clues["narrator"], "David Collins")
+
+
 if __name__ == "__main__":
     unittest.main()

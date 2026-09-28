@@ -1058,6 +1058,12 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     return {}
 
 
+_READ_BY_RE = re.compile(
+    r"\s*[(\[]\s*(?:read|narrated|performed)\s+by\s+(?P<narrator>[^)\]]+?)\s*[)\]]\s*$",
+    re.IGNORECASE,
+)
+
+
 @trace(ALTER, capture=["value", "known_author"])
 def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
     """Parse common author/title path names, using known author tags to orient them."""
@@ -1065,6 +1071,26 @@ def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
 
     if not value:
         return {}
+
+    # "Virgil - The Aeneid (Read by David Collins)": the credit names the
+    # narrator, and what's left reads as "Author - Title".
+    read_by = _READ_BY_RE.search(value)
+    if read_by:
+        narrator = clean_text(read_by.group("narrator"))
+        rest = value[: read_by.start()]
+        parsed = parse_descriptive_book_text(rest)
+        if not parsed.get("author"):
+            segments = [clean_text(part) for part in rest.split(" - ") if clean_text(part)]
+            if len(segments) == 2 and not is_generic_chapter_title(segments[1]):
+                parsed = {
+                    "title": segments[1],
+                    "author": clean_author_value(segments[0]),
+                    "year": "",
+                    "series": "",
+                    "book_number": extract_book_number_from_text(segments[1]),
+                }
+        if parsed.get("author"):
+            return {**parsed, "raw_title": value, "narrator": narrator}
 
     if parse_structured_book_text(value, known_author=known_author):
         return {}
