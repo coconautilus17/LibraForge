@@ -225,6 +225,17 @@ class FillMarkerHelperTests(unittest.TestCase):
         self.assertEqual(merged["genre"], "Fantasy")
         self.assertIn("genre", filled)
 
+    def test_junk_genre_tag_counts_as_missing(self):
+        # "Audiobook" (2663 books) or a foreign store label is not a genre, so
+        # fill-missing replaces it with the match's genres.
+        for junk in ["Audiobook", "Fantasía, Acción y aventura", "Hörbuch"]:
+            with self.subTest(junk=junk):
+                current = {"title": "The Book", "artist": "Jane Doe", "genre": junk}
+                metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}
+                merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+                self.assertEqual(merged["genre"], "Fantasy")
+                self.assertIn("genre", filled)
+
     def test_genre_is_preserved_when_already_present(self):
         current = {"title": "The Book", "artist": "Jane Doe", "genre": "Horror"}
         metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}

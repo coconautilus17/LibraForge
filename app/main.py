@@ -6371,8 +6371,10 @@ def _attach_local_genres(books: list[dict[str, Any]]) -> None:
             genres = ((item.get("media") or {}).get("metadata") or {}).get("genres")
             if isinstance(genres, list):
                 book["existing_genres"] = genres
+        wrote_genre = _libraforge_wrote_genre(book)
+        book["file_genres_written_by_libraforge"] = wrote_genre
         book["manual_genres"] = detect_manual_genres(
-            book.get("existing_genres") or [], book["file_genres"], _libraforge_wrote_genre(book), written_log.get(book["id"]))
+            book.get("existing_genres") or [], book["file_genres"], wrote_genre, written_log.get(book["id"]))
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(one, books))

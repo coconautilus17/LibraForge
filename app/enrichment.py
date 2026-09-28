@@ -575,7 +575,10 @@ def build_book_voters(
     for name, result in (("audiosilo", audiosilo_result), ("openlibrary", openlibrary_result)):
         if (result or {}).get("status") == "found":
             voters[name] = list(result.get("labels") or [])
-    voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
+    # A genre tag Metadata Forge wrote is Audible's categories again, not the
+    # file's own editorial genre, so it doesn't vote a second time.
+    if not book.get("file_genres_written_by_libraforge"):
+        voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
     # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
     pinned = {g.lower() for g in book.get("manual_genres") or []}
     existing = [g for g in split_compound_genres(book.get("existing_genres") or []) if g.lower() not in pinned]
