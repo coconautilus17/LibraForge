@@ -18,6 +18,7 @@ from typing import Any
 from app.debug_trace import trace, ALTER, CHOOSE, SCORE
 from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
+    is_never_series,
     normalize_for_match,
     parse_sequence_number,
     extract_book_number_from_text,
@@ -233,6 +234,10 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     series_name, sequence = split_series_trailing_number(
         sanitize_tag(series_name), sanitize_tag(sequence)
     )
+    # Audible sometimes files books under a genre as the series (Arthur
+    # Stone's "LitRPG" #1-3); that is never written as a series.
+    if is_never_series(series_name):
+        return "", ""
     return series_name, sequence
 
 

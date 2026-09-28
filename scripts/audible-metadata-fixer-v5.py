@@ -2905,7 +2905,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # Audible ASINs always start with B0; the B0-prefix pattern avoids false matches on other bracket
     # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
     # because it removes noise rather than extracting for validation.
-    existing_asin = (tags or {}).get("asin", "").strip().upper()
+    existing_asin = first_existing_tag(tags or {}, ["asin", "audible_asin"]).upper()
     if not existing_asin:
         # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
         # The tighter pattern avoids false matches on other bracket tokens in filenames.
