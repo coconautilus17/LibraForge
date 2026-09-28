@@ -58,3 +58,20 @@ class VotingTests(unittest.TestCase):
     def test_books_without_votes_do_not_dilute_the_threshold(self):
         votes = [book_vote({"audible": ["horror"], "audiosilo": ["horror"]})] + [book_vote({}) for _ in range(7)]
         self.assertEqual(unit(votes)["main"], ["Horror"])
+
+
+class LiveCalibrationTests(unittest.TestCase):
+    """From the first live compiles against the benchmark (Cradle, Dragon
+    Emperor, Intensity)."""
+
+    def test_goodreads_shelf_alone_cannot_make_a_strong_main(self):
+        # Cradle: readers shelve it as litrpg, but it is progression, not LitRPG.
+        v = book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"], "goodreads": ["fantasy", "litrpg"]})
+        self.assertNotIn("LitRPG", v["main"])
+        corroborated = book_vote({"audible": ["fantasy"], "goodreads": ["fantasy", "litrpg"], "keywords": ["litrpg"]})
+        self.assertIn("LitRPG", corroborated["main"])
+        self.assertIn("LitRPG", book_vote({"audible": ["fantasy", "litrpg"], "goodreads": ["fantasy"]})["main"])
+
+    def test_non_fiction_subgenres_stay_out_of_fiction(self):
+        votes = [book_vote({"audible": ["thriller", "criminology"], "audiosilo": ["thriller", "criminology"]})]
+        self.assertNotIn("True Crime", unit(votes)["sub"])

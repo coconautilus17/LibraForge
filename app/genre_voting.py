@@ -24,6 +24,10 @@ _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology"
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
 _REAL_SF_SUBS = ("Space Opera", "Military Science Fiction", "Post-Apocalyptic", "Hard Science Fiction")
 MAX_MAINS = 3
+# Crowd shelving: Goodreads readers shelve progression and harem fantasy as
+# "litrpg" loosely (Cradle, Dragon Emperor), so a strong genre from Goodreads
+# alone needs a second source like any other genre.
+_CROWD_SOURCES = {"goodreads"}
 MAX_SUBS = 5
 
 
@@ -39,7 +43,8 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
             evidence[genre].add(source)
         subs.update(source_subs)
     needed = 2 if len(voters) >= 2 else 1
-    main = {g for g, c in votes.items() if c >= needed or (g in STRONG_MAINS and c >= 1)}
+    main = {g for g, c in votes.items()
+            if c >= needed or (g in STRONG_MAINS and evidence[g] - _CROWD_SOURCES)}
     if not main and votes:
         # Nothing agreed: fall back to the best-supported genre(s), at most two.
         top = max(votes.values())
@@ -115,6 +120,8 @@ def vote_unit(
 
     if "Non-Fiction" in mains:
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k in _NON_FICTION_SUBS})
+    else:
+        sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k not in _NON_FICTION_SUBS})
     subs = [s for s, c in sorted(sub_votes.items(), key=lambda kv: (-kv[1], kv[0]))
             if c >= threshold and s not in mains and not s.endswith("?")][:MAX_SUBS]
     return {
