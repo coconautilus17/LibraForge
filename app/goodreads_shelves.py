@@ -194,6 +194,8 @@ _NICHE = {
     "dystopian": "Dystopian", "dystopia": "Dystopian", "cozy-mystery": "Cozy Mystery",
     "police-procedural": "Police Procedural", "legal-thriller": "Legal Thriller", "espionage": "Espionage",
     "spy": "Espionage", "time-travel": "Time Travel", "superhero": "Superhero", "superheroes": "Superhero",
+    # Measured: real dragon books 12-120% of the top genre shelf, noise <= 1.3%.
+    "dragons": "Dragons", "dragon": "Dragons", "dragon-riders": "Dragons", "dragon-rider": "Dragons",
 }
 _AUDIENCE = {
     "young-adult": "Young Adult", "ya": "Young Adult", "ya-fantasy": "Young Adult", "teen": "Young Adult",

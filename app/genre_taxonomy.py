@@ -20,11 +20,15 @@ from typing import Any
 MAIN_ORDER = ["Fantasy","Sci-Fi","LitRPG","Progression Fantasy","Cultivation","Harem","Thriller","Mystery","Horror","Romance","Humor",
             "Historical Fiction","Young Adult","Children's","Classics","Literary Fiction","Non-Fiction","Audio Drama"]
 # source label (lowercase) -> (main genres, subgenres)
+# Audible's "Dragons & Mythical Creatures" is a publisher discoverability shelf
+# (12 Miles Below, The Witcher, Spellmonger sit on it): Fantasy evidence only.
+# The Dragons subgenre comes from dragon-specific evidence: Goodreads readers'
+# "dragons" shelf (app/goodreads_shelves._NICHE) or an Open Library subject.
 LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
  "fantasy":(["Fantasy"],[]), "epic":([],["Epic Fantasy?"]), "epic fantasy":(["Fantasy"],["Epic Fantasy"]), "high fantasy":(["Fantasy"],["Epic Fantasy"]),
  "urban":(["Fantasy"],["Urban Fantasy"]), "urban fantasy":(["Fantasy"],["Urban Fantasy"]), "paranormal & urban":(["Fantasy"],["Urban Fantasy"]),
  "paranormal":([],["Paranormal"]), "supernatural":([],["Paranormal"]), "occult":(["Horror"],["Occult"]),
- "sword & sorcery":(["Fantasy"],["Sword & Sorcery"]), "dragons & mythical creatures":(["Fantasy"],["Dragons"]), "dragons":(["Fantasy"],["Dragons"]),
+ "sword & sorcery":(["Fantasy"],["Sword & Sorcery"]), "dragons & mythical creatures":(["Fantasy"],[]), "dragons":(["Fantasy"],["Dragons"]),
  "dark fantasy":(["Fantasy"],["Dark Fantasy"]), "gaslamp":(["Fantasy"],["Gaslamp Fantasy"]), "fairy tales":(["Fantasy"],["Fairy Tales"]),
  "myths & legends":(["Fantasy"],["Mythology"]), "arthurian":(["Fantasy"],["Arthurian"]), "coming of age":([],["Coming of Age"]),
  "portal fantasy":(["Fantasy"],["Portal Fantasy"]), "isekai":(["Fantasy"],["Portal Fantasy"]), "alt-history":([],["Alternate History"]),
@@ -87,7 +91,11 @@ LABEL_MAP.update({
 })
 LABEL_MAP.setdefault("erotica", (["Romance"], ["Erotica"]))
 _KEYWORDS = {"litrpg":r"\blit\s?rpg\b|\bgamelit\b","progression fantasy":r"progression fantasy","cultivation":r"\bcultivation\b|\bxianxia\b|\bwuxia\b",
-    "portal fantasy":r"\bisekai\b|portal fantasy","harem":r"\bharem\b","dungeon core":r"dungeon core"}
+    "portal fantasy":r"\bisekai\b|portal fantasy","harem":r"\bharem\b","dungeon core":r"dungeon core",
+    # Dragon-specific wording only: plural creatures or dragon riders. The bare
+    # "dragon" is a name or title too (the Dragon Reborn), and "fans of
+    # Dungeons and Dragons" is a marketing comparison, not the book's content.
+    "dragons":r"(?<!dungeons and )(?<!dungeons & )\bdragons\b|\bdragon[- ]?riders?\b"}
 _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult","fiction, coming of age":"coming of age","school stories":"young adult","smut":"erotica",
  "childrens":"children's audiobooks","comedy humor":"humor","thriller suspense":"thriller","legal thriller":"legal","fantasy comedy":"humor",
  "detective and mystery stories":"mystery","women detectives":"amateur sleuths","fiction, horror":"horror","fiction, thrillers, general":"thriller","fiction, suspense":"suspense",
