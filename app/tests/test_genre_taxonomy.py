@@ -79,3 +79,26 @@ class CompoundGenreSplitTests(unittest.TestCase):
         names = {n for m, s in t.LABEL_MAP.values() for n in m + s} | set(t.MAIN_ORDER)
         self.assertEqual(sorted(n for n in names if "&" in n or " and " in n.lower()), ["Sword & Sorcery"])
         self.assertEqual(t.LABEL_MAP["action & adventure"], ([], ["Action", "Adventure"]))
+
+
+class ScienceFictionVariantTests(unittest.TestCase):
+    def test_a_mangled_single_genre_is_joined_not_split(self):
+        self.assertEqual(t.split_compound_genres(["Science & Fiction"]), ["Science Fiction"])
+        self.assertEqual(t.split_compound_genres(["Science and Fiction"]), ["Science Fiction"])
+
+    def test_non_genre_parts_are_dropped_after_a_split(self):
+        self.assertEqual(t.split_compound_genres(["Literature & Fiction", "Thriller & Audiobook"]), ["Literature", "Thriller"])
+
+    def test_sci_fi_spellings(self):
+        for spelling in ("Sci-Fi", "SciFi", "Scifi", "Sci Fi", "Science-Fiction"):
+            self.assertEqual(t.labels_from_genres([spelling]), ["science fiction"], spelling)
+
+    def test_unknown_merged_input_labels_are_split_before_mapping(self):
+        self.assertEqual(t.labels_from_genres(["Sci-Fi & Fantasy"]), ["science fiction", "fantasy"])
+        self.assertEqual(t.labels_from_genres(["Science Fiction & Fantasy"]), [])  # store umbrella: no evidence either way
+
+
+class CanonicalSpellingTests(unittest.TestCase):
+    def test_known_genres_use_one_spelling_unknown_keep_the_users(self):
+        self.assertEqual(t.split_compound_genres(["Sci-Fi & Fantasy", "scifi", "Small Town"]),
+                         ["Science Fiction", "Fantasy", "Small Town"])

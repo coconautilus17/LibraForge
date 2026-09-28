@@ -98,10 +98,16 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "police procedural":"police procedurals","psychological thriller":"psychological","hard boiled":"hard-boiled","arts entertainment":"art","social sciences":"sociology",
  "fiction, fantasy, general":"fantasy","fiction, science fiction, general":"science fiction","fiction, mystery & detective, general":"mystery","horror tales":"horror",
  "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery",
- "non-fiction":"non fiction","biography":"memoir","children's":"children's audiobooks"}
+ "non-fiction":"non fiction","sci-fi":"science fiction","scifi":"science fiction","sci fi":"science fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
 _COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
+
+
+def _output_names() -> dict[str, str]:
+    """Controlled genre names, lowercase -> canonical spelling."""
+    names = set(MAIN_ORDER) | {n for m, sub in LABEL_MAP.values() for n in m + sub}
+    return {n.lower(): n for n in names if not n.endswith("?")}
 
 
 def _is_known_genre(text: str) -> bool:
@@ -120,11 +126,23 @@ def split_compound_genres(genres: Any) -> list[str]:
     seen: set[str] = set()
     for genre in genres or []:
         text = str(genre or "").strip()
-        parts = _COMPOUND_SPLIT_RE.split(text)
-        if len(parts) > 1 and not any(_is_known_genre(part) for part in parts):
-            parts = [text]
+        parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(text) if p.strip()]
+        if len(parts) > 1:
+            joined = _output_names().get(" ".join(parts).lower())
+            if joined:
+                # A mangled single genre ("Science & Fiction"), not a merge.
+                parts = [joined]
+            elif not any(_is_known_genre(p) or normalize_label(p) in NON_GENRES for p in parts):
+                parts = [text]  # a genre in its own right (Sword & Sorcery)
+            else:
+                parts = [p for p in parts if normalize_label(p) not in NON_GENRES]
+        names = _output_names()
         for part in parts:
             part = part.strip()
+            # One spelling per known genre ("Sci-Fi" -> Science Fiction), so ABS
+            # doesn't end up with two genres for one; unknown names keep the
+            # user's wording.
+            part = names.get(normalize_label(part), part)
             if part and part.lower() not in seen:
                 seen.add(part.lower())
                 out.append(part)
@@ -158,7 +176,13 @@ def labels_from_genres(values: Any) -> list[str]:
             if not part or part.lower() == "mystery, thriller & suspense":
                 continue
             label = normalize_label(part)
-            if label and label not in NON_GENRES:
+            if not label or label in NON_GENRES:
+                continue
+            if label not in LABEL_MAP and _COMPOUND_SPLIT_RE.search(label):
+                # A merged label the table doesn't know ("Sci-Fi & Fantasy"):
+                # map its parts instead.
+                out.extend(normalize_label(p) for p in split_compound_genres([part]))
+            else:
                 out.append(label)
     return out
 
