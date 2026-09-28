@@ -159,7 +159,7 @@ try:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, has_real_genres, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -295,7 +295,7 @@ except ModuleNotFoundError:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, has_real_genres, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
 try:
@@ -4418,6 +4418,9 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
         # A genre tag with no real genre in it ("Audiobook", a foreign store
         # label) is as good as empty.
         if field == "genre" and not has_real_genres(current_value):
+            current_value = ""
+        # So is a series tag our cleaners would change ("X, Book #", a genre).
+        if field == "series" and is_dirty_series_name(current_value):
             current_value = ""
         if normalize_for_match(current_value):
             merged[field] = sanitize_tag(current_value)

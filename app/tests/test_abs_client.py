@@ -209,6 +209,19 @@ class MergeSeriesEntriesTests(unittest.TestCase):
         self.assertIn({"name": "Blight", "sequence": "1"}, merged)
         self.assertIn({"name": "Other Series", "sequence": "2"}, merged)
 
+    def test_dirty_entry_of_the_same_series_is_replaced_not_duplicated(self):
+        merged = abs_client.merge_series_entries(
+            [{"name": "Dean Koontz: From the Vault, Book #", "sequence": None},
+             {"name": "Other Series", "sequence": "2"}],
+            "Dean Koontz: From the Vault", "",
+        )
+        self.assertEqual(merged, [{"name": "Dean Koontz: From the Vault", "sequence": ""},
+                                  {"name": "Other Series", "sequence": "2"}])
+
+    def test_never_series_entries_are_dropped(self):
+        merged = abs_client.merge_series_entries([{"name": "LitRPG", "sequence": "1"}], "Unfinished Hero", "1")
+        self.assertEqual(merged, [{"name": "Unfinished Hero", "sequence": "1"}])
+
     def test_blank_series_name_leaves_current_list_untouched(self):
         current = [{"name": "Other Series", "sequence": "2"}]
         merged = abs_client.merge_series_entries(current, "", "")
@@ -232,6 +245,26 @@ class ComputeSelectivePatchFieldsTests(unittest.TestCase):
     def test_fill_missing_keeps_old_series_when_new_is_not_clean_numeric(self):
         current_media = {"metadata": {"series": [{"name": "Blight", "sequence": "1/1"}]}}
         new_payload = {"series": [{"name": "Blight", "sequence": "one"}]}
+        fields = abs_client.compute_selective_patch_fields(current_media, new_payload, fill_missing=True)
+        self.assertNotIn("series", fields)
+
+    def test_fill_missing_replaces_a_dirty_series(self):
+        # Dean Koontz's Voice of the Night: the rip's grouping tag gave ABS
+        # "Dean Koontz: From the Vault, Book #"; smart mode must still fix it.
+        current_media = {"metadata": {"series": [{"name": "Dean Koontz: From the Vault, Book #", "sequence": None}]}}
+        new_payload = {"series": [{"name": "Dean Koontz: From the Vault", "sequence": ""}]}
+        fields = abs_client.compute_selective_patch_fields(current_media, new_payload, fill_missing=True)
+        self.assertEqual(fields["series"], new_payload["series"])
+
+    def test_fill_missing_replaces_a_never_series_value(self):
+        current_media = {"metadata": {"series": [{"name": "LitRPG", "sequence": "1"}]}}
+        new_payload = {"series": [{"name": "Unfinished Hero", "sequence": "1"}]}
+        fields = abs_client.compute_selective_patch_fields(current_media, new_payload, fill_missing=True)
+        self.assertEqual(fields["series"], new_payload["series"])
+
+    def test_fill_missing_keeps_a_clean_series(self):
+        current_media = {"metadata": {"series": [{"name": "Cradle", "sequence": "1"}]}}
+        new_payload = {"series": [{"name": "Cradle Saga", "sequence": "1"}]}
         fields = abs_client.compute_selective_patch_fields(current_media, new_payload, fill_missing=True)
         self.assertNotIn("series", fields)
 

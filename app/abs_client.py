@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
-from app.fixer.parsing import is_single_numeric_sequence
+from app.fixer.parsing import is_never_series, is_single_numeric_sequence
 from app.fixer.scoring import GENRE_BLOCKLIST, split_genre_string, split_series_trailing_number
 
 logger = logging.getLogger(__name__)
@@ -278,6 +278,20 @@ def normalize_abs_media_to_internal(media: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _series_key(name: str) -> str:
+    """A series name without Book-N wording ("X, Book #" and "X" are one series)."""
+    return split_series_trailing_number(str(name or "").strip(), "")[0].strip().lower()
+
+
+def is_dirty_series_name(name: str) -> bool:
+    """A series name our cleaners would change: Book-N wording baked into the
+    name, or a value that is never a series (a genre, a bare number)."""
+    name = str(name or "").strip()
+    if not name:
+        return False
+    return split_series_trailing_number(name, "")[0].strip() != name or is_never_series(name)
+
+
 def merge_series_entries(current_series: list[dict[str, Any]], series_name: str, sequence: str) -> list[dict[str, Any]]:
     """Merge LibraForge's corrected series entry into ABS's current full
     series list (matched by name, case-insensitive), so a PATCH never drops a
@@ -289,12 +303,16 @@ def merge_series_entries(current_series: list[dict[str, Any]], series_name: str,
             {"name": str(entry.get("name") or ""), "sequence": str(entry.get("sequence") or "")}
             for entry in (current_series or [])
         ]
-    target_key = series_name.strip().lower()
+    target_key = _series_key(series_name)
     merged: list[dict[str, Any]] = []
     replaced = False
     for entry in current_series or []:
         name = str(entry.get("name") or "")
-        if name.strip().lower() == target_key:
+        if is_never_series(name):
+            continue
+        if _series_key(name) == target_key:
+            if replaced:
+                continue
             merged.append({"name": series_name, "sequence": sequence})
             replaced = True
         else:
@@ -342,6 +360,14 @@ def compute_selective_patch_fields(
             # numeric sequence for the same series -- now meaningful for real
             # (the metadata.json version of this check was dead code, since
             # that format only ever stored series as flat strings).
+            # A dirty series (Book-N wording, a genre) is as good as missing.
+            if (
+                key == "series" and isinstance(new_value, list) and new_value
+                and isinstance(old_value, list)
+                and any(isinstance(s, dict) and is_dirty_series_name(s.get("name")) for s in old_value)
+            ):
+                result[key] = new_value
+                continue
             if key == "series" and isinstance(new_value, list) and isinstance(old_value, list):
                 old_fractions = [s.get("sequence", "") for s in old_value if isinstance(s, dict) and "/" in str(s.get("sequence", ""))]
                 new_valid = [

@@ -249,6 +249,22 @@ class FillMarkerHelperTests(unittest.TestCase):
                 self.assertEqual(merged["genre"], "Fantasy")
                 self.assertIn("genre", filled)
 
+    def test_dirty_series_tag_counts_as_missing(self):
+        current = {"title": "The Voice of the Night", "artist": "Dean Koontz",
+                   "grouping": "Dean Koontz: From the Vault, Book #"}
+        metadata = {"title": "The Voice of the Night", "author": "Dean Koontz",
+                    "series": "Dean Koontz: From the Vault", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["series"], "Dean Koontz: From the Vault")
+        self.assertIn("series", filled)
+
+    def test_clean_series_tag_is_kept(self):
+        current = {"title": "Unsouled", "artist": "Will Wight", "grouping": "Cradle"}
+        metadata = {"title": "Unsouled", "author": "Will Wight", "series": "Cradle Saga", "edit_mode": "full"}
+        merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+        self.assertEqual(merged["series"], "Cradle")
+        self.assertNotIn("series", filled)
+
     def test_genre_is_preserved_when_already_present(self):
         current = {"title": "The Book", "artist": "Jane Doe", "genre": "Horror"}
         metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}
