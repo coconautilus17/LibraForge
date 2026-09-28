@@ -176,12 +176,6 @@
   background: var(--border-strong);
 }
 
-.source-strip .sep {
-  width: 1px;
-  height: 13px;
-  background: var(--border);
-}
-
 .source-strip .time {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
@@ -201,8 +195,18 @@
 #compileCard .field label {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  gap: 5px;
+  flex-wrap: wrap;
+  /* Label and hint share a text baseline and wrap under each other on narrow
+     screens, so every field's control starts at the same height. */
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+#compileCard .field-hint {
+  /* style.css gives every hint a 4px/12px vertical margin for stacked forms;
+     here it would lift the hint off its label and make this row taller. */
+  margin: 0;
 }
 
 #compileCard .field-label {
@@ -422,6 +426,12 @@
 
 #compileCard .dryrun-notice {
   margin-top: 18px;
+}
+
+#compileCard .dryrun-notice strong {
+  /* The lead-in keeps its width; only the paragraph wraps. */
+  flex: none;
+  white-space: nowrap;
 }
 
 #includedCount {
@@ -670,4 +680,62 @@
 .batch-apply-row {
   justify-content: space-between;
   margin-top: 10px;
+}
+
+/* Source strip: the chips wrap as one group (each dot is its own separator)
+   and the timer stays at the top-right however many lines the chips take. */
+.source-strip {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.source-chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  min-width: 0;
+}
+
+.source-strip .time {
+  flex: none;
+}
+
+/* Book rows: a source name never breaks in the middle ("Current ABS /
+   genres/tags"); the values after it wrap normally. */
+.book-src-line .src-name {
+  white-space: nowrap;
+}
+
+/* The explicit column has one width, so the evidence pills and the choice
+   share a left edge instead of each hugging the right at its own width. */
+.book-explicit-cell {
+  flex: 0 0 clamp(200px, 24%, 280px);
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  max-width: none;
+}
+
+.book-explicit-cell .evidence-pill {
+  white-space: normal;
+  text-align: left;
+}
+
+@media (max-width: 760px) {
+  .book-row {
+    flex-wrap: wrap;
+  }
+
+  .book-main {
+    flex: 1 1 100%;
+  }
+
+  .book-explicit-cell {
+    flex: 1 1 auto;
+  }
+
+  #compileCard .grid {
+    grid-template-columns: 1fr;
+  }
 }

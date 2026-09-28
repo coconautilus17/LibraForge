@@ -6,7 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
-  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-6" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-7" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -86,7 +86,7 @@
           <div id="otherSuggestions" class="genre-suggestions"></div>
           <p id="seriesEvidence" class="section-note"></p>
         </div>
-        <div class="field">
+        <div class="field field-wide">
           <label for="narratorInput"><span class="field-label">Narrator</span><span class="field-hint">optional, off by default</span></label>
           <input id="narratorInput" placeholder="Leave empty to keep each book's own narrator" />
           <p id="narratorSuggestions" class="context-note"></p>
@@ -95,10 +95,6 @@
             <label for="applyNarratorCheckbox" class="explicit-toggle-label">Also set this narrator on every included book</label>
           </div>
           <p class="explicit-footnote">Narrators differ per book and per edition (a full-cast edition next to a single-narrator one), so this is off by default.</p>
-        </div>
-        <div class="field">
-          <label for="sequenceRangeInput"><span class="field-label">Sequence range</span></label>
-          <input id="sequenceRangeInput" readonly />
         </div>
 
         <div class="field explicit-field field-wide">
@@ -179,6 +175,6 @@
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260929-9"></script>
+  <script src="/static/enrichment-forge.js?v=20260929-10"></script>
 </body>
 </html>

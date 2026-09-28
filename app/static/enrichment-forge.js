@@ -28,7 +28,7 @@ const BOOK_SOURCES = ["audible", "file_tags", "goodreads", "audiosilo", "openlib
 const SERIES_SOURCES = ["progressionfantasy", "haremlit"];
 
 // Source labels arrive normalized to lowercase; a few need their real casing back.
-const LABEL_CASING = { litrpg: "LitRPG", gamelit: "GameLit", haremlit: "HaremLit" };
+const LABEL_CASING = { litrpg: "LitRPG", gamelit: "GameLit", haremlit: "HaremLit", "science fiction": "Sci-Fi" };
 
 function titleCase(label) {
   const text = String(label);
@@ -173,7 +173,7 @@ function renderBookList(books) {
     const included = book.default_include !== false;
     const sources = book.sources || {};
     const sourceParts = BOOK_SOURCES.filter((key) => (sources[key] || []).length)
-      .map((key) => `<span class="src src-${key}">${escapeHtml(SOURCE_LABELS[key])}: ${escapeHtml(sources[key].map(titleCase).join(", "))}</span>`);
+      .map((key) => `<span class="src src-${key}"><span class="src-name">${escapeHtml(SOURCE_LABELS[key])}:</span> ${escapeHtml(sources[key].map(titleCase).join(", "))}</span>`);
     return `
     <div class="book-row${included ? "" : " excluded"}" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
@@ -236,7 +236,7 @@ function renderSourceStrip(sourceStatus, totalCount, elapsedSeconds) {
     .map((key) => sourceChipHtml(key, sourceStatus[key]))
     .filter(Boolean);
   $("sourceStrip").innerHTML = `
-    ${chips.join('<span class="sep"></span>')}
+    <div class="source-chips">${chips.join("")}</div>
     <span class="time">${elapsedSeconds}s</span>
   `;
 }
@@ -284,7 +284,9 @@ async function compileSeries(seriesName, seriesKey) {
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   currentBooks = data.books;
   currentSourceStatus = data.source_status || {};
-  $("compileSub").textContent = `${seriesName}, ${data.books.length} book${data.books.length === 1 ? "" : "s"}.`;
+  // The sequence range is read-only context: part of the subtitle, not a field.
+  const sequence = data.sequence_range ? `, sequence ${data.sequence_range}` : "";
+  $("compileSub").textContent = `${seriesName}, ${data.books.length} book${data.books.length === 1 ? "" : "s"}${sequence}.`;
   renderSourceStrip(currentSourceStatus, data.books.length, elapsedSeconds);
   currentEvidence = data.genre_evidence || {};
   pinnedGenres = new Set(data.pinned_genres || []);
@@ -308,7 +310,6 @@ async function compileSeries(seriesName, seriesKey) {
   const preset = (data.books || []).some((b) => (b.explicit || {}).strength === "authoritative" && b.has_audio !== false);
   $("explicitPerBookOption").hidden = !preset;
   $("explicitSelect").value = preset ? "per-book" : "";
-  $("sequenceRangeInput").value = data.sequence_range;
   renderExplicitEvidence(data.explicit_evidence_note);
   renderExplicitSummary(data.explicit_summary);
   renderBookList(data.books);
