@@ -165,3 +165,176 @@ def summarize_status(label: str, results: dict[str, dict[str, Any]], books: list
         "rate_limited": skipped > 0,
         "detail": f"{label} is failing or rate-limiting; paused, the remaining books were skipped." if skipped else "",
     }
+
+
+# ---------------------------------------------------------------------------
+# Series-level sources
+# ---------------------------------------------------------------------------
+
+PROGRESSIONFANTASY_POSTS_URL = "https://progressionfantasy.co.uk/wp-json/wp/v2/posts"
+_PF_CATEGORIES = {8: "LitRPG", 6: "Progression"}  # 8 = "LitRPG & GameLit", 6 = "Non-LitRPG" progression
+HAREMLIT_API_URL = "https://haremlit-fiction.fandom.com/api.php"
+
+
+def _norm_series(name: Any) -> str:
+    text = str(name or "").strip().lower()
+    text = re.sub(r"\s*\(series\)\s*$|\s+series\s*$|\s+\d+(\.\d+)?\s*$", "", text)
+    return re.sub(r"[^a-z0-9]", "", text)
+
+
+def _series_names_match(a: str, b: str) -> bool:
+    na, nb = _norm_series(a), _norm_series(b)
+    if not na or not nb:
+        return False
+    return na == nb or (min(len(na), len(nb)) >= 5 and (na.startswith(nb) or nb.startswith(na)))
+
+
+def _author_matches(candidate: str, authors: list[str]) -> bool:
+    cand = str(candidate or "").lower()
+    for author in authors:
+        surname = str(author or "").strip().lower().split()[-1:] or [""]
+        if surname[0] and surname[0] in cand:
+            return True
+    return False
+
+
+class ProgressionFantasyIndex:
+    """progressionfantasy.co.uk's catalogue ("Author – Series" posts, ~860),
+    downloaded once per TTL and matched locally by series name + author.
+    Category "Non-LitRPG" is broad (lists The Dresden Files), so voting only
+    trusts "Progression" when corroborated (app/genre_voting.py)."""
+
+    def __init__(self, http_get: HttpGet = http_get_json, ttl_s: float = 86400,
+                 failure_retry_s: float = 600, clock: Callable[[], float] = time.monotonic):
+        self._http_get = http_get
+        self._ttl_s = ttl_s
+        self._failure_retry_s = failure_retry_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: list[tuple[str, str, str]] | None = None  # (author, series, category)
+        self._loaded_at = 0.0
+        self._failed_at: float | None = None
+
+    def _load(self) -> bool:
+        now = self._clock()
+        if self._entries is not None and now - self._loaded_at < self._ttl_s:
+            return True
+        if self._failed_at is not None and now - self._failed_at < self._failure_retry_s:
+            return self._entries is not None
+        entries: list[tuple[str, str, str]] = []
+        try:
+            page = 1
+            while True:
+                posts = self._http_get(f"{PROGRESSIONFANTASY_POSTS_URL}?per_page=100&page={page}&_fields=title,categories", 30)
+                if not isinstance(posts, list) or not posts:
+                    break
+                for post in posts:
+                    title = html.unescape(str((post.get("title") or {}).get("rendered") or ""))
+                    author, sep, series = title.partition(" – ")
+                    category = next((_PF_CATEGORIES[c] for c in post.get("categories") or [] if c in _PF_CATEGORIES), None)
+                    if sep and category:
+                        entries.append((author.strip(), series.strip(), category))
+                page += 1
+        except urllib.error.HTTPError as exc:
+            # WordPress answers past-the-last-page with 400; anything else failed.
+            if not (exc.code == 400 and entries):
+                self._failed_at = now
+                return self._entries is not None
+        except Exception:
+            self._failed_at = now
+            return self._entries is not None
+        self._entries, self._loaded_at, self._failed_at = entries, now, None
+        return True
+
+    def lookup(self, series_name: str, authors: list[str]) -> dict[str, Any]:
+        with self._lock:
+            if not self._load():
+                return {"status": "failed", "category": None, "title": None}
+            entries = list(self._entries or [])
+        for author, series, category in entries:
+            if not _series_names_match(series, series_name):
+                continue
+            # Web serials are often listed under a pen name ("Shirtaloon" for
+            # Travis Deverell), so a distinctive exact name stands on its own;
+            # short names ("Cradle") still need the author.
+            exact = _norm_series(series) == _norm_series(series_name) and len(_norm_series(series_name)) >= 12
+            if exact or _author_matches(author, authors):
+                return {"status": "found", "category": category, "title": f"{author} – {series}"}
+        return {"status": "not_found", "category": None, "title": None}
+
+
+PF_INDEX = ProgressionFantasyIndex()
+
+_TEMPLATE_RE = re.compile(r"\{\{(Book_Series_Template|Book_Template)\|(.*?)\}\}", re.S)
+_WIKILINK_RE = re.compile(r"\[\[(?::?Category:)?([^|\]]+)(?:\|[^\]]*)?\]\]")
+
+
+def _wiki(params: dict[str, str], http_get: HttpGet) -> dict[str, Any]:
+    data = http_get(HAREMLIT_API_URL + "?" + urllib.parse.urlencode({**params, "format": "json"}), 20)
+    return data if isinstance(data, dict) else {}
+
+
+def _wikitext(page: str, http_get: HttpGet) -> str:
+    return str(((_wiki({"action": "parse", "page": page, "prop": "wikitext"}, http_get).get("parse") or {})
+                .get("wikitext") or {}).get("*") or "")
+
+
+def _template_fields(text: str) -> dict[str, str] | None:
+    match = _TEMPLATE_RE.search(text)
+    if not match:
+        return None
+    fields = {"_type": match.group(1)}
+    for part in re.split(r"\|(?![^\[]*\]\])", match.group(2)):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            fields[key.strip()] = _WIKILINK_RE.sub(r"\1", value).strip()
+    return fields
+
+
+def haremlit_lookup(series_name: str, authors: list[str], *, http_get: HttpGet = http_get_json) -> dict[str, Any]:
+    """HaremLit Fiction wiki: the series' own page (author-checked), else the
+    author's page listing the series. The wiki only documents harem fiction,
+    so either is harem evidence; the series page also carries `explicit_sex`."""
+    empty = {"status": "not_found", "match": None, "explicit": None, "genres": [], "via": None}
+    try:
+        hits = ((_wiki({"action": "query", "list": "search", "srsearch": series_name, "srlimit": "8"}, http_get)
+                 .get("query") or {}).get("search") or [])
+        hits = sorted(hits, key=lambda h: not str(h.get("title", "")).endswith("(Series)"))
+        for hit in hits:
+            title = str(hit.get("title") or "")
+            if not _series_names_match(title, series_name):
+                continue
+            fields = _template_fields(_wikitext(title, http_get))
+            if not fields or not _author_matches(fields.get("author", ""), authors):
+                continue
+            genres = [normalize_label(g) for g in re.split(r"[,;]", fields.get("genre(s)", "")) if g.strip()]
+            return {"status": "found", "match": title, "explicit": fields.get("explicit_sex") or fields.get("explicit"),
+                    "genres": [g for g in genres if g in LABEL_MAP], "via": "series"}
+        for author in authors:
+            if not str(author or "").strip():
+                continue
+            for link in _WIKILINK_RE.findall(_wikitext(author, http_get)):
+                if _series_names_match(link, series_name):
+                    return {"status": "found", "match": f"{author}: {link.strip()}", "explicit": None, "genres": [], "via": "author"}
+    except Exception:
+        return {**empty, "status": "failed"}
+    return empty
+
+
+def series_level_labels(pf: dict[str, Any], hl: dict[str, Any]) -> tuple[list[str], list[str], bool]:
+    """(labels counted as full series support, evidence lines, pf_progression)."""
+    labels: list[str] = []
+    evidence: list[str] = []
+    pf_progression = False
+    if (pf or {}).get("status") == "found":
+        if pf.get("category") == "LitRPG":
+            labels.append("litrpg")
+            evidence.append(f"progressionfantasy.co.uk: LitRPG & GameLit ({pf.get('title')})")
+        elif pf.get("category") == "Progression":
+            pf_progression = True
+            evidence.append(f"progressionfantasy.co.uk: progression, needs corroboration ({pf.get('title')})")
+    if (hl or {}).get("status") == "found":
+        labels.append("haremlit")
+        labels.extend(g for g in hl.get("genres") or [] if g not in labels)
+        evidence.append(f"HaremLit wiki: {hl.get('match')}")
+    return labels, evidence, pf_progression
