@@ -220,5 +220,79 @@ class OtherCreditTagsTests(unittest.TestCase):
         self.assertEqual(FIXER.score_product_for_metadata(clues, self.TANYA_5, 643.2), 0.0)
 
 
+class TagProbeTests(unittest.TestCase):
+    """Mythos (Unabridged).m4b has artist/album_artist "Stephen Fry", but a
+    sidecar snapshot from an earlier run held format_tags {} and was trusted
+    on every later run (no title, no author). Opus/OGG keep their tags on
+    the audio stream, which the probe never read (Freedman's "Command")."""
+
+    def _ffprobe(self, payload):
+        import json
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    def test_stream_tags_fill_what_the_container_lacks(self):
+        payload = {"format": {"duration": "60", "tags": {"encoder": "fre:ac"}},
+                   "streams": [{"codec_type": "audio", "tags": {"ARTIST": "Sir Lawrence Freedman",
+                                                                "TITLE": "Command"}}]}
+        with patch.object(FIXER.subprocess, "run", return_value=self._ffprobe(payload)):
+            tags, minutes = FIXER.probe_file(Path("/x/Command.opus"))
+        self.assertEqual(tags["artist"], "Sir Lawrence Freedman")
+        self.assertEqual(tags["encoder"], "fre:ac")
+        self.assertEqual(minutes, 1.0)
+
+    def test_container_tags_win_over_stream_tags(self):
+        payload = {"format": {"duration": "60", "tags": {"title": "Mythos"}},
+                   "streams": [{"codec_type": "audio", "tags": {"title": "Track 1"}}]}
+        with patch.object(FIXER.subprocess, "run", return_value=self._ffprobe(payload)):
+            tags, _ = FIXER.probe_file(Path("/x/Mythos.m4b"))
+        self.assertEqual(tags["title"], "Mythos")
+
+    def _book_with_sidecar(self, tmp, backup):
+        import json
+        book = Path(tmp) / "Mythos (Unabridged).m4b"
+        book.write_bytes(b"")
+        (Path(tmp) / "other.m4b").write_bytes(b"")  # not alone: per-file sidecar
+        sidecar = book.with_name(book.name + FIXER.LIBRAFORGE_SUFFIX)
+        sidecar.write_text(json.dumps({"schema_version": 2, "backup": backup}))
+        return book, sidecar
+
+    def test_empty_cached_snapshot_is_not_trusted(self):
+        import tempfile
+        live = ({"title": "Mythos (Unabridged)", "artist": "Stephen Fry"}, 925.7)
+        with tempfile.TemporaryDirectory() as tmp:
+            book, _ = self._book_with_sidecar(tmp, {"duration_minutes": 925.7, "format_tags": {}})
+            with patch.object(FIXER, "probe_file", return_value=live) as probe:
+                tags, minutes, is_live = FIXER.read_tags_and_duration(book)
+        probe.assert_called_once()
+        self.assertEqual(tags["artist"], "Stephen Fry")
+        self.assertTrue(is_live)
+
+    def test_empty_original_backup_is_repaired_when_never_applied(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            book, sidecar = self._book_with_sidecar(tmp, {"duration_minutes": 925.7, "format_tags": {}})
+            FIXER.write_original_metadata_backup(book, tags={"artist": "Stephen Fry"}, duration_minutes=925.7)
+            backup = json.loads(sidecar.read_text())["backup"]
+        self.assertEqual(backup["format_tags"], {"artist": "Stephen Fry"})
+
+    def test_empty_backup_is_repaired_from_a_fresh_probe(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            book, sidecar = self._book_with_sidecar(tmp, {"duration_minutes": 925.7, "format_tags": {}})
+            with patch.object(FIXER, "probe_file", return_value=({"artist": "Stephen Fry"}, 925.7)):
+                FIXER.write_original_metadata_backup(book)
+            backup = json.loads(sidecar.read_text())["backup"]
+        self.assertEqual(backup["format_tags"], {"artist": "Stephen Fry"})
+
+    def test_backup_of_an_applied_book_is_never_replaced(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            book, sidecar = self._book_with_sidecar(
+                tmp, {"duration_minutes": 925.7, "format_tags": {}, "applied_tags": {"title": "Mythos"}})
+            FIXER.write_original_metadata_backup(book, tags={"artist": "Stephen Fry"}, duration_minutes=925.7)
+            backup = json.loads(sidecar.read_text())["backup"]
+        self.assertEqual(backup["format_tags"], {})
+
+
 if __name__ == "__main__":
     unittest.main()

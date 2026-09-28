@@ -738,7 +738,10 @@ def write_original_metadata_backup(
     """
     lf_path, payload = _load_libraforge_raw(source, alone=alone)
 
-    if "backup" in payload:
+    existing = payload.get("backup")
+    # An empty original-tags backup is a failed probe; it is replaced while
+    # the file still holds its originals (nothing ever applied).
+    if existing is not None and (existing.get("format_tags") or existing.get("applied_tags")):
         return lf_path
 
     if tags is None or duration_minutes is None:
@@ -747,6 +750,9 @@ def write_original_metadata_backup(
             tags = probed_tags
         if duration_minutes is None:
             duration_minutes = probed_duration
+
+    if existing is not None and not tags:
+        return lf_path
 
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
@@ -2571,10 +2577,11 @@ def refresh_multipart_sidecar_audio_profile(
     return lf_path
 
 def probe_file(file_path: Path) -> tuple[dict, float | None]:
-    """Single ffprobe -show_format call returning (tags_dict, duration_minutes).
+    """Single ffprobe call returning (tags_dict, duration_minutes).
 
-    -show_format already includes both the embedded tag block and the
-    container duration, so one subprocess call covers both needs.
+    -show_format gives the container's tag block and duration; the first
+    audio stream's tags fill in what the container lacks (Opus/OGG keep
+    their tags there).
     """
     cmd = [
         "ffprobe",
@@ -2583,6 +2590,9 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
         "-print_format",
         "json",
         "-show_format",
+        "-show_streams",
+        "-select_streams",
+        "a:0",
         str(file_path),
     ]
 
@@ -2610,11 +2620,16 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
         return {}, None
 
     fmt = data.get("format", {}) or {}
-    tags = {
-        str(key).lower(): str(value).strip()
-        for key, value in (fmt.get("tags", {}) or {}).items()
-        if str(value).strip()
-    }
+    # Opus/OGG keep their tags on the audio stream, not the container; those
+    # fill whatever the container lacks.
+    stream_tags = ((data.get("streams") or [{}])[0] or {}).get("tags", {}) or {}
+    tags = {}
+    for source in (stream_tags, fmt.get("tags", {}) or {}):
+        tags.update({
+            str(key).lower(): str(value).strip()
+            for key, value in source.items()
+            if str(value).strip()
+        })
 
     try:
         seconds = float(fmt.get("duration") or 0)
@@ -2760,7 +2775,9 @@ def read_tags_and_duration(
                             if book
                             else entry.get("format_tags")
                         )
-                    if isinstance(tags, dict):
+                    # An empty snapshot is a failed probe, not a file
+                    # without tags: read the file instead.
+                    if isinstance(tags, dict) and tags:
                         return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
@@ -2775,7 +2792,7 @@ def read_tags_and_duration(
                 tags = backup.get("format_tags")
             else:
                 tags = backup.get("applied_tags") or backup.get("format_tags")
-            if isinstance(tags, dict):
+            if isinstance(tags, dict) and tags:
                 return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
