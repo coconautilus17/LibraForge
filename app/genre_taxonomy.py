@@ -17,7 +17,7 @@ import math
 import re
 from typing import Any
 
-MAIN_ORDER = ["Fantasy","Science Fiction","LitRPG","Progression Fantasy","Cultivation","Harem","Thriller","Mystery","Horror","Romance","Humor",
+MAIN_ORDER = ["Fantasy","Sci-Fi","LitRPG","Progression Fantasy","Cultivation","Harem","Thriller","Mystery","Horror","Romance","Humor",
             "Historical Fiction","Young Adult","Children's","Classics","Literary Fiction","Non-Fiction","Audio Drama"]
 # source label (lowercase) -> (main genres, subgenres)
 LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
@@ -28,12 +28,12 @@ LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
  "dark fantasy":(["Fantasy"],["Dark Fantasy"]), "gaslamp":(["Fantasy"],["Gaslamp Fantasy"]), "fairy tales":(["Fantasy"],["Fairy Tales"]),
  "myths & legends":(["Fantasy"],["Mythology"]), "arthurian":(["Fantasy"],["Arthurian"]), "coming of age":([],["Coming of Age"]),
  "portal fantasy":(["Fantasy"],["Portal Fantasy"]), "isekai":(["Fantasy"],["Portal Fantasy"]), "alt-history":([],["Alternate History"]),
- "science fiction":(["Science Fiction"],[]), "space opera":(["Science Fiction"],["Space Opera"]), "hard science fiction":(["Science Fiction"],["Hard Science Fiction"]),
- "military science fiction":(["Science Fiction"],["Military Science Fiction"]), "cyberpunk":(["Science Fiction"],["Cyberpunk"]),
- "post-apocalyptic":(["Science Fiction"],["Post-Apocalyptic"]), "apocalyptic":(["Science Fiction"],["Post-Apocalyptic"]), "dystopian":(["Science Fiction"],["Dystopian"]),
- "first contact":(["Science Fiction"],["First Contact"]), "alien invasion":(["Science Fiction"],["Alien Invasion"]), "space exploration":(["Science Fiction"],["Space Exploration"]),
- "galactic empire":(["Science Fiction"],["Space Opera"]), "time travel":(["Science Fiction"],["Time Travel"]), "alternate history":([],["Alternate History"]),
- "steampunk":([],["Steampunk"]), "superhero":([],["Superhero"]), "superheroes":([],["Superhero"]), "genetic engineering":(["Science Fiction"],[]),
+ "science fiction":(["Sci-Fi"],[]), "space opera":(["Sci-Fi"],["Space Opera"]), "hard science fiction":(["Sci-Fi"],["Hard Sci-Fi"]),
+ "military science fiction":(["Sci-Fi"],["Military Sci-Fi"]), "cyberpunk":(["Sci-Fi"],["Cyberpunk"]),
+ "post-apocalyptic":(["Sci-Fi"],["Post-Apocalyptic"]), "apocalyptic":(["Sci-Fi"],["Post-Apocalyptic"]), "dystopian":(["Sci-Fi"],["Dystopian"]),
+ "first contact":(["Sci-Fi"],["First Contact"]), "alien invasion":(["Sci-Fi"],["Alien Invasion"]), "space exploration":(["Sci-Fi"],["Space Exploration"]),
+ "galactic empire":(["Sci-Fi"],["Space Opera"]), "time travel":(["Sci-Fi"],["Time Travel"]), "alternate history":([],["Alternate History"]),
+ "steampunk":([],["Steampunk"]), "superhero":([],["Superhero"]), "superheroes":([],["Superhero"]), "genetic engineering":(["Sci-Fi"],[]),
  "litrpg":(["LitRPG"],[]), "gamelit":(["LitRPG"],["GameLit"]), "dungeon core":(["LitRPG"],["Dungeon Core"]), "dungeon":([],["Dungeon"]),
  "progression fantasy":(["Progression Fantasy"],[]), "cultivation":(["Cultivation"],[]), "xianxia":(["Cultivation"],[]), "wuxia":(["Cultivation"],[]),
  "haremlit":(["Harem"],[]), "harem":(["Harem"],[]),
@@ -70,7 +70,7 @@ LABEL_MAP.update({
  "mysteries":(["Mystery"],[]), "amateur sleuths":(["Mystery"],["Amateur Sleuth"]), "mysteries & detectives":(["Mystery"],[]), "noir":(["Mystery"],["Noir"]),
  "magical realism":(["Literary Fiction"],["Magical Realism"]), "metaphysical & visionary":(["Literary Fiction"],[]), "women's fiction":(["Literary Fiction"],[]),
  "sagas":([],["Family Saga"]), "scary stories":(["Horror"],[]), "gothic":(["Horror"],["Gothic"]),
- "apocalyptic & post-apocalyptic":(["Science Fiction"],["Post-Apocalyptic"]), "aliens":(["Science Fiction"],["Aliens"]),
+ "apocalyptic & post-apocalyptic":(["Sci-Fi"],["Post-Apocalyptic"]), "aliens":(["Sci-Fi"],["Aliens"]),
  "greek & roman":([],["Historical?"]), "ancient":([],["Historical?"]), "medieval":([],["Historical?"]), "europe":([],["Historical?"]),
  "world war ii & holocaust":([],["Historical?"]), "military & wars":([],["Historical?"]), "history & culture":([],["Historical?"]),
  "westerns":([],["Western"]), "christian fiction":([],["Christian Fiction"]), "sea adventures":([],["Action & Adventure"]),
@@ -98,7 +98,8 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "police procedural":"police procedurals","psychological thriller":"psychological","hard boiled":"hard-boiled","arts entertainment":"art","social sciences":"sociology",
  "fiction, fantasy, general":"fantasy","fiction, science fiction, general":"science fiction","fiction, mystery & detective, general":"mystery","horror tales":"horror",
  "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery",
- "non-fiction":"non fiction","sci-fi":"science fiction","scifi":"science fiction","sci fi":"science fiction","biography":"memoir","children's":"children's audiobooks"}
+ "non-fiction":"non fiction","sci-fi":"science fiction","scifi":"science fiction","sci fi":"science fiction",
+ "military sci-fi":"military science fiction","hard sci-fi":"hard science fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
 _COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
@@ -110,13 +111,36 @@ def _output_names() -> dict[str, str]:
     return {n.lower(): n for n in names if not n.endswith("?")}
 
 
+def _canonical(text: str) -> str | None:
+    """The one controlled name for `text` when it clearly names one genre
+    ("Science Fiction", "SciFi" -> Sci-Fi; "Military Science Fiction" ->
+    Military Sci-Fi), else None."""
+    label = normalize_label(text)
+    names = _output_names()
+    if label in names:
+        return names[label]
+    if label in LABEL_MAP:
+        mains, subs = LABEL_MAP[label]
+        targets = [n for n in (subs or mains) if not n.endswith("?")]
+        # Only a spelling of the same genre is renamed (Science Fiction ->
+        # Sci-Fi); a different genre that counts toward another one (Radio
+        # Drama -> Audio Drama, Suspense -> Thriller) keeps its own name.
+        if len(targets) == 1 and normalize_label(targets[0]) == label:
+            return targets[0]
+    return None
+
+
+# Format words, not genres: dropped when a merged name is split.
+FORMAT_WORDS = {"audiobook", "audiobooks", "audio book", "audio books"}
+
+
 def _is_known_genre(text: str) -> bool:
     known = set(LABEL_MAP) | {n.lower() for m, sub in LABEL_MAP.values() for n in m + sub}
     label = normalize_label(text)
     return label in known or (label.endswith("s") and label[:-1] in known)
 
 
-def split_compound_genres(genres: Any) -> list[str]:
+def split_compound_genres(genres: Any, canonical: bool = True) -> list[str]:
     """Split store-style merged genres for a library: "Action & Adventure" ->
     Action, Adventure; "Mystery, Thriller & Suspense" -> Mystery, Thriller,
     Suspense. A name is split only when one of its parts is a genre in its own
@@ -128,21 +152,24 @@ def split_compound_genres(genres: Any) -> list[str]:
         text = str(genre or "").strip()
         parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(text) if p.strip()]
         if len(parts) > 1:
-            joined = _output_names().get(" ".join(parts).lower())
-            if joined:
+            joined = _canonical(" ".join(parts)) if canonical else None
+            if joined and not _COMPOUND_SPLIT_RE.search(joined):
                 # A mangled single genre ("Science & Fiction"), not a merge.
                 parts = [joined]
             elif not any(_is_known_genre(p) or normalize_label(p) in NON_GENRES for p in parts):
                 parts = [text]  # a genre in its own right (Sword & Sorcery)
             else:
-                parts = [p for p in parts if normalize_label(p) not in NON_GENRES]
-        names = _output_names()
+                parts = [p for p in parts if normalize_label(p) not in FORMAT_WORDS]
         for part in parts:
             part = part.strip()
-            # One spelling per known genre ("Sci-Fi" -> Science Fiction), so ABS
+            # One spelling per known genre (Science Fiction -> Sci-Fi), so ABS
             # doesn't end up with two genres for one; unknown names keep the
             # user's wording.
-            part = names.get(normalize_label(part), part)
+            if canonical:
+                named = _canonical(part)
+                # Never turn a single part back into a merged name.
+                if named and (not _COMPOUND_SPLIT_RE.search(named) or normalize_label(named) == normalize_label(part)):
+                    part = named
             if part and part.lower() not in seen:
                 seen.add(part.lower())
                 out.append(part)
@@ -203,7 +230,7 @@ NON_GENRES = {"audiobook", "audiobooks", "audio book", "audio books", "fiction",
                "genre fiction", "science fiction & fantasy", "miscellaneous"}
 
 
-_SF_SUBGENRES = ("Space Opera", "Hard Science Fiction", "Military Science Fiction", "Post-Apocalyptic", "Dystopian",
+_SF_SUBGENRES = ("Space Opera", "Hard Sci-Fi", "Military Sci-Fi", "Post-Apocalyptic", "Dystopian",
                  "First Contact", "Space Exploration", "Alien Invasion", "Time Travel")
 
 
@@ -236,22 +263,22 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
 
     mains = [m for m in MAIN_ORDER if main[m] >= threshold]
     # Fantasy vs Science Fiction: keep both only when neither is under half the other.
-    if "Fantasy" in mains and "Science Fiction" in mains:
-        fantasy, scifi = main["Fantasy"], main["Science Fiction"]
+    if "Fantasy" in mains and "Sci-Fi" in mains:
+        fantasy, scifi = main["Fantasy"], main["Sci-Fi"]
         if min(fantasy, scifi) < 0.5 * max(fantasy, scifi):
-            mains.remove("Fantasy" if fantasy < scifi else "Science Fiction")
+            mains.remove("Fantasy" if fantasy < scifi else "Sci-Fi")
     if "Young Adult" in mains and "Children's" in mains:
         mains.remove("Children's" if main["Children's"] < main["Young Adult"] else "Young Adult")
     # Audible files LitRPG under Science Fiction > Cyberpunk; without any real
     # SF subgenre that is a shelving artifact, not science fiction.
     if "LitRPG" in mains:
-        if "Science Fiction" in mains and not sum(sub[s] for s in _SF_SUBGENRES):
-            mains.remove("Science Fiction")
-        if "Science Fiction" not in mains:
+        if "Sci-Fi" in mains and not sum(sub[s] for s in _SF_SUBGENRES):
+            mains.remove("Sci-Fi")
+        if "Sci-Fi" not in mains:
             sub["Cyberpunk"] = 0
 
     # Ambiguous subgenres ("Epic" alone, "Historical") resolve against the mains.
-    if sub.get("Epic Fantasy?", 0) >= threshold and "Fantasy" not in mains and "Science Fiction" not in mains:
+    if sub.get("Epic Fantasy?", 0) >= threshold and "Fantasy" not in mains and "Sci-Fi" not in mains:
         mains.insert(0, "Fantasy")
     if sub.get("Epic Fantasy?"):
         if "Fantasy" in mains:
@@ -263,12 +290,12 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
             sub["Historical Fantasy"] += count
         elif "Non-Fiction" in mains:
             sub["History"] += count
-        elif count >= threshold and not ({"Science Fiction", "Thriller", "Mystery"} & set(mains)):
+        elif count >= threshold and not ({"Sci-Fi", "Thriller", "Mystery"} & set(mains)):
             mains.append("Historical Fiction")
     if "Military" in sub:
         count = sub.pop("Military")
-        if "Science Fiction" in mains:
-            sub["Military Science Fiction"] += count
+        if "Sci-Fi" in mains:
+            sub["Military Sci-Fi"] += count
         elif "Thriller" in mains:
             sub["Military Thriller"] += count
     if sub.get("Paranormal") and not mains:
@@ -280,7 +307,7 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
 
 
 LABEL_MAP.update({
-    label: (mains, split_compound_genres(subs))
+    label: (mains, split_compound_genres(subs, canonical=False))
     for label, (mains, subs) in LABEL_MAP.items()
-    if split_compound_genres(subs) != subs
+    if split_compound_genres(subs, canonical=False) != subs
 })

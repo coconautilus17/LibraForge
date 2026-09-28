@@ -64,7 +64,7 @@ class CompoundGenreSplitTests(unittest.TestCase):
 
     def test_split_and_dedupe(self):
         self.assertEqual(t.split_compound_genres(["Action & Adventure", "Science Fiction and Fantasy", "Adventure"]),
-                         ["Action", "Adventure", "Science Fiction", "Fantasy"])
+                         ["Action", "Adventure", "Sci-Fi", "Fantasy"])
         self.assertEqual(t.split_compound_genres(["Mystery, Thriller & Suspense"]), ["Mystery", "Thriller", "Suspense"])
 
     def test_true_compound_names_stay_whole(self):
@@ -83,11 +83,12 @@ class CompoundGenreSplitTests(unittest.TestCase):
 
 class ScienceFictionVariantTests(unittest.TestCase):
     def test_a_mangled_single_genre_is_joined_not_split(self):
-        self.assertEqual(t.split_compound_genres(["Science & Fiction"]), ["Science Fiction"])
-        self.assertEqual(t.split_compound_genres(["Science and Fiction"]), ["Science Fiction"])
+        self.assertEqual(t.split_compound_genres(["Science & Fiction"]), ["Sci-Fi"])
+        self.assertEqual(t.split_compound_genres(["Science and Fiction"]), ["Sci-Fi"])
 
     def test_non_genre_parts_are_dropped_after_a_split(self):
-        self.assertEqual(t.split_compound_genres(["Literature & Fiction", "Thriller & Audiobook"]), ["Literature", "Thriller"])
+        # Literature and Fiction are both genres; only format words go.
+        self.assertEqual(t.split_compound_genres(["Literature & Fiction", "Thriller & Audiobook"]), ["Literature", "Fiction", "Thriller"])
 
     def test_sci_fi_spellings(self):
         for spelling in ("Sci-Fi", "SciFi", "Scifi", "Sci Fi", "Science-Fiction"):
@@ -101,4 +102,16 @@ class ScienceFictionVariantTests(unittest.TestCase):
 class CanonicalSpellingTests(unittest.TestCase):
     def test_known_genres_use_one_spelling_unknown_keep_the_users(self):
         self.assertEqual(t.split_compound_genres(["Sci-Fi & Fantasy", "scifi", "Small Town"]),
-                         ["Science Fiction", "Fantasy", "Small Town"])
+                         ["Sci-Fi", "Fantasy", "Small Town"])
+
+
+class SciFiNameTests(unittest.TestCase):
+    """Sci-Fi is the one name for science fiction, everywhere it is produced."""
+
+    def test_every_spelling_is_written_as_sci_fi(self):
+        self.assertEqual(t.split_compound_genres(["Science Fiction", "science-fiction", "SciFi"]), ["Sci-Fi"])
+
+    def test_votes_come_out_as_sci_fi(self):
+        self.assertEqual(t.classify([t.labels_from_genres(["Science Fiction"])])[0], ["Sci-Fi"])
+        self.assertEqual(t.LABEL_MAP["military science fiction"], (["Sci-Fi"], ["Military Sci-Fi"]))
+        self.assertNotIn("Science Fiction", t.MAIN_ORDER)

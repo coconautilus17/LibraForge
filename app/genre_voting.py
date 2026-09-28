@@ -23,7 +23,7 @@ PINNED_SOURCE = "yours"
 _MAINSTREAM = ("Mystery", "Thriller", "Horror", "Romance")
 _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology", "Religion", "Society",
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
-_REAL_SF_SUBS = ("Space Opera", "Military Science Fiction", "Post-Apocalyptic", "Hard Science Fiction")
+_REAL_SF_SUBS = ("Space Opera", "Military Sci-Fi", "Post-Apocalyptic", "Hard Sci-Fi")
 # Sources are ranked, not counted equally. Editorial sources (the publisher's
 # own catalogue and copy, the file's embedded genre tag, AudioSilo's curated
 # mapping) carry weight 2; crowd sources (Goodreads shelving, Open Library
@@ -134,14 +134,14 @@ def vote_unit(
             mains = ["Non-Fiction"]
         else:
             mains.remove("Non-Fiction")
-    if "Fantasy" in mains and "Science Fiction" in mains:
-        fantasy, scifi = main_votes["Fantasy"], main_votes["Science Fiction"]
+    if "Fantasy" in mains and "Sci-Fi" in mains:
+        fantasy, scifi = main_votes["Fantasy"], main_votes["Sci-Fi"]
         if min(fantasy, scifi) < 0.5 * max(fantasy, scifi):
-            mains.remove("Fantasy" if fantasy < scifi else "Science Fiction")
-    if ("LitRPG" in mains and "Science Fiction" in mains
-            and sub_votes.get("Cyberpunk", 0) >= main_votes["Science Fiction"] * 0.8
+            mains.remove("Fantasy" if fantasy < scifi else "Sci-Fi")
+    if ("LitRPG" in mains and "Sci-Fi" in mains
+            and sub_votes.get("Cyberpunk", 0) >= main_votes["Sci-Fi"] * 0.8
             and not any(sub_votes.get(s) for s in _REAL_SF_SUBS)):
-        mains.remove("Science Fiction")
+        mains.remove("Sci-Fi")
         sub_votes.pop("Cyberpunk", None)
     if "Classics" in mains and main_votes["Classics"] < max(1, math.ceil(0.5 * n)):
         mains.remove("Classics")
