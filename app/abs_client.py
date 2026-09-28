@@ -165,6 +165,11 @@ def _is_real_asin(asin: str) -> bool:
     confirmed live: 14 real-library items shared "NOREALASIN", 6 shared
     "abs-agg-graphicaudio-0". The strict B0-prefixed shape already excludes
     every known placeholder on its own; no separate sentinel list needed.
+
+    TODO(#307): too narrow. Audible's older titles use ISBN-10-shaped ASINs
+    ([0-9]{9}[0-9X], e.g. 1004027907 Dune: House Atreides; 7% of a real
+    library), which this rejects, so those books are never indexed by ASIN.
+    That shape cannot collide with any placeholder, so it can be accepted too.
     """
     return bool(_REAL_ASIN_RE.fullmatch(asin))
 
