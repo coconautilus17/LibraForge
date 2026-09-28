@@ -96,16 +96,23 @@ whole series at once, instead of fixing each book one at a time.
   doesn't fit the book is ignored rather than trusted. Each source has its own request
   pacing and pauses on its own if it starts failing; the source strip shows found,
   failed and rate-limited counts for every source.
-- **Genres are voted, not piled up:** every source's labels are mapped onto one
-  controlled list of genres. A book's main genre needs two sources agreeing (LitRPG,
-  cultivation, progression fantasy and harem need only one, unless that one is Goodreads'
-  crowd shelving or the book's current genres alone); a series keeps every genre supported
-  by at least a quarter of its books, with no fixed limit. LitRPG and cultivation are kinds
-  of progression fantasy, so when either is a main genre, Progression Fantasy is kept as a
-  subgenre (a Progression Fantasy collection still gathers them).
-  The series-level lists count as support for the whole series, but
-  progressionfantasy.co.uk's broad progression list only counts when something else
-  agrees or nothing contradicts it.
+- **Genres are voted, not piled up, and sources are ranked:** every source's labels are
+  mapped onto one controlled list of genres. Editorial sources (Audible's categories and
+  summary, the genre tag embedded in the book's audio file, AudioSilo) count double;
+  crowd sources (Goodreads shelves, Open Library subjects, genres already in
+  Audiobookshelf from earlier tools) count single; a book's main genre needs one
+  editorial source or two crowd sources agreeing. A series keeps every genre supported by
+  at least a quarter of its books, with no fixed limit. The series-level lists count as
+  support for the whole series, but progressionfantasy.co.uk's broad progression list
+  only counts when something else agrees or nothing contradicts it. LitRPG and
+  cultivation are kinds of progression fantasy, so when either is a main genre,
+  Progression Fantasy is kept as a subgenre.
+- **Your own genres are pinned:** genres you set by hand in Audiobookshelf (real genres
+  that differ from the audio file's own tag and weren't written by Metadata Forge or
+  Enrichment Forge) are always pre-filled, marked "yours", and never outvoted.
+- **Library genres, not store categories:** merged store names are split ("Action &
+  Adventure" becomes Action and Adventure) wherever a genre is shown or written; a name
+  is kept whole only when neither part is a genre on its own (Sword & Sorcery).
 - **Compiled, editable result:** main genres (the collection-worthy ones) and subgenres
   as removable chips. Hover a chip to see which sources support it and on how many
   books; each book row shows what every source said about it and its own vote. Other

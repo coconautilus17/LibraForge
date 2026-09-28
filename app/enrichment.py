@@ -14,7 +14,14 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from app.genre_taxonomy import MAIN_ORDER, labels_from_genres, labels_from_text
+from app.genre_taxonomy import (
+    MAIN_ORDER,
+    NON_GENRES,
+    labels_from_genres,
+    labels_from_text,
+    normalize_label,
+    split_compound_genres,
+)
 from app.genre_voting import book_vote, vote_unit
 from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
 
@@ -497,6 +504,44 @@ def _split_abs_genre(value: Any) -> list[str]:
     return [part.strip() for part in str(value or "").split(",")]
 
 
+def file_tag_genres(expanded_item: dict[str, Any] | None) -> list[str]:
+    """The genre tag embedded in the book's first audio file, as ABS read it
+    (split on '/' and ';', the way ABS splits genre tags)."""
+    for audio in ((expanded_item or {}).get("media") or {}).get("audioFiles") or []:
+        tag = str(((audio or {}).get("metaTags") or {}).get("tagGenre") or "").strip()
+        if tag:
+            return [part.strip() for part in re.split(r"[/;]", tag) if part.strip()]
+    return []
+
+
+def _genre_key_set(genres: list[str]) -> set[str]:
+    """Comparable form of a genre list: non-genres and store umbrellas are
+    dropped before splitting, the same way on both sides of a comparison."""
+    real = [g for g in genres if normalize_label(g) not in NON_GENRES]
+    return {normalize_label(g) for g in split_compound_genres(real)}
+
+
+def detect_manual_genres(
+    abs_genres: list[str],
+    file_genres: list[str],
+    libraforge_wrote_genre: bool,
+    enrichment_written: list[str] | None,
+) -> list[str]:
+    """Genres the user set by hand in Audiobookshelf, to be pinned. ABS keeps
+    no per-field history, so: real genres (not "Audiobook" or a store
+    umbrella) that differ from the file's own genre tag and weren't written by
+    Metadata Forge (sidecar) or Enrichment Forge (its write log). Merged names
+    are split."""
+    real = [g for g in abs_genres or [] if normalize_label(g) not in NON_GENRES and str(g).strip()]
+    if not real or libraforge_wrote_genre:
+        return []
+    if enrichment_written is not None and _genre_key_set(real) == _genre_key_set(enrichment_written):
+        return []
+    if file_genres and _genre_key_set(real) == _genre_key_set(file_genres):
+        return []
+    return split_compound_genres(real)
+
+
 def build_book_voters(
     book: dict[str, Any],
     product: dict | None,
@@ -517,7 +562,11 @@ def build_book_voters(
     for name, result in (("audiosilo", audiosilo_result), ("openlibrary", openlibrary_result)):
         if (result or {}).get("status") == "found":
             voters[name] = list(result.get("labels") or [])
-    voters["abs_existing"] = labels_from_genres(list(book.get("existing_genres") or []) + list(book.get("existing_tags") or []))
+    voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
+    # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
+    pinned = {g.lower() for g in book.get("manual_genres") or []}
+    existing = [g for g in split_compound_genres(book.get("existing_genres") or []) if g.lower() not in pinned]
+    voters["abs_existing"] = labels_from_genres(existing + list(book.get("existing_tags") or []))
     text = " ".join(str(x or "") for x in (
         (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),
         (abs_product or {}).get("description"), book.get("description")))
@@ -598,13 +647,19 @@ def compile_series_enrichment(
             "default_include": has_audio,
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
+            "file_genres": book.get("file_genres") or [],
+            "manual_genres": book.get("manual_genres") or [],
             "sources": voters,
             "book_main": sorted(vote["main"], key=MAIN_ORDER.index),
         })
 
     series = series_sources or {}
+    pinned: dict[str, int] = {}
+    for book in books:
+        for genre in book.get("manual_genres") or []:
+            pinned[genre] = pinned.get(genre, 0) + 1
     unit = vote_unit(book_votes, series_labels=series.get("labels") or [], series_evidence=series.get("evidence") or [],
-                     pf_progression=bool(series.get("pf_progression")), standalone=standalone)
+                     pf_progression=bool(series.get("pf_progression")), standalone=standalone, pinned=pinned)
     voted = unit["main"] + unit["sub"]
 
     return {
@@ -615,6 +670,7 @@ def compile_series_enrichment(
         "genre": voted or unit["candidates"] or _dedupe_preserve_order(all_genres),
         # Taxonomy genres some source supported that didn't make the cut.
         "genre_suggestions": unit["candidates"],
+        "pinned_genres": unit["pinned"],
         # Every genre any source suggested, cleaned: "other suggestions" in the UI.
         "genre_union": _dedupe_preserve_order(all_genres),
         "main_genres": unit["main"],

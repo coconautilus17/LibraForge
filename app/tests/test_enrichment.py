@@ -784,3 +784,38 @@ class CompileSuggestionsTests(unittest.TestCase):
         self.assertIn("Romance", out["genre_suggestions"])
         self.assertNotIn("Literature & Fiction", out["genre_suggestions"])
         self.assertNotIn("Epic", out["genre_suggestions"])
+
+
+class LocalGenreTests(unittest.TestCase):
+    """The file's embedded genre tag is an editorial source; genres the user
+    set by hand in ABS (different from the file, not written by LibraForge)
+    are pinned."""
+
+    def test_file_tag_genres_from_the_expanded_item(self):
+        item = {"media": {"audioFiles": [{"metaTags": {"tagGenre": "Literature & Fiction / Action & Adventure; Thriller"}}]}}
+        self.assertEqual(enrichment.file_tag_genres(item), ["Literature & Fiction", "Action & Adventure", "Thriller"])
+        self.assertEqual(enrichment.file_tag_genres({"media": {"audioFiles": []}}), [])
+
+    def test_manual_genres_detection(self):
+        detect = enrichment.detect_manual_genres
+        self.assertEqual(detect(["Audiobook"], [], False, None), [])                      # placeholder
+        self.assertEqual(detect(["Thriller"], ["Thriller"], False, None), [])             # came from the file
+        self.assertEqual(detect(["Horror"], ["Thriller"], True, None), [])                # Meta Forge wrote it
+        self.assertEqual(detect(["Horror", "Crime"], ["Thriller"], False, ["Crime", "Horror"]), [])  # Enrichment Forge wrote it
+        self.assertEqual(detect(["Horror", "Action & Adventure", "Audiobook"], ["Thriller"], False, None),
+                         ["Horror", "Action", "Adventure"])                               # yours, merged names split
+        self.assertEqual(detect(["Radio Drama"], [], False, None), ["Radio Drama"])       # no file tag: still yours
+        self.assertEqual(detect(["Horror", "Literature & Fiction"], [], False, ["Literature & Fiction", "Horror"]), [])  # umbrella labels on both sides
+
+    def test_voters_use_file_tags_and_leave_pinned_genres_out_of_the_crowd_vote(self):
+        book = _vbook("b", existing_genres=["Horror", "Fantasy"], manual_genres=["Horror"], file_genres=["History"])
+        voters = enrichment.build_book_voters(book, None, None, {}, None, None)
+        self.assertEqual(voters["file_tags"], ["history"])
+        self.assertEqual(voters["abs_existing"], ["fantasy"])
+
+    def test_compile_pins_manual_genres(self):
+        books = [_vbook("a", manual_genres=["Small Town"]), _vbook("b")]
+        out = enrichment.compile_series_enrichment(books, {"a": _EPIC, "b": _EPIC}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        self.assertIn("Small Town", out["sub_genres"])
+        self.assertEqual(out["pinned_genres"], ["Small Town"])
+        self.assertEqual(out["genre_evidence"]["Small Town"], {"yours": 1})

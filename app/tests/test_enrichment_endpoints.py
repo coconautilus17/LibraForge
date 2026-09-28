@@ -137,7 +137,8 @@ class EnrichmentItemsCacheTests(unittest.TestCase):
         calls = []
 
         def counting_abs_request(path, params):
-            calls.append((path, dict(params)))
+            if path.startswith("/api/libraries"):  # the catalog, not per-book lookups
+                calls.append((path, dict(params)))
             return _abs_request(path, params)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -475,6 +476,16 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
             "http://abs", "key",
         )
 
+    def test_merged_genres_are_split_before_writing(self):
+        self.post(genre=["Action & Adventure", "Sword & Sorcery", "Adventure"])
+        self.assertEqual(self.sent()["genres"], ["Action", "Adventure", "Sword & Sorcery"])
+
+    def test_genre_writes_are_logged_so_they_are_not_mistaken_for_manual_edits(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            self.post(genre=["Fantasy", "LitRPG"])
+            log = json.loads((Path(tmp) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["abs-item-1"], ["Fantasy", "LitRPG"])
+
     def test_audiobook_can_never_be_written_as_a_genre(self):
         self.post(genre=["Audiobook", "Fantasy", "Audio Book"])
         self.assertEqual(self.sent()["genres"], ["Fantasy"])
@@ -616,3 +627,35 @@ class CompileV2ResponseTests(unittest.TestCase):
         self.assertEqual(collect.call_args[0][1], "Scholomance")  # the series name the sources search for
         self.assertIn("LitRPG", body["main_vocabulary"])
         self.assertEqual(body["source_status"]["audible"]["found"], 0)  # ABS provider stub found nothing
+
+
+def _abs_request_with_local_genres(path, params):
+    if path == "/api/items/item-1":
+        return {"media": {"metadata": {"genres": ["Horror", "Audiobook"]},
+                          "audioFiles": [{"metaTags": {"tagGenre": "Science Fiction & Fantasy/Fantasy"}}]}}
+    if path == "/api/items/item-2":
+        return {"media": {"metadata": {"genres": ["Fantasy"]}, "audioFiles": [{"metaTags": {"tagGenre": "Fantasy"}}]}}
+    return _abs_request(path, params)
+
+
+class CompileLocalGenresTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_file_tags_vote_and_hand_set_genres_are_pinned(self):
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request_with_local_genres), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}), \
+             tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance", "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["pinned_genres"], ["Horror"])  # item-1: set by hand (differs from its file tag)
+        self.assertIn("Horror", body["main_genres"])
+        self.assertIn("Fantasy", body["main_genres"])     # the file tags vote (editorial)
+        rows = {b["id"]: b for b in body["books"]}
+        self.assertEqual(rows["item-1"]["manual_genres"], ["Horror"])
+        self.assertEqual(rows["item-2"]["manual_genres"], [])   # same as its file tag: not a hand edit
+        self.assertIn("file_tags", rows["item-2"]["sources"])

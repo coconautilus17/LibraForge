@@ -53,6 +53,8 @@ from app.library_index import is_audio_file
 from app.enrichment import (
     STANDALONE_KEY_PREFIX,
     compile_series_enrichment,
+    detect_manual_genres,
+    file_tag_genres,
     fetch_all_abs_book_items,
     get_series_books,
     group_items_by_series,
@@ -75,7 +77,7 @@ from app.enrichment_sources import (
     series_level_labels,
     summarize_status,
 )
-from app.genre_taxonomy import MAIN_ORDER
+from app.genre_taxonomy import MAIN_ORDER, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
     abs_get_json,
@@ -6255,6 +6257,8 @@ class EnrichmentBookRow(BaseModel):
     # Normalized labels per evidence source, and this book's own vote.
     sources: dict[str, list[str]] = Field(default_factory=dict)
     book_main: list[str] = []
+    file_genres: list[str] = []
+    manual_genres: list[str] = []
 
 
 class EnrichmentSourceStatus(BaseModel):
@@ -6282,6 +6286,7 @@ class EnrichmentCompileResponse(BaseModel):
     sub_genres: list[str] = []
     genre_union: list[str] = []
     genre_suggestions: list[str] = []
+    pinned_genres: list[str] = []
     # genre -> {source: number of books (or "series-source") supporting it}
     genre_evidence: dict[str, dict[str, int]] = Field(default_factory=dict)
     series_evidence: list[str] = []
@@ -6290,6 +6295,73 @@ class EnrichmentCompileResponse(BaseModel):
     series_explicit: dict[str, str] = Field(default_factory=dict)
     # The controlled main-genre names, so the UI can file a typed genre as main.
     main_vocabulary: list[str] = Field(default_factory=lambda: list(MAIN_ORDER))
+
+
+# What Enrichment Forge last wrote as each book's genres, so a later compile
+# doesn't mistake its own write for the user's hand edit (ABS keeps no
+# per-field history).
+_ENRICHMENT_GENRE_LOG_NAME = "enrichment-genre-writes.json"
+_ENRICHMENT_GENRE_LOG_LOCK = threading.Lock()
+
+
+def _load_enrichment_genre_writes() -> dict[str, list[str]]:
+    try:
+        data = json.loads((REPORTS_DIR / _ENRICHMENT_GENRE_LOG_NAME).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_enrichment_genre_writes(written: dict[str, list[str]]) -> None:
+    with _ENRICHMENT_GENRE_LOG_LOCK:
+        log = _load_enrichment_genre_writes()
+        log.update(written)
+        path = REPORTS_DIR / _ENRICHMENT_GENRE_LOG_NAME
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(log, indent=1, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            pass  # the log only refines manual-edit detection; never fail an apply over it
+
+
+def _libraforge_wrote_genre(book: dict[str, Any]) -> bool:
+    """Metadata Forge records the fields it wrote in the book's sidecar."""
+    if book.get("is_file") or not book.get("path"):
+        return False
+    try:
+        sidecar = json.loads((Path(book["path"]) / "libraforge.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    written = ((sidecar or {}).get("marker") or {}).get("written_fields") or []
+    return any(str(f).lower() in ("genre", "genres") for f in written)
+
+
+def _attach_local_genres(books: list[dict[str, Any]]) -> None:
+    """Per audio book: the file's embedded genre tag (an editorial source) and
+    the genres the user set by hand in ABS (pinned). Uses the expanded item,
+    which carries the audio files' tags and the freshest genres."""
+    written_log = _load_enrichment_genre_writes()
+
+    def one(book: dict[str, Any]) -> None:
+        book.setdefault("file_genres", [])
+        book.setdefault("manual_genres", [])
+        if not book.get("has_audio", True) or not book.get("id"):
+            return
+        try:
+            item = _abs_request(f"/api/items/{book['id']}", {"expanded": "1"})
+        except Exception:
+            item = None
+        if isinstance(item, dict):
+            book["file_genres"] = file_tag_genres(item)
+            genres = ((item.get("media") or {}).get("metadata") or {}).get("genres")
+            if isinstance(genres, list):
+                book["existing_genres"] = genres
+        book["manual_genres"] = detect_manual_genres(
+            book.get("existing_genres") or [], book["file_genres"], _libraforge_wrote_genre(book), written_log.get(book["id"]))
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        list(pool.map(one, books))
 
 
 # Open Library subjects rarely differ within a series and it asks for ~1 req/s,
@@ -6370,6 +6442,7 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     if not books:
         raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name or req.series_key}")
 
+    _attach_local_genres(books)
     source_status: dict[str, dict[str, Any]] = {}
     audible_results: dict[str, dict | None] = {}
     abs_results: dict[str, dict | None] = {}
@@ -6497,12 +6570,14 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     """
     applied = 0
     failed: list[dict] = []
+    written_genres: dict[str, list[str]] = {}
     legacy_json: dict[str, int] = {}
     abs_api_key = _get_abs_api_key()
     abs_url = _get_abs_url() if abs_api_key else ""
     narrators = [n.strip() for n in req.narrator.split(",") if n.strip()] if req.apply_narrator else []
     # "Audiobook" (and any other format label) can never be written as a genre.
-    genres = clean_provider_genres(req.genre)
+    # Store-style merged genres are split for a library (Action & Adventure).
+    genres = split_compound_genres(clean_provider_genres(req.genre))
     for book in req.books:
         if not book.include:
             continue
@@ -6524,6 +6599,8 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
                     legacy_json[legacy["action"]] = legacy_json.get(legacy["action"], 0) + 1
                 if fields:
                     abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
+                if genres:
+                    written_genres[book.id] = genres
                 applied += 1
             except Exception as exc:
                 failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
@@ -6542,6 +6619,8 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
             failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
         except Exception as exc:
             failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
+    if written_genres:
+        _record_enrichment_genre_writes(written_genres)
     return EnrichmentApplyResponse(applied=applied, legacy_json=legacy_json, failed=failed)
 
 

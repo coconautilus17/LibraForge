@@ -158,7 +158,7 @@ def labels_from_genres(values: Any) -> list[str]:
             if not part or part.lower() == "mystery, thriller & suspense":
                 continue
             label = normalize_label(part)
-            if label and label not in _NOT_GENRES:
+            if label and label not in NON_GENRES:
                 out.append(label)
     return out
 
@@ -175,7 +175,7 @@ def labels_from_text(text: str) -> list[str]:
     return out
 
 
-_NOT_GENRES = {"audiobook", "audiobooks", "audio book", "audio books", "fiction", "literature & fiction",
+NON_GENRES = {"audiobook", "audiobooks", "audio book", "audio books", "fiction", "literature & fiction",
                "genre fiction", "science fiction & fantasy", "miscellaneous"}
 
 

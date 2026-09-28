@@ -5,6 +5,7 @@ let currentBooks = [];
 let currentSeriesName = "";
 let currentSourceStatus = {};
 let currentEvidence = {};
+let pinnedGenres = new Set();
 let mainVocabulary = [];
 
 // Display names for the evidence sources the compile reports per genre and per book.
@@ -14,13 +15,15 @@ const SOURCE_LABELS = {
   audiosilo: "AudioSilo",
   openlibrary: "Open Library",
   keywords: "Keywords in descriptions",
-  abs_existing: "Your current genres/tags",
+  file_tags: "File tags",
+  abs_existing: "Current ABS genres/tags",
+  yours: "Set by you in Audiobookshelf",
   "series-source": "Series list",
   implied: "Implied by LitRPG / Cultivation",
   progressionfantasy: "progressionfantasy.co.uk",
   haremlit: "HaremLit wiki",
 };
-const BOOK_SOURCES = ["audible", "goodreads", "audiosilo", "openlibrary", "keywords", "abs_existing"];
+const BOOK_SOURCES = ["audible", "file_tags", "goodreads", "audiosilo", "openlibrary", "keywords", "abs_existing"];
 const SERIES_SOURCES = ["progressionfantasy", "haremlit"];
 
 // Source labels arrive normalized to lowercase; a few need their real casing back.
@@ -36,7 +39,7 @@ function evidenceText(genre) {
   if (!ev || !Object.keys(ev).length) return "Added by you";
   const parts = Object.entries(ev)
     .sort((a, b) => b[1] - a[1])
-    .map(([src, n]) => (src === "series-source" || src === "implied" ? SOURCE_LABELS[src] : `${SOURCE_LABELS[src] || src} ×${n}`));
+    .map(([src, n]) => (["series-source", "implied", "yours"].includes(src) ? SOURCE_LABELS[src] : `${SOURCE_LABELS[src] || src} ×${n}`));
   return `Supported by ${parts.join(", ")}`;
 }
 
@@ -73,9 +76,10 @@ function renderSeriesResults(rows) {
 function renderGenreChips(containerId, genres) {
   const container = $(containerId);
   container.innerHTML = genres.map((g) => {
-    const sources = Object.keys(currentEvidence[g] || {}).length;
+    const sources = Object.keys(currentEvidence[g] || {}).filter((src) => src !== "yours").length;
+    const pinned = pinnedGenres.has(g);
     return `
-    <span class="badge chip" data-genre="${escapeHtml(g)}" title="${escapeHtml(evidenceText(g))}">${escapeHtml(g)}${sources ? ` <span class="chip-support" aria-label="${sources} sources">${sources}</span>` : ""} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
+    <span class="badge chip${pinned ? " pinned" : ""}" data-genre="${escapeHtml(g)}" title="${escapeHtml(evidenceText(g))}">${pinned ? '<span class="chip-yours">yours</span> ' : ""}${escapeHtml(g)}${sources ? ` <span class="chip-support" aria-label="${sources} sources">${sources}</span>` : ""} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
   `;
   }).join("");
   container.querySelectorAll(".chip-remove").forEach((btn) => {
@@ -139,7 +143,7 @@ function renderBookList(books) {
     <div class="book-row${included ? "" : " excluded"}" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
         <div class="book-title">${escapeHtml(book.title)}</div>
-        ${book.has_audio === false ? "" : `<div class="book-src-line"><strong>Book vote:</strong> ${escapeHtml((book.book_main || []).join(", ") || "no agreement")}</div>`}
+        ${book.has_audio === false ? "" : `<div class="book-src-line"><strong>Book vote:</strong> ${escapeHtml((book.book_main || []).join(", ") || "no agreement")}${(book.manual_genres || []).length ? ` &nbsp;&middot;&nbsp; <strong>Set by you:</strong> ${escapeHtml(book.manual_genres.join(", "))}` : ""}</div>`}
         <div class="book-src-line">
           ${sourceParts.join(" &nbsp;&middot;&nbsp; ") || '<span class="local">No source found this book</span>'}
         </div>
@@ -248,6 +252,7 @@ async function compileSeries(seriesName, seriesKey) {
   $("compileSub").textContent = `${seriesName}, ${data.books.length} book${data.books.length === 1 ? "" : "s"}.`;
   renderSourceStrip(currentSourceStatus, data.books.length, elapsedSeconds);
   currentEvidence = data.genre_evidence || {};
+  pinnedGenres = new Set(data.pinned_genres || []);
   mainVocabulary = data.main_vocabulary || [];
   const agreed = data.agreement !== "none";
   // With no agreement the backend returns every suggestion in `genre`; they

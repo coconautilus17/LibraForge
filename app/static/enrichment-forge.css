@@ -504,3 +504,20 @@
 .book-src-line .src-abs_existing {
   color: var(--accent);
 }
+
+/* Genres the user set by hand in Audiobookshelf: pinned, always pre-filled. */
+.chip.pinned {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.chip-yours {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.book-src-line .src-file_tags {
+  color: #d9954f;
+}
