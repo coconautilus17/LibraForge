@@ -114,6 +114,20 @@ def _display_series_name(group_items: list[dict[str, Any]]) -> str:
 
 
 _SERIES_KEY_AUTHOR_SEP = "\x1f"
+# Standalone units are keyed by item id; the prefix can't occur in a
+# normalized series key.
+STANDALONE_KEY_PREFIX = "\x1estandalone:"
+
+
+def _has_audio(item: dict[str, Any]) -> bool:
+    count = (item.get("media") or {}).get("numAudioFiles")
+    return count is None or int(count or 0) > 0
+
+
+def standalone_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Audio items with no series: each is its own Enrichment Forge unit."""
+    return [it for it in items
+            if not str(((it.get("media") or {}).get("metadata") or {}).get("seriesName") or "").strip() and _has_audio(it)]
 
 
 def _item_authors(item: dict[str, Any]) -> list[str]:
@@ -149,6 +163,7 @@ def split_group_by_author(items: list[dict[str, Any]]) -> dict[str, list[dict[st
 def list_series_summary(
     groups: dict[str, list[dict[str, Any]]],
     query: str = "",
+    standalones: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return [{key, name, book_count}] sorted by book_count descending,
     filtered by a case-insensitive substring match on the display name.
@@ -166,9 +181,19 @@ def list_series_summary(
             if query_lower and query_lower not in display_name.lower():
                 continue
             key = f"{group_key}{_SERIES_KEY_AUTHOR_SEP}{author}" if author else group_key
-            summary.append({"key": key, "name": display_name, "book_count": len(bucket)})
+            summary.append({"key": key, "name": display_name, "book_count": len(bucket), "standalone": False})
     summary.sort(key=lambda row: (-row["book_count"], row["name"].lower()))
-    return summary
+    rows = []
+    for item in standalones or []:
+        metadata = (item.get("media") or {}).get("metadata") or {}
+        authors = _item_authors(item)
+        title = str(metadata.get("title") or "").strip()
+        display_name = f"{title} [{authors[0]}]" if authors else title
+        if query_lower and query_lower not in display_name.lower() and query_lower not in str(metadata.get("authorName") or "").lower():
+            continue
+        rows.append({"key": STANDALONE_KEY_PREFIX + str(item.get("id") or ""), "name": display_name, "book_count": 1, "standalone": True})
+    rows.sort(key=lambda row: row["name"].lower())
+    return summary + rows
 
 
 def get_series_books(
@@ -176,11 +201,15 @@ def get_series_books(
     series_name: str,
     normalize_series_fn: Callable[[str], str],
     by_key: bool = False,
+    items: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the lightweight per-book dicts for a chosen series (matched by
     its display or normalized name), used to drive the compile step.
     """
-    if by_key:
+    if by_key and series_name.startswith(STANDALONE_KEY_PREFIX):
+        item_id = series_name[len(STANDALONE_KEY_PREFIX):]
+        group_items = [it for it in items or [] if it.get("id") == item_id]
+    elif by_key:
         group_key, _, author = series_name.partition(_SERIES_KEY_AUTHOR_SEP)
         group_items = groups.get(group_key, [])
         if author:
@@ -207,7 +236,8 @@ def get_series_books(
             "existing_tags": list(media.get("tags") or []),
             # Ebook-only / placeholder items have no audio and must not be
             # searched as audiobooks (#301). Unknown count = assume audio.
-            "has_audio": media.get("numAudioFiles") is None or int(media.get("numAudioFiles") or 0) > 0,
+            "has_audio": _has_audio(item),
+            "description": str(metadata.get("description") or ""),
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),

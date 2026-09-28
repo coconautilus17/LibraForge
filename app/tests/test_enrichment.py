@@ -79,8 +79,8 @@ class ListSeriesSummaryTests(unittest.TestCase):
         }
         summary = enrichment.list_series_summary(groups)
         self.assertEqual(summary, [
-            {"key": "scholomance", "name": "Scholomance", "book_count": 2},
-            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1},
+            {"key": "scholomance", "name": "Scholomance", "book_count": 2, "standalone": False},
+            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1, "standalone": False},
         ])
 
     def test_query_filters_case_insensitively(self):
@@ -89,7 +89,7 @@ class ListSeriesSummaryTests(unittest.TestCase):
             "dungeon core": [{"media": {"metadata": {"seriesName": "Dungeon Core #1"}}}],
         }
         summary = enrichment.list_series_summary(groups, query="scho")
-        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1}])
+        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1, "standalone": False}])
 
 
 class GetSeriesBooksTests(unittest.TestCase):
@@ -128,6 +128,7 @@ class GetSeriesBooksTests(unittest.TestCase):
             "existing_genres": [],
             "existing_tags": ["Fantasy", "LitRPG"],
             "has_audio": True,
+            "description": "",
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
             "sequence": None,
@@ -675,3 +676,32 @@ class SplitGroupByAuthorTests(unittest.TestCase):
         for r in rows:
             books = enrichment.get_series_books(groups, r["key"], _fake_normalize_series, by_key=True)
             self.assertEqual({b["author"] for b in books}, {r["name"].split("[")[1].rstrip("]")})
+
+
+class StandaloneUnitsTests(unittest.TestCase):
+    """Enrichment Forge v2: books with no series are units of their own."""
+
+    def setUp(self):
+        placeholder = _item("p1", "", "Nobody", title="Notes")
+        placeholder["media"]["numAudioFiles"] = 0
+        self.items = [_item("s1", "", "Dean Koontz", title="Intensity"), _item("b1", "Dune #1", "Frank Herbert", title="Dune"), placeholder]
+        self.groups = enrichment.group_items_by_series(self.items, _fake_normalize_series)
+
+    def test_standalones_listed_after_series_and_resolvable(self):
+        standalones = enrichment.standalone_items(self.items)
+        self.assertEqual([it["id"] for it in standalones], ["s1"])  # no-audio items are not units
+        rows = enrichment.list_series_summary(self.groups, "", standalones=standalones)
+        self.assertEqual([r["standalone"] for r in rows], [False, True])
+        self.assertEqual(rows[1]["name"], "Intensity [Dean Koontz]")
+        books = enrichment.get_series_books(self.groups, rows[1]["key"], _fake_normalize_series, by_key=True, items=self.items)
+        self.assertEqual([b["id"] for b in books], ["s1"])
+
+    def test_query_matches_standalone_title_or_author(self):
+        standalones = enrichment.standalone_items(self.items)
+        self.assertEqual([r["name"] for r in enrichment.list_series_summary(self.groups, "koontz", standalones=standalones)], ["Intensity [Dean Koontz]"])
+        self.assertEqual(len(enrichment.list_series_summary(self.groups, "intens", standalones=standalones)), 1)
+
+    def test_books_carry_description_for_keyword_votes(self):
+        self.items[0]["media"]["metadata"]["description"] = "A thriller."
+        books = enrichment.get_series_books(self.groups, enrichment.STANDALONE_KEY_PREFIX + "s1", _fake_normalize_series, by_key=True, items=self.items)
+        self.assertEqual(books[0]["description"], "A thriller.")

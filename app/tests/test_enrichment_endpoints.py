@@ -85,7 +85,7 @@ class EnrichmentSeriesEndpointTests(unittest.TestCase):
              patch("app.main.load_review_module", return_value=_FakeReviewModule):
             resp = client.get("/api/enrichment/series?q=schol")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"series": [{"key": "scholomance", "name": "Scholomance", "book_count": 2}]})
+        self.assertEqual(resp.json(), {"series": [{"key": "scholomance", "name": "Scholomance", "book_count": 2, "standalone": False}]})
 
 
 class EnrichmentItemsCacheTests(unittest.TestCase):
@@ -498,3 +498,30 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _abs_request_with_standalone(path, params):
+    data = _abs_request(path, params)
+    if path == "/api/libraries/lib1/items" and int(params["page"]) == 0:
+        standalone = {"id": "item-s", "path": "/audiobooks/Dean Koontz/Intensity", "isFile": False,
+                      "media": {"numAudioFiles": 1, "tags": [],
+                                "metadata": {"title": "Intensity", "authorName": "Dean Koontz", "seriesName": ""}}}
+        data = {"total": 3, "results": data["results"] + [standalone]}
+    return data
+
+
+class EnrichmentStandaloneEndpointTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_standalone_listed_and_compilable(self):
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request_with_standalone), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}):
+            rows = client.get("/api/enrichment/series?q=intensity").json()["series"]
+            self.assertEqual([(r["name"], r["standalone"]) for r in rows], [("Intensity [Dean Koontz]", True)])
+            resp = client.post("/api/enrichment/compile", json={"series_key": rows[0]["key"], "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual([b["id"] for b in resp.json()["books"]], ["item-s"])

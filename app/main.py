@@ -60,6 +60,7 @@ from app.enrichment import (
     search_series_abs,
     search_series_audible,
     search_series_goodreads,
+    standalone_items,
     write_metadata_json_partial,
 )
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
@@ -6158,6 +6159,7 @@ class EnrichmentSeriesRow(BaseModel):
     key: str = ""
     name: str
     book_count: int
+    standalone: bool = False
 
 
 class EnrichmentSeriesResponse(BaseModel):
@@ -6211,7 +6213,7 @@ def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
     review_module = load_review_module()
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
-    summary = list_series_summary(groups, q)
+    summary = list_series_summary(groups, q, standalones=standalone_items(items))
     return EnrichmentSeriesResponse(series=[EnrichmentSeriesRow(**row) for row in summary])
 
 
@@ -6271,7 +6273,7 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
     if req.series_key:
-        books = get_series_books(groups, req.series_key, review_module.normalize_series, by_key=True)
+        books = get_series_books(groups, req.series_key, review_module.normalize_series, by_key=True, items=items)
     else:
         books = get_series_books(groups, req.series_name, review_module.normalize_series)
     if not books:
