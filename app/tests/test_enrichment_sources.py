@@ -166,12 +166,12 @@ class HaremLitTests(unittest.TestCase):
                 return {"query": {"search": [{"title": "Dragon Emperor (Series)"}]}}
             return {"parse": {"wikitext": {"*": self.WIKI}}}
 
-        r = s.haremlit_lookup("Dragon Emperor", ["Eric Vall"], http_get=get)
+        r = s.haremlit_lookup("Dragon Emperor", ["Eric Vall"], http_get=get, pacer=P())
         self.assertEqual((r["status"], r["via"], r["explicit"]), ("found", "series", "Yes"))
         self.assertIn("portal fantasy", r["genres"])
         other = s.haremlit_lookup("Dragon Emperor", ["Someone Else"], http_get=lambda u, t: (
             {"query": {"search": [{"title": "Dragon Emperor (Series)"}]}} if "list=search" in u
-            else {"parse": {"wikitext": {"*": self.WIKI}}} if "Dragon" in u else {"error": {"code": "missingtitle"}}))
+            else {"parse": {"wikitext": {"*": self.WIKI}}} if "Dragon" in u else {"error": {"code": "missingtitle"}}), pacer=P())
         self.assertEqual(other["status"], "not_found")
 
     def test_author_page_listing(self):
@@ -180,14 +180,14 @@ class HaremLitTests(unittest.TestCase):
                 return {"query": {"search": []}}
             return {"parse": {"wikitext": {"*": "* [[Building Harem Town]]\n* [[Chaos God (Series)|Chaos God]]"}}}
 
-        r = s.haremlit_lookup("Chaos God", ["Eric Vall"], http_get=get)
+        r = s.haremlit_lookup("Chaos God", ["Eric Vall"], http_get=get, pacer=P())
         self.assertEqual((r["status"], r["via"]), ("found", "author"))
 
     def test_network_failure_is_failed(self):
         def get(url, timeout):
             raise TimeoutError()
 
-        self.assertEqual(s.haremlit_lookup("X", ["Y"], http_get=get)["status"], "failed")
+        self.assertEqual(s.haremlit_lookup("X", ["Y"], http_get=get, pacer=P())["status"], "failed")
 
     def test_series_level_labels(self):
         labels, ev, pfp = s.series_level_labels({"status": "found", "category": "Progression", "title": "A – B"},
@@ -229,9 +229,9 @@ class FinalReviewFixTests(unittest.TestCase):
                 return {"query": {"search": []}}
             return {"parse": {"wikitext": {"*": "* [[Summoner (Series)|Summoner]]\n[[Category:Fantasy Series]]"}}}
 
-        self.assertEqual(s.haremlit_lookup("Summoner School", ["Eric Vall"], http_get=get)["status"], "not_found")
-        self.assertEqual(s.haremlit_lookup("Fantasy", ["Eric Vall"], http_get=get)["status"], "not_found")
-        self.assertEqual(s.haremlit_lookup("Summoner", ["Eric Vall"], http_get=get)["status"], "found")
+        self.assertEqual(s.haremlit_lookup("Summoner School", ["Eric Vall"], http_get=get, pacer=P())["status"], "not_found")
+        self.assertEqual(s.haremlit_lookup("Fantasy", ["Eric Vall"], http_get=get, pacer=P())["status"], "not_found")
+        self.assertEqual(s.haremlit_lookup("Summoner", ["Eric Vall"], http_get=get, pacer=P())["status"], "found")
 
 
 class BatchReadinessTests(unittest.TestCase):
@@ -259,3 +259,16 @@ class BatchReadinessTests(unittest.TestCase):
     def test_author_surname_matches_whole_words_only(self):
         self.assertFalse(s._author_matches("William Wight", ["Jet Li"]))
         self.assertTrue(s._author_matches("Will Wight", ["Wight"]))
+
+
+class HaremLitAuthorExplicitTests(unittest.TestCase):
+    def test_author_page_match_reads_the_linked_pages_explicit_value(self):
+        def get(url, timeout):
+            if "list=search" in url:
+                return {"query": {"search": []}}
+            if "Chaos+God" in url or "Chaos%20God" in url:
+                return {"parse": {"wikitext": {"*": "{{Book_Series_Template|author=[[Eric Vall]]|explicit_sex=Yes}}"}}}
+            return {"parse": {"wikitext": {"*": "* [[Chaos God]]"}}}
+
+        r = s.haremlit_lookup("Chaos God", ["Eric Vall"], http_get=get, pacer=P())
+        self.assertEqual((r["status"], r["via"], r["explicit"]), ("found", "author", "Yes"))

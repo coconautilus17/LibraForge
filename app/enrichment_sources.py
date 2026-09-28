@@ -351,7 +351,10 @@ def haremlit_lookup(series_name: str, authors: list[str], *, http_get: HttpGet =
                 # Exact name only (as the prototype's curated catalogue did):
                 # an author page links other, non-harem work too.
                 if _norm_series(link) and _norm_series(link) == _norm_series(series_name):
-                    return {"status": "found", "match": f"{author}: {link.strip()}", "explicit": None, "genres": [], "via": "author"}
+                    # The linked page (when it exists) carries the explicit value.
+                    fields = _template_fields(_wikitext(link.strip(), http_get, pacer)) or {}
+                    return {"status": "found", "match": f"{author}: {link.strip()}",
+                            "explicit": fields.get("explicit_sex") or fields.get("explicit"), "genres": [], "via": "author"}
     except _BreakerOpen:
         return {**empty, "status": "skipped"}
     except Exception:
