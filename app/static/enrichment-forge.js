@@ -185,12 +185,12 @@ function sourceChipHtml(key, status) {
   let state = status.state === "failed" ? "failed" : "not used";
   if (status.state === "searched") {
     if (SERIES_SOURCES.includes(key)) {
-      state = Number(status.found || 0) ? "series listed" : "not listed";
+      state = Number(status.found || 0) ? "series listed" : (status.rate_limited ? "paused" : "not listed");
     } else {
       state = `found ${Number(status.found || 0)} of ${searched}`;
     }
     if (Number(status.failed || 0)) state += `, ${status.failed} failed`;
-    if (status.rate_limited) state += ", rate-limited, paused";
+    if (status.rate_limited && !SERIES_SOURCES.includes(key)) state += ", rate-limited, paused";
   }
   const cls = status.state === "searched" && (status.rate_limited || Number(status.failed || 0)) ? "degraded" : (status.state || "").replace(/\s+/g, "-");
   const detail = status.detail ? ` title="${escapeHtml(status.detail)}"` : "";
@@ -262,7 +262,7 @@ async function compileSeries(seriesName, seriesKey) {
   currentSuggestions = data.genre_suggestions || [];
   renderSuggestions();
   $("agreementNotice").hidden = agreed;
-  $("agreementNotice").innerHTML = agreed ? "" : '<span class="dot">&#9679;</span><span><strong>No genre reached agreement across the sources for this series.</strong> The subgenres below are every genre any source suggested; keep the ones that fit. Type a genre like Fantasy or Thriller into Add to make it a main genre.</span>';
+  $("agreementNotice").innerHTML = agreed ? "" : `<span class="dot">&#9679;</span><span><strong>No genre reached agreement across the sources for this ${data.standalone ? "book" : "series"}.</strong> The subgenres below are every genre any source suggested; keep the ones that fit. Type a genre like Fantasy or Thriller into Add to make it a main genre.</span>`;
   $("seriesEvidence").textContent = (data.series_evidence || []).length ? `Series lists: ${data.series_evidence.join(" · ")}` : "";
   // Narrators differ per book and edition, so nothing is pre-filled (#299).
   $("narratorInput").value = "";

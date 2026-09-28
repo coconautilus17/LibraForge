@@ -6295,6 +6295,7 @@ class EnrichmentCompileResponse(BaseModel):
     series_explicit: dict[str, str] = Field(default_factory=dict)
     # The controlled main-genre names, so the UI can file a typed genre as main.
     main_vocabulary: list[str] = Field(default_factory=lambda: list(MAIN_ORDER))
+    standalone: bool = False
 
 
 # What Enrichment Forge last wrote as each book's genres, so a later compile
@@ -6373,6 +6374,9 @@ def _series_source_status(label: str, result: dict[str, Any] | None, standalone:
     if standalone:
         return {"label": label, "state": "not used", "detail": "Series-level source; not used for standalone books."}
     status = (result or {}).get("status")
+    if status == "skipped":
+        return {"label": label, "state": "searched", "skipped": 1, "rate_limited": True,
+                "detail": f"{label} is paused after repeated failures; try again in a minute."}
     if status in ("found", "not_found"):
         found = status == "found"
         return {"label": label, "state": "searched", "searched": 1, "found": int(found),
@@ -6496,27 +6500,31 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     unit_authors = list(dict.fromkeys(
         a.split(" - ")[0].strip() for b in books for a in str(b.get("author") or "").split(",")[:1] if a.strip()))
     extra_pool = ThreadPoolExecutor(max_workers=1)
-    extra_job = extra_pool.submit(_collect_extra_sources, books, unit_series_name, unit_authors, standalone)
-    trips_before = _GOODREADS_PACER.trips
-    goodreads_results = search_series_goodreads(books, fetch_book_shelves, _GOODREADS_PACER)
-    audio_books = [b for b in books if b.get("has_audio", True)]
-    statuses = [goodreads_results.get(b["id"], {}).get("status") for b in audio_books]
-    skipped = statuses.count("skipped")
-    rate_limited = skipped > 0 or _GOODREADS_PACER.trips > trips_before
-    source_status["goodreads"] = {
-        "label": "Goodreads",
-        "state": "searched",
-        "searched": len(audio_books),
-        "found": statuses.count("found"),
-        "failed": statuses.count("failed"),
-        "skipped": skipped,
-        "rate_limited": rate_limited,
-        "detail": ("Goodreads is rate-limiting; paused for a few minutes, the remaining books were skipped."
-                   if rate_limited else ""),
-    }
+    try:
+        extra_job = extra_pool.submit(_collect_extra_sources, books, unit_series_name, unit_authors, standalone)
+        trips_before = _GOODREADS_PACER.trips
+        goodreads_results = search_series_goodreads(books, fetch_book_shelves, _GOODREADS_PACER)
+        audio_books = [b for b in books if b.get("has_audio", True)]
+        statuses = [goodreads_results.get(b["id"], {}).get("status") for b in audio_books]
+        skipped = statuses.count("skipped")
+        rate_limited = skipped > 0 or _GOODREADS_PACER.trips > trips_before
+        source_status["goodreads"] = {
+            "label": "Goodreads",
+            "state": "searched",
+            "searched": len(audio_books),
+            "found": statuses.count("found"),
+            "failed": statuses.count("failed"),
+            "skipped": skipped,
+            "rate_limited": rate_limited,
+            "detail": ("Goodreads is rate-limiting; paused for a few minutes, the remaining books were skipped."
+                       if rate_limited else ""),
+        }
 
-    extra_results, series_sources, extra_status = extra_job.result()
-    extra_pool.shutdown()
+        extra_results, series_sources, extra_status = extra_job.result()
+    finally:
+        # If anything above fails, don't leave the extra sources running for
+        # a response nobody will read.
+        extra_pool.shutdown(wait=False, cancel_futures=True)
     source_status.update(extra_status)
 
     compiled = compile_series_enrichment(
@@ -6525,6 +6533,7 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     )
     compiled["source_status"] = source_status
     compiled["series_explicit"] = series_sources.get("explicit") or {}
+    compiled["standalone"] = standalone
     return EnrichmentCompileResponse(**compiled)
 
 

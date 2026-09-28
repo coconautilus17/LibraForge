@@ -554,6 +554,7 @@ class EnrichmentStandaloneEndpointTests(unittest.TestCase):
             resp = client.post("/api/enrichment/compile", json={"series_key": rows[0]["key"], "auth_file": "/nonexistent"})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual([b["id"] for b in resp.json()["books"]], ["item-s"])
+        self.assertTrue(resp.json()["standalone"])
 
 
 _BOOKS = [{"id": "a", "title": "Unsouled", "author": "Will Wight", "has_audio": True},

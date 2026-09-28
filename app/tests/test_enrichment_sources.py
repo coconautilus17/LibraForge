@@ -232,3 +232,30 @@ class FinalReviewFixTests(unittest.TestCase):
         self.assertEqual(s.haremlit_lookup("Summoner School", ["Eric Vall"], http_get=get)["status"], "not_found")
         self.assertEqual(s.haremlit_lookup("Fantasy", ["Eric Vall"], http_get=get)["status"], "not_found")
         self.assertEqual(s.haremlit_lookup("Summoner", ["Eric Vall"], http_get=get)["status"], "found")
+
+
+class BatchReadinessTests(unittest.TestCase):
+    """Before batch mode: HaremLit is paced and bounded, author matching is by word."""
+
+    def test_haremlit_skips_while_its_breaker_is_open(self):
+        calls = []
+        pacer = P(fail_threshold=1)
+        pacer.record(False)  # open
+        r = s.haremlit_lookup("X", ["Y"], http_get=lambda u, t: calls.append(u) or {}, pacer=pacer)
+        self.assertEqual((r["status"], calls), ("skipped", []))
+
+    def test_haremlit_checks_at_most_three_author_pages(self):
+        pages = []
+
+        def get(url, timeout):
+            if "list=search" in url:
+                return {"query": {"search": []}}
+            pages.append(url)
+            return {"parse": {"wikitext": {"*": ""}}}
+
+        s.haremlit_lookup("Anthology", [f"Author {i}" for i in range(8)], http_get=get, pacer=P())
+        self.assertEqual(len(pages), 3)
+
+    def test_author_surname_matches_whole_words_only(self):
+        self.assertFalse(s._author_matches("William Wight", ["Jet Li"]))
+        self.assertTrue(s._author_matches("Will Wight", ["Wight"]))

@@ -34,6 +34,8 @@ SourcePacer = GoodreadsPacer
 # ~100 req/min; Open Library answers in 1-3 s and asks for about 1 req/s.
 AUDIOSILO_PACER = SourcePacer(gap_s=0.35, fail_threshold=3, cooldown_s=60)
 OPENLIBRARY_PACER = SourcePacer(gap_s=1.0, fail_threshold=3, cooldown_s=60)
+# Fandom's MediaWiki API: a few calls per series, paced so a batch run stays polite.
+HAREMLIT_PACER = SourcePacer(gap_s=0.5, fail_threshold=3, cooldown_s=60)
 
 AUDIOSILO_SEARCH_URL = "https://meta.audiosilo.app/abs/search"
 OPENLIBRARY_SEARCH_URL = "https://openlibrary.org/search.json"
@@ -205,7 +207,8 @@ def _author_matches(candidate: str, authors: list[str]) -> bool:
     cand = str(candidate or "").lower()
     for author in authors:
         surname = str(author or "").strip().lower().split()[-1:] or [""]
-        if surname[0] and surname[0] in cand:
+        # Whole word: a short surname ("Li") must not match inside "William".
+        if surname[0] and re.search(rf"(?<![a-z0-9]){re.escape(surname[0])}(?![a-z0-9])", cand):
             return True
     return False
 
@@ -287,14 +290,28 @@ _WIKILINK_RE = re.compile(r"\[\[(?::?Category:)?([^|\]]+)(?:\|[^\]]*)?\]\]")
 _PAGE_LINK_RE = re.compile(r"\[\[(?!:?(?:Category|File|Image):)([^|\]]+)(?:\|[^\]]*)?\]\]", re.I)
 
 
-def _wiki(params: dict[str, str], http_get: HttpGet) -> dict[str, Any]:
-    data = http_get(HAREMLIT_API_URL + "?" + urllib.parse.urlencode({**params, "format": "json"}), 20)
+class _BreakerOpen(Exception):
+    pass
+
+
+def _wiki(params: dict[str, str], http_get: HttpGet, pacer: GoodreadsPacer) -> dict[str, Any]:
+    if not pacer.wait_turn():
+        raise _BreakerOpen()
+    try:
+        data = http_get(HAREMLIT_API_URL + "?" + urllib.parse.urlencode({**params, "format": "json"}), 20)
+    except Exception:
+        pacer.record(False)
+        raise
+    pacer.record(True)
     return data if isinstance(data, dict) else {}
 
 
-def _wikitext(page: str, http_get: HttpGet) -> str:
-    return str(((_wiki({"action": "parse", "page": page, "prop": "wikitext"}, http_get).get("parse") or {})
+def _wikitext(page: str, http_get: HttpGet, pacer: GoodreadsPacer) -> str:
+    return str(((_wiki({"action": "parse", "page": page, "prop": "wikitext"}, http_get, pacer).get("parse") or {})
                 .get("wikitext") or {}).get("*") or "")
+
+
+HAREMLIT_MAX_AUTHOR_PAGES = 3
 
 
 def _template_fields(text: str) -> dict[str, str] | None:
@@ -309,33 +326,34 @@ def _template_fields(text: str) -> dict[str, str] | None:
     return fields
 
 
-def haremlit_lookup(series_name: str, authors: list[str], *, http_get: HttpGet = http_get_json) -> dict[str, Any]:
+def haremlit_lookup(series_name: str, authors: list[str], *, http_get: HttpGet = http_get_json,
+                    pacer: GoodreadsPacer = HAREMLIT_PACER) -> dict[str, Any]:
     """HaremLit Fiction wiki: the series' own page (author-checked), else the
     author's page listing the series. The wiki only documents harem fiction,
     so either is harem evidence; the series page also carries `explicit_sex`."""
     empty = {"status": "not_found", "match": None, "explicit": None, "genres": [], "via": None}
     try:
-        hits = ((_wiki({"action": "query", "list": "search", "srsearch": series_name, "srlimit": "8"}, http_get)
+        hits = ((_wiki({"action": "query", "list": "search", "srsearch": series_name, "srlimit": "8"}, http_get, pacer)
                  .get("query") or {}).get("search") or [])
         hits = sorted(hits, key=lambda h: not str(h.get("title", "")).endswith("(Series)"))
         for hit in hits:
             title = str(hit.get("title") or "")
             if not _series_names_match(title, series_name):
                 continue
-            fields = _template_fields(_wikitext(title, http_get))
+            fields = _template_fields(_wikitext(title, http_get, pacer))
             if not fields or not _author_matches(fields.get("author", ""), authors):
                 continue
             genres = [normalize_label(g) for g in re.split(r"[,;]", fields.get("genre(s)", "")) if g.strip()]
             return {"status": "found", "match": title, "explicit": fields.get("explicit_sex") or fields.get("explicit"),
                     "genres": [g for g in genres if g in LABEL_MAP], "via": "series"}
-        for author in authors:
-            if not str(author or "").strip():
-                continue
-            for link in _PAGE_LINK_RE.findall(_wikitext(author, http_get)):
+        for author in [a for a in authors if str(a or "").strip()][:HAREMLIT_MAX_AUTHOR_PAGES]:
+            for link in _PAGE_LINK_RE.findall(_wikitext(author, http_get, pacer)):
                 # Exact name only (as the prototype's curated catalogue did):
                 # an author page links other, non-harem work too.
                 if _norm_series(link) and _norm_series(link) == _norm_series(series_name):
                     return {"status": "found", "match": f"{author}: {link.strip()}", "explicit": None, "genres": [], "via": "author"}
+    except _BreakerOpen:
+        return {**empty, "status": "skipped"}
     except Exception:
         return {**empty, "status": "failed"}
     return empty
