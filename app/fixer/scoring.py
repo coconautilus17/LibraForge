@@ -1187,6 +1187,20 @@ def narrator_match_score(clues: dict, product: dict) -> float:
     return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
 
 
+def _same_recording(a: dict, b: dict) -> bool:
+    """Same title, authors, narrators and runtime: one recording, two listings."""
+    def people(p: dict, role: str) -> set[str]:
+        return {normalize_for_match(n) for n in get_people(p, role)}
+
+    a_minutes, b_minutes = get_audible_duration_minutes(a), get_audible_duration_minutes(b)
+    return bool(
+        a_minutes and b_minutes and abs(a_minutes - b_minutes) <= 1
+        and normalize_for_match(a.get("title") or "") == normalize_for_match(b.get("title") or "")
+        and people(a, "authors") == people(b, "authors")
+        and people(a, "narrators") and people(a, "narrators") == people(b, "narrators")
+    )
+
+
 def _sku_matches(clues: dict, product: dict) -> bool:
     local = str(clues.get("sku", "") or "").upper()
     return bool(local) and local in {
@@ -1296,6 +1310,11 @@ def pick_best_match_for_metadata(
                 resolved = True
                 resolved_by = evidence
                 break
+    # Nothing in the file tells them apart, but they are one recording sold
+    # under several ASINs: any of them is the book, so take Audible's first.
+    if not resolved and all(_same_recording(best_product, item[1]) for item in top[1:]):
+        resolved = True
+        resolved_by = "same recording"
 
     def label(product: dict) -> str:
         title = product.get("title", "") or "?"

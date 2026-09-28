@@ -331,13 +331,30 @@ class TieBreakTests(unittest.TestCase):
         self.assertTrue(ambiguity["resolved"])
 
     def test_true_tie_unresolved(self):
-        a = self._twin("B0TIE1", 600.0)
-        b = self._twin("B0TIE2", 600.1)  # ~6s apart -> below 30s margin
+        # Two different recordings (different readers, neither the local
+        # one), durations too close to separate: nothing decides.
+        a = product(asin="B0TIE1", title="Power Mage 5", series="Power Mage", sequence="5",
+                    narrators=("Reader A",), minutes=600.0)
+        b = product(asin="B0TIE2", title="Power Mage 5", series="Power Mage", sequence="5",
+                    narrators=("Reader B",), minutes=600.1)  # ~6s apart -> below 30s margin
         _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
             self.clues, [a, b], 600.0
         )
         self.assertIsNotNone(ambiguity)
         self.assertFalse(ambiguity["resolved"])
+
+    def test_same_recording_under_two_asins_takes_the_first_listed(self):
+        # Norse Mythology: William Morrow (US) and Bloomsbury (UK) editions of
+        # one recording, same reader and runtime, nothing in the file telling
+        # them apart. Either is the book; Audible's first-listed one is used.
+        a = self._twin("B0FIRST", 600.0)
+        b = self._twin("B0SECOND", 600.1)
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            self.clues, [a, b], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0FIRST")
+        self.assertTrue(ambiguity["resolved"])
+        self.assertIn("same recording", ambiguity["reason"])
 
     def test_narrator_breaks_tie_duration_cannot(self):
         # Two recordings of the same book, durations too close to separate:
@@ -403,14 +420,6 @@ class TieBreakTests(unittest.TestCase):
         )
         self.assertEqual(chosen["asin"], "B0US")
         self.assertTrue(ambiguity["resolved"])
-
-    def test_editions_without_local_evidence_stay_unresolved(self):
-        us = self._edition("B0US", "BK_HARP_005696", "William Morrow")
-        uk = self._edition("B0UK", "BK_ADBL_030111", "Audible Studios for Bloomsbury")
-        _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
-            self.clues, [us, uk], 600.0
-        )
-        self.assertFalse(ambiguity["resolved"])
 
     def test_single_candidate_no_ambiguity(self):
         only = self._twin("B0ONLY", 601)
