@@ -127,10 +127,17 @@ class ReadCurrentBookMetadataTests(unittest.TestCase):
         current = read_current_book_metadata(tags, is_grouped=True)
         self.assertEqual(current["sequence"], "")
 
-    def test_ungrouped_track_number_still_becomes_sequence(self):
-        # Single-file behavior (is_grouped defaults to False) is unchanged --
-        # confirmed against the existing MP4-style-tags test above.
-        tags = {"title": "Soul Harvest", "track": "2"}
+    def test_track_number_without_series_tag_is_not_a_sequence(self):
+        # Sapiens.mp3 carries track "1/4294967295" and no series tag: a
+        # position in nothing is not evidence of a series sequence.
+        tags = {"title": "Sapiens", "album": "Sapiens", "track": "1/4294967295"}
+        current = read_current_book_metadata(tags)
+        self.assertEqual(current["sequence"], "")
+
+    def test_track_number_with_series_tag_is_the_sequence(self):
+        # LibraForge writes the Audible sequence to "track" next to the
+        # series in "grouping", so that pair is real evidence.
+        tags = {"title": "Soul Harvest", "grouping": "Dread Knight", "track": "2"}
         current = read_current_book_metadata(tags)
         self.assertEqual(current["sequence"], "2")
 
