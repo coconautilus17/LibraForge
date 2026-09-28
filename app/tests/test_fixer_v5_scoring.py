@@ -376,6 +376,42 @@ class TieBreakTests(unittest.TestCase):
         )
         self.assertFalse(ambiguity["resolved"])
 
+    def _edition(self, asin, sku, publisher):
+        p = product(asin=asin, title="Power Mage 5", series="Power Mage",
+                    sequence="5", minutes=600.0)
+        p["sku"] = sku
+        p["publisher_name"] = publisher
+        return p
+
+    def test_sku_tag_picks_the_publisher_edition(self):
+        # Sapiens: the same recording sold as a Harper (US) and a Vintage
+        # (UK) edition; the file's UFID tag is the UK edition's SKU.
+        us = self._edition("B0US", "BK_HARP_006291", "Harper")
+        uk = self._edition("B0UK", "BK_RHUK_002027", "Vintage Digital")
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "sku": "BK_RHUK_002027"}, [us, uk], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0UK")
+        self.assertTrue(ambiguity["resolved"])
+        self.assertIn("sku", ambiguity["reason"])
+
+    def test_publisher_tag_picks_the_publisher_edition(self):
+        us = self._edition("B0US", "BK_HARP_005696", "William Morrow")
+        uk = self._edition("B0UK", "BK_ADBL_030111", "Audible Studios for Bloomsbury")
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "publisher": "William Morrow"}, [uk, us], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0US")
+        self.assertTrue(ambiguity["resolved"])
+
+    def test_editions_without_local_evidence_stay_unresolved(self):
+        us = self._edition("B0US", "BK_HARP_005696", "William Morrow")
+        uk = self._edition("B0UK", "BK_ADBL_030111", "Audible Studios for Bloomsbury")
+        _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            self.clues, [us, uk], 600.0
+        )
+        self.assertFalse(ambiguity["resolved"])
+
     def test_single_candidate_no_ambiguity(self):
         only = self._twin("B0ONLY", 601)
         _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(

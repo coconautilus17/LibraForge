@@ -16,7 +16,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.debug_trace import trace, ALTER, CHOOSE, SCORE
-from app.publisher_policy import SPECIAL_PROVIDERS
+from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
     normalize_for_match,
     parse_sequence_number,
@@ -1157,6 +1157,27 @@ def narrator_match_score(clues: dict, product: dict) -> float:
     return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
 
 
+def _sku_matches(clues: dict, product: dict) -> bool:
+    local = str(clues.get("sku", "") or "").upper()
+    return bool(local) and local in {
+        str(product.get("sku", "") or "").upper(),
+        str(product.get("sku_lite", "") or "").upper(),
+    }
+
+
+def _publisher_matches(clues: dict, product: dict) -> bool:
+    local = clues.get("publisher", "")
+    remote = product.get("publisher_name", "")
+    if not local or not remote:
+        return False
+    local_entry = match_canonical_publisher(local)
+    remote_entry = match_canonical_publisher(remote)
+    if local_entry and remote_entry:
+        return local_entry.get("id") == remote_entry.get("id")
+    local_n, remote_n = normalize_for_match(local), normalize_for_match(remote)
+    return bool(local_n and remote_n) and (local_n in remote_n or remote_n in local_n)
+
+
 @trace(CHOOSE, capture=["local_duration_minutes"], show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
@@ -1228,18 +1249,23 @@ def pick_best_match_for_metadata(
             if (second_diff - best_diff) >= TIE_DURATION_MARGIN_MINUTES:
                 resolved = True
 
-    # Duration cannot separate them: the one recording read by the local
-    # narrator wins. Several (or no) narrator matches leave it unresolved.
+    # Duration cannot separate them: fall back to what the file itself says,
+    # narrator first, then the edition it was ripped from (the same recording
+    # is often sold under two ASINs, e.g. a US and a UK publisher). Each step
+    # decides only when exactly one tied candidate fits.
     resolved_by = "duration"
     if not resolved:
-        narrated = [
-            item for item in top
-            if narrator_match_score(clues, item[1]) >= NARRATOR_GOOD_SCORE
-        ]
-        if len(narrated) == 1:
-            best_score_value, best_product = narrated[0]
-            resolved = True
-            resolved_by = "narrator"
+        for evidence, fits in (
+            ("narrator", lambda p: narrator_match_score(clues, p) >= NARRATOR_GOOD_SCORE),
+            ("sku", lambda p: _sku_matches(clues, p)),
+            ("publisher", lambda p: _publisher_matches(clues, p)),
+        ):
+            fitting = [item for item in top if fits(item[1])]
+            if len(fitting) == 1:
+                best_score_value, best_product = fitting[0]
+                resolved = True
+                resolved_by = evidence
+                break
 
     def label(product: dict) -> str:
         title = product.get("title", "") or "?"
@@ -1256,7 +1282,7 @@ def pick_best_match_for_metadata(
             + (
                 f"(chose {label(best_product)} on {resolved_by})"
                 if resolved
-                else "with no clear duration or narrator winner"
+                else "with no clear duration, narrator or edition winner"
             )
         ),
     }

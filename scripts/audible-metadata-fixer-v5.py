@@ -83,6 +83,7 @@ try:
     from app.fixer.clues import (
         apply_structured_path_override,
         capture_publisher_clue,
+        capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
         infer_group_identity_from_path,
@@ -218,6 +219,7 @@ except ModuleNotFoundError:
     from app.fixer.clues import (
         apply_structured_path_override,
         capture_publisher_clue,
+        capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
         infer_group_identity_from_path,
@@ -2925,6 +2927,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
             clues["author_source"] = "title"
 
     capture_publisher_clue(clues, tags or {})
+    capture_sku_clue(clues, tags or {})
 
     return recover_invalid_local_title(clues, file_path)
 
@@ -3052,6 +3055,9 @@ def build_multi_file_search_context(
         clues["publisher"] = group_publisher
         canonical = match_canonical_publisher(group_publisher)
         clues["publisher_verified"] = bool(canonical)
+    group_sku = pick_most_common_value([c.get("sku", "") for c in clues_list if c.get("sku")])
+    if group_sku:
+        clues["sku"] = group_sku
 
     # "current" is a pure, matcher-untouched snapshot of what the group's
     # representative file (the first, by natural sort) actually has in its
