@@ -29,6 +29,19 @@ def load_module(name: str, relative_path: str):
 FIXER = load_module("fixer_v5_publisher", "scripts/audible-metadata-fixer-v5.py")
 
 
+class SkuCaptureTests(unittest.TestCase):
+    def test_audible_sku_captured_from_ufid_tag(self):
+        # Sapiens.mp3 carries UFID=BK_RHUK_002027, Audible's SKU for its edition.
+        clues = {}
+        FIXER.capture_sku_clue(clues, {"ufid": "BK_RHUK_002027"})
+        self.assertEqual(clues["sku"], "BK_RHUK_002027")
+
+    def test_non_audible_ufid_is_ignored(self):
+        clues = {}
+        FIXER.capture_sku_clue(clues, {"ufid": "http://musicbrainz.org 1234"})
+        self.assertNotIn("sku", clues)
+
+
 class PublisherCaptureTests(unittest.TestCase):
     def test_capture_from_dedicated_tag(self):
         clues = {"author": "Jane Doe", "narrator": "Reader"}

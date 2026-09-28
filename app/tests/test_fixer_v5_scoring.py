@@ -339,6 +339,79 @@ class TieBreakTests(unittest.TestCase):
         self.assertIsNotNone(ambiguity)
         self.assertFalse(ambiguity["resolved"])
 
+    def test_narrator_breaks_tie_duration_cannot(self):
+        # Two recordings of the same book, durations too close to separate:
+        # the one read by the local narrator wins.
+        other = product(asin="B0OTHER", title="Power Mage 5", series="Power Mage",
+                        sequence="5", narrators=("Someone Else",), minutes=600.0)
+        ours = product(asin="B0OURS", title="Power Mage 5", series="Power Mage",
+                       sequence="5", narrators=("Narrator Y",), minutes=600.1)
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            self.clues, [other, ours], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0OURS")
+        self.assertTrue(ambiguity["resolved"])
+        self.assertIn("narrator", ambiguity["reason"])
+        self.assertEqual(ambiguity["alternatives"], ["Power Mage 5 [B0OTHER]"])
+
+    def test_narrator_does_not_override_clear_duration_winner(self):
+        # Duration separates them, so the narrator is not consulted.
+        perfect = product(asin="B0PERF", title="Power Mage 5", series="Power Mage",
+                          sequence="5", narrators=("Someone Else",), minutes=601)
+        strong = product(asin="B0STRG", title="Power Mage 5", series="Power Mage",
+                         sequence="5", narrators=("Narrator Y",), minutes=650)
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "narrator": ""}, [strong, perfect], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0PERF")
+        self.assertTrue(ambiguity["resolved"])
+
+    def test_narrator_tie_without_local_narrator_stays_unresolved(self):
+        a = product(asin="B0A", title="Power Mage 5", series="Power Mage",
+                    sequence="5", narrators=("Someone Else",), minutes=600.0)
+        b = product(asin="B0B", title="Power Mage 5", series="Power Mage",
+                    sequence="5", narrators=("Another Reader",), minutes=600.1)
+        _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "narrator": ""}, [a, b], 600.0
+        )
+        self.assertFalse(ambiguity["resolved"])
+
+    def _edition(self, asin, sku, publisher):
+        p = product(asin=asin, title="Power Mage 5", series="Power Mage",
+                    sequence="5", minutes=600.0)
+        p["sku"] = sku
+        p["publisher_name"] = publisher
+        return p
+
+    def test_sku_tag_picks_the_publisher_edition(self):
+        # Sapiens: the same recording sold as a Harper (US) and a Vintage
+        # (UK) edition; the file's UFID tag is the UK edition's SKU.
+        us = self._edition("B0US", "BK_HARP_006291", "Harper")
+        uk = self._edition("B0UK", "BK_RHUK_002027", "Vintage Digital")
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "sku": "BK_RHUK_002027"}, [us, uk], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0UK")
+        self.assertTrue(ambiguity["resolved"])
+        self.assertIn("sku", ambiguity["reason"])
+
+    def test_publisher_tag_picks_the_publisher_edition(self):
+        us = self._edition("B0US", "BK_HARP_005696", "William Morrow")
+        uk = self._edition("B0UK", "BK_ADBL_030111", "Audible Studios for Bloomsbury")
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            {**self.clues, "publisher": "William Morrow"}, [uk, us], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0US")
+        self.assertTrue(ambiguity["resolved"])
+
+    def test_editions_without_local_evidence_stay_unresolved(self):
+        us = self._edition("B0US", "BK_HARP_005696", "William Morrow")
+        uk = self._edition("B0UK", "BK_ADBL_030111", "Audible Studios for Bloomsbury")
+        _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            self.clues, [us, uk], 600.0
+        )
+        self.assertFalse(ambiguity["resolved"])
+
     def test_single_candidate_no_ambiguity(self):
         only = self._twin("B0ONLY", 601)
         _chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
