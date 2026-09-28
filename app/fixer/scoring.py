@@ -235,8 +235,14 @@ def get_primary_series(product: dict) -> tuple[str, str]:
         sanitize_tag(series_name), sanitize_tag(sequence)
     )
     # Audible sometimes files books under a genre as the series (Arthur
-    # Stone's "LitRPG" #1-3); that is never written as a series.
+    # Stone's "LitRPG" #1-3); that is never written as a series. Nor is the
+    # book's own "title: subtitle" (Goodreads' Postwar, "#1945").
     if is_never_series(series_name):
+        return "", ""
+    subtitle = str(product.get("subtitle") or "").strip()
+    if subtitle and normalize_for_match(series_name) == normalize_for_match(
+        f"{product.get('title') or ''} {subtitle}"
+    ):
         return "", ""
     return series_name, sequence
 

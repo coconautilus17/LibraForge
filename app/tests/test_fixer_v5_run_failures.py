@@ -294,5 +294,19 @@ class TagProbeTests(unittest.TestCase):
         self.assertEqual(backup["format_tags"], {})
 
 
+class SeriesThatIsTheBookTests(unittest.TestCase):
+    """Postwar via Goodreads: series "Postwar: A History of Europe Since
+    1945" #1945 is the book's own title and subtitle."""
+
+    def test_series_equal_to_title_and_subtitle_is_dropped(self):
+        product = {"title": "Postwar", "subtitle": "A History of Europe Since 1945",
+                   "series": [{"title": "Postwar: A History of Europe Since 1945", "sequence": "1945"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("", ""))
+
+    def test_book_named_after_its_series_keeps_it(self):
+        product = {"title": "Dune", "subtitle": "", "series": [{"title": "Dune", "sequence": "1"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("Dune", "1"))
+
+
 if __name__ == "__main__":
     unittest.main()
