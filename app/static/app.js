@@ -178,13 +178,29 @@ async function startRun() {
     const ok = confirm('Both cover options are enabled. Replace existing cover already covers missing covers too. Continue with replace-cover behavior?');
     if (!ok) return;
   }
-  const res = await fetch('/api/runs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
+  // One start at a time: a double-click (or a second tab) used to launch two
+  // identical runs (LibraForge #322). The server refuses the second as well.
+  // attachToRun keeps it disabled for the whole run; only a failed start
+  // hands it back.
+  const startBtn = $('startBtn');
+  if (startBtn.disabled) return;
+  startBtn.disabled = true;
+  let res;
+  try {
+    res = await fetch('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  } catch (err) {
+    startBtn.disabled = false;
+    alert(`Could not start the run: ${err}`);
+    return;
+  }
   if (!res.ok) {
-    alert(await res.text());
+    startBtn.disabled = false;
+    const body = await res.json().catch(() => null);
+    alert(body?.detail || `Could not start the run (HTTP ${res.status}).`);
     return;
   }
   const data = await res.json();

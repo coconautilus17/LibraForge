@@ -1596,10 +1596,33 @@ class RunState:
     parser_state: dict[str, Any] = field(default_factory=dict)
     report_items: list[dict[str, Any]] = field(default_factory=list)
     report_item_updates: dict[str, dict[str, Any]] = field(default_factory=dict)
+    target_path: str = ""
 
 
 runs: dict[str, RunState] = {}
 runs_lock = threading.Lock()
+
+
+def _run_is_live(state: RunState) -> bool:
+    """Still doing work: queued/running, or cancelled but its process hasn't
+    exited yet (a cancel only asks the script to stop)."""
+    if state.process is not None:
+        return state.process.poll() is None
+    return state.status in {"queued", "running"}
+
+
+def _paths_overlap(a: str, b: str) -> bool:
+    pa, pb = Path(a), Path(b)
+    return pa == pb or pa in pb.parents or pb in pa.parents
+
+
+def find_conflicting_run(all_runs: dict[str, RunState], target_path: str) -> RunState | None:
+    """A live run over the same folder, a folder inside it, or one containing
+    it: two runs there would process (and with --apply, write) the same books."""
+    for state in all_runs.values():
+        if state.target_path and _run_is_live(state) and _paths_overlap(state.target_path, target_path):
+            return state
+    return None
 
 
 def set_run_phase(
@@ -8644,8 +8667,19 @@ def start_run(req: RunRequest) -> dict[str, Any]:
     except HTTPException:
         raise HTTPException(status_code=400, detail=f"Bad path: {req.target_path!r} — must be an existing path under {AUDIOBOOKS_ROOT}")
     run_id = datetime_id()
-    state = RunState(id=run_id)
+    state = RunState(id=run_id, target_path=req.target_path)
+    # Check and register under one lock, so two requests in the same instant
+    # can't both pass the check (LibraForge #322).
     with runs_lock:
+        conflict = find_conflicting_run(runs, req.target_path)
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Run {conflict.id} is still working on {conflict.target_path}. "
+                    "Wait for it to finish (or stop it and let it exit) before starting another run there."
+                ),
+            )
         runs[run_id] = state
     thread = threading.Thread(target=run_script_worker, args=(run_id, req), daemon=True)
     thread.start()
