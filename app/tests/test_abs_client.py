@@ -602,6 +602,45 @@ class ReconcileLegacyMetadataJsonTests(unittest.TestCase):
         self.assertEqual(self.run_it(3_000)["action"], "none")
 
 
+class SyncGenreOwnershipTests(unittest.TestCase):
+    """Metadata Forge fills ABS genres only when ABS has no real ones
+    (nothing, or only junk like "Audiobook" / foreign store labels); real
+    genres belong to Enrichment Forge and the user, and an empty genre never
+    clears them, in any write mode."""
+
+    def _sync(self, current_genres, genre, **flags):
+        record = {
+            "library_item_id": "li1", "path": "/x", "rel_path": "x", "updated_at": 100,
+            "media": {"metadata": {"title": "Old", "genres": current_genres}},
+        }
+        metadata = {"title": "T", "author": "A", "series": "", "sequence": "",
+                    "genre": genre, "asin": "ASIN1"}
+        with patch.object(abs_client, "abs_get_json", return_value={"media": {"metadata": {}}}), \
+             patch.object(abs_client, "abs_patch_json") as patch_mock:
+            abs_client.sync_book_metadata(
+                metadata=metadata, abs_url="http://x", abs_api_key="key",
+                lookup_item=lambda a, p: record, write_file_fallback=lambda: None, **flags,
+            )
+        return patch_mock.call_args[0][1]["metadata"] if patch_mock.called else {}
+
+    def test_empty_genre_never_clears_abs_genres(self):
+        self.assertNotIn("genres", self._sync(["Fantasy", "LitRPG"], ""))
+
+    def test_real_abs_genres_are_not_replaced_even_in_overwrite(self):
+        self.assertNotIn("genres", self._sync(["Fantasy", "LitRPG"], "Fantasy, Epic"))
+
+    def test_junk_only_abs_genres_are_replaced(self):
+        self.assertEqual(self._sync(["Audiobook"], "Fantasy, Epic")["genres"], ["Fantasy", "Epic"])
+        self.assertEqual(
+            self._sync(["Fantasía, Acción y aventura"], "Fantasy")["genres"], ["Fantasy"]
+        )
+
+    def test_junk_only_abs_genres_are_replaced_in_fill_missing_mode(self):
+        self.assertEqual(
+            self._sync(["Audiobook"], "Fantasy", fill_missing=True)["genres"], ["Fantasy"]
+        )
+
+
 class SyncBookMetadataLegacyJsonTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)

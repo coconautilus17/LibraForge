@@ -1671,6 +1671,16 @@ def metadata_from_product(
 
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
+    if not genre_text:
+        # An Audible match: its store categories through Enrichment Forge's
+        # taxonomy, i.e. what EF's own vote says from Audible alone (main
+        # genres, then subgenres; shelf-only labels like "Dragons & Mythical
+        # Creatures" follow EF's rules instead of being copied verbatim).
+        from app.enrichment import audible_category_ladder_genres
+        from app.genre_taxonomy import classify, labels_from_genres
+
+        mains, subs = classify([labels_from_genres(audible_category_ladder_genres(product))])
+        genre_text = ", ".join(clean_provider_genres(mains + subs))
 
     # A special-provider match (GraphicAudio, SoundBooth Theater) is its own
     # publisher by definition, regardless of what clues["publisher"] holds --
