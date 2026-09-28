@@ -79,8 +79,8 @@ class ListSeriesSummaryTests(unittest.TestCase):
         }
         summary = enrichment.list_series_summary(groups)
         self.assertEqual(summary, [
-            {"name": "Scholomance", "book_count": 2},
-            {"name": "Dungeon Core", "book_count": 1},
+            {"key": "scholomance", "name": "Scholomance", "book_count": 2},
+            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1},
         ])
 
     def test_query_filters_case_insensitively(self):
@@ -89,7 +89,7 @@ class ListSeriesSummaryTests(unittest.TestCase):
             "dungeon core": [{"media": {"metadata": {"seriesName": "Dungeon Core #1"}}}],
         }
         summary = enrichment.list_series_summary(groups, query="scho")
-        self.assertEqual(summary, [{"name": "Scholomance", "book_count": 1}])
+        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1}])
 
 
 class GetSeriesBooksTests(unittest.TestCase):
@@ -125,11 +125,31 @@ class GetSeriesBooksTests(unittest.TestCase):
             "title": "Scholomance",
             "asin": "B0XXXXXXXX",
             "author": "Logan Jacobs",
-            "existing_genres": ["Fantasy", "LitRPG"],
+            "existing_genres": [],
+            "existing_tags": ["Fantasy", "LitRPG"],
+            "has_audio": True,
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
             "sequence": None,
         }])
+
+    def test_existing_genres_come_from_the_genres_field_and_tags_are_separate(self):
+        # LibraForge #300: the genres field is what Enrichment Forge overwrites,
+        # so it is what "existing genres" must show; tags stay a separate input.
+        item = {"id": "1", "path": "/a", "isFile": False,
+                "media": {"numAudioFiles": 1, "tags": ["Epic"],
+                          "metadata": {"title": "T", "seriesName": "S #1", "genres": ["Fantasy"]}}}
+        [book] = enrichment.get_series_books({"s": [item]}, "S", _fake_normalize_series)
+        self.assertEqual(book["existing_genres"], ["Fantasy"])
+        self.assertEqual(book["existing_tags"], ["Epic"])
+        self.assertTrue(book["has_audio"])
+
+    def test_ebook_only_item_has_no_audio(self):
+        item = {"id": "2", "path": "/b", "isFile": False,
+                "media": {"numAudioFiles": 0, "tags": [],
+                          "metadata": {"title": "Missing X Books", "seriesName": "S #0"}}}
+        [book] = enrichment.get_series_books({"s": [item]}, "S", _fake_normalize_series)
+        self.assertFalse(book["has_audio"])
 
     def test_captures_sequence_from_series_name(self):
         groups = {
@@ -242,27 +262,31 @@ class SearchSeriesAudibleTests(unittest.TestCase):
 
 
 class SearchSeriesGoodreadsTests(unittest.TestCase):
-    def test_calls_for_every_book_unconditionally(self):
-        books = [{"id": "1", "title": "T1", "author": "A1"}, {"id": "2", "title": "T2", "author": "A2"}]
+    """Direct Goodreads shelves (app/goodreads_shelves.py), one result per book."""
+
+    def test_fetches_every_audio_book_with_first_author_and_shares_the_pacer(self):
+        books = [{"id": "1", "title": "Cradle - Book 001 - Unsouled", "author": "Will Wight, Someone Else"},
+                 {"id": "2", "title": "T2", "author": "A2"},
+                 {"id": "3", "title": "Missing Books", "author": "A3", "has_audio": False}]
         calls = []
+        pacer = object()
 
-        def abs_tract(**kwargs):
-            calls.append(kwargs["title"])
-            return [{"title": kwargs["title"]}]
+        def fetch(title, author, *, pacer):
+            calls.append((title, author, pacer))
+            return {"status": "found", "title": title, "shelves": [("fantasy", 5)]}
 
-        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
-        self.assertEqual(sorted(calls), ["T1", "T2"])
-        self.assertEqual(result["1"], [{"title": "T1"}])
-        self.assertEqual(result["2"], [{"title": "T2"}])
+        result = enrichment.search_series_goodreads(books, fetch, pacer)
+        self.assertEqual(sorted(c[:2] for c in calls), [("Cradle - Book 001 - Unsouled", "Will Wight"), ("T2", "A2")])
+        self.assertTrue(all(c[2] is pacer for c in calls))
+        self.assertEqual(result["1"]["status"], "found")
+        self.assertEqual(result["3"]["status"], "skipped")
 
-    def test_book_failure_yields_empty_list_not_exception(self):
-        books = [{"id": "1", "title": "T", "author": "A"}]
+    def test_an_exception_is_a_failed_result_not_a_crash(self):
+        def fetch(title, author, *, pacer):
+            raise RuntimeError("boom")
 
-        def abs_tract(**kwargs):
-            raise RuntimeError("upstream blocked")
-
-        result = enrichment.search_series_goodreads(books, abs_tract, abs_tract_url="http://abs-tract:5555")
-        self.assertEqual(result, {"1": []})
+        result = enrichment.search_series_goodreads([{"id": "1", "title": "T", "author": "A"}], fetch, None)
+        self.assertEqual(result["1"]["status"], "failed")
 
 
 class SearchSeriesAbsTests(unittest.TestCase):
@@ -290,14 +314,21 @@ class SearchSeriesAbsTests(unittest.TestCase):
 
 
 class AudibleCategoryLadderGenresTests(unittest.TestCase):
-    def test_takes_leaf_name_of_each_ladder(self):
-        product = {
-            "category_ladders": [
-                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}, {"name": "Epic"}]},
-                {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}]},
-            ]
-        }
-        self.assertEqual(enrichment.audible_category_ladder_genres(product), ["Epic", "Fantasy"])
+    def test_keeps_every_level_below_the_root_deduped(self):
+        # LibraForge #302: the leaf alone loses the parent genre ("Space Opera"
+        # without "Science Fiction") and the children's/teen audience.
+        product = {"category_ladders": [
+            {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}, {"name": "Space Opera"}]},
+            {"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}, {"name": "Military"}]},
+            {"ladder": [{"name": "Children's Audiobooks"}, {"name": "Literature & Fiction"}, {"name": "Fantasy & Magic"}]},
+            {"ladder": [{"name": "Literature & Fiction"}, {"name": "Genre Fiction"}, {"name": "Coming of Age"}]},
+        ]}
+        self.assertEqual(enrichment.audible_category_ladder_genres(product),
+                         ["Science Fiction", "Space Opera", "Military", "Children's Audiobooks", "Fantasy & Magic", "Coming of Age"])
+
+    def test_single_node_ladder_keeps_its_node(self):
+        product = {"category_ladders": [{"ladder": [{"name": "Fantasy"}]}]}
+        self.assertEqual(enrichment.audible_category_ladder_genres(product), ["Fantasy"])
 
     def test_none_product_returns_empty(self):
         self.assertEqual(enrichment.audible_category_ladder_genres(None), [])
@@ -361,13 +392,15 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
             },
         }
         goodreads_results = {
-            "1": [{"_abs_genres": ["Young Adult"]}],
-            "2": [{"_abs_genres": ["Fantasy"]}],
+            "1": {"status": "found", "shelves": [("fantasy", 100), ("young-adult", 40)]},
+            "2": {"status": "found", "shelves": [("fantasy", 10), ("erotica", 4)]},
         }
         compiled = enrichment.compile_series_enrichment(
             books, audible_results, goodreads_results, self._clean_genres
         )
         self.assertEqual(compiled["genre"], ["Fantasy", "Young Adult", "Erotica"])
+        self.assertEqual(compiled["books"][1]["goodreads_explicit"]["votes"], 4)
+        self.assertEqual(compiled["books"][0]["goodreads_explicit"]["votes"], 0)
         self.assertEqual(compiled["narrator"], "Andrea Parsneau")
         self.assertEqual(compiled["explicit_flagged_count"], 1)
         self.assertEqual(compiled["explicit_total_count"], 2)
@@ -377,6 +410,23 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         self.assertEqual(compiled["books"][0]["path"], "/audiobooks/Scholomance")
         self.assertEqual(compiled["books"][0]["is_file"], False)
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
+
+    def test_evidence_note_counts_significant_goodreads_explicit_shelving(self):
+        books = [{"id": "1", "title": "A", "existing_genres": [], "existing_narrator": "", "existing_explicit": False},
+                 {"id": "2", "title": "B", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        gr = {"1": {"status": "found", "shelves": [("fantasy", 27), ("erotica", 4), ("nsfw", 2)]},
+              "2": {"status": "found", "shelves": [("sci-fi", 24246), ("adult-fiction", 261)]}}
+        compiled = enrichment.compile_series_enrichment(books, {}, gr, self._clean_genres)
+        self.assertIn("1 of 2 books", compiled["explicit_evidence_note"])
+        self.assertIn("Goodreads", compiled["explicit_evidence_note"])
+        self.assertEqual(compiled["explicit_goodreads_count"], 1)
+
+    def test_not_found_or_failed_goodreads_results_add_no_genres(self):
+        books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(
+            books, {}, {"1": {"status": "failed", "shelves": [("horror", 99)]}}, self._clean_genres)
+        self.assertEqual(compiled["genre"], [])
+        self.assertIsNone(compiled["books"][0]["goodreads_explicit"])
 
     def test_missing_audible_and_goodreads_results_do_not_crash(self):
         books = [{"id": "1", "title": "T", "existing_genres": [], "existing_narrator": "", "existing_explicit": False}]
@@ -403,6 +453,14 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
         self.assertEqual(compiled["genre"], ["Romance", "Fantasy"])
         self.assertEqual(compiled["books"][0]["audible_genres"], [])
+
+    def test_tags_still_feed_the_union_and_are_returned_separately(self):
+        books = [{"id": "1", "title": "T", "existing_genres": ["Fantasy"], "existing_tags": ["Epic"],
+                  "existing_narrator": "", "existing_explicit": False}]
+        compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
+        self.assertEqual(compiled["genre"], ["Fantasy", "Epic"])
+        self.assertEqual(compiled["books"][0]["existing_tags"], ["Epic"])
+        self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
 
     def test_existing_genres_are_unioned_in_even_when_audible_found_some(self):
         # Local genres are part of the full genre equation, not a
@@ -526,3 +584,94 @@ class WriteMetadataJsonPartialTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NonAudioItemsTests(unittest.TestCase):
+    """LibraForge #301: ebook-only / placeholder items ("Missing Dune Books")
+    were searched like audiobooks and their random matches' genres leaked
+    into the whole series."""
+
+    BOOK = {"id": "x", "title": "Missing Dune Books", "author": "Frank Herbert", "asin": "", "has_audio": False}
+
+    def test_audible_search_skips_non_audio_books(self):
+        calls = []
+        out = enrichment.search_series_audible([self.BOOK], lambda *a, **k: calls.append(1) or [{"asin": "B0X"}],
+                                               lambda *a, **k: calls.append(1), client=None)
+        self.assertEqual(calls, [])
+        self.assertIsNone(out["x"])
+
+    def test_abs_search_skips_non_audio_books(self):
+        calls = []
+        out = enrichment.search_series_abs([self.BOOK], lambda **k: calls.append(1) or {"results": [{}]})
+        self.assertEqual(calls, [])
+        self.assertIsNone(out["x"])
+
+    def test_non_audio_rows_default_to_excluded_and_add_nothing_to_the_union(self):
+        books = [dict(self.BOOK, existing_genres=["Fantasy"], existing_tags=[]),
+                 {"id": "y", "title": "Dune", "has_audio": True, "existing_genres": [], "existing_tags": []}]
+        audible = {"x": {"category_ladders": [{"ladder": [{"name": "Literature & Fiction"}, {"name": "Literary Fiction"}]}]},
+                   "y": {"category_ladders": [{"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}]}]}}
+        out = enrichment.compile_series_enrichment(books, audible, {}, lambda g: [x for x in g if x])
+        rows = {r["id"]: r for r in out["books"]}
+        self.assertFalse(rows["x"]["default_include"])
+        self.assertTrue(rows["y"]["default_include"])
+        self.assertNotIn("Literary Fiction", out["genre"])
+        self.assertNotIn("Fantasy", out["genre"])
+
+
+def _item(item_id, series, author, title=None):
+    return {"id": item_id, "path": "/audiobooks/" + item_id, "isFile": False,
+            "media": {"numAudioFiles": 1, "tags": [],
+                      "metadata": {"title": title or item_id, "seriesName": series, "authorName": author}}}
+
+
+class StableSeriesKeyTests(unittest.TestCase):
+    """LibraForge #304: a listed series must always be compilable."""
+
+    def test_summary_rows_carry_a_key_that_resolves_even_for_odd_names(self):
+        groups = enrichment.group_items_by_series([_item("1", "Life Lines, Book-5 #1 #1", "BBC")], _fake_normalize_series)
+        [row] = enrichment.list_series_summary(groups)
+        self.assertIn("key", row)
+        self.assertEqual(len(enrichment.get_series_books(groups, row["key"], _fake_normalize_series, by_key=True)), 1)
+
+    def test_name_lookup_still_works(self):
+        groups = enrichment.group_items_by_series([_item("1", "Dune #1", "Frank Herbert")], _fake_normalize_series)
+        self.assertEqual(len(enrichment.get_series_books(groups, "Dune", _fake_normalize_series)), 1)
+
+
+class SplitGroupByAuthorTests(unittest.TestCase):
+    """LibraForge #305: same-named series by different authors were merged."""
+
+    def test_two_authors_with_two_plus_books_each_and_no_shared_credit_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("n1", "Scholomance #1", "Naomi Novik"), _item("n2", "Scholomance #2", "Naomi Novik"),
+            _item("l1", "Scholomance #1", "Logan Jacobs"), _item("l2", "Scholomance #2", "Logan Jacobs")])
+        self.assertEqual(sorted(groups), ["Logan Jacobs", "Naomi Novik"])
+        self.assertEqual(len(groups["Naomi Novik"]), 2)
+
+    def test_continuation_authors_with_a_shared_credit_do_not_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "Dune #1", "Brian Herbert, Kevin J. Anderson"), _item("b", "Dune #2", "Brian Herbert, Kevin J. Anderson"),
+            _item("c", "Dune #3", "Kevin J. Anderson, Brian Herbert"), _item("d", "Dune #4", "Kevin J. Anderson, Brian Herbert")])
+        self.assertEqual(list(groups), [""])
+
+    def test_a_single_stray_book_by_another_author_does_not_split(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "HP #1", "J.K. Rowling"), _item("b", "HP #2", "J.K. Rowling"), _item("c", "HP #3", "Eliezer Yudkowsky")])
+        self.assertEqual(list(groups), [""])
+
+    def test_role_suffixes_are_ignored(self):
+        groups = enrichment.split_group_by_author([
+            _item("a", "D #1", "Terry Pratchett"), _item("b", "D #2", "Terry Pratchett"),
+            _item("c", "D #3", "Ben Aaranovitch - introduction")])
+        self.assertEqual(list(groups), [""])
+
+    def test_summary_lists_split_groups_separately_and_keys_resolve(self):
+        items = [_item("n1", "Scholomance #1", "Naomi Novik"), _item("n2", "Scholomance #2", "Naomi Novik"),
+                 _item("l1", "Scholomance #1", "Logan Jacobs"), _item("l2", "Scholomance #2", "Logan Jacobs")]
+        groups = enrichment.group_items_by_series(items, _fake_normalize_series)
+        rows = enrichment.list_series_summary(groups)
+        self.assertEqual(sorted(r["name"] for r in rows), ["Scholomance [Logan Jacobs]", "Scholomance [Naomi Novik]"])
+        for r in rows:
+            books = enrichment.get_series_books(groups, r["key"], _fake_normalize_series, by_key=True)
+            self.assertEqual({b["author"] for b in books}, {r["name"].split("[")[1].rstrip("]")})

@@ -80,8 +80,14 @@
           </div>
         </div>
         <div class="field">
-          <label for="narratorInput"><span class="field-label">Narrator</span><span class="field-hint">union, edit if narrators changed mid-series</span></label>
-          <input id="narratorInput" />
+          <label for="narratorInput"><span class="field-label">Narrator</span><span class="field-hint">optional, off by default</span></label>
+          <input id="narratorInput" placeholder="Leave empty to keep each book's own narrator" />
+          <p id="narratorSuggestions" class="context-note"></p>
+          <div class="explicit-toggle-row">
+            <input id="applyNarratorCheckbox" type="checkbox" />
+            <label for="applyNarratorCheckbox" class="explicit-toggle-label">Also set this narrator on every included book</label>
+          </div>
+          <p class="explicit-footnote">Narrators differ per book and per edition (a full-cast edition next to a single-narrator one), so this is off by default.</p>
         </div>
         <div class="field">
           <label for="sequenceRangeInput"><span class="field-label">Sequence range</span></label>
@@ -89,12 +95,14 @@
         </div>
 
         <div class="field explicit-field field-wide">
-          <div class="explicit-toggle-row">
-            <input id="explicitCheckbox" type="checkbox" />
-            <label for="explicitCheckbox" class="explicit-toggle-label">Explicit</label>
-          </div>
+          <label for="explicitSelect"><span class="field-label">Explicit</span></label>
+          <select id="explicitSelect">
+            <option value="">Don't change</option>
+            <option value="true">Explicit</option>
+            <option value="false">Not explicit</option>
+          </select>
           <div id="explicitEvidence" class="context-note"></div>
-          <p class="explicit-footnote">Leave unchecked to skip. Checking writes <code>explicit: true</code> for every included book below — directly to Audiobookshelf via its API, or to metadata.json if it isn't configured.</p>
+          <p class="explicit-footnote">Leave on Don't change to skip. Explicit writes <code>explicit: true</code> and Not explicit writes <code>explicit: false</code> for every included book below, directly to Audiobookshelf via its API (or to metadata.json if it isn't configured).</p>
         </div>
       </div>
 
@@ -104,7 +112,7 @@
       <div id="bookList"></div>
 
       <div class="dryrun-notice">
-        <strong>Heads up:</strong> Apply pushes directly to Audiobookshelf via its API and never edits the audio files' own tags. Only if Audiobookshelf isn't configured does this write to metadata.json instead — in that case, if the library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you applied here.
+        <strong>Heads up:</strong> Apply pushes directly to Audiobookshelf via its API and never edits the audio files' own tags. If a book's folder still has an old metadata.json from earlier LibraForge versions, it would undo this change on the next scan, so it is first compared with Audiobookshelf (the newer side wins) and then removed. Only if Audiobookshelf isn't configured does this write to metadata.json instead; in that case, if the library has Audiobookshelf's "Store metadata with item" setting enabled, ABS regenerates metadata.json itself on its next scan and will overwrite what you applied here.
       </div>
 
       <div class="actions">
@@ -116,6 +124,6 @@
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260711-2"></script>
+  <script src="/static/enrichment-forge.js?v=20260928-2"></script>
 </body>
 </html>

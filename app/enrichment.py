@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
+
 _SERIES_SEQUENCE_SUFFIX_RE = re.compile(r"\s*#\d+\s*$")
 _SERIES_SEQUENCE_NUMBER_RE = re.compile(r"#(\d+(?:\.\d+)?)\s*$")
 
@@ -111,20 +113,60 @@ def _display_series_name(group_items: list[dict[str, Any]]) -> str:
     return max(counts.items(), key=lambda pair: pair[1])[0]
 
 
+_SERIES_KEY_AUTHOR_SEP = "\x1f"
+
+
+def _item_authors(item: dict[str, Any]) -> list[str]:
+    """Credited authors of an ABS item, minus role suffixes like
+    'Ben Aaranovitch - introduction'."""
+    raw = str(((item.get("media") or {}).get("metadata") or {}).get("authorName") or "")
+    return [a.split(" - ")[0].strip() for a in raw.split(",") if a.split(" - ")[0].strip()]
+
+
+def split_group_by_author(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Split a same-named series group into separate works by primary author
+    (LibraForge #305), e.g. Naomi Novik's and Logan Jacobs' "Scholomance".
+
+    Splits only when 2+ primary authors each have 2+ books AND no book credits
+    two of them together -- co-written/continuation series (Dune: Brian Herbert
+    and Kevin J. Anderson) and a single stray book stay one group. Returns
+    {"": items} when no split applies.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        authors = _item_authors(item)
+        buckets.setdefault(authors[0] if authors else "", []).append(item)
+    big = [a for a, group in buckets.items() if a and len(group) >= 2]
+    if len(big) < 2:
+        return {"": items}
+    big_lower = {a.lower() for a in big}
+    for item in items:
+        if len(big_lower & {a.lower() for a in _item_authors(item)}) >= 2:
+            return {"": items}
+    return buckets
+
+
 def list_series_summary(
     groups: dict[str, list[dict[str, Any]]],
     query: str = "",
 ) -> list[dict[str, Any]]:
-    """Return [{name, book_count}] sorted by book_count descending, filtered
-    by a case-insensitive substring match on the display name.
+    """Return [{key, name, book_count}] sorted by book_count descending,
+    filtered by a case-insensitive substring match on the display name.
+
+    `key` is the group's own key (plus the author for a split group) and is
+    what compile should look up -- re-normalizing a display name can land on
+    a different key for odd series names (LibraForge #304).
     """
     query_lower = query.strip().lower()
     summary = []
-    for group_items in groups.values():
-        display_name = _display_series_name(group_items)
-        if query_lower and query_lower not in display_name.lower():
-            continue
-        summary.append({"name": display_name, "book_count": len(group_items)})
+    for group_key, group_items in groups.items():
+        base_name = _display_series_name(group_items)
+        for author, bucket in split_group_by_author(group_items).items():
+            display_name = f"{base_name} [{author}]" if author else base_name
+            if query_lower and query_lower not in display_name.lower():
+                continue
+            key = f"{group_key}{_SERIES_KEY_AUTHOR_SEP}{author}" if author else group_key
+            summary.append({"key": key, "name": display_name, "book_count": len(bucket)})
     summary.sort(key=lambda row: (-row["book_count"], row["name"].lower()))
     return summary
 
@@ -133,15 +175,23 @@ def get_series_books(
     groups: dict[str, list[dict[str, Any]]],
     series_name: str,
     normalize_series_fn: Callable[[str], str],
+    by_key: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the lightweight per-book dicts for a chosen series (matched by
     its display or normalized name), used to drive the compile step.
     """
-    query_key = normalize_abs_series_name(series_name, normalize_series_fn)
-    group_items = groups.get(query_key, [])
+    if by_key:
+        group_key, _, author = series_name.partition(_SERIES_KEY_AUTHOR_SEP)
+        group_items = groups.get(group_key, [])
+        if author:
+            group_items = split_group_by_author(group_items).get(author, [])
+    else:
+        query_key = normalize_abs_series_name(series_name, normalize_series_fn)
+        group_items = groups.get(query_key, [])
     books = []
     for item in group_items:
-        metadata = ((item.get("media") or {}).get("metadata") or {})
+        media = item.get("media") or {}
+        metadata = media.get("metadata") or {}
         raw_series_name = str(metadata.get("seriesName") or "").strip()
         books.append({
             "id": item.get("id", ""),
@@ -150,7 +200,14 @@ def get_series_books(
             "title": metadata.get("title", "") or "",
             "asin": str(metadata.get("asin", "") or "").strip().upper(),
             "author": metadata.get("authorName", "") or "",
-            "existing_genres": list((item.get("media") or {}).get("tags") or []),
+            # The genres field is what Enrichment Forge overwrites, so that's
+            # what "existing" shows (#300); tags carry historical genre data in
+            # many libraries and stay a separate, still-contributing input.
+            "existing_genres": list(metadata.get("genres") or []),
+            "existing_tags": list(media.get("tags") or []),
+            # Ebook-only / placeholder items have no audio and must not be
+            # searched as audiobooks (#301). Unknown count = assume audio.
+            "has_audio": media.get("numAudioFiles") is None or int(media.get("numAudioFiles") or 0) > 0,
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),
@@ -192,6 +249,8 @@ def search_series_audible(
     -> Audible product dict, or None if nothing was found or the call failed.
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        if not book.get("has_audio", True):
+            return book["id"], None  # #301: never match placeholders/ebooks to audiobooks
         try:
             if book.get("asin"):
                 return book["id"], audible_lookup_by_asin_fn(client, book["asin"])
@@ -212,34 +271,29 @@ def search_series_audible(
 
 def search_series_goodreads(
     books: list[dict[str, Any]],
-    abs_tract_search_fn: Callable[..., list[dict]],
-    abs_tract_url: str,
+    fetch_fn: Callable[..., dict[str, Any]],
+    pacer: Any,
     workers: int = ENRICHMENT_SEARCH_WORKERS,
-) -> dict[str, list[dict]]:
-    """Search Goodreads (via abs-tract) for every book in a series, up to
-    `workers` concurrently. Always called for every book, unlike the fixer's
-    silent-fallback pattern used during batch runs. This phase only starts
-    after search_series_audible() has fully completed for the whole series
-    (enforced by the caller, see app/main.py), so Audible and Goodreads
-    calls never interleave (abs-tract's upstream rate limit only trips under
-    mixed Goodreads+Amazon load, not pure Goodreads).
+) -> dict[str, dict[str, Any]]:
+    """Look every audio book up on Goodreads directly (app/goodreads_shelves.py),
+    up to `workers` concurrently, all sharing one pacer so the whole library
+    stays under Meta Forge's Goodreads pacing (0.5 s global gap, breaker 2 -> 180 s).
+    Runs after the Audible phase has finished (enforced by the caller). Returns
+    book id -> {"status": found|not_found|failed|skipped, "title", "shelves"}.
     """
-    def _search_one(book: dict[str, Any]) -> tuple[str, list[dict]]:
+    def _search_one(book: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if not book.get("has_audio", True):
+            return book["id"], {"status": "skipped", "title": None, "shelves": []}  # #301
+        author = (str(book.get("author", "") or "").split(",")[0]).strip()
         try:
-            return book["id"], abs_tract_search_fn(
-                title=book.get("title", ""),
-                author=book.get("author", ""),
-                provider="goodreads",
-                abs_tract_url=abs_tract_url,
-                limit=3,
-            )
+            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer)
         except Exception:
-            return book["id"], []
+            return book["id"], {"status": "failed", "title": None, "shelves": []}
 
-    results: dict[str, list[dict]] = {}
+    results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for book_id, products in pool.map(_search_one, books):
-            results[book_id] = products
+        for book_id, result in pool.map(_search_one, books):
+            results[book_id] = result
     return results
 
 
@@ -256,6 +310,8 @@ def search_series_abs(
     ABS search plumbing as the manual review and M4B flows.
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
+        if not book.get("has_audio", True):
+            return book["id"], None  # #301
         try:
             query = str(book.get("title", "") or "").strip()
             if not query:
@@ -281,21 +337,37 @@ def search_series_abs(
 _EROTICA_ROOT = "erotica"
 
 
+# Audible's audience roots carry the only children's/teen signal, so they are
+# kept; every other root is a broad store section. Generic umbrella nodes are
+# dropped here (Enrichment Forge only -- Meta Forge's genre output is untouched).
+_AUDIENCE_ROOTS = {"children's audiobooks", "teen & young adult"}
+_UMBRELLA_NODES = {"literature & fiction", "genre fiction", "science fiction & fantasy"}
+
+
 def audible_category_ladder_genres(product: dict[str, Any] | None) -> list[str]:
-    """Return the deepest (leaf) genre name from each of a product's
-    category_ladders entries, e.g. 'Science Fiction & Fantasy > Fantasy >
-    Epic' becomes 'Epic'.
+    """Every level of each of a product's category_ladders below its root,
+    deduped in order (LibraForge #302), e.g. 'Science Fiction & Fantasy >
+    Science Fiction > Space Opera' gives Science Fiction and Space Opera.
+    Audience roots (Children's Audiobooks, Teen & Young Adult) are kept;
+    generic umbrella nodes are dropped.
     """
     if not product:
         return []
-    genres = []
+    out: list[str] = []
+    seen: set[str] = set()
     for ladder in (product.get("category_ladders") or []):
-        nodes = ladder.get("ladder") or []
-        if nodes:
-            name = nodes[-1].get("name", "")
-            if name:
-                genres.append(name)
-    return genres
+        names = [str(n.get("name") or "").strip() for n in (ladder.get("ladder") or [])]
+        names = [n for n in names if n]
+        if not names:
+            continue
+        keep = names if names[0].lower() in _AUDIENCE_ROOTS else (names[1:] or names)
+        for name in keep:
+            key = name.lower()
+            if key in _UMBRELLA_NODES or key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+    return out
 
 
 def is_flagged_explicit(product: dict[str, Any] | None) -> bool:
@@ -317,22 +389,28 @@ def is_flagged_explicit(product: dict[str, Any] | None) -> bool:
     return False
 
 
-def explicit_evidence_note(flagged_count: int, total_count: int) -> str:
+def explicit_evidence_note(flagged_count: int, total_count: int, goodreads_count: int = 0) -> str:
     """Deterministic, count-only evidence sentence.
 
     Never names individual books (the per-book warning pills in the UI
     already do that, and it gets grammatically awkward at variable list
     lengths), and never a generated sentence, this is plain templating.
+    `goodreads_count` = books whose Goodreads readers significantly shelve
+    them as erotica/smut/nsfw.
     """
-    if flagged_count == 0:
+    if flagged_count == 0 and goodreads_count == 0:
         headline = "No book in this series returned a positive Erotica/adult signal from Audible or Goodreads."
-    elif flagged_count == total_count:
-        headline = f"All {total_count} books in this series show a positive Erotica/adult signal from Audible."
     else:
-        headline = (
-            f"{flagged_count} of {total_count} books in this series show a positive "
-            "Erotica/adult signal from Audible (marked below)."
-        )
+        parts = []
+        if flagged_count == total_count:
+            parts.append(f"All {total_count} books in this series show a positive Erotica/adult signal from Audible.")
+        elif flagged_count:
+            parts.append(f"{flagged_count} of {total_count} books in this series show a positive "
+                         "Erotica/adult signal from Audible (marked below).")
+        if goodreads_count:
+            parts.append(f"{goodreads_count} of {total_count} books are shelved as erotica/smut/nsfw by "
+                         "Goodreads readers (marked below).")
+        headline = " ".join(parts)
     caveat = (
         "That doesn't confirm the rest are clean, the same signal has missed equally "
         "explicit books before, so use your own judgment for the whole series."
@@ -400,18 +478,22 @@ def compile_series_enrichment(
     all_genres: list[str] = []
     all_narrators: list[str] = []
     flagged_count = 0
+    goodreads_explicit_count = 0
 
     for book in books:
         product = audible_results.get(book["id"])
         abs_product = (abs_results or {}).get(book["id"])
-        gr_products = goodreads_results.get(book["id"]) or []
-        gr_product = gr_products[0] if gr_products else None
+        gr = goodreads_results.get(book["id"]) or {}
+        gr_found = gr.get("status") == "found"
 
         audible_genres = clean_provider_genres_fn(
             audible_category_ladder_genres(product)
             or _split_abs_genre((abs_product or {}).get("genre", ""))
         )
-        goodreads_genres = clean_provider_genres_fn((gr_product or {}).get("_abs_genres") or [])
+        goodreads_genres = clean_provider_genres_fn(shelves_to_genres(gr.get("shelves") or [])) if gr_found else []
+        goodreads_explicit = shelves_explicit_evidence(gr.get("shelves") or []) if gr_found else None
+        if goodreads_explicit and goodreads_explicit["significant"] and book.get("has_audio", True):
+            goodreads_explicit_count += 1
         flagged = is_flagged_explicit(product)
         if flagged:
             flagged_count += 1
@@ -420,10 +502,12 @@ def compile_series_enrichment(
         if not narrators:
             narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
-        all_genres.extend(audible_genres)
-        all_genres.extend(goodreads_genres)
-        all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", [])))
-        all_narrators.extend(narrators)
+        has_audio = book.get("has_audio", True)
+        if has_audio:  # #301: a placeholder/ebook's genres are not evidence about the series
+            all_genres.extend(audible_genres)
+            all_genres.extend(goodreads_genres)
+            all_genres.extend(clean_provider_genres_fn(book.get("existing_genres", []) + book.get("existing_tags", [])))
+            all_narrators.extend(narrators)
 
         rows.append({
             "id": book["id"],
@@ -432,8 +516,12 @@ def compile_series_enrichment(
             "title": book.get("title", ""),
             "audible_genres": audible_genres,
             "goodreads_genres": goodreads_genres,
+            "goodreads_explicit": goodreads_explicit,
             "flagged_explicit": flagged,
             "existing_genres": book.get("existing_genres", []),
+            "existing_tags": book.get("existing_tags", []),
+            "has_audio": has_audio,
+            "default_include": has_audio,
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
         })
@@ -444,7 +532,8 @@ def compile_series_enrichment(
         "narrator": ", ".join(_dedupe_preserve_order(all_narrators)),
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),
-        "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books)),
+        "explicit_goodreads_count": goodreads_explicit_count,
+        "explicit_evidence_note": explicit_evidence_note(flagged_count, len(books), goodreads_explicit_count),
         "sequence_range": _compute_sequence_range(books),
     }
 

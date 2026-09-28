@@ -46,7 +46,8 @@ from app.fixer.parsing import (
 # ---------------------------------------------------------------------------
 
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
-GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
+# Format labels, never genres ("Audiobook" is not a genre: PR #105, #306).
+GENRE_BLOCKLIST = {"audiobook", "audiobooks", "audio book", "audio books"}
 
 TITLE_ORDER_STOPWORDS = {
     "a",

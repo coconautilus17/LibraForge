@@ -62,16 +62,19 @@ from app.enrichment import (
     search_series_goodreads,
     write_metadata_json_partial,
 )
+from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
+    abs_get_json,
     abs_patch_json,
     build_item_index,
     load_bootstrap_registry,
     lookup_item_in_index,
     reconcile_bootstrap_registry,
+    reconcile_legacy_metadata_json,
     sync_book_metadata,
     upsert_bootstrapped_file,
 )
-from app.fixer.scoring import clean_provider_genres, split_series_trailing_number
+from app.fixer.scoring import GENRE_BLOCKLIST, clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
@@ -115,7 +118,6 @@ AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
-_GENRE_BLOCKLIST = {"audiobook", "audiobooks"}
 
 
 def _pick_genre(genres: list[str]) -> str:
@@ -130,7 +132,7 @@ def _pick_genre(genres: list[str]) -> str:
     for g in genres:
         cleaned = g.strip()
         key = cleaned.lower()
-        if not cleaned or key in _GENRE_BLOCKLIST or key in seen:
+        if not cleaned or key in GENRE_BLOCKLIST or key in seen:
             continue
         seen.add(key)
         kept.append(cleaned)
@@ -3811,7 +3813,14 @@ def enforce_m4b_output_metadata(
     set_mp4_text(tags, "\xa9wrt", metadata.narrator)
     set_mp4_text(tags, "\xa9grp", metadata.series)
     set_mp4_text(tags, "\xa9day", metadata.year)
-    set_mp4_text(tags, "\xa9gen", "Audiobook")
+    # Keep a real genre the merged output inherited from its source files, but
+    # never leave (or stamp) a format label like "Audiobook" as the genre: ABS
+    # fills an empty genre from file tags on first scan (LibraForge #306).
+    real_genres = [str(g) for g in (tags.get("\xa9gen") or []) if str(g).strip().lower() not in GENRE_BLOCKLIST]
+    if real_genres:
+        tags["\xa9gen"] = real_genres
+    else:
+        tags.pop("\xa9gen", None)
     set_mp4_text(tags, "desc", metadata.summary[:240])
     set_mp4_text(tags, "ldes", metadata.summary)
     set_mp4_text(tags, "\xa9cmt", metadata.summary)
@@ -6146,6 +6155,7 @@ def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
 
 
 class EnrichmentSeriesRow(BaseModel):
+    key: str = ""
     name: str
     book_count: int
 
@@ -6189,6 +6199,11 @@ def _reset_enrichment_items_cache_for_tests() -> None:
         _ENRICHMENT_ITEMS_CACHE = None
 
 
+# One Goodreads pacer for the whole process, so consecutive compiles share the
+# request budget and the breaker survives across series.
+_GOODREADS_PACER = GoodreadsPacer()
+
+
 @app.get("/api/enrichment/series")
 def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
     if not _get_abs_api_key():
@@ -6201,7 +6216,9 @@ def enrichment_series(q: str = "") -> EnrichmentSeriesResponse:
 
 
 class EnrichmentCompileRequest(BaseModel):
-    series_name: str
+    series_name: str = ""
+    # Preferred: the key /api/enrichment/series returned (LibraForge #304).
+    series_key: str = ""
     auth_file: str = "/auth/audible-metadata.json"
 
 
@@ -6212,8 +6229,12 @@ class EnrichmentBookRow(BaseModel):
     title: str
     audible_genres: list[str]
     goodreads_genres: list[str]
+    goodreads_explicit: dict | None = None
     flagged_explicit: bool
     existing_genres: list[str]
+    existing_tags: list[str] = []
+    has_audio: bool = True
+    default_include: bool = True
     existing_narrator: str
     existing_explicit: bool
 
@@ -6223,6 +6244,10 @@ class EnrichmentSourceStatus(BaseModel):
     state: str
     detail: str = ""
     searched: int = 0
+    found: int = 0
+    failed: int = 0
+    skipped: int = 0
+    rate_limited: bool = False
 
 
 class EnrichmentCompileResponse(BaseModel):
@@ -6232,6 +6257,7 @@ class EnrichmentCompileResponse(BaseModel):
     sequence_range: str
     explicit_flagged_count: int
     explicit_total_count: int
+    explicit_goodreads_count: int = 0
     explicit_evidence_note: str
     source_status: dict[str, EnrichmentSourceStatus] = Field(default_factory=dict)
 
@@ -6244,9 +6270,12 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     review_module = load_review_module()
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
-    books = get_series_books(groups, req.series_name, review_module.normalize_series)
+    if req.series_key:
+        books = get_series_books(groups, req.series_key, review_module.normalize_series, by_key=True)
+    else:
+        books = get_series_books(groups, req.series_name, review_module.normalize_series)
     if not books:
-        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name}")
+        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name or req.series_key}")
 
     source_status: dict[str, dict[str, Any]] = {}
     audible_results: dict[str, dict | None] = {}
@@ -6287,26 +6316,27 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
             "searched": len(books),
         }
 
-    # Phase 2: Goodreads, 5 workers, starts only after phase 1 is fully done
-    # (never interleaved with Audible calls, see app/enrichment.py's
-    # search_series_goodreads docstring).
-    abs_tract_config = _load_abs_tract_config()
-    abs_tract_url = (abs_tract_config.get("url") or "").strip()
-    if abs_tract_url:
-        goodreads_results = search_series_goodreads(books, abs_tract_search, abs_tract_url)
-        source_status["goodreads"] = {
-            "label": "Goodreads",
-            "state": "searched",
-            "searched": len(books),
-        }
-    else:
-        goodreads_results = {}
-        source_status["goodreads"] = {
-            "label": "Goodreads",
-            "state": "skipped",
-            "detail": "abs-tract is not connected, so Goodreads was not used.",
-            "searched": 0,
-        }
+    # Phase 2: Goodreads shelves, read directly (app/goodreads_shelves.py --
+    # abs-tract's filtered 3-shelf output can't supply LitRPG/progression/
+    # harem/YA). Starts only after phase 1 is fully done; every compile shares
+    # one process-wide pacer (Meta Forge pacing: 0.5 s gap, breaker 2 -> 180 s).
+    trips_before = _GOODREADS_PACER.trips
+    goodreads_results = search_series_goodreads(books, fetch_book_shelves, _GOODREADS_PACER)
+    audio_books = [b for b in books if b.get("has_audio", True)]
+    statuses = [goodreads_results.get(b["id"], {}).get("status") for b in audio_books]
+    skipped = statuses.count("skipped")
+    rate_limited = skipped > 0 or _GOODREADS_PACER.trips > trips_before
+    source_status["goodreads"] = {
+        "label": "Goodreads",
+        "state": "searched",
+        "searched": len(audio_books),
+        "found": statuses.count("found"),
+        "failed": statuses.count("failed"),
+        "skipped": skipped,
+        "rate_limited": rate_limited,
+        "detail": ("Goodreads is rate-limiting; paused for a few minutes, the remaining books were skipped."
+                   if rate_limited else ""),
+    }
 
     compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres, abs_results)
     compiled["source_status"] = source_status
@@ -6318,17 +6348,24 @@ class EnrichmentApplyBook(BaseModel):
     path: str
     is_file: bool
     include: bool
+    title: str = ""
 
 
 class EnrichmentApplyRequest(BaseModel):
     books: list[EnrichmentApplyBook]
     genre: list[str] = []
     narrator: str = ""
-    explicit: bool = False
+    # Narrators differ per book and per edition, so the series-wide narrator is
+    # only written when the user explicitly opts in (LibraForge #299).
+    apply_narrator: bool = False
+    # None = don't touch, True = set, False = clear (LibraForge #303).
+    explicit: bool | None = None
 
 
 class EnrichmentApplyResponse(BaseModel):
     applied: int
+    # Counts per legacy metadata.json reconcile action (LibraForge #298).
+    legacy_json: dict[str, int] = {}
     failed: list[dict] = []
 
 
@@ -6348,41 +6385,52 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     """
     applied = 0
     failed: list[dict] = []
+    legacy_json: dict[str, int] = {}
     abs_api_key = _get_abs_api_key()
     abs_url = _get_abs_url() if abs_api_key else ""
+    narrators = [n.strip() for n in req.narrator.split(",") if n.strip()] if req.apply_narrator else []
+    # "Audiobook" (and any other format label) can never be written as a genre.
+    genres = clean_provider_genres(req.genre)
     for book in req.books:
         if not book.include:
             continue
         if abs_api_key and book.id:
             try:
                 fields: dict[str, Any] = {}
-                if req.genre:
-                    fields["genres"] = list(req.genre)
-                if req.narrator.strip():
-                    fields["narrators"] = [n.strip() for n in req.narrator.split(",") if n.strip()]
-                if req.explicit:
-                    fields["explicit"] = True
+                if genres:
+                    fields["genres"] = genres
+                if narrators:
+                    fields["narrators"] = narrators
+                if req.explicit is not None:
+                    fields["explicit"] = bool(req.explicit)
+                # A legacy metadata.json in the book's folder would revert this
+                # write on the next rescan: reconcile it into ABS and delete it
+                # first (LibraForge #298).
+                item = abs_get_json(f"/api/items/{book.id}", {"expanded": "1"}, abs_url, abs_api_key)
+                legacy = reconcile_legacy_metadata_json(book.path, item, abs_url=abs_url, abs_api_key=abs_api_key)
+                if legacy.get("action") and legacy["action"] != "none":
+                    legacy_json[legacy["action"]] = legacy_json.get(legacy["action"], 0) + 1
                 if fields:
                     abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
                 applied += 1
             except Exception as exc:
-                failed.append({"id": book.id, "path": book.path, "error": str(exc)})
+                failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
             continue
         try:
             validated_path = validate_audiobook_path(book.path)
         except HTTPException as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc.detail)})
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
             continue
         target = resolve_metadata_json_path(str(validated_path), book.is_file)
         try:
             assert_under_audiobooks(target)
-            write_metadata_json_partial(target, req.genre, req.narrator, req.explicit)
+            write_metadata_json_partial(target, genres, ", ".join(narrators), bool(req.explicit))
             applied += 1
         except HTTPException as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc.detail)})
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})
         except Exception as exc:
-            failed.append({"id": book.id, "path": book.path, "error": str(exc)})
-    return EnrichmentApplyResponse(applied=applied, failed=failed)
+            failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
+    return EnrichmentApplyResponse(applied=applied, legacy_json=legacy_json, failed=failed)
 
 
 # ---------------------------------------------------------------------------
