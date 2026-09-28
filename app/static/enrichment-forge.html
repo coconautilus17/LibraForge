@@ -6,7 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
-  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-2" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-3" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -109,7 +109,8 @@
             <option value="false">Not explicit</option>
           </select>
           <div id="explicitEvidence" class="context-note"></div>
-          <p class="explicit-footnote">Leave on Don't change to skip. Explicit writes <code>explicit: true</code> and Not explicit writes <code>explicit: false</code> for every included book below, directly to Audiobookshelf via its API (or to metadata.json if it isn't configured).</p>
+          <p id="explicitSummary" class="explicit-summary" hidden></p>
+          <p class="explicit-footnote">Sets every included book's choice below; each book can still be changed on its own. Don't change skips a book. Only the HaremLit wiki's own rating pre-selects a book; the other signals are shown as evidence for you to judge.</p>
         </div>
       </div>
 
@@ -131,6 +132,6 @@
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260929-4"></script>
+  <script src="/static/enrichment-forge.js?v=20260929-5"></script>
 </body>
 </html>

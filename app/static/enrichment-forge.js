@@ -131,11 +131,45 @@ function renderSuggestions() {
   });
 }
 
+// Per-book explicit: evidence pills plus a three-way choice. Only the HaremLit
+// wiki (authoritative) pre-selects; everything else starts on Don't change.
+function explicitControlHtml(book) {
+  if (book.has_audio === false) return "";
+  const ev = book.explicit || {};
+  const pills = (ev.evidence || []).map((text) => `<span class="badge evidence-pill">&#9888; ${escapeHtml(text)}</span>`);
+  if (ev.check) pills.push('<span class="badge evidence-pill check" title="Harem fiction is often explicit, but the genre alone proves nothing">check: harem</span>');
+  const preset = ev.strength === "authoritative" ? (ev.suggestion === "explicit" ? "true" : "false") : "";
+  const option = (value, label) => `<option value="${value}"${preset === value ? " selected" : ""}>${label}</option>`;
+  return `
+      <div class="book-explicit-cell">
+        ${pills.join(" ")}
+        <select class="book-explicit" aria-label="Explicit for ${escapeHtml(book.title)}" title="Now: ${book.existing_explicit ? "explicit" : "not explicit"}">
+          ${option("", `Don't change (now ${book.existing_explicit ? "explicit" : "not explicit"})`)}
+          ${option("true", preset === "true" ? "Explicit (HaremLit wiki)" : "Explicit")}
+          ${option("false", preset === "false" ? "Not explicit (HaremLit wiki)" : "Not explicit")}
+        </select>
+      </div>`;
+}
+
+function renderExplicitSummary(summary) {
+  const notes = [];
+  if (summary && summary.inconsistent) {
+    notes.push(`${summary.flagged_now} of ${summary.total} books are flagged explicit in Audiobookshelf; set each book below.`);
+  }
+  if (summary && summary.suggested_explicit) {
+    notes.push(`The HaremLit wiki lists this as explicit; ${summary.suggested_explicit} book${summary.suggested_explicit === 1 ? " is" : "s are"} pre-selected below.`);
+  }
+  if (summary && summary.suggested_not) {
+    notes.push(`The HaremLit wiki lists this as not explicit; ${summary.suggested_not} book${summary.suggested_not === 1 ? " is" : "s are"} pre-selected below.`);
+  }
+  $("explicitSummary").hidden = !notes.length;
+  $("explicitSummary").textContent = notes.join(" ");
+}
+
 function renderBookList(books) {
   $("bookList").innerHTML = books.map((book) => {
     // Items with no audio (placeholders, ebooks) come back excluded by default (#301).
     const included = book.default_include !== false;
-    const grExplicit = book.goodreads_explicit && book.goodreads_explicit.significant;
     const sources = book.sources || {};
     const sourceParts = BOOK_SOURCES.filter((key) => (sources[key] || []).length)
       .map((key) => `<span class="src src-${key}">${escapeHtml(SOURCE_LABELS[key])}: ${escapeHtml(sources[key].map(titleCase).join(", "))}</span>`);
@@ -154,8 +188,7 @@ function renderBookList(books) {
         </div>
       </div>
       ${book.has_audio === false ? '<span class="badge evidence-pill" title="No audio files: not searched, excluded by default">No audio</span>' : ""}
-      ${book.flagged_explicit ? '<span class="badge evidence-pill">&#9888; Erotica</span>' : ""}
-      ${grExplicit ? `<span class="badge evidence-pill" title="Goodreads readers shelved this as erotica/smut/nsfw">&#9888; Goodreads explicit shelves &times;${book.goodreads_explicit.votes}</span>` : ""}
+      ${explicitControlHtml(book)}
       <button type="button" class="secondary include-toggle${included ? " in" : ""}" data-included="${included}">${included ? "In" : "Excluded"}</button>
     </div>
   `;
@@ -271,8 +304,14 @@ async function compileSeries(seriesName, seriesKey) {
   $("explicitSelect").value = "";
   $("sequenceRangeInput").value = data.sequence_range;
   renderExplicitEvidence(data.explicit_evidence_note);
+  renderExplicitSummary(data.explicit_summary);
   renderBookList(data.books);
   updateIncludedCount();
+}
+
+function explicitChoice(select) {
+  if (!select || select.value === "") return null;
+  return select.value === "true";
 }
 
 async function applyEnrichment() {
@@ -285,9 +324,9 @@ async function applyEnrichment() {
       is_file: book.is_file,
       title: book.title,
       include: row.querySelector(".include-toggle").dataset.included === "true",
+      explicit: explicitChoice(row.querySelector(".book-explicit")),
     };
   });
-  const explicitValue = $("explicitSelect").value;
 
   const res = await fetch("/api/enrichment/apply", {
     method: "POST",
@@ -297,7 +336,8 @@ async function applyEnrichment() {
       genre: currentGenreList(),
       narrator: $("narratorInput").value,
       apply_narrator: $("applyNarratorCheckbox").checked,
-      explicit: explicitValue === "" ? null : explicitValue === "true",
+      // Every book carries its own choice (the series select sets them all).
+      explicit: null,
     }),
   }).catch(() => null);
 
@@ -358,4 +398,12 @@ $("genreAddInput").addEventListener("keydown", (e) => {
   e.preventDefault();
   addGenreChip($("genreAddInput").value);
   $("genreAddInput").value = "";
+});
+
+// The series-wide choice sets every book's own choice; books can still differ.
+$("explicitSelect").addEventListener("change", () => {
+  const value = $("explicitSelect").value;
+  $("bookList").querySelectorAll(".book-explicit").forEach((select) => {
+    select.value = value;
+  });
 });
