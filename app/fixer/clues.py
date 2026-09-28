@@ -351,7 +351,7 @@ def group_numbers_are_part_indices(clues_list: list[dict]) -> bool:
         for clues in clues_list
         if clues.get("book_number_source") in {"path", "title"} and clues.get("book_number")
     ]
-    return len(numbers) >= 2 and len(set(numbers)) > len(numbers) // 2
+    return len(numbers) >= 2 and not pick_majority_value(numbers, len(numbers))
 
 
 def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[str, str]:
