@@ -139,6 +139,35 @@
   background: #5fae9c;
 }
 
+.source-chip.audiosilo .dot {
+  background: #8b7fd1;
+}
+
+.source-chip.openlibrary .dot {
+  background: #6f9fd8;
+}
+
+.source-chip.progressionfantasy .dot {
+  background: #c7a23a;
+}
+
+.source-chip.haremlit .dot {
+  background: #d27aa0;
+}
+
+.source-chip.not-used {
+  opacity: 0.6;
+}
+
+.source-chip.failed,
+.source-chip.degraded {
+  color: var(--warning);
+}
+
+.source-chip.failed .dot {
+  background: var(--danger);
+}
+
 .source-chip.skipped {
   color: var(--muted);
 }
@@ -399,4 +428,79 @@
   margin-right: auto;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* Enrichment Forge v2: per-genre support count, suggestions, standalones. */
+.chip-support {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: rgb(0 0 0 / 12%);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.genre-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.genre-suggestions:empty {
+  display: none;
+}
+
+.suggestions-label {
+  color: var(--muted);
+}
+
+.genre-suggestions .suggestion {
+  min-height: 0;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.genre-suggestions .suggestion:hover {
+  border-style: solid;
+  color: var(--text);
+}
+
+#seriesEvidence:empty {
+  display: none;
+}
+
+.standalone-badge {
+  flex: none;
+}
+
+.book-src-line .src-audible {
+  color: #d9954f;
+}
+
+.book-src-line .src-goodreads {
+  color: #5fae9c;
+}
+
+.book-src-line .src-audiosilo {
+  color: #8b7fd1;
+}
+
+.book-src-line .src-openlibrary {
+  color: #6f9fd8;
+}
+
+.book-src-line .src-keywords,
+.book-src-line .src-abs_existing {
+  color: var(--accent);
 }

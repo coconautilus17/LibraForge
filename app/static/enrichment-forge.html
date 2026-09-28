@@ -6,7 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
-  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260711-1" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -48,36 +48,43 @@
       <div class="page-descriptor-copy">
         <span class="eyebrow">Discover, verify, enrich</span>
         <h2 class="page-descriptor-title">Enrichment Forge</h2>
-        <p class="page-descriptor-text">Find a series already in your Audiobookshelf library, pull genre and narrator from Audible and Goodreads across every book in it, then apply the compiled result to the whole series at once.</p>
+        <p class="page-descriptor-text">Find a series or standalone book already in your Audiobookshelf library. Every book is looked up in Audible, Goodreads, AudioSilo and Open Library, and the series in progressionfantasy.co.uk and the HaremLit wiki. The genres they agree on are compiled for you to review, then applied to every included book at once.</p>
       </div>
     </div>
 
     <section class="card">
-      <div class="card-title"><span class="step-n">1</span><h2>Choose a series</h2></div>
-      <p class="section-note">Searches series already indexed by Audiobookshelf, not a provider search.</p>
+      <div class="card-title"><span class="step-n">1</span><h2>Choose a series or book</h2></div>
+      <p class="section-note">Searches series and standalone books already indexed by Audiobookshelf, not a provider search.</p>
       <div class="search-box">
         <span class="icon" aria-hidden="true">&#8981;</span>
-        <input id="seriesSearch" type="search" placeholder="Search your library's series..." autocomplete="off" />
+        <input id="seriesSearch" type="search" placeholder="Search your library's series or standalone books..." autocomplete="off" />
       </div>
       <div id="seriesResults"></div>
-      <p class="section-note series-footnote">Series names come from Audiobookshelf's own library index, normalized so tag variants collapse into one entry.</p>
+      <p class="section-note series-footnote">Series names come from Audiobookshelf's own library index, normalized so tag variants collapse into one entry. Books with no series are listed as standalones.</p>
     </section>
 
     <section class="card" id="compileCard" hidden>
-      <div class="card-title"><span class="step-n">2</span><h2>Compiled from Audible + Goodreads</h2></div>
+      <div class="card-title"><span class="step-n">2</span><h2>Compiled from your sources</h2></div>
       <p id="compileSub"></p>
-      <p class="section-note">Every book is searched against both sources; nothing is written until you apply.</p>
+      <p class="section-note">Every book is looked up in each source; nothing is written until you apply.</p>
 
       <div id="sourceStrip" class="source-strip"></div>
 
       <div class="grid">
+        <div id="agreementNotice" class="context-note field-wide" hidden></div>
         <div class="field field-wide">
-          <label><span class="field-label">Genre</span><span class="field-hint">deduped union across the series, both sources</span></label>
-          <div id="genreChips" class="chip-field"></div>
+          <label><span class="field-label">Main genres</span><span class="field-hint">what the sources agree on; the ones to build collections from</span></label>
+          <div id="mainGenreChips" class="chip-field"></div>
+        </div>
+        <div class="field field-wide">
+          <label><span class="field-label">Subgenres</span><span class="field-hint">hover any genre to see which sources support it</span></label>
+          <div id="subGenreChips" class="chip-field"></div>
           <div class="chip-field-add-row">
             <input id="genreAddInput" type="text" placeholder="Add a genre..." />
             <button id="genreAddBtn" type="button" class="secondary chip-add">Add</button>
           </div>
+          <div id="otherSuggestions" class="genre-suggestions"></div>
+          <p id="seriesEvidence" class="section-note"></p>
         </div>
         <div class="field">
           <label for="narratorInput"><span class="field-label">Narrator</span><span class="field-hint">optional, off by default</span></label>
@@ -124,6 +131,6 @@
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260928-2"></script>
+  <script src="/static/enrichment-forge.js?v=20260929-1"></script>
 </body>
 </html>

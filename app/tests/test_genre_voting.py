@@ -75,3 +75,24 @@ class LiveCalibrationTests(unittest.TestCase):
     def test_non_fiction_subgenres_stay_out_of_fiction(self):
         votes = [book_vote({"audible": ["thriller", "criminology"], "audiosilo": ["thriller", "criminology"]})]
         self.assertNotIn("True Crime", unit(votes)["sub"])
+
+
+class EvidenceAndSuggestionTests(unittest.TestCase):
+    """From the first real-browser run: subgenre chips had no evidence, and
+    'other suggestions' showed raw source labels."""
+
+    def test_subgenres_carry_evidence_too(self):
+        votes = [book_vote({"audible": ["fantasy", "epic"], "audiosilo": ["epic fantasy", "fantasy"]}) for _ in range(2)]
+        r = unit(votes)
+        self.assertIn("Epic Fantasy", r["sub"])
+        self.assertEqual(r["evidence"]["Epic Fantasy"], {"audible": 2, "audiosilo": 2})
+
+    def test_candidates_are_taxonomy_names_that_missed_the_threshold(self):
+        votes = [book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"]}) for _ in range(7)]
+        votes.append(book_vote({"audible": ["fantasy", "romance", "sword & sorcery"], "audiosilo": ["fantasy", "romance"]}))
+        r = unit(votes)
+        self.assertEqual(r["main"], ["Fantasy"])
+        self.assertIn("Romance", r["candidates"])
+        self.assertIn("Sword & Sorcery", r["candidates"])
+        self.assertNotIn("Fantasy", r["candidates"])
+        self.assertFalse([c for c in r["candidates"] if c.endswith("?")])

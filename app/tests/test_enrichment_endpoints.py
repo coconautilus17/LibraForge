@@ -614,3 +614,5 @@ class CompileV2ResponseTests(unittest.TestCase):
         self.assertEqual(body["books"][0]["sources"]["audiosilo"], ["litrpg"])
         self.assertIn("genre_union", body)
         self.assertEqual(collect.call_args[0][1], "Scholomance")  # the series name the sources search for
+        self.assertIn("LitRPG", body["main_vocabulary"])
+        self.assertEqual(body["source_status"]["audible"]["found"], 0)  # ABS provider stub found nothing

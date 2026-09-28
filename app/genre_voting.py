@@ -29,19 +29,25 @@ MAX_MAINS = 3
 # alone needs a second source like any other genre.
 _CROWD_SOURCES = {"goodreads"}
 MAX_SUBS = 5
+MAX_CANDIDATES = 10
 
 
 def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
-    """{"main": set, "sub": Counter, "evidence": {genre: set(sources)}} for one book."""
+    """One book's vote: {"main": set, "sub": Counter, "evidence": {genre:
+    set(sources)}, "sub_evidence": {sub: set(sources)}, "other": set of main
+    genres some source named that didn't pass}."""
     votes: collections.Counter = collections.Counter()
     subs: collections.Counter = collections.Counter()
     evidence: dict[str, set[str]] = collections.defaultdict(set)
+    sub_evidence: dict[str, set[str]] = collections.defaultdict(set)
     for source, labels in voters.items():
         mains, source_subs = classify([labels])
         for genre in mains:
             votes[genre] += 1
             evidence[genre].add(source)
-        subs.update(source_subs)
+        for sub in source_subs:
+            subs[sub] += 1
+            sub_evidence[sub].add(source)
     needed = 2 if len(voters) >= 2 else 1
     main = {g for g, c in votes.items()
             if c >= needed or (g in STRONG_MAINS and evidence[g] - _CROWD_SOURCES)}
@@ -50,7 +56,8 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
         top = max(votes.values())
         tied = sorted((g for g, c in votes.items() if c == top), key=MAIN_ORDER.index)
         main = set(tied[:2])
-    return {"main": main, "sub": subs, "evidence": {g: evidence[g] for g in main}}
+    return {"main": main, "sub": subs, "evidence": {g: evidence[g] for g in main},
+            "sub_evidence": dict(sub_evidence), "other": set(votes) - main}
 
 
 def vote_unit(
@@ -69,12 +76,16 @@ def vote_unit(
     main_votes: collections.Counter = collections.Counter()
     sub_votes: collections.Counter = collections.Counter()
     evidence: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    sub_evidence: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    mentioned: collections.Counter = collections.Counter()  # any support at all, for suggestions
     for vote in voted:
         for genre in vote["main"]:
             main_votes[genre] += 1
             evidence[genre].update(vote["evidence"].get(genre, ()))
         for sub in vote["sub"]:
             sub_votes[sub] += 1
+            sub_evidence[sub].update(vote.get("sub_evidence", {}).get(sub, ()))
+        mentioned.update(set(vote["main"]) | set(vote.get("other", ())) | set(vote["sub"]))
 
     series_mains: list[str] = []
     if not standalone:
@@ -124,10 +135,14 @@ def vote_unit(
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k not in _NON_FICTION_SUBS})
     subs = [s for s, c in sorted(sub_votes.items(), key=lambda kv: (-kv[1], kv[0]))
             if c >= threshold and s not in mains and not s.endswith("?")][:MAX_SUBS]
+    excluded_subs = _NON_FICTION_SUBS if "Non-Fiction" not in mains else set()
+    candidates = [g for g, _c in sorted(mentioned.items(), key=lambda kv: (-kv[1], kv[0]))
+                  if g not in mains and g not in subs and not g.endswith("?") and g not in excluded_subs][:MAX_CANDIDATES]
     return {
         "main": mains,
         "sub": subs,
-        "evidence": {g: dict(evidence[g]) for g in mains},
+        "candidates": candidates,
+        "evidence": {**{g: dict(evidence[g]) for g in mains}, **{s: dict(sub_evidence[s]) for s in subs}},
         "series_evidence": list(series_evidence) if not standalone else [],
         "agreement": "ok" if mains else "none",
     }

@@ -75,6 +75,7 @@ from app.enrichment_sources import (
     series_level_labels,
     summarize_status,
 )
+from app.genre_taxonomy import MAIN_ORDER
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
     abs_get_json,
@@ -6280,12 +6281,15 @@ class EnrichmentCompileResponse(BaseModel):
     main_genres: list[str] = []
     sub_genres: list[str] = []
     genre_union: list[str] = []
+    genre_suggestions: list[str] = []
     # genre -> {source: number of books (or "series-source") supporting it}
     genre_evidence: dict[str, dict[str, int]] = Field(default_factory=dict)
     series_evidence: list[str] = []
     agreement: str = "ok"
     # Series-level explicit values as found (HaremLit "explicit_sex"); data only.
     series_explicit: dict[str, str] = Field(default_factory=dict)
+    # The controlled main-genre names, so the UI can file a typed genre as main.
+    main_vocabulary: list[str] = Field(default_factory=lambda: list(MAIN_ORDER))
 
 
 # Open Library subjects rarely differ within a series and it asks for ~1 req/s,
@@ -6404,6 +6408,8 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
             "detail": "Used ABS's Audible provider because no direct Audible auth file is configured.",
             "searched": len(books),
         }
+    phase1_results = audible_results or abs_results
+    source_status["audible"]["found"] = sum(1 for b in books if phase1_results.get(b["id"]))
 
     # Phase 2: Goodreads shelves, read directly (app/goodreads_shelves.py --
     # abs-tract's filtered 3-shelf output can't supply LitRPG/progression/

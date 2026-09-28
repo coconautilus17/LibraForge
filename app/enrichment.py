@@ -610,8 +610,11 @@ def compile_series_enrichment(
     return {
         "books": rows,
         # The chips pre-fill with the vote; with no agreement, every genre any
-        # source suggested, so the user still has something to pick from.
-        "genre": voted or _dedupe_preserve_order(all_genres),
+        # source suggested (mapped if possible, else raw), so the user still
+        # has something to pick from.
+        "genre": voted or unit["candidates"] or _dedupe_preserve_order(all_genres),
+        # Taxonomy genres some source supported that didn't make the cut.
+        "genre_suggestions": unit["candidates"],
         # Every genre any source suggested, cleaned: "other suggestions" in the UI.
         "genre_union": _dedupe_preserve_order(all_genres),
         "main_genres": unit["main"],

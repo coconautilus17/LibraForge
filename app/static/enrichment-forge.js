@@ -4,6 +4,40 @@ const { escapeHtml } = window.UiCommon;
 let currentBooks = [];
 let currentSeriesName = "";
 let currentSourceStatus = {};
+let currentEvidence = {};
+let mainVocabulary = [];
+
+// Display names for the evidence sources the compile reports per genre and per book.
+const SOURCE_LABELS = {
+  audible: "Audible",
+  goodreads: "Goodreads",
+  audiosilo: "AudioSilo",
+  openlibrary: "Open Library",
+  keywords: "Keywords in descriptions",
+  abs_existing: "Your current genres/tags",
+  "series-source": "Series list",
+  progressionfantasy: "progressionfantasy.co.uk",
+  haremlit: "HaremLit wiki",
+};
+const BOOK_SOURCES = ["audible", "goodreads", "audiosilo", "openlibrary", "keywords", "abs_existing"];
+const SERIES_SOURCES = ["progressionfantasy", "haremlit"];
+
+// Source labels arrive normalized to lowercase; a few need their real casing back.
+const LABEL_CASING = { litrpg: "LitRPG", gamelit: "GameLit", haremlit: "HaremLit" };
+
+function titleCase(label) {
+  const text = String(label);
+  return LABEL_CASING[text] || text.replace(/(^|[\s-])([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase());
+}
+
+function evidenceText(genre) {
+  const ev = currentEvidence[genre];
+  if (!ev || !Object.keys(ev).length) return "Added by you";
+  const parts = Object.entries(ev)
+    .sort((a, b) => b[1] - a[1])
+    .map(([src, n]) => (src === "series-source" ? SOURCE_LABELS[src] : `${SOURCE_LABELS[src] || src} ×${n}`));
+  return `Supported by ${parts.join(", ")}`;
+}
 
 async function searchSeries(query) {
   const res = await fetch(`/api/enrichment/series?q=${encodeURIComponent(query)}`).catch(() => null);
@@ -21,7 +55,9 @@ function renderSeriesResults(rows) {
   container.innerHTML = rows.map((row) => `
     <div class="series-result-row" data-name="${escapeHtml(row.name)}" data-key="${escapeHtml(row.key || "")}">
       <span class="series-result-name">${escapeHtml(row.name)}</span>
-      <span class="series-result-count">${row.book_count} books</span>
+      ${row.standalone
+        ? '<span class="badge standalone-badge">Standalone</span>'
+        : `<span class="series-result-count">${row.book_count} book${row.book_count === 1 ? "" : "s"}</span>`}
     </div>
   `).join("");
   container.querySelectorAll(".series-result-row").forEach((el) => {
@@ -33,28 +69,61 @@ function renderSeriesResults(rows) {
   });
 }
 
-function renderGenreChips(genres) {
-  const container = $("genreChips");
-  container.innerHTML = genres.map((g) => `
-    <span class="badge chip" data-genre="${escapeHtml(g)}">${escapeHtml(g)} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
-  `).join("");
+function renderGenreChips(containerId, genres) {
+  const container = $(containerId);
+  container.innerHTML = genres.map((g) => {
+    const sources = Object.keys(currentEvidence[g] || {}).length;
+    return `
+    <span class="badge chip" data-genre="${escapeHtml(g)}" title="${escapeHtml(evidenceText(g))}">${escapeHtml(g)}${sources ? ` <span class="chip-support" aria-label="${sources} sources">${sources}</span>` : ""} <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(g)}">&times;</button></span>
+  `;
+  }).join("");
   container.querySelectorAll(".chip-remove").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.target.closest("[data-genre]").remove();
+      renderSuggestions();
     });
   });
 }
 
+function chipValues(containerId) {
+  return Array.from($(containerId).querySelectorAll("[data-genre]")).map((el) => el.dataset.genre);
+}
+
+// Main genres first, then subgenres: the order they are written to Audiobookshelf.
 function currentGenreList() {
-  return Array.from($("genreChips").querySelectorAll("[data-genre]")).map((el) => el.dataset.genre);
+  return [...chipValues("mainGenreChips"), ...chipValues("subGenreChips")];
 }
 
 function addGenreChip(value) {
   const trimmed = value.trim();
   if (!trimmed) return;
-  const existing = currentGenreList();
-  if (existing.some((g) => g.toLowerCase() === trimmed.toLowerCase())) return;
-  renderGenreChips([...existing, trimmed]);
+  const same = (g) => g.toLowerCase() === trimmed.toLowerCase();
+  const main = mainVocabulary.find(same);
+  if (chipValues("mainGenreChips").some(same)) return;
+  if (main) {
+    // A main-genre name typed while it sits in Subgenres moves it up.
+    renderGenreChips("subGenreChips", chipValues("subGenreChips").filter((g) => !same(g)));
+    renderGenreChips("mainGenreChips", [...chipValues("mainGenreChips"), main]);
+  } else if (chipValues("subGenreChips").some(same)) {
+    return;
+  } else {
+    renderGenreChips("subGenreChips", [...chipValues("subGenreChips"), trimmed]);
+  }
+  renderSuggestions();
+}
+
+let currentSuggestions = [];
+
+// Every other genre any source suggested, one click to add.
+function renderSuggestions() {
+  const present = new Set(currentGenreList().map((g) => g.toLowerCase()));
+  const left = currentSuggestions.filter((g) => !present.has(g.toLowerCase()));
+  $("otherSuggestions").innerHTML = left.length
+    ? `<span class="suggestions-label">Other suggestions:</span> ${left.map((g) => `<button type="button" class="suggestion" data-genre="${escapeHtml(g)}">+ ${escapeHtml(g)}</button>`).join(" ")}`
+    : "";
+  $("otherSuggestions").querySelectorAll(".suggestion").forEach((btn) => {
+    btn.addEventListener("click", () => addGenreChip(btn.dataset.genre));
+  });
 }
 
 function renderBookList(books) {
@@ -62,14 +131,16 @@ function renderBookList(books) {
     // Items with no audio (placeholders, ebooks) come back excluded by default (#301).
     const included = book.default_include !== false;
     const grExplicit = book.goodreads_explicit && book.goodreads_explicit.significant;
+    const sources = book.sources || {};
+    const sourceParts = BOOK_SOURCES.filter((key) => (sources[key] || []).length)
+      .map((key) => `<span class="src src-${key}">${escapeHtml(SOURCE_LABELS[key])}: ${escapeHtml(sources[key].map(titleCase).join(", "))}</span>`);
     return `
     <div class="book-row${included ? "" : " excluded"}" data-id="${escapeHtml(book.id)}">
       <div class="book-main">
         <div class="book-title">${escapeHtml(book.title)}</div>
+        ${book.has_audio === false ? "" : `<div class="book-src-line"><strong>Book vote:</strong> ${escapeHtml((book.book_main || []).join(", ") || "no agreement")}</div>`}
         <div class="book-src-line">
-          <span class="audible">Audible: ${escapeHtml(book.audible_genres.join(", ") || "none")}</span>
-          &nbsp;&middot;&nbsp;
-          <span class="goodreads">Goodreads: ${escapeHtml(book.goodreads_genres.join(", ") || "none")}</span>
+          ${sourceParts.join(" &nbsp;&middot;&nbsp; ") || '<span class="local">No source found this book</span>'}
         </div>
         <div class="book-src-line">
           <span class="local">Current genres: ${escapeHtml((book.existing_genres || []).join(", ") || "none")}</span>
@@ -103,24 +174,27 @@ function updateIncludedCount() {
   $("includedCount").textContent = `${included.length} of ${rows.length} included`;
 }
 
-function sourceChipHtml(key, status, total) {
+function sourceChipHtml(key, status) {
   if (!status) return "";
   const searched = Number(status.searched || 0);
-  let state = "not used";
+  let state = status.state === "failed" ? "failed" : "not used";
   if (status.state === "searched") {
-    state = key === "goodreads" && status.found !== undefined
-      ? `found ${Number(status.found || 0)} of ${searched} searched`
-      : `${searched} of ${total} searched`;
+    if (SERIES_SOURCES.includes(key)) {
+      state = Number(status.found || 0) ? "series listed" : "not listed";
+    } else {
+      state = `found ${Number(status.found || 0)} of ${searched}`;
+    }
     if (Number(status.failed || 0)) state += `, ${status.failed} failed`;
     if (status.rate_limited) state += ", rate-limited, paused";
   }
+  const cls = status.state === "searched" && (status.rate_limited || Number(status.failed || 0)) ? "degraded" : (status.state || "").replace(/\s+/g, "-");
   const detail = status.detail ? ` title="${escapeHtml(status.detail)}"` : "";
-  return `<span class="source-chip ${key} ${status.state || ""}"${detail}><span class="dot"></span> ${escapeHtml(status.label || key)}, ${state}</span>`;
+  return `<span class="source-chip ${key} ${cls}"${detail}><span class="dot"></span> ${escapeHtml(status.label || SOURCE_LABELS[key] || key)}, ${state}</span>`;
 }
 
 function renderSourceStrip(sourceStatus, totalCount, elapsedSeconds) {
-  const chips = ["audible", "goodreads"]
-    .map((key) => sourceChipHtml(key, sourceStatus[key], totalCount))
+  const chips = ["audible", "goodreads", "audiosilo", "openlibrary", ...SERIES_SOURCES]
+    .map((key) => sourceChipHtml(key, sourceStatus[key]))
     .filter(Boolean);
   $("sourceStrip").innerHTML = `
     ${chips.join('<span class="sep"></span>')}
@@ -170,9 +244,20 @@ async function compileSeries(seriesName, seriesKey) {
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   currentBooks = data.books;
   currentSourceStatus = data.source_status || {};
-  $("compileSub").textContent = `${seriesName}, ${data.books.length} books.`;
+  $("compileSub").textContent = `${seriesName}, ${data.books.length} book${data.books.length === 1 ? "" : "s"}.`;
   renderSourceStrip(currentSourceStatus, data.books.length, elapsedSeconds);
-  renderGenreChips(data.genre);
+  currentEvidence = data.genre_evidence || {};
+  mainVocabulary = data.main_vocabulary || [];
+  const agreed = data.agreement !== "none";
+  // With no agreement the backend returns every suggestion in `genre`; they
+  // are offered as subgenres so nothing is presented as a confirmed main genre.
+  renderGenreChips("mainGenreChips", agreed ? (data.main_genres || []) : []);
+  renderGenreChips("subGenreChips", agreed ? (data.sub_genres || []) : data.genre);
+  currentSuggestions = data.genre_suggestions || [];
+  renderSuggestions();
+  $("agreementNotice").hidden = agreed;
+  $("agreementNotice").innerHTML = agreed ? "" : '<span class="dot">&#9679;</span><span><strong>No genre reached agreement across the sources for this series.</strong> The subgenres below are every genre any source suggested; keep the ones that fit. Type a genre like Fantasy or Thriller into Add to make it a main genre.</span>';
+  $("seriesEvidence").textContent = (data.series_evidence || []).length ? `Series lists: ${data.series_evidence.join(" · ")}` : "";
   // Narrators differ per book and edition, so nothing is pre-filled (#299).
   $("narratorInput").value = "";
   $("applyNarratorCheckbox").checked = false;

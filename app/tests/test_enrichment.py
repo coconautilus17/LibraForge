@@ -772,3 +772,15 @@ class CompileVotingTests(unittest.TestCase):
         out = enrichment.compile_series_enrichment([_vbook("s")], {"s": _EPIC}, {}, lambda g: g, extra_results={},
                                                    series_sources={"labels": ["haremlit"], "evidence": ["x"], "pf_progression": False}, standalone=True)
         self.assertNotIn("Harem", out["main_genres"])
+
+
+class CompileSuggestionsTests(unittest.TestCase):
+    def test_suggestions_are_taxonomy_names_not_raw_labels(self):
+        books = [_vbook(f"b{i}") for i in range(5)]
+        audible = {f"b{i}": _EPIC for i in range(5)}
+        audible["b0"] = {"category_ladders": [{"ladder": [{"name": "Literature & Fiction"}, {"name": "Romance"}, {"name": "Romantic Comedy"}]}]}
+        extra = {"audiosilo": {f"b{i}": {"status": "found", "labels": ["fantasy"]} for i in range(5)}}
+        out = enrichment.compile_series_enrichment(books, audible, {}, lambda g: g, extra_results=extra, series_sources=_NO_SERIES)
+        self.assertIn("Romance", out["genre_suggestions"])
+        self.assertNotIn("Literature & Fiction", out["genre_suggestions"])
+        self.assertNotIn("Epic", out["genre_suggestions"])
