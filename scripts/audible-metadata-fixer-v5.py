@@ -2965,6 +2965,22 @@ def build_multi_file_search_context(
     )
     folder_descriptive = parse_descriptive_book_text(folder_name)
     folder_identity = parse_identity_rich_book_text(folder_name)
+    # "Series, Book N - Title" and "Series, Book N - Author" are the same
+    # shape, so a one-word title can be misread as the author. When the
+    # group's tags already agree on an author that shares no name with the
+    # folder's, keep the folder parse only if the same rule the per-file path
+    # uses would prefer its author; a misread author means the rest of that
+    # parse is wrong too, so drop all of it.
+    tag_author = pick_most_common_value([clues.get("author", "") for clues in clues_list])
+    identity_author = folder_identity.get("author", "")
+    if (
+        identity_author
+        and has_author_identity_conflict(
+            {"author": tag_author}, {"authors": [{"name": identity_author}]}
+        )
+        and not should_prefer_path_author(tag_author, identity_author)
+    ):
+        folder_identity = {}
 
     specific_titles = [
         clues.get("title", "")
