@@ -626,7 +626,8 @@ class CompileV2ResponseTests(unittest.TestCase):
         main._reset_enrichment_items_cache_for_tests()
 
     def test_response_carries_votes_evidence_and_all_source_statuses(self):
-        extra = ({"audiosilo": {"item-1": {"status": "found", "labels": ["litrpg"]}}},
+        extra = ({"audiosilo": {"item-1": {"status": "found", "labels": ["litrpg"]}},
+                  "openlibrary": {"item-1": {"status": "found", "labels": ["litrpg"]}}},  # two crowd sources agree
                  {"labels": [], "evidence": [], "pf_progression": False},
                  {k: {"label": k, "state": "searched"} for k in ("audiosilo", "openlibrary", "progressionfantasy", "haremlit")})
         with patch.object(main, "_get_abs_api_key", return_value="key"), \

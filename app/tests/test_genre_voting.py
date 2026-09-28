@@ -193,3 +193,14 @@ class CuratedListAuthorityTests(unittest.TestCase):
     def test_a_pinned_litrpg_still_wins(self):
         votes = [book_vote({"audible": ["fantasy"], "keywords": ["litrpg"]}) for _ in range(2)]
         self.assertIn("LitRPG", unit(votes, pf_progression=True, pinned={"LitRPG": 1})["main"])
+
+
+class AudioSiloIsCrowdTests(unittest.TestCase):
+    """AudioSilo's genres are mostly Audible categories auto-mapped by bulk
+    imports plus contributor submissions: crowd weight, not editorial."""
+
+    def test_audiosilo_alone_is_not_enough(self):
+        self.assertEqual(book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy", "science fiction", "humor"]})["main"], {"Fantasy"})
+
+    def test_audiosilo_with_another_crowd_source_is(self):
+        self.assertIn("Humor", book_vote({"audiosilo": ["humor"], "goodreads": ["humor"]})["main"])

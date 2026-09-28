@@ -25,14 +25,18 @@ _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology"
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
 _REAL_SF_SUBS = ("Space Opera", "Military Sci-Fi", "Post-Apocalyptic", "Hard Sci-Fi")
 # Sources are ranked, not counted equally. Editorial sources (the publisher's
-# own catalogue and copy, the file's embedded genre tag, AudioSilo's curated
-# mapping) carry weight 2; crowd sources (Goodreads shelving, Open Library
-# subjects, genres already in ABS with no known author) carry 1. A book's main
-# genre needs weight 2: one editorial source, or two crowd sources agreeing.
+# own catalogue and copy, the file's embedded genre tag) carry weight 2; crowd
+# sources (Goodreads shelving, Open Library subjects, AudioSilo, genres already
+# in ABS with no known author) carry 1. AudioSilo is crowd: its genres are
+# Audible's store categories auto-mapped by bulk library imports plus
+# contributor submissions (github.com/KodeStar/audiosilo-meta,
+# internal/importer/audiblegenres.go), so at full weight it would count
+# Audible twice. A book's main genre needs weight 2: one editorial source, or
+# two crowd sources agreeing.
 # (Goodreads readers shelve progression and harem fantasy as "litrpg" loosely:
 # Cradle, Dragon Emperor.) The user's own ABS genres are pinned, not voted.
-SOURCE_WEIGHTS = {"audible": 2, "file_tags": 2, "keywords": 2, "audiosilo": 2,
-                  "goodreads": 1, "openlibrary": 1, "abs_existing": 1}
+SOURCE_WEIGHTS = {"audible": 2, "file_tags": 2, "keywords": 2,
+                  "audiosilo": 1, "goodreads": 1, "openlibrary": 1, "abs_existing": 1}
 MAIN_WEIGHT = 2
 MAX_SUBS = 5
 MAX_CANDIDATES = 10
