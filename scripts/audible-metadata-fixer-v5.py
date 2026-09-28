@@ -3121,9 +3121,51 @@ def find_duplicate_set_folders(files: list[Path]) -> dict[Path, str]:
     return found
 
 
+# A split part is rarely this big (the largest real parts in the library are
+# ~170 MB); full books routinely are. Below it the album check is skipped, so
+# chapter splits never pay for a tag read.
+DISTINCT_BOOK_MIN_FILE_BYTES = 250_000_000
+
+
+def _album_identity(album: str) -> str:
+    """The book an album tag names, ignoring an explicit part marker."""
+    marker = detect_part_marker(album)
+    return marker[0] if marker else normalize_part_filename(album)
+
+
+def looks_like_distinct_books(
+    group_files: list[Path],
+    tag_reader=None,
+    size_reader=None,
+) -> bool:
+    """True when every file is book-sized and each one's album names a
+    different book (Tunnel Rat, Tunnel Rat 2, Tunnel Rat 3). Parts of one
+    long book share an album and stay a group; a missing album decides
+    nothing."""
+    size_reader = size_reader or (lambda path: path.stat().st_size)
+    tag_reader = tag_reader or (lambda path: read_tags_and_duration(path)[0])
+    if len(group_files) < 2:
+        return False
+    try:
+        if min(size_reader(path) for path in group_files) < DISTINCT_BOOK_MIN_FILE_BYTES:
+            return False
+    except OSError:
+        return False
+    identities = []
+    for path in group_files:
+        album = first_existing_tag(tag_reader(path) or {}, ["album"])
+        identity = _album_identity(album) if album else ""
+        if not identity:
+            return False
+        identities.append(identity)
+    return len(set(identities)) == len(identities)
+
+
 def build_multi_part_group_map(
     files: list[Path],
     chapter_count_reader=None,
+    tag_reader=None,
+    size_reader=None,
 ) -> dict[Path, list[Path]]:
     grouped: dict[Path, list[Path]] = {}
     duplicate_sets = find_duplicate_set_folders(files)
@@ -3147,6 +3189,10 @@ def build_multi_part_group_map(
             if len(numeric_parts) >= 2
             else group_files
         )
+        if looks_like_distinct_books(candidate_files, tag_reader, size_reader):
+            print(f"  WARNING: not grouping folder of separate full-length books: {parent}")
+            continue
+
         validation = validate_multi_part_group_files(
             candidate_files,
             chapter_count_reader=chapter_count_reader,
