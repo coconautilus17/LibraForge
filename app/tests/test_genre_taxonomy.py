@@ -49,3 +49,10 @@ class TaxonomyTests(unittest.TestCase):
         for label, (mains, _subs) in t.LABEL_MAP.items():
             for m in mains:
                 self.assertIn(m, t.MAIN_ORDER, label)
+
+
+class GoodreadsGenreNamesTests(unittest.TestCase):
+    def test_every_goodreads_shelf_genre_maps_into_the_taxonomy(self):
+        from app import goodreads_shelves as g
+        names = set(g._NICHE.values()) | set(g._AUDIENCE.values()) | set(g._BROAD.values())
+        self.assertEqual(sorted(n for n in names if t.normalize_label(n) not in t.LABEL_MAP), [])

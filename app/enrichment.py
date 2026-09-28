@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from app.genre_taxonomy import MAIN_ORDER, labels_from_genres, labels_from_text
+from app.genre_voting import book_vote, vote_unit
 from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
 
 _SERIES_SEQUENCE_SUFFIX_RE = re.compile(r"\s*#\d+\s*$")
@@ -238,6 +240,7 @@ def get_series_books(
             # searched as audiobooks (#301). Unknown count = assume audio.
             "has_audio": _has_audio(item),
             "description": str(metadata.get("description") or ""),
+            "series_name": strip_series_sequence_suffix(raw_series_name),
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),
@@ -494,16 +497,53 @@ def _split_abs_genre(value: Any) -> list[str]:
     return [part.strip() for part in str(value or "").split(",")]
 
 
+def build_book_voters(
+    book: dict[str, Any],
+    product: dict | None,
+    abs_product: dict | None,
+    goodreads_result: dict | None,
+    audiosilo_result: dict | None,
+    openlibrary_result: dict | None,
+) -> dict[str, list[str]]:
+    """Normalized labels per evidence source for one book; sources with
+    nothing to say are left out. A no-audio item votes nothing (#301)."""
+    if not book.get("has_audio", True):
+        return {}
+    voters: dict[str, list[str]] = {}
+    audible = audible_category_ladder_genres(product) or _split_abs_genre((abs_product or {}).get("genre", ""))
+    voters["audible"] = labels_from_genres(audible)
+    if (goodreads_result or {}).get("status") == "found":
+        voters["goodreads"] = labels_from_genres(shelves_to_genres(goodreads_result.get("shelves") or []))
+    for name, result in (("audiosilo", audiosilo_result), ("openlibrary", openlibrary_result)):
+        if (result or {}).get("status") == "found":
+            voters[name] = list(result.get("labels") or [])
+    voters["abs_existing"] = labels_from_genres(list(book.get("existing_genres") or []) + list(book.get("existing_tags") or []))
+    text = " ".join(str(x or "") for x in (
+        (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),
+        (abs_product or {}).get("description"), book.get("description")))
+    voters["keywords"] = labels_from_text(text)
+    return {name: labels for name, labels in voters.items() if labels}
+
+
 def compile_series_enrichment(
     books: list[dict[str, Any]],
     audible_results: dict[str, dict | None],
     goodreads_results: dict[str, list[dict]],
     clean_provider_genres_fn: Callable[[list[str]], list[str]],
     abs_results: dict[str, dict | None] | None = None,
+    extra_results: dict[str, dict[str, dict]] | None = None,
+    series_sources: dict[str, Any] | None = None,
+    standalone: bool = False,
 ) -> dict[str, Any]:
-    """Build the full compile payload: per-book rows plus series-level
-    aggregate genre/narrator union and the explicit evidence note.
+    """Build the full compile payload: per-book rows, the voted main genres and
+    subgenres with their evidence, the narrator union and the explicit note.
+
+    `extra_results` holds the other book-level sources ({"audiosilo": {id:
+    result}, "openlibrary": {...}}); `series_sources` the series-level labels
+    ({"labels", "evidence", "pf_progression"}, app/enrichment_sources.py).
     """
+    extra = extra_results or {}
+    book_votes = []
     rows = []
     all_genres: list[str] = []
     all_narrators: list[str] = []
@@ -533,6 +573,10 @@ def compile_series_enrichment(
             narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
         has_audio = book.get("has_audio", True)
+        voters = build_book_voters(book, product, abs_product, gr,
+                                   (extra.get("audiosilo") or {}).get(book["id"]), (extra.get("openlibrary") or {}).get(book["id"]))
+        vote = book_vote(voters)
+        book_votes.append(vote)
         if has_audio:  # #301: a placeholder/ebook's genres are not evidence about the series
             all_genres.extend(audible_genres)
             all_genres.extend(goodreads_genres)
@@ -554,11 +598,27 @@ def compile_series_enrichment(
             "default_include": has_audio,
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
+            "sources": voters,
+            "book_main": sorted(vote["main"], key=MAIN_ORDER.index),
         })
+
+    series = series_sources or {}
+    unit = vote_unit(book_votes, series_labels=series.get("labels") or [], series_evidence=series.get("evidence") or [],
+                     pf_progression=bool(series.get("pf_progression")), standalone=standalone)
+    voted = unit["main"] + unit["sub"]
 
     return {
         "books": rows,
-        "genre": _dedupe_preserve_order(all_genres),
+        # The chips pre-fill with the vote; with no agreement, every genre any
+        # source suggested, so the user still has something to pick from.
+        "genre": voted or _dedupe_preserve_order(all_genres),
+        # Every genre any source suggested, cleaned: "other suggestions" in the UI.
+        "genre_union": _dedupe_preserve_order(all_genres),
+        "main_genres": unit["main"],
+        "sub_genres": unit["sub"],
+        "genre_evidence": unit["evidence"],
+        "series_evidence": unit["series_evidence"],
+        "agreement": unit["agreement"],
         "narrator": ", ".join(_dedupe_preserve_order(all_narrators)),
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),

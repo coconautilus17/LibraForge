@@ -51,6 +51,7 @@ import app.library_index as library_index
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
 from app.enrichment import (
+    STANDALONE_KEY_PREFIX,
     compile_series_enrichment,
     fetch_all_abs_book_items,
     get_series_books,
@@ -62,6 +63,17 @@ from app.enrichment import (
     search_series_goodreads,
     standalone_items,
     write_metadata_json_partial,
+)
+from app.enrichment_sources import (
+    AUDIOSILO_PACER,
+    OPENLIBRARY_PACER,
+    PF_INDEX,
+    audiosilo_lookup,
+    haremlit_lookup,
+    openlibrary_lookup,
+    search_series_sources,
+    series_level_labels,
+    summarize_status,
 )
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
@@ -6239,6 +6251,9 @@ class EnrichmentBookRow(BaseModel):
     default_include: bool = True
     existing_narrator: str
     existing_explicit: bool
+    # Normalized labels per evidence source, and this book's own vote.
+    sources: dict[str, list[str]] = Field(default_factory=dict)
+    book_main: list[str] = []
 
 
 class EnrichmentSourceStatus(BaseModel):
@@ -6262,6 +6277,78 @@ class EnrichmentCompileResponse(BaseModel):
     explicit_goodreads_count: int = 0
     explicit_evidence_note: str
     source_status: dict[str, EnrichmentSourceStatus] = Field(default_factory=dict)
+    main_genres: list[str] = []
+    sub_genres: list[str] = []
+    genre_union: list[str] = []
+    # genre -> {source: number of books (or "series-source") supporting it}
+    genre_evidence: dict[str, dict[str, int]] = Field(default_factory=dict)
+    series_evidence: list[str] = []
+    agreement: str = "ok"
+    # Series-level explicit values as found (HaremLit "explicit_sex"); data only.
+    series_explicit: dict[str, str] = Field(default_factory=dict)
+
+
+# Open Library subjects rarely differ within a series and it asks for ~1 req/s,
+# so only the first few audio books of a unit are looked up there.
+_OPENLIBRARY_BOOKS_PER_UNIT = 3
+
+
+def _series_source_status(label: str, result: dict[str, Any] | None, standalone: bool, detail_key: str) -> dict[str, Any]:
+    if standalone:
+        return {"label": label, "state": "not used", "detail": "Series-level source; not used for standalone books."}
+    status = (result or {}).get("status")
+    if status in ("found", "not_found"):
+        found = status == "found"
+        return {"label": label, "state": "searched", "searched": 1, "found": int(found),
+                "detail": str((result or {}).get(detail_key) or "") if found else "Not listed there."}
+    return {"label": label, "state": "failed", "searched": 1, "failed": 1, "detail": f"{label} could not be reached."}
+
+
+def _collect_extra_sources(
+    books: list[dict[str, Any]], series_name: str, authors: list[str], standalone: bool,
+) -> tuple[dict[str, dict[str, dict]], dict[str, Any], dict[str, dict[str, Any]]]:
+    """Enrichment Forge v2 sources besides Audible and Goodreads, run in
+    parallel, each with its own pacer. Returns (book-level results by source,
+    series-level {labels, evidence, pf_progression, explicit}, source statuses).
+    A source that breaks is reported as failed; it never fails the compile."""
+    extra: dict[str, dict[str, dict]] = {}
+    status: dict[str, dict[str, Any]] = {}
+
+    def book_source(key: str, label: str, lookup: Any, pacer: Any, limit: int | None = None) -> None:
+        try:
+            results = search_series_sources(books, lookup, pacer, limit=limit)
+        except Exception as exc:
+            status[key] = {"label": label, "state": "failed", "detail": f"{label} failed: {exc}"}
+            return
+        extra[key] = results
+        status[key] = summarize_status(label, results, books)
+
+    def guarded(fn: Any, *args: Any) -> dict[str, Any]:
+        try:
+            return fn(*args)
+        except Exception:
+            return {"status": "failed"}
+
+    pf: dict[str, Any] | None = None
+    hl: dict[str, Any] | None = None
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = [pool.submit(book_source, "audiosilo", "AudioSilo", audiosilo_lookup, AUDIOSILO_PACER),
+                pool.submit(book_source, "openlibrary", "Open Library", openlibrary_lookup, OPENLIBRARY_PACER,
+                            _OPENLIBRARY_BOOKS_PER_UNIT)]
+        if not standalone and series_name:
+            pf_job = pool.submit(guarded, PF_INDEX.lookup, series_name, authors)
+            hl_job = pool.submit(guarded, haremlit_lookup, series_name, authors)
+            pf, hl = pf_job.result(), hl_job.result()
+        for job in jobs:
+            job.result()
+
+    labels, evidence, pf_progression = series_level_labels(pf or {}, hl or {})
+    series = {"labels": labels, "evidence": evidence, "pf_progression": pf_progression, "explicit": {}}
+    if (hl or {}).get("status") == "found" and hl.get("explicit"):
+        series["explicit"]["haremlit"] = str(hl["explicit"])
+    status["progressionfantasy"] = _series_source_status("progressionfantasy.co.uk", pf, standalone or not series_name, "title")
+    status["haremlit"] = _series_source_status("HaremLit wiki", hl, standalone or not series_name, "match")
+    return extra, series, status
 
 
 @app.post("/api/enrichment/compile")
@@ -6322,6 +6409,15 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     # abs-tract's filtered 3-shelf output can't supply LitRPG/progression/
     # harem/YA). Starts only after phase 1 is fully done; every compile shares
     # one process-wide pacer (Meta Forge pacing: 0.5 s gap, breaker 2 -> 180 s).
+    # The v2 sources (AudioSilo, Open Library, series-level lists) run
+    # alongside it, each on its own pacer.
+    standalone = req.series_key.startswith(STANDALONE_KEY_PREFIX)
+    series_names = [b.get("series_name") or "" for b in books if b.get("series_name")]
+    unit_series_name = max(set(series_names), key=series_names.count) if series_names else ""
+    unit_authors = list(dict.fromkeys(
+        a.split(" - ")[0].strip() for b in books for a in str(b.get("author") or "").split(",")[:1] if a.strip()))
+    extra_pool = ThreadPoolExecutor(max_workers=1)
+    extra_job = extra_pool.submit(_collect_extra_sources, books, unit_series_name, unit_authors, standalone)
     trips_before = _GOODREADS_PACER.trips
     goodreads_results = search_series_goodreads(books, fetch_book_shelves, _GOODREADS_PACER)
     audio_books = [b for b in books if b.get("has_audio", True)]
@@ -6340,8 +6436,16 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
                    if rate_limited else ""),
     }
 
-    compiled = compile_series_enrichment(books, audible_results, goodreads_results, clean_provider_genres, abs_results)
+    extra_results, series_sources, extra_status = extra_job.result()
+    extra_pool.shutdown()
+    source_status.update(extra_status)
+
+    compiled = compile_series_enrichment(
+        books, audible_results, goodreads_results, clean_provider_genres, abs_results,
+        extra_results=extra_results, series_sources=series_sources, standalone=standalone,
+    )
     compiled["source_status"] = source_status
+    compiled["series_explicit"] = series_sources.get("explicit") or {}
     return EnrichmentCompileResponse(**compiled)
 
 

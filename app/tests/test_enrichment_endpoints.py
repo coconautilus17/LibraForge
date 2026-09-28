@@ -11,6 +11,24 @@ from app import main
 
 client = TestClient(main.app)
 
+# The v2 sources (AudioSilo, Open Library, progressionfantasy.co.uk, HaremLit)
+# are network calls: stubbed for every test in this module; the real collector
+# is tested on its own below with its callees stubbed.
+_REAL_COLLECT_EXTRA_SOURCES = main._collect_extra_sources
+_NO_EXTRA = ({}, {"labels": [], "evidence": [], "pf_progression": False}, {})
+_extra_patch = patch.object(main, "_collect_extra_sources", return_value=_NO_EXTRA)
+_no_network = patch("urllib.request.urlopen", side_effect=AssertionError("network call in an endpoint test"))
+
+
+def setUpModule():
+    _extra_patch.start()
+    _no_network.start()
+
+
+def tearDownModule():
+    _no_network.stop()
+    _extra_patch.stop()
+
 
 class _FakeReviewModule:
     """Stand-in for the dynamically loaded review-libraforge-report.py."""
@@ -525,3 +543,74 @@ class EnrichmentStandaloneEndpointTests(unittest.TestCase):
             resp = client.post("/api/enrichment/compile", json={"series_key": rows[0]["key"], "auth_file": "/nonexistent"})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual([b["id"] for b in resp.json()["books"]], ["item-s"])
+
+
+_BOOKS = [{"id": "a", "title": "Unsouled", "author": "Will Wight", "has_audio": True},
+          {"id": "b", "title": "Soulsmith", "author": "Will Wight", "has_audio": True}]
+
+
+class CollectExtraSourcesTests(unittest.TestCase):
+    def run_it(self, standalone=False, audiosilo=None):
+        found = lambda books, lookup, pacer, *a, **k: {b["id"]: {"status": "found", "title": b["title"], "labels": ["fantasy"]} for b in books}
+        calls = {"hl": 0}
+
+        def hl(name, authors, **k):
+            calls["hl"] += 1
+            return {"status": "found", "match": "X (Series)", "genres": [], "explicit": "Yes", "via": "series"}
+
+        with patch.object(main, "search_series_sources", side_effect=audiosilo or found), \
+             patch.object(main.PF_INDEX, "lookup", return_value={"status": "found", "category": "Progression", "title": "Will Wight \u2013 Cradle"}), \
+             patch.object(main, "haremlit_lookup", side_effect=hl):
+            out = _REAL_COLLECT_EXTRA_SOURCES(_BOOKS, "Cradle", ["Will Wight"], standalone)
+        return out, calls
+
+    def test_collects_all_sources_with_status(self):
+        (extra, series, status), calls = self.run_it()
+        self.assertEqual(set(extra), {"audiosilo", "openlibrary"})
+        self.assertEqual(set(status), {"audiosilo", "openlibrary", "progressionfantasy", "haremlit"})
+        self.assertEqual(status["audiosilo"]["found"], 2)
+        self.assertEqual(status["progressionfantasy"]["found"], 1)
+        self.assertTrue(series["pf_progression"])
+        self.assertIn("haremlit", series["labels"])
+        self.assertEqual(series["explicit"], {"haremlit": "Yes"})
+
+    def test_a_broken_source_is_failed_not_fatal(self):
+        def boom(books, lookup, pacer, *a, **k):
+            if lookup is main.audiosilo_lookup:
+                raise RuntimeError("AudioSilo down")
+            return {}
+        (extra, _series, status), _calls = self.run_it(audiosilo=boom)
+        self.assertEqual(status["audiosilo"]["state"], "failed")
+        self.assertIn("AudioSilo down", status["audiosilo"]["detail"])
+        self.assertEqual(status["openlibrary"]["state"], "searched")
+
+    def test_standalone_skips_series_sources(self):
+        (_extra, series, status), calls = self.run_it(standalone=True)
+        self.assertEqual(calls["hl"], 0)
+        self.assertEqual(status["haremlit"]["state"], "not used")
+        self.assertEqual(series["labels"], [])
+
+
+class CompileV2ResponseTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_response_carries_votes_evidence_and_all_source_statuses(self):
+        extra = ({"audiosilo": {"item-1": {"status": "found", "labels": ["litrpg"]}}},
+                 {"labels": [], "evidence": [], "pf_progression": False},
+                 {k: {"label": k, "state": "searched"} for k in ("audiosilo", "openlibrary", "progressionfantasy", "haremlit")})
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}), \
+             patch.object(main, "_collect_extra_sources", return_value=extra) as collect:
+            resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance", "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(set(body["source_status"]), {"audible", "goodreads", "audiosilo", "openlibrary", "progressionfantasy", "haremlit"})
+        self.assertIn("LitRPG", body["main_genres"])
+        self.assertIn("audiosilo", body["genre_evidence"]["LitRPG"])
+        self.assertEqual(body["books"][0]["sources"]["audiosilo"], ["litrpg"])
+        self.assertIn("genre_union", body)
+        self.assertEqual(collect.call_args[0][1], "Scholomance")  # the series name the sources search for

@@ -97,7 +97,8 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "self help":"personal success","ghost stories":"ghosts","fairy tales folklore":"fairy tales","military history":"history","war military fiction":"war & military",
  "police procedural":"police procedurals","psychological thriller":"psychological","hard boiled":"hard-boiled","arts entertainment":"art","social sciences":"sociology",
  "fiction, fantasy, general":"fantasy","fiction, science fiction, general":"science fiction","fiction, mystery & detective, general":"mystery","horror tales":"horror",
- "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery"}
+ "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery",
+ "non-fiction":"non fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
 STRONG_MAINS = {"LitRPG", "Progression Fantasy", "Harem"}
