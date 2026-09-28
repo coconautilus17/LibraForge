@@ -6259,6 +6259,7 @@ class EnrichmentBookRow(BaseModel):
     book_main: list[str] = []
     file_genres: list[str] = []
     manual_genres: list[str] = []
+    explicit: dict = Field(default_factory=dict)
 
 
 class EnrichmentSourceStatus(BaseModel):
@@ -6296,6 +6297,7 @@ class EnrichmentCompileResponse(BaseModel):
     # The controlled main-genre names, so the UI can file a typed genre as main.
     main_vocabulary: list[str] = Field(default_factory=lambda: list(MAIN_ORDER))
     standalone: bool = False
+    explicit_summary: dict = Field(default_factory=dict)
 
 
 # What Enrichment Forge last wrote as each book's genres, so a later compile
@@ -6543,6 +6545,8 @@ class EnrichmentApplyBook(BaseModel):
     is_file: bool
     include: bool
     title: str = ""
+    # None = use the request-level choice; True/False = this book's own choice.
+    explicit: bool | None = None
 
 
 class EnrichmentApplyRequest(BaseModel):
@@ -6590,6 +6594,8 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     for book in req.books:
         if not book.include:
             continue
+        # A per-book choice (the explicit panel) beats the series-wide one.
+        book_explicit = book.explicit if book.explicit is not None else req.explicit
         if abs_api_key and book.id:
             try:
                 fields: dict[str, Any] = {}
@@ -6597,8 +6603,8 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
                     fields["genres"] = genres
                 if narrators:
                     fields["narrators"] = narrators
-                if req.explicit is not None:
-                    fields["explicit"] = bool(req.explicit)
+                if book_explicit is not None:
+                    fields["explicit"] = bool(book_explicit)
                 # A legacy metadata.json in the book's folder would revert this
                 # write on the next rescan: reconcile it into ABS and delete it
                 # first (LibraForge #298).
@@ -6622,7 +6628,7 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
         target = resolve_metadata_json_path(str(validated_path), book.is_file)
         try:
             assert_under_audiobooks(target)
-            write_metadata_json_partial(target, genres, ", ".join(narrators), bool(req.explicit))
+            write_metadata_json_partial(target, genres, ", ".join(narrators), bool(book_explicit))
             applied += 1
         except HTTPException as exc:
             failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc.detail)})

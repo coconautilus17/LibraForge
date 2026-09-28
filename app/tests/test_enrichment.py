@@ -819,3 +819,13 @@ class LocalGenreTests(unittest.TestCase):
         self.assertIn("Small Town", out["sub_genres"])
         self.assertEqual(out["pinned_genres"], ["Small Town"])
         self.assertEqual(out["genre_evidence"]["Small Town"], {"yours": 1})
+
+
+class CompileExplicitTests(unittest.TestCase):
+    def test_rows_carry_explicit_evidence_and_the_series_summary(self):
+        books = [_vbook("a", existing_explicit=True), _vbook("b")]
+        out = enrichment.compile_series_enrichment(
+            books, {"a": _EPIC, "b": _EPIC}, {}, lambda g: g, extra_results={},
+            series_sources={"labels": [], "evidence": [], "pf_progression": False, "explicit": {"haremlit": "Yes"}})
+        self.assertEqual([r["explicit"]["suggestion"] for r in out["books"]], ["explicit", "explicit"])
+        self.assertEqual((out["explicit_summary"]["flagged_now"], out["explicit_summary"]["inconsistent"]), (1, True))

@@ -22,6 +22,7 @@ from app.genre_taxonomy import (
     normalize_label,
     split_compound_genres,
 )
+from app.explicit_evidence import book_explicit_evidence, series_explicit_summary
 from app.genre_voting import book_vote, vote_unit
 from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
 
@@ -654,6 +655,8 @@ def compile_series_enrichment(
         })
 
     series = series_sources or {}
+    for row in rows:
+        row["explicit"] = book_explicit_evidence(row, series.get("explicit") or {})
     pinned: dict[str, int] = {}
     for book in books:
         for genre in book.get("manual_genres") or []:
@@ -671,6 +674,7 @@ def compile_series_enrichment(
         # Taxonomy genres some source supported that didn't make the cut.
         "genre_suggestions": unit["candidates"],
         "pinned_genres": unit["pinned"],
+        "explicit_summary": series_explicit_summary(rows),
         # Every genre any source suggested, cleaned: "other suggestions" in the UI.
         "genre_union": _dedupe_preserve_order(all_genres),
         "main_genres": unit["main"],

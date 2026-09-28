@@ -490,6 +490,18 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
         self.post(genre=["Audiobook", "Fantasy", "Audio Book"])
         self.assertEqual(self.sent()["genres"], ["Fantasy"])
 
+    def test_per_book_explicit_overrides_the_series_choice(self):
+        other = dict(self.book, id="abs-item-2", title="Two")
+        client.post("/api/enrichment/apply", json={"books": [dict(self.book, explicit=True), dict(other, explicit=None)],
+                                                    "genre": ["Fantasy"], "explicit": None})
+        sent = {c[0][0]: c[0][1]["metadata"] for c in self.patch_mock.call_args_list}
+        self.assertEqual(sent["/api/items/abs-item-1/media"].get("explicit"), True)
+        self.assertNotIn("explicit", sent["/api/items/abs-item-2/media"])
+
+    def test_per_book_false_beats_a_series_wide_true(self):
+        self.post(genre=[], explicit=True, books=[dict(self.book, explicit=False)])
+        self.assertEqual(self.sent(), {"explicit": False})
+
     def test_explicit_false_clears_the_flag(self):
         self.post(genre=[], explicit=False)
         self.assertEqual(self.sent(), {"explicit": False})
