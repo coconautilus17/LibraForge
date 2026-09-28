@@ -4095,6 +4095,47 @@ button.ghost:hover:not(:disabled) {
   background: var(--accent-soft);
 }
 
+.cf-asr-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md);
+  border: 1px solid rgb(255 126 139 / 30%);
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+}
+
+.cf-asr-notice-icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.cf-asr-notice-body {
+  min-width: 0;
+}
+
+.cf-asr-notice-title {
+  margin: 0 0 2px;
+  font-size: var(--font-sm);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cf-asr-notice-text {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--text-soft);
+}
+
+.cf-asr-notice-text .info-tip {
+  vertical-align: -3px;
+  margin-left: 2px;
+}
+
 .cf-segmented {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

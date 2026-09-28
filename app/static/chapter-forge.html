@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Chapter Forge</title>
   <script src="/static/ui-preferences.js?v=20260711-6"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260927-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260927-2" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -52,8 +52,18 @@
       </div>
     </div>
 
-    <div id="asrUnavailableNotice" class="dryrun-notice danger" hidden>
-      <strong>Heads up - ASR not installed:</strong> this image was built without Chapter Forge's optional transcription dependencies (faster-whisper), so <b>Hybrid</b> and <b>Full transcription</b> won't work -- they're disabled below. <b>Audible chapters</b> still works with no extra dependencies. To enable local transcription, rebuild using <code>Dockerfile.unified</code> (see its header comment) or, in a dev environment, <code>pip install -r requirements-chaptering.txt</code>.
+    <div id="asrUnavailableNotice" class="cf-asr-notice" hidden>
+      <svg class="cf-asr-notice-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M10 3.3 17.7 16.4H2.3L10 3.3Z" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M10 8.2v3.4" stroke-linecap="round"/>
+        <circle cx="10" cy="14.1" r="0.9" fill="currentColor" stroke="none"/>
+      </svg>
+      <div class="cf-asr-notice-body">
+        <p class="cf-asr-notice-title">Local transcription isn't installed</p>
+        <p class="cf-asr-notice-text">Hybrid and Full transcription are turned off below. Audible chapters still works with no extra setup.
+          <span class="info-tip" data-tooltip="Rebuild the image using Dockerfile.unified to add it (see its header comment), or, in a dev environment, pip install -r requirements-chaptering.txt."></span>
+        </p>
+      </div>
     </div>
 
     <div class="side-nav-layout">
