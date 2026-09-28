@@ -847,12 +847,31 @@ def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
 # Main scorer
 # ---------------------------------------------------------------------------
 
+def with_best_local_author(clues: dict, product: dict) -> dict:
+    """The clues with the local credit that names the product's author.
+
+    Rips scatter credits: an uploader or narrator can sit in the author tag
+    while the real author is in composer ([PZG] Tanya rips). When the chosen
+    author doesn't match the product but another local credit tag does,
+    score and judge the product against that credit."""
+    names = clues.get("credit_names") or []
+    product_authors = " ".join(get_people(product, "authors"))
+    current = clues.get("author", "")
+    if not names or not product_authors or _authors_compatible(current, product_authors) is True:
+        return clues
+    for name in names:
+        if name != current and _authors_compatible(name, product_authors) is True:
+            return {**clues, "author": name}
+    return clues
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
     product: dict,
     local_duration_minutes: float | None = None,
 ) -> float:
+    clues = with_best_local_author(clues, product)
     # ASIN identity: embedded ASIN + title + author is bullet-proof confirmation.
     # When all three match, skip hard-reject guards designed for wrong-book
     # false positives and guarantee a floor score above the min_score gate.
@@ -1311,6 +1330,7 @@ def determine_edit_mode(
     score: float,
     duration_result: dict | None = None,
 ) -> str:
+    clues = with_best_local_author(clues, product)
     # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
     # runtime data via abs-agg so duration is always "unknown". Their scores are
     # structurally low even for perfect matches, so evaluate them before the

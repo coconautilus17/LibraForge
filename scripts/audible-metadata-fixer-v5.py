@@ -3063,6 +3063,9 @@ def build_multi_file_search_context(
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": author,
+        "credit_names": list(dict.fromkeys(
+            name for clues in clues_list for name in clues.get("credit_names") or []
+        )),
         "narrator": narrator,
         "album": pick_most_common_value([clues.get("album", "") for clues in clues_list]),
         "local_duration_minutes": local_duration_minutes,

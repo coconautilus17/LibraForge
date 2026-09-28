@@ -1553,6 +1553,14 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": clean_author_value(artist),
+        # Every credit tag: rips often put the author in composer or artist
+        # and an uploader or narrator in album_artist.
+        "credit_names": list(dict.fromkeys(
+            name
+            for name in (clean_author_value(first_existing_tag(tags, [key]))
+                         for key in ("album_artist", "artist", "author", "composer"))
+            if name
+        )),
         "narrator": narrator,
         "genre": genre,
         "album": album,

@@ -186,5 +186,39 @@ class ReadByNarratorTests(unittest.TestCase):
         self.assertEqual(clues["narrator"], "David Collins")
 
 
+class OtherCreditTagsTests(unittest.TestCase):
+    """Tanya Vol 5/7 ([PZG] rips): album_artist holds the uploader ("Phantom
+    Z. Greyfire" / "[PZG]"), artist the narrator, composer the real author
+    (Carlo Zen). Any local credit tag may confirm a candidate's author."""
+
+    TANYA_5 = {"asin": "B0B1Q1Z9Z7", "title": "The Saga of Tanya the Evil, Vol. 5",
+               "authors": [{"name": "Carlo Zen"}, {"name": "Shinobu Shinotsuki"}],
+               "narrators": [{"name": "Shiromi Arserio"}],
+               "series": [{"title": "The Saga of Tanya the Evil (light novel)", "sequence": "5"}],
+               "runtime_length_min": 643}
+    TAGS = {"title": "The Saga of Tanya the Evil, Vol. 05: Abyssus Abyssum Invocat",
+            "album_artist": "Phantom Z. Greyfire", "artist": "Shiromi Arserio", "composer": "Carlo Zen"}
+
+    def test_all_credit_tags_are_kept_as_clues(self):
+        parsed = FIXER.parse_title_series_number_from_metadata(self.TAGS)
+        self.assertEqual(parsed["author"], "Phantom Z. Greyfire")
+        self.assertEqual(parsed["credit_names"], ["Phantom Z. Greyfire", "Shiromi Arserio", "Carlo Zen"])
+
+    def test_composer_credit_confirms_the_author(self):
+        clues = {"title": "The Saga of Tanya the Evil, Vol. 05: Abyssus Abyssum Invocat",
+                 "author": "Phantom Z. Greyfire", "series": "The Saga of Tanya the Evil", "book_number": "5",
+                 "book_number_source": "title",
+                 "credit_names": ["Phantom Z. Greyfire", "Shiromi Arserio", "Carlo Zen"],
+                 "local_duration_minutes": 643.2}
+        score = FIXER.score_product_for_metadata(clues, self.TANYA_5, 643.2)
+        self.assertGreaterEqual(score, 0.7)
+        self.assertEqual(FIXER.metadata_from_product(self.TANYA_5, clues, score)["edit_mode"], "full")
+
+    def test_a_candidate_matching_no_local_credit_still_conflicts(self):
+        clues = {"title": "The Saga of Tanya the Evil, Vol. 05", "author": "Phantom Z. Greyfire",
+                 "credit_names": ["Phantom Z. Greyfire", "Shiromi Arserio"], "local_duration_minutes": 643.2}
+        self.assertEqual(FIXER.score_product_for_metadata(clues, self.TANYA_5, 643.2), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
