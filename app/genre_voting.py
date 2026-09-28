@@ -23,12 +23,16 @@ _MAINSTREAM = ("Mystery", "Thriller", "Horror", "Romance")
 _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology", "Religion", "Society",
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
 _REAL_SF_SUBS = ("Space Opera", "Military Science Fiction", "Post-Apocalyptic", "Hard Science Fiction")
-# Crowd shelving: Goodreads readers shelve progression and harem fantasy as
-# "litrpg" loosely (Cradle, Dragon Emperor), so a strong genre from Goodreads
-# alone needs a second source like any other genre.
-# The library's own current genres count the same way: v1 wrote Goodreads'
-# loose LitRPG into ABS, and it must not come back on its own.
-_CROWD_SOURCES = {"goodreads", "abs_existing"}
+# Sources are ranked, not counted equally. Editorial sources (the publisher's
+# own catalogue and copy, the file's embedded genre tag, AudioSilo's curated
+# mapping) carry weight 2; crowd sources (Goodreads shelving, Open Library
+# subjects, genres already in ABS with no known author) carry 1. A book's main
+# genre needs weight 2: one editorial source, or two crowd sources agreeing.
+# (Goodreads readers shelve progression and harem fantasy as "litrpg" loosely:
+# Cradle, Dragon Emperor.) The user's own ABS genres are pinned, not voted.
+SOURCE_WEIGHTS = {"audible": 2, "file_tags": 2, "keywords": 2, "audiosilo": 2,
+                  "goodreads": 1, "openlibrary": 1, "abs_existing": 1}
+MAIN_WEIGHT = 2
 MAX_SUBS = 5
 MAX_CANDIDATES = 10
 
@@ -44,18 +48,17 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     for source, labels in voters.items():
         mains, source_subs = classify([labels])
         for genre in mains:
-            votes[genre] += 1
+            votes[genre] += SOURCE_WEIGHTS.get(source, 1)
             evidence[genre].add(source)
         for sub in source_subs:
             subs[sub] += 1
             sub_evidence[sub].add(source)
-    needed = 2 if len(voters) >= 2 else 1
-    main = {g for g, c in votes.items()
-            if c >= needed or (g in STRONG_MAINS and evidence[g] - _CROWD_SOURCES)}
-    fallback = {g: c for g, c in votes.items() if not (g in STRONG_MAINS and not evidence[g] - _CROWD_SOURCES)}
+    main = {g for g, w in votes.items() if w >= MAIN_WEIGHT}
+    fallback = {g: w for g, w in votes.items() if g not in STRONG_MAINS}
     if not main and fallback:
-        # Nothing agreed: fall back to the best-supported genre(s), at most two,
-        # never a strong genre only crowd shelving named.
+        # Only lone crowd sources answered: fall back to their best-supported
+        # broad genre(s), at most two (a tie-break between sources that
+        # disagree), never a strong genre on crowd shelving alone.
         votes = collections.Counter(fallback)
         top = max(votes.values())
         tied = sorted((g for g, c in votes.items() if c == top), key=MAIN_ORDER.index)

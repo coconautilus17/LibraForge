@@ -56,3 +56,21 @@ class GoodreadsGenreNamesTests(unittest.TestCase):
         from app import goodreads_shelves as g
         names = set(g._NICHE.values()) | set(g._AUDIENCE.values()) | set(g._BROAD.values())
         self.assertEqual(sorted(n for n in names if t.normalize_label(n) not in t.LABEL_MAP), [])
+
+
+class CompoundGenreSplitTests(unittest.TestCase):
+    """Store-style merged genres ("Action & Adventure") are split for a library;
+    a genre whose own name contains '&' (Sword & Sorcery) is kept whole."""
+
+    def test_split_and_dedupe(self):
+        self.assertEqual(t.split_compound_genres(["Action & Adventure", "Science Fiction and Fantasy", "Adventure"]),
+                         ["Action", "Adventure", "Science Fiction", "Fantasy"])
+        self.assertEqual(t.split_compound_genres(["Mystery, Thriller & Suspense"]), ["Mystery", "Thriller", "Suspense"])
+
+    def test_true_compound_names_stay_whole(self):
+        self.assertEqual(t.split_compound_genres(["Sword & Sorcery"]), ["Sword & Sorcery"])
+
+    def test_taxonomy_never_outputs_a_merged_name_except_real_compounds(self):
+        names = {n for m, s in t.LABEL_MAP.values() for n in m + s} | set(t.MAIN_ORDER)
+        self.assertEqual(sorted(n for n in names if "&" in n or " and " in n.lower()), ["Sword & Sorcery"])
+        self.assertEqual(t.LABEL_MAP["action & adventure"], ([], ["Action", "Adventure"]))

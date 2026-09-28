@@ -101,6 +101,29 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "non-fiction":"non fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
+# Genres whose own name contains "&" / "and" (not a store merging two genres).
+COMPOUND_GENRES = {"sword & sorcery", "sword and sorcery"}
+_COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
+
+
+def split_compound_genres(genres: Any) -> list[str]:
+    """Split store-style merged genres for a library: "Action & Adventure" ->
+    Action, Adventure; "Mystery, Thriller & Suspense" -> Mystery, Thriller,
+    Suspense. Real compound names (Sword & Sorcery) stay whole. Deduped
+    case-insensitively, first spelling and order kept."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for genre in genres or []:
+        text = str(genre or "").strip()
+        parts = [text] if text.lower() in COMPOUND_GENRES else _COMPOUND_SPLIT_RE.split(text)
+        for part in parts:
+            part = part.strip()
+            if part and part.lower() not in seen:
+                seen.add(part.lower())
+                out.append(part)
+    return out
+
+
 STRONG_MAINS = {"LitRPG", "Progression Fantasy", "Cultivation", "Harem"}
 # LitRPG and Cultivation are kinds of progression fantasy: when either is a
 # main genre, Progression Fantasy is kept as a subgenre (app/genre_voting.py).
@@ -223,3 +246,10 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
         mains = [max(main, key=main.get)]
     subs = [s for s, c in sorted(sub.items(), key=lambda kv: (-kv[1], kv[0])) if c >= threshold and s not in mains][:cap_sub]
     return mains, subs
+
+
+LABEL_MAP.update({
+    label: (mains, split_compound_genres(subs))
+    for label, (mains, subs) in LABEL_MAP.items()
+    if any(("&" in sub or " and " in sub.lower()) and sub.lower() not in COMPOUND_GENRES for sub in subs)
+})

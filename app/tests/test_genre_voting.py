@@ -11,10 +11,15 @@ def unit(votes, **kw):
 
 
 class VotingTests(unittest.TestCase):
-    def test_main_needs_two_sources_unless_strong(self):
-        v = book_vote({"audible": ["thriller"], "audiosilo": ["horror"], "keywords": ["litrpg"]})
-        self.assertIn("LitRPG", v["main"])
-        self.assertNotIn("Horror", v["main"])
+    def test_one_editorial_source_is_enough_crowd_sources_need_each_other(self):
+        v = book_vote({"audible": ["thriller"], "goodreads": ["horror"], "openlibrary": ["romance", "horror"], "keywords": ["litrpg"]})
+        self.assertIn("Thriller", v["main"])   # Audible alone: editorial
+        self.assertIn("LitRPG", v["main"])     # publisher summary keywords: editorial
+        self.assertIn("Horror", v["main"])     # Goodreads + Open Library agree
+        self.assertNotIn("Romance", v["main"])  # Open Library alone: crowd
+
+    def test_file_tags_are_editorial(self):
+        self.assertEqual(book_vote({"file_tags": ["thriller"], "goodreads": ["fantasy"]})["main"], {"Thriller"})
 
     def test_single_source_book_keeps_its_top_genre(self):
         self.assertEqual(book_vote({"audible": ["thriller"]})["main"], {"Thriller"})
