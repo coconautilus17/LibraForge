@@ -6,7 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
-  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-3" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-5" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -129,9 +129,23 @@
         <button id="applyBtn" type="button">Apply</button>
       </div>
     </section>
+
+    <section class="card" id="collectionsCard">
+      <div class="card-title"><span class="step-n">3</span><h2>Collections from genres</h2></div>
+      <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone.</p>
+      <div class="actions collections-actions">
+        <label class="collections-toggle"><input id="collectionsAllGenres" type="checkbox" /> Show subgenres too</label>
+        <button id="collectionsLoadBtn" type="button" class="secondary">Check collections</button>
+      </div>
+      <div id="collectionsTable"></div>
+      <p id="collectionsResult" class="section-note"></p>
+      <div class="actions" id="collectionsApplyRow" hidden>
+        <button id="collectionsApplyBtn" type="button">Create / refresh selected</button>
+      </div>
+    </section>
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260929-5"></script>
+  <script src="/static/enrichment-forge.js?v=20260929-6"></script>
 </body>
 </html>

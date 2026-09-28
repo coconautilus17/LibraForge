@@ -672,3 +672,50 @@ class CompileLocalGenresTests(unittest.TestCase):
         self.assertEqual(rows["item-1"]["manual_genres"], ["Horror"])
         self.assertEqual(rows["item-2"]["manual_genres"], [])   # same as its file tag: not a hand edit
         self.assertIn("file_tags", rows["item-2"]["sources"])
+
+
+def _abs_request_collections(path, params):
+    if path == "/api/libraries":
+        return {"libraries": [{"id": "lib1", "mediaType": "book"}]}
+    if path == "/api/libraries/lib1/items":
+        if int(params["page"]) > 0:
+            return {"total": 3, "results": []}
+        return {"total": 3, "results": [
+            {"id": "a", "libraryId": "lib1", "media": {"metadata": {"genres": ["Fantasy", "Audiobook"]}}},
+            {"id": "b", "libraryId": "lib1", "media": {"metadata": {"genres": ["Fantasy", "Sci-Fi"]}}},
+            {"id": "c", "libraryId": "lib1", "media": {"metadata": {"genres": ["Explicit"]}}}]}
+    raise AssertionError(path)
+
+
+class EnrichmentCollectionsEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.posted, self.patched = [], []
+        existing = {"collections": [{"id": "u1", "libraryId": "lib1", "name": "Explicit", "description": None, "books": []}]}
+
+        def post(path, body, *a, **k):
+            if body.get("name") == "Sci-Fi":
+                raise RuntimeError("ABS 500")
+            self.posted.append(body)
+            return {"id": "new"}
+
+        for p_ in (patch.object(main, "_get_abs_api_key", return_value="key"),
+                   patch.object(main, "_get_abs_url", return_value="http://abs"),
+                   patch.object(main, "_abs_request", side_effect=_abs_request_collections),
+                   patch.object(main, "abs_get_json", return_value=existing),
+                   patch.object(main, "abs_post_json", side_effect=post),
+                   patch.object(main, "abs_patch_json", side_effect=lambda p, b, *a, **k: self.patched.append((p, b)))):
+            p_.start(); self.addCleanup(p_.stop)
+
+    def test_plan_lists_genres_with_counts_and_status(self):
+        rows = {r["genre"]: r for r in client.get("/api/enrichment/collections/plan").json()["rows"]}
+        self.assertEqual((rows["Fantasy"]["book_count"], rows["Fantasy"]["action"]), (2, "create"))
+        self.assertEqual(rows["Explicit"]["action"], "name_taken")
+        self.assertNotIn("Audiobook", rows)
+
+    def test_apply_creates_only_chosen_free_genres_and_reports_failures(self):
+        body = client.post("/api/enrichment/collections/apply", json={"genres": ["Fantasy", "Explicit", "Sci-Fi"]}).json()
+        self.assertEqual([p["name"] for p in self.posted], ["Fantasy"])
+        self.assertEqual(sorted(self.posted[0]["books"]), ["a", "b"])
+        self.assertEqual((body["created"], body["skipped"]), (1, 1))
+        self.assertEqual(body["failed"], [{"genre": "Sci-Fi", "error": "ABS 500"}])
+        self.assertEqual(self.patched, [])

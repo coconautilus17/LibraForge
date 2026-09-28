@@ -549,3 +549,48 @@
   font-size: 12.5px;
   font-weight: 600;
 }
+
+/* Collections from genres. */
+.collections-actions {
+  justify-content: space-between;
+}
+
+.collections-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.collections-table th,
+.collections-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.collections-table th {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.collection-row.name_taken td,
+.collection-row.empty td,
+.collection-row.in_sync td {
+  color: var(--muted);
+}
+
+.collections-toggle {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.collections-table td:first-child,
+.collections-table th:first-child {
+  width: 32px;
+}

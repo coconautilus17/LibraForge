@@ -407,3 +407,74 @@ $("explicitSelect").addEventListener("change", () => {
     select.value = value;
   });
 });
+
+// Collections from genres.
+const COLLECTION_STATUS = {
+  create: () => "new collection",
+  update: (r) => `refresh: +${r.add_count} / -${r.remove_count}`,
+  in_sync: () => "in sync",
+  name_taken: () => "one of your collections has this name; left alone",
+  empty: () => "no books",
+};
+let collectionRows = [];
+
+function renderCollections() {
+  const showAll = $("collectionsAllGenres").checked;
+  const rows = collectionRows.filter((r) => showAll || r.main);
+  $("collectionsTable").innerHTML = rows.length ? `
+    <table class="collections-table">
+      <thead><tr><th></th><th>Genre</th><th>Books</th><th>Status</th></tr></thead>
+      <tbody>${rows.map((r) => {
+        const actionable = r.action === "create" || r.action === "update";
+        return `<tr class="collection-row ${r.action}">
+          <td><input type="checkbox" class="collection-pick" data-genre="${escapeHtml(r.genre)}"${actionable ? "" : " disabled"}${actionable && r.main ? " checked" : ""} aria-label="Create or refresh ${escapeHtml(r.genre)}" /></td>
+          <td>${escapeHtml(r.genre)}</td>
+          <td>${r.book_count}</td>
+          <td>${escapeHtml((COLLECTION_STATUS[r.action] || (() => r.action))(r))}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>` : '<p class="section-note">No genres found in your library yet.</p>';
+  $("collectionsApplyRow").hidden = !rows.some((r) => r.action === "create" || r.action === "update");
+}
+
+async function loadCollections() {
+  $("collectionsResult").textContent = "Reading your library's genres and collections...";
+  const res = await fetch("/api/enrichment/collections/plan").catch(() => null);
+  if (!res || !res.ok) {
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("collectionsResult").textContent = `Could not read collections${detail ? `: ${detail}` : "."}`;
+    return;
+  }
+  collectionRows = (await res.json()).rows || [];
+  $("collectionsResult").textContent = "";
+  renderCollections();
+}
+
+async function applyCollections() {
+  const genres = Array.from(document.querySelectorAll(".collection-pick:checked")).map((el) => el.dataset.genre);
+  if (!genres.length) {
+    $("collectionsResult").textContent = "Tick at least one genre.";
+    return;
+  }
+  $("collectionsResult").textContent = `Writing ${genres.length} collection${genres.length === 1 ? "" : "s"}...`;
+  const res = await fetch("/api/enrichment/collections/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ genres }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    $("collectionsResult").textContent = "Creating collections failed. Check that Audiobookshelf is reachable.";
+    return;
+  }
+  const data = await res.json();
+  const parts = [`Created ${data.created}, refreshed ${data.updated}.`];
+  if (data.failed && data.failed.length) {
+    parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.genre} (${f.error})`).join("; ")}`);
+  }
+  await loadCollections();
+  $("collectionsResult").textContent = parts.join(" ");
+}
+
+$("collectionsLoadBtn").addEventListener("click", loadCollections);
+$("collectionsAllGenres").addEventListener("change", renderCollections);
+$("collectionsApplyBtn").addEventListener("click", applyCollections);

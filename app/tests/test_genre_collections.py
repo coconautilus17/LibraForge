@@ -50,3 +50,9 @@ class CollectionsTests(unittest.TestCase):
         self.assertEqual(calls[1][2], {"books": ["a", "b"]})
         self.assertEqual((out["created"], out["updated"], out["skipped"]), (1, 1, 1))
         self.assertEqual(out["failed"], [{"genre": "Horror", "error": "ABS 500"}])
+
+
+class UmbrellaTests(unittest.TestCase):
+    def test_store_umbrella_shelves_are_not_collection_genres(self):
+        items = [{"id": "x", "media": {"metadata": {"genres": ["Science Fiction & Fantasy", "Literature & Fiction", "Fantasy"]}}}]
+        self.assertEqual(sorted(gc.genre_counts(items)), ["Fantasy"])

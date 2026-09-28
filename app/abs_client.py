@@ -71,13 +71,22 @@ def abs_get_json(path: str, params: dict[str, str], abs_url: str, abs_api_key: s
 
 def abs_patch_json(path: str, body: dict[str, Any], abs_url: str, abs_api_key: str, timeout: int = 15) -> Any:
     """Authenticated PATCH against the ABS API with a JSON body. Raises on failure."""
+    return _abs_send_json("PATCH", path, body, abs_url, abs_api_key, timeout)
+
+
+def abs_post_json(path: str, body: dict[str, Any], abs_url: str, abs_api_key: str, timeout: int = 15) -> Any:
+    """Authenticated POST against the ABS API with a JSON body. Raises on failure."""
+    return _abs_send_json("POST", path, body, abs_url, abs_api_key, timeout)
+
+
+def _abs_send_json(method: str, path: str, body: dict[str, Any], abs_url: str, abs_api_key: str, timeout: int) -> Any:
     import urllib.request as _urlrequest
 
     url = f"{abs_url.rstrip('/')}{path}"
     req = _urlrequest.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
-        method="PATCH",
+        method=method,
         headers={
             "Authorization": f"Bearer {abs_api_key}",
             "Accept": "application/json",

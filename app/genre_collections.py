@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from app.fixer.scoring import GENRE_BLOCKLIST
-from app.genre_taxonomy import split_compound_genres
+from app.genre_taxonomy import NON_GENRES, normalize_label, split_compound_genres
 
 MARKER = "Managed by LibraForge (genre collection)"
 
@@ -21,6 +21,9 @@ def genre_counts(items: list[dict[str, Any]]) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for item in items:
         genres = ((item.get("media") or {}).get("metadata") or {}).get("genres") or []
+        # A store umbrella shelf ("Science Fiction & Fantasy") says nothing
+        # about which genre a book is: never a collection.
+        genres = [g for g in genres if normalize_label(g) not in NON_GENRES]
         for genre in split_compound_genres(genres):
             if genre.lower() in GENRE_BLOCKLIST:
                 continue
