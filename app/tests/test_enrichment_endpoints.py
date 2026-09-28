@@ -484,7 +484,13 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
             self.post(genre=["Fantasy", "LitRPG"])
             log = json.loads((Path(tmp) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
-        self.assertEqual(log["abs-item-1"], ["Fantasy", "LitRPG"])
+        self.assertEqual(log["abs-item-1"], {"written": ["Fantasy", "LitRPG"], "pinned": []})
+
+    def test_pinned_genres_are_logged_as_the_users(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            self.post(genre=["Fantasy", "Small Town"], pinned=["Small Town", "Gone"])
+            log = json.loads((Path(tmp) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["abs-item-1"], {"written": ["Fantasy", "Small Town"], "pinned": ["Small Town"]})
 
     def test_audiobook_can_never_be_written_as_a_genre(self):
         self.post(genre=["Audiobook", "Fantasy", "Audio Book"])
@@ -763,6 +769,25 @@ class EnrichmentBatchEndpointTests(unittest.TestCase):
             self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 409)
             self.assertEqual(client.post("/api/enrichment/batch/apply", json={"selections": []}).status_code, 409)
 
+    def test_a_series_page_apply_marks_the_batch_unit_applied(self):
+        client.post("/api/enrichment/batch/start", json={})
+        self.wait()
+        client.post("/api/enrichment/apply", json={"books": [{"id": "k1-b", "path": "/audiobooks/k1", "is_file": False,
+                                                               "include": True, "title": "One"}],
+                                                    "genre": ["Horror"], "series_key": "k1"})
+        units = {u["key"]: u for u in client.get("/api/enrichment/batch").json()["units"]}
+        self.assertEqual((units["k1"]["state"], units["k1"]["applied_genres"]), ("applied", ["Horror"]))
+        self.assertEqual(units["k2"]["state"], "compiled")
+        # and a later batch apply skips it instead of overwriting the curation
+        body = client.post("/api/enrichment/batch/apply", json={"selections": [{"key": "k1", "genres": ["Fantasy"]}]}).json()
+        self.assertEqual(body["skipped"], ["k1"])
+
+    def test_one_store_per_file_and_nothing_starts_or_applies_during_an_apply(self):
+        self.assertIs(main._batch_store(), main._batch_store())
+        with patch.object(main, "_BATCH_APPLYING", True):
+            self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 409)
+            self.assertEqual(client.post("/api/enrichment/batch/apply", json={"selections": []}).status_code, 409)
+
     def test_apply_writes_selected_units_and_logs_the_genres(self):
         client.post("/api/enrichment/batch/start", json={})
         self.wait()
@@ -771,6 +796,24 @@ class EnrichmentBatchEndpointTests(unittest.TestCase):
         self.assertEqual((body["units"], body["books"]), (1, 1))
         self.assertEqual(self.patched, [("/api/items/k1-b/media", {"metadata": {"genres": ["Fantasy", "Action", "Adventure"]}})])
         log = json.loads((Path(self.tmp.name) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
-        self.assertEqual(log["k1-b"], ["Fantasy", "Action", "Adventure"])
+        self.assertEqual(log["k1-b"], {"written": ["Fantasy", "Action", "Adventure"], "pinned": []})
         states = {u["key"]: u["state"] for u in client.get("/api/enrichment/batch").json()["units"]}
         self.assertEqual(states, {"k1": "applied", "k2": "compiled"})
+
+
+def _abs_request_item_fetch_fails(path, params):
+    if path.startswith("/api/items/"):
+        raise TimeoutError("ABS slow")
+    return _abs_request(path, params)
+
+
+class LocalGenresFetchFailureTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_a_failed_item_fetch_pins_nothing(self):
+        with patch.object(main, "_abs_request", side_effect=_abs_request_item_fetch_fails), \
+             tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            books = [{"id": "x", "path": "/audiobooks/x", "is_file": False, "has_audio": True, "existing_genres": ["Horror", "Crime"]}]
+            main._attach_local_genres(books)
+        self.assertEqual((books[0]["manual_genres"], books[0]["file_genres"]), ([], []))

@@ -79,7 +79,12 @@ def apply_collection_plan(
                                              "description": MARKER, "books": row["books"]})
                 out["created"] += 1
             elif row["action"] == "update":
-                patch_fn(f"/api/collections/{row['collection_id']}", {"books": row["books"]})
+                # ABS only reorders on a PATCH books list; membership changes go
+                # through the batch endpoints (verified against ABS 2.35).
+                if row["add"]:
+                    post_fn(f"/api/collections/{row['collection_id']}/batch/add", {"books": row["add"]})
+                if row["remove"]:
+                    post_fn(f"/api/collections/{row['collection_id']}/batch/remove", {"books": row["remove"]})
                 out["updated"] += 1
             else:
                 out["skipped"] += 1

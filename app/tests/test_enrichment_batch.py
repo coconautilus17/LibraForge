@@ -88,6 +88,12 @@ class BatchTests(unittest.TestCase):
         out = eb.apply_batch(self.store, [{"key": "a", "genres": ["Fantasy"], "apply_explicit": False}], apply_fn)
         self.assertEqual(out["books"], 1)
         self.assertEqual(out["failed"], [{"unit": "A", "title": "a", "error": "ABS 502"}])
+        # Not "applied": a unit with failed books can be applied again.
+        self.assertEqual(self.store.load()["units"]["a"]["state"], "apply_failed")
+        calls = []
+        eb.apply_batch(self.store, [{"key": "a", "genres": ["Fantasy"], "apply_explicit": False}],
+                       lambda book, genres, explicit: calls.append(book["id"]))
+        self.assertEqual(calls, ["a1", "a3"])
         self.assertEqual(self.store.load()["units"]["a"]["state"], "applied")
 
     def test_a_run_left_running_by_a_restart_reads_as_stopped(self):
@@ -106,3 +112,43 @@ class EffectiveStatusTests(unittest.TestCase):
 
     def test_stop_requested_on_a_live_thread_is_stopping(self):
         self.assertEqual(eb.effective_status({"status": "running"}, thread_alive=True, stop_requested=True), "stopping")
+
+
+class ApplyCallbackTests(unittest.TestCase):
+    def test_each_applied_unit_is_reported_with_the_books_written(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        store = eb.BatchStore(Path(tmp.name) / "b.json")
+        eb.run_batch(store, UNITS[:2], lambda k, n: compiled(k), should_stop=lambda: False)
+        done = []
+        eb.apply_batch(store, [{"key": "a", "genres": ["Fantasy"]}, {"key": "b", "genres": ["Horror"]}],
+                       lambda *a: None, on_unit_done=lambda entry, ids, genres: done.append((entry["name"], ids, genres)))
+        self.assertEqual(done, [("A", ["a1"], ["Fantasy"]), ("B", ["b1"], ["Horror"])])
+
+
+class DegradedAndConcurrencyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = eb.BatchStore(Path(self.tmp.name) / "batch.json")
+
+    def test_units_compiled_while_a_source_was_paused_are_marked_and_recompiled(self):
+        paused = compiled("a")
+        paused["source_status"]["goodreads"] = {"found": 0, "skipped": 3, "rate_limited": True}
+        results = {"a": paused}
+        eb.run_batch(self.store, UNITS[:1], lambda k, n: results[k], should_stop=lambda: False)
+        self.assertEqual(self.store.load()["units"]["a"]["result"]["degraded"], ["goodreads"])
+        calls = []
+        results["a"] = compiled("a")
+        eb.run_batch(self.store, UNITS[:1], lambda k, n: calls.append(k) or results[k], should_stop=lambda: False)
+        self.assertEqual(calls, ["a"])
+        self.assertEqual(self.store.load()["units"]["a"]["result"]["degraded"], [])
+
+    def test_the_run_never_overwrites_state_saved_by_someone_else_meanwhile(self):
+        eb.run_batch(self.store, UNITS[:1], lambda k, n: compiled(k), should_stop=lambda: False)
+
+        def compile_fn(key, name):
+            if key == "b":  # while the run is busy, "a" gets applied elsewhere
+                eb.apply_batch(self.store, [{"key": "a", "genres": ["Fantasy"]}], lambda *a: None)
+            return compiled(key)
+
+        eb.run_batch(self.store, UNITS, compile_fn, should_stop=lambda: False)
+        self.assertEqual(self.store.load()["units"]["a"]["state"], "applied")

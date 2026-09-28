@@ -40,14 +40,18 @@ class CollectionsTests(unittest.TestCase):
 
         def post(path, body):
             calls.append(("post", path, body))
-            if body["name"] == "Horror":
+            if body.get("name") == "Horror":
                 raise RuntimeError("ABS 500")
             return {"id": "n"}
 
         out = gc.apply_collection_plan(rows, library_id="L", post_fn=post, patch_fn=lambda p, b: calls.append(("patch", p, b)))
-        self.assertEqual([(c[0], c[1]) for c in calls], [("post", "/api/collections"), ("patch", "/api/collections/c1"), ("post", "/api/collections")])
+        # ABS ignores a PATCH books list (it only reorders); refreshing uses
+        # the batch add/remove endpoints (verified live).
+        self.assertEqual([(c[0], c[1]) for c in calls], [
+            ("post", "/api/collections"), ("post", "/api/collections/c1/batch/add"),
+            ("post", "/api/collections/c1/batch/remove"), ("post", "/api/collections")])
         self.assertEqual(calls[0][2], {"libraryId": "L", "name": "Sci-Fi", "description": gc.MARKER, "books": ["b"]})
-        self.assertEqual(calls[1][2], {"books": ["a", "b"]})
+        self.assertEqual((calls[1][2], calls[2][2]), ({"books": ["b"]}, {"books": ["z"]}))
         self.assertEqual((out["created"], out["updated"], out["skipped"]), (1, 1, 1))
         self.assertEqual(out["failed"], [{"genre": "Horror", "error": "ABS 500"}])
 

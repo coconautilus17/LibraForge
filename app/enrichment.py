@@ -526,21 +526,32 @@ def detect_manual_genres(
     abs_genres: list[str],
     file_genres: list[str],
     libraforge_wrote_genre: bool,
-    enrichment_written: list[str] | None,
+    enrichment_written: Any,
 ) -> list[str]:
     """Genres the user set by hand in Audiobookshelf, to be pinned. ABS keeps
-    no per-field history, so: real genres (not "Audiobook" or a store
-    umbrella) that differ from the file's own genre tag and weren't written by
-    Metadata Forge (sidecar) or Enrichment Forge (its write log). Merged names
-    are split."""
-    real = [g for g in abs_genres or [] if normalize_label(g) not in NON_GENRES and str(g).strip()]
-    if not real or libraforge_wrote_genre:
+    no per-field history, so per genre: a real genre (not "Audiobook" or a
+    store umbrella) that isn't in the file's own genre tag and wasn't written
+    by Metadata Forge (sidecar) or Enrichment Forge (its write log). Genres the
+    log recorded as the user's own stay pinned after Enrichment Forge rewrites
+    them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
+    older plain list of written genres."""
+    real = split_compound_genres([g for g in abs_genres or [] if str(g).strip() and normalize_label(g) not in NON_GENRES])
+    if not real:
         return []
-    if enrichment_written is not None and _genre_key_set(real) == _genre_key_set(enrichment_written):
-        return []
-    if file_genres and _genre_key_set(real) == _genre_key_set(file_genres):
-        return []
-    return split_compound_genres(real)
+    if isinstance(enrichment_written, dict):
+        written, pinned_before = enrichment_written.get("written") or [], enrichment_written.get("pinned") or []
+    else:
+        written, pinned_before = enrichment_written or [], []
+    written_keys, pinned_keys = _genre_key_set(written), _genre_key_set(pinned_before)
+    file_keys = _genre_key_set(file_genres or [])
+    out = []
+    for genre in real:
+        key = normalize_label(genre)
+        if key in pinned_keys:
+            out.append(genre)
+        elif not (libraforge_wrote_genre or key in written_keys or key in file_keys):
+            out.append(genre)
+    return out
 
 
 def build_book_voters(
@@ -664,19 +675,22 @@ def compile_series_enrichment(
     unit = vote_unit(book_votes, series_labels=series.get("labels") or [], series_evidence=series.get("evidence") or [],
                      pf_progression=bool(series.get("pf_progression")), standalone=standalone, pinned=pinned)
     voted = unit["main"] + unit["sub"]
+    # Store umbrella shelves ("Literature & Fiction") are never offered as
+    # chips; only a genre the user types or pins is split and kept.
+    union = [g for g in _dedupe_preserve_order(all_genres) if normalize_label(g) not in NON_GENRES]
 
     return {
         "books": rows,
         # The chips pre-fill with the vote; with no agreement, every genre any
         # source suggested (mapped if possible, else raw), so the user still
         # has something to pick from.
-        "genre": voted or unit["candidates"] or _dedupe_preserve_order(all_genres),
+        "genre": voted or unit["candidates"] or union,
         # Taxonomy genres some source supported that didn't make the cut.
         "genre_suggestions": unit["candidates"],
         "pinned_genres": unit["pinned"],
         "explicit_summary": series_explicit_summary(rows),
         # Every genre any source suggested, cleaned: "other suggestions" in the UI.
-        "genre_union": _dedupe_preserve_order(all_genres),
+        "genre_union": union,
         "main_genres": unit["main"],
         "sub_genres": unit["sub"],
         "genre_evidence": unit["evidence"],

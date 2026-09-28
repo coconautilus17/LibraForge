@@ -3,6 +3,7 @@ const { escapeHtml } = window.UiCommon;
 
 let currentBooks = [];
 let currentSeriesName = "";
+let currentSeriesKey = "";
 let currentSourceStatus = {};
 let currentEvidence = {};
 let pinnedGenres = new Set();
@@ -259,6 +260,7 @@ async function compileSeries(seriesName, seriesKey) {
     return;
   }
   currentSeriesName = seriesName;
+  currentSeriesKey = seriesKey || "";
   $("compileCard").hidden = false;
   $("compileSub").textContent = `${seriesName}, searching...`;
   $("sourceStrip").innerHTML = "";
@@ -301,7 +303,11 @@ async function compileSeries(seriesName, seriesKey) {
   $("narratorInput").value = "";
   $("applyNarratorCheckbox").checked = false;
   $("narratorSuggestions").textContent = data.narrator ? `Narrators found across this series: ${data.narrator}` : "";
-  $("explicitSelect").value = "";
+  // Books pre-set from the HaremLit wiki make the series choice "per book",
+  // so choosing Don't change is a real change that clears those presets.
+  const preset = (data.books || []).some((b) => (b.explicit || {}).strength === "authoritative" && b.has_audio !== false);
+  $("explicitPerBookOption").hidden = !preset;
+  $("explicitSelect").value = preset ? "per-book" : "";
   $("sequenceRangeInput").value = data.sequence_range;
   renderExplicitEvidence(data.explicit_evidence_note);
   renderExplicitSummary(data.explicit_summary);
@@ -338,6 +344,9 @@ async function applyEnrichment() {
       apply_narrator: $("applyNarratorCheckbox").checked,
       // Every book carries its own choice (the series select sets them all).
       explicit: null,
+      // The user's own genres still on the page stay pinned after this write.
+      pinned: currentGenreList().filter((g) => pinnedGenres.has(g)),
+      series_key: currentSeriesKey,
     }),
   }).catch(() => null);
 
@@ -362,6 +371,7 @@ async function applyEnrichment() {
     parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.title || f.path} (${f.error})`).join("; ")}`);
   }
   $("compileSub").textContent = parts.join(" ");
+  loadBatch(false);
 }
 
 let searchDebounce = null;
@@ -403,6 +413,7 @@ $("genreAddInput").addEventListener("keydown", (e) => {
 // The series-wide choice sets every book's own choice; books can still differ.
 $("explicitSelect").addEventListener("change", () => {
   const value = $("explicitSelect").value;
+  if (value === "per-book") return;
   $("bookList").querySelectorAll(".book-explicit").forEach((select) => {
     select.value = value;
   });
@@ -494,11 +505,12 @@ function batchProposed(unit) {
 
 function batchMatches(unit, filter) {
   if (filter === "all") return true;
-  if (filter === "failed") return unit.state === "failed";
+  if (filter === "failed") return unit.state === "failed" || unit.state === "apply_failed";
   if (filter === "applied") return unit.state === "applied";
   if (filter === "changed") return unit.state === "compiled" && !sameGenres(batchProposed(unit), unit.current_genres);
   // Needs review: nothing agreed, little evidence, or it failed.
-  return unit.state === "failed" || (unit.state === "compiled" && (unit.agreement === "none" || unit.coverage <= 2));
+  return unit.state === "failed" || unit.state === "apply_failed"
+    || (unit.state === "compiled" && (unit.agreement === "none" || unit.coverage <= 2 || (unit.degraded || []).length));
 }
 
 function renderBatchProgress(data) {
@@ -514,9 +526,9 @@ function renderBatchProgress(data) {
   $("batchProgress").textContent = data.total ? parts.join(" · ") : "Not run yet.";
   document.querySelector(".batch-bar").hidden = !data.total;
   $("batchBarFill").style.width = data.total ? `${Math.round((100 * done) / data.total)}%` : "0";
-  const resumable = data.status === "stopped" && (counts.pending || 0) + (counts.failed || 0) > 0;
-  $("batchStartBtn").hidden = running;
-  $("batchStartBtn").textContent = resumable ? "Resume" : (data.total ? "Run again" : "Start");
+  const leftover = (counts.pending || 0) + (counts.failed || 0) + (data.degraded || 0);
+  $("batchStartBtn").hidden = running || (data.total > 0 && leftover === 0);
+  $("batchStartBtn").textContent = data.total ? "Resume" : "Start";
   $("batchStopBtn").hidden = !running;
   $("batchRestartBtn").hidden = running || !data.total;
 }
@@ -529,8 +541,8 @@ function renderBatchTable() {
     <table class="collections-table batch-table">
       <thead><tr><th></th><th>Series or book</th><th>Sources</th><th>Now</th><th>Proposed</th><th>Explicit</th><th></th></tr></thead>
       <tbody>${rows.map((u) => {
-        const pickable = u.state === "compiled";
-        const checked = pickable && u.agreement !== "none";
+        const pickable = u.state === "compiled" || u.state === "apply_failed";
+        const checked = u.state === "compiled" && u.agreement !== "none";
         const pinned = new Set(u.pinned_genres || []);
         const chip = (g, main) => `<span class="batch-genre${main ? " main" : ""}${pinned.has(g) ? " pinned" : ""}">${escapeHtml(g)}</span>`;
         const proposed = u.state === "failed"
@@ -539,8 +551,8 @@ function renderBatchTable() {
           : [...(u.main_genres || []).map((g) => chip(g, true)), ...(u.sub_genres || []).map((g) => chip(g, false))].join(" ") || '<span class="section-note">no agreement</span>';
         return `<tr class="batch-row ${u.state}">
           <td><input type="checkbox" class="batch-pick" data-key="${escapeHtml(u.key)}"${pickable ? "" : " disabled"}${checked ? " checked" : ""} aria-label="Apply ${escapeHtml(u.name)}" /></td>
-          <td>${escapeHtml(u.name)} ${u.standalone ? '<span class="badge standalone-badge">Standalone</span>' : `<span class="section-note">${u.book_count} book${u.book_count === 1 ? "" : "s"}</span>`}${u.state === "applied" ? ' <span class="badge">applied</span>' : ""}</td>
-          <td>${u.state === "pending" ? "" : (u.coverage || 0)}</td>
+          <td>${escapeHtml(u.name)} ${u.standalone ? '<span class="badge standalone-badge">Standalone</span>' : `<span class="section-note">${u.book_count} book${u.book_count === 1 ? "" : "s"}</span>`}${u.state === "applied" ? ' <span class="badge">applied</span>' : ""}${u.state === "apply_failed" ? ` <span class="batch-error">${(u.failures || []).length} book${(u.failures || []).length === 1 ? "" : "s"} failed; tick to retry</span>` : ""}</td>
+          <td>${u.state === "pending" ? "" : (u.coverage || 0)}${(u.degraded || []).length ? `<div class="batch-error" title="Paused or failing while this compiled; Resume compiles it again">missing: ${escapeHtml(u.degraded.join(", "))}</div>` : ""}</td>
           <td class="batch-now">${escapeHtml((u.current_genres || []).join(", ") || "none")}</td>
           <td>${proposed}</td>
           <td>${u.explicit_suggested ? `${u.explicit_suggested} (HaremLit)` : ""}</td>
@@ -606,6 +618,7 @@ async function applyBatch() {
   const books = units.reduce((sum, u) => sum + (u.book_count || 0), 0);
   if (!window.confirm(`Write genres to about ${books} book${books === 1 ? "" : "s"} in ${units.length} series or books?`)) return;
   $("batchResult").textContent = "Applying...";
+  $("batchApplyBtn").disabled = true;
   const res = await fetch("/api/enrichment/batch/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -614,10 +627,12 @@ async function applyBatch() {
     }),
   }).catch(() => null);
   if (!res || !res.ok) {
+    $("batchApplyBtn").disabled = false;
     const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
     $("batchResult").textContent = `Apply failed${detail ? `: ${detail}` : "."}`;
     return;
   }
+  $("batchApplyBtn").disabled = false;
   const data = await res.json();
   const parts = [`Applied to ${data.books} book${data.books === 1 ? "" : "s"} in ${data.units} series or books.`];
   if (data.failed && data.failed.length) {

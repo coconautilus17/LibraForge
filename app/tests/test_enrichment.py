@@ -829,3 +829,31 @@ class CompileExplicitTests(unittest.TestCase):
             series_sources={"labels": [], "evidence": [], "pf_progression": False, "explicit": {"haremlit": "Yes"}})
         self.assertEqual([r["explicit"]["suggestion"] for r in out["books"]], ["explicit", "explicit"])
         self.assertEqual((out["explicit_summary"]["flagged_now"], out["explicit_summary"]["inconsistent"]), (1, True))
+
+
+class PinnedAcrossAppliesTests(unittest.TestCase):
+    """The write log remembers which written genres were the user's own, and
+    only genres the user added since are new pins."""
+
+    def test_a_pinned_genre_stays_pinned_after_enrichment_forge_writes_it(self):
+        log = {"written": ["Fantasy", "Small Town"], "pinned": ["Small Town"]}
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "Small Town"], [], False, log), ["Small Town"])
+
+    def test_only_what_the_user_added_since_is_pinned(self):
+        log = {"written": ["Fantasy", "LitRPG"], "pinned": []}
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "LitRPG", "Small Town"], [], False, log), ["Small Town"])
+
+    def test_genres_from_the_file_tag_are_not_pins_but_additions_are(self):
+        self.assertEqual(enrichment.detect_manual_genres(["Thriller", "Horror"], ["Thriller"], False, None), ["Horror"])
+
+    def test_old_list_shaped_log_entries_still_work(self):
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "Small Town"], [], False, ["Fantasy"]), ["Small Town"])
+
+
+class UmbrellaChipTests(unittest.TestCase):
+    def test_store_shelves_are_never_offered_as_chips(self):
+        books = [_vbook("a", existing_genres=["Literature & Fiction", "Science Fiction & Fantasy", "Sports"])]
+        out = enrichment.compile_series_enrichment(books, {}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        for field in ("genre", "genre_union"):
+            self.assertFalse({"Literature", "Fiction", "Literature & Fiction", "Science Fiction & Fantasy"} & set(out[field]), out[field])
+        self.assertIn("Sports", out["genre_union"])

@@ -77,7 +77,7 @@ from app.enrichment_sources import (
     series_level_labels,
     summarize_status,
 )
-from app.enrichment_batch import BatchStore, apply_batch, effective_status, run_batch
+from app.enrichment_batch import BatchStore, apply_batch, effective_status, mark_applied, run_batch
 from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
 from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
@@ -6318,7 +6318,13 @@ def _load_enrichment_genre_writes() -> dict[str, list[str]]:
         return {}
 
 
-def _record_enrichment_genre_writes(written: dict[str, list[str]]) -> None:
+def _genre_log_entry(genres: list[str], pinned: list[str]) -> dict[str, list[str]]:
+    """What was written and which of it was the user's own (stays pinned)."""
+    pinned_keys = {normalize_label(g) for g in pinned or []}
+    return {"written": list(genres), "pinned": [g for g in genres if normalize_label(g) in pinned_keys]}
+
+
+def _record_enrichment_genre_writes(written: dict[str, dict[str, list[str]]]) -> None:
     with _ENRICHMENT_GENRE_LOG_LOCK:
         log = _load_enrichment_genre_writes()
         log.update(written)
@@ -6358,6 +6364,8 @@ def _attach_local_genres(books: list[dict[str, Any]]) -> None:
             item = _abs_request(f"/api/items/{book['id']}", {"expanded": "1"})
         except Exception:
             item = None
+        if not isinstance(item, dict):
+            return  # unknown, not "no file tag": pin nothing rather than everything
         if isinstance(item, dict):
             book["file_genres"] = file_tag_genres(item)
             genres = ((item.get("media") or {}).get("metadata") or {}).get("genres")
@@ -6566,6 +6574,10 @@ class EnrichmentApplyRequest(BaseModel):
     apply_narrator: bool = False
     # None = don't touch, True = set, False = clear (LibraForge #303).
     explicit: bool | None = None
+    # The user's own (pinned) genres among `genre`, so they stay pinned.
+    pinned: list[str] = []
+    # The unit this came from, so the whole-library run knows it was curated.
+    series_key: str = ""
 
 
 class EnrichmentApplyResponse(BaseModel):
@@ -6582,10 +6594,15 @@ class EnrichmentApplyResponse(BaseModel):
 _BATCH_THREAD: threading.Thread | None = None
 _BATCH_STOP = threading.Event()
 _BATCH_START_LOCK = threading.Lock()
+_BATCH_APPLYING = False
+# One store (and so one lock) per file, shared by the run and every endpoint.
+_BATCH_STORES: dict[Path, BatchStore] = {}
 
 
 def _batch_store() -> BatchStore:
-    return BatchStore(REPORTS_DIR / "enrichment-batch.json")
+    path = REPORTS_DIR / "enrichment-batch.json"
+    with _BATCH_START_LOCK:
+        return _BATCH_STORES.setdefault(path, BatchStore(path))
 
 
 def _batch_running() -> bool:
@@ -6620,14 +6637,17 @@ def enrichment_batch_start(req: EnrichmentBatchStartRequest) -> dict[str, Any]:
     global _BATCH_THREAD
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    store = _batch_store()
     with _BATCH_START_LOCK:
         if _batch_running():
             raise HTTPException(status_code=409, detail="The whole-library run is already running.")
+        if _BATCH_APPLYING:
+            raise HTTPException(status_code=409, detail="Results are being applied; start again when that finishes.")
         units = _batch_units()
         _BATCH_STOP.clear()
         _BATCH_THREAD = threading.Thread(
             target=run_batch,
-            args=(_batch_store(), units, lambda key, name: _compile_unit(key, name)),
+            args=(store, units, lambda key, name: _compile_unit(key, name)),
             kwargs={"should_stop": _BATCH_STOP.is_set, "restart": req.restart},
             daemon=True,
         )
@@ -6645,10 +6665,12 @@ def enrichment_batch_stop() -> dict[str, Any]:
 def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
     data = _batch_store().load()
     units = [dict(data["units"][key], key=key) for key in data["order"] if key in data["units"]]
-    counts = {state: sum(1 for u in units if u["state"] == state) for state in ("pending", "compiled", "failed", "applied")}
+    counts = {state: sum(1 for u in units if u["state"] == state)
+              for state in ("pending", "compiled", "failed", "applied", "apply_failed")}
     out: dict[str, Any] = {
         "status": effective_status(data, thread_alive=_batch_running(), stop_requested=_BATCH_STOP.is_set()),
         "total": len(units), "counts": counts, "current": data.get("current", ""),
+        "degraded": sum(1 for u in units if u["state"] == "compiled" and ((u.get("result") or {}).get("degraded"))),
         "started_at": data.get("started_at"), "updated_at": data.get("updated_at"),
     }
     if summary_only:
@@ -6668,6 +6690,7 @@ def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
             "coverage": result.get("coverage", 0), "current_genres": current,
             "explicit_suggested": sum(1 for b in books if (b.get("explicit") or {}).get("strength") == "authoritative"),
             "applied_genres": u.get("applied_genres") or [], "failures": u.get("failures") or [],
+            "degraded": result.get("degraded") or [],
         })
     out["units"] = rows
     return out
@@ -6677,22 +6700,34 @@ def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
 def enrichment_batch_apply(req: EnrichmentBatchApplyRequest) -> dict[str, Any]:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-    if _batch_running():
-        raise HTTPException(status_code=409, detail="Stop the whole-library run before applying its results.")
+    global _BATCH_APPLYING
+    store = _batch_store()
+    with _BATCH_START_LOCK:
+        if _batch_running():
+            raise HTTPException(status_code=409, detail="Stop the whole-library run before applying its results.")
+        if _BATCH_APPLYING:
+            raise HTTPException(status_code=409, detail="Results are already being applied.")
+        _BATCH_APPLYING = True
     abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
-    written: dict[str, list[str]] = {}
 
     def apply_fn(book: dict[str, Any], genres: list[str], explicit: bool | None) -> None:
         clean = split_compound_genres(clean_provider_genres(genres))
         _apply_book_via_abs(book["id"], book.get("path") or "", clean, [], explicit, abs_url, abs_api_key)
-        if clean:
-            written[book["id"]] = clean
+
+    def on_unit_done(entry: dict[str, Any], book_ids: list[str], genres: list[str]) -> None:
+        # Logged per unit, so a restart mid-apply never leaves written books
+        # looking like the user's own edits.
+        clean = split_compound_genres(clean_provider_genres(genres))
+        if clean and book_ids:
+            pinned = (entry.get("result") or {}).get("pinned_genres") or []
+            _record_enrichment_genre_writes({book_id: _genre_log_entry(clean, pinned) for book_id in book_ids})
 
     selections = [sel.model_dump() for sel in req.selections]
-    result = apply_batch(_batch_store(), selections, apply_fn)
-    if written:
-        _record_enrichment_genre_writes(written)
-    return result
+    try:
+        return apply_batch(store, selections, apply_fn, on_unit_done=on_unit_done)
+    finally:
+        with _BATCH_START_LOCK:
+            _BATCH_APPLYING = False
 
 
 class EnrichmentCollectionsApplyRequest(BaseModel):
@@ -6793,7 +6828,7 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     """
     applied = 0
     failed: list[dict] = []
-    written_genres: dict[str, list[str]] = {}
+    written_genres: dict[str, dict[str, list[str]]] = {}
     legacy_json: dict[str, int] = {}
     abs_api_key = _get_abs_api_key()
     abs_url = _get_abs_url() if abs_api_key else ""
@@ -6812,7 +6847,7 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
                 if action != "none":
                     legacy_json[action] = legacy_json.get(action, 0) + 1
                 if genres:
-                    written_genres[book.id] = genres
+                    written_genres[book.id] = _genre_log_entry(genres, req.pinned)
                 applied += 1
             except Exception as exc:
                 failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
@@ -6833,6 +6868,8 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
             failed.append({"id": book.id, "path": book.path, "title": book.title, "error": str(exc)})
     if written_genres:
         _record_enrichment_genre_writes(written_genres)
+        if req.series_key:
+            mark_applied(_batch_store(), req.series_key, genres)
     return EnrichmentApplyResponse(applied=applied, legacy_json=legacy_json, failed=failed)
 
 
