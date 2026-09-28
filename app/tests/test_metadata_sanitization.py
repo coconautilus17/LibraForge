@@ -445,6 +445,67 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(clues["book_number"], "2")
         self.assertEqual(queries[0], "The Beastlands Mashton XX")
 
+    def test_grouped_folder_title_word_does_not_override_shared_tag_author(self):
+        """Regression: "Series, Book 05 - Title" folders were read as
+        "Series, Book N - Author", so the one-word title ("Shadowfall")
+        replaced the author every file's tags agreed on and the author
+        hard-reject then discarded the exact Audible product."""
+        folder = "/library/_unorganized/Prism Academy, Book 05 - Shadowfall"
+        files = [
+            Path(f"{folder}/Prism Academy, Book 05 - Shadowfall - 01.m4b"),
+            Path(f"{folder}/Prism Academy, Book 05 - Shadowfall - 02.m4b"),
+        ]
+        tag_clues = {
+            "raw_title": "Prism Academy, Book 05 - Shadowfall",
+            "title": "Prism Academy, Book 05 - Shadowfall",
+            "series": "Prism Academy",
+            "book_number": "5",
+            "book_number_source": "tag",
+            "author": "David Burke",
+            "narrator": "Jonathan Waters, Maeve York",
+            "album": "Prism Academy, Book 05 - Shadowfall",
+        }
+
+        with (
+            patch.object(FIXER, "build_search_clues_from_file", return_value=tag_clues),
+            patch.object(FIXER, "probe_file", return_value=({}, 100.0)),
+            patch.object(FIXER, "validate_multi_part_group_files", return_value={}),
+        ):
+            queries, clues = FIXER.build_multi_file_search_context(files)
+
+        self.assertEqual(clues["author"], "David Burke")
+        self.assertEqual(clues["title"], "Shadowfall")
+        self.assertEqual(clues["series"], "Prism Academy")
+        self.assertEqual(clues["book_number"], "5")
+
+    def test_grouped_folder_author_kept_when_tag_author_lists_it_with_narrators(self):
+        # Tags credit author plus narrators in one field; the folder's author
+        # is one of them, so the folder parse must still be used.
+        folder = "/library/_unorganized/Roderick Gordon - Tunnels 02 - Deeper"
+        files = [Path(f"{folder}/Deeper - 01.mp3"), Path(f"{folder}/Deeper - 02.mp3")]
+        tag_clues = {
+            "raw_title": "Deeper",
+            "title": "Deeper",
+            "series": "",
+            "book_number": "",
+            "book_number_source": "",
+            "author": "Roderick Gordon/Brian Williams/Steven Crossley",
+            "narrator": "",
+            "album": "Deeper",
+        }
+
+        with (
+            patch.object(FIXER, "build_search_clues_from_file", return_value=tag_clues),
+            patch.object(FIXER, "probe_file", return_value=({}, 100.0)),
+            patch.object(FIXER, "validate_multi_part_group_files", return_value={}),
+        ):
+            queries, clues = FIXER.build_multi_file_search_context(files)
+
+        self.assertEqual(clues["author"], "Roderick Gordon")
+        self.assertEqual(clues["title"], "Deeper")
+        self.assertEqual(clues["series"], "Tunnels")
+        self.assertEqual(clues["book_number"], "2")
+
     def test_grouped_volume_recovers_author_and_series_from_organized_path(self):
         files = [
             Path(
