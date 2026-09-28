@@ -81,17 +81,34 @@ Metadata Forge (shown above the planned moves) to flag moves worth a second look
   scheme, so the folder layout can be adapted to match how you already organise books.
 
 ## Enrichment Forge (`/enrichment-forge`)
-Finds a series already indexed in your Audiobookshelf library, then compiles genre and
-narrator across every book in it from Audible and Goodreads at once, instead of fixing
-each book one at a time.
+Finds a series (or a standalone book) already indexed in your Audiobookshelf library,
+looks every book up in several sources, and compiles the genres they agree on for the
+whole series at once, instead of fixing each book one at a time.
 
 - **Series lookup is ABS-native:** searches series already in your Audiobookshelf
   library index (not a provider search), with tag variants normalized into one entry.
-- **Compiled, editable result:** genre is a deduped union across the series from
-  Audible (every level of its category path, so a Space Opera book also gets Science
-  Fiction), Goodreads reader shelves, and the books' current genres and tags, shown as
-  removable chips with a free-text add. "Audiobook" is a format label and is never
-  proposed or written as a genre. Sequence range is shown for context.
+  Books with no series are listed too, marked Standalone.
+- **Sources:** per book, Audible (every level of its category path), Goodreads reader
+  shelves, AudioSilo (a community audiobook database), Open Library subjects (first three
+  books of a series), keywords such as "LitRPG" or "cultivation" in the Audible summary
+  and the book's description, and the book's current genres and tags. Per series,
+  progressionfantasy.co.uk's catalogue and the HaremLit Fiction wiki. A match whose title
+  doesn't fit the book is ignored rather than trusted. Each source has its own request
+  pacing and pauses on its own if it starts failing; the source strip shows found,
+  failed and rate-limited counts for every source.
+- **Genres are voted, not piled up:** every source's labels are mapped onto one
+  controlled list of genres. A book's main genre needs two sources agreeing (LitRPG,
+  progression fantasy and harem need only one, unless that one is Goodreads' crowd
+  shelving alone); a series keeps a genre supported by at least a quarter of its books.
+  The series-level lists count as support for the whole series, but
+  progressionfantasy.co.uk's broad progression list only counts when something else
+  agrees or nothing contradicts it.
+- **Compiled, editable result:** main genres (the collection-worthy ones) and subgenres
+  as removable chips. Hover a chip to see which sources support it and on how many
+  books; each book row shows what every source said about it and its own vote. Other
+  genres some source suggested are one click away, and typing a main genre name files it
+  as a main genre. "Audiobook" is a format label and is never proposed or written as a
+  genre. Sequence range is shown for context.
 - **Goodreads shelves, read directly:** Enrichment Forge reads each book's Goodreads
   reader shelves with their vote counts (not through abs-tract, whose Goodreads output is
   limited to three generic genres), so LitRPG, progression fantasy, cultivation, harem and
