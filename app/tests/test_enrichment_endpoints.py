@@ -719,3 +719,57 @@ class EnrichmentCollectionsEndpointTests(unittest.TestCase):
         self.assertEqual((body["created"], body["skipped"]), (1, 1))
         self.assertEqual(body["failed"], [{"genre": "Sci-Fi", "error": "ABS 500"}])
         self.assertEqual(self.patched, [])
+
+
+class EnrichmentBatchEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.patched = []
+        units = [{"key": "k1", "name": "One", "standalone": False, "book_count": 1},
+                 {"key": "k2", "name": "Two", "standalone": True, "book_count": 1}]
+
+        def compile_unit(key, name, auth_file="/x"):
+            return {"main_genres": ["Fantasy"], "sub_genres": [], "pinned_genres": [], "genre_evidence": {}, "agreement": "ok",
+                    "series_evidence": [], "explicit_summary": {}, "source_status": {"audible": {"found": 1}},
+                    "books": [{"id": f"{key}-b", "path": f"/audiobooks/{key}", "is_file": False, "title": name,
+                               "has_audio": True, "existing_genres": ["Audiobook"], "explicit": {}}]}
+
+        for p_ in (patch.object(main, "REPORTS_DIR", Path(self.tmp.name)),
+                   patch.object(main, "_get_abs_api_key", return_value="key"),
+                   patch.object(main, "_get_abs_url", return_value="http://abs"),
+                   patch.object(main, "_batch_units", return_value=units),
+                   patch.object(main, "_compile_unit", side_effect=compile_unit),
+                   patch.object(main, "abs_get_json", return_value={"id": "x", "path": "/nowhere", "isFile": False, "media": {"metadata": {}}}),
+                   patch.object(main, "abs_patch_json", side_effect=lambda p, b, *a, **k: self.patched.append((p, b)))):
+            p_.start(); self.addCleanup(p_.stop)
+
+    def wait(self):
+        thread = main._BATCH_THREAD
+        if thread is not None:
+            thread.join(timeout=10)
+
+    def test_run_compiles_every_unit_and_reports_progress(self):
+        self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 200)
+        self.wait()
+        body = client.get("/api/enrichment/batch").json()
+        self.assertEqual((body["status"], body["counts"]["compiled"], body["total"]), ("done", 2, 2))
+        self.assertEqual([u["main_genres"] for u in body["units"]], [["Fantasy"], ["Fantasy"]])
+        self.assertEqual(body["units"][0]["current_genres"], [])  # "Audiobook" is not a genre
+
+    def test_second_start_while_running_is_refused(self):
+        alive = MagicMock(); alive.is_alive.return_value = True
+        with patch.object(main, "_BATCH_THREAD", alive):
+            self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 409)
+            self.assertEqual(client.post("/api/enrichment/batch/apply", json={"selections": []}).status_code, 409)
+
+    def test_apply_writes_selected_units_and_logs_the_genres(self):
+        client.post("/api/enrichment/batch/start", json={})
+        self.wait()
+        body = client.post("/api/enrichment/batch/apply", json={"selections": [
+            {"key": "k1", "genres": ["Fantasy", "Action & Adventure"], "apply_explicit": False}]}).json()
+        self.assertEqual((body["units"], body["books"]), (1, 1))
+        self.assertEqual(self.patched, [("/api/items/k1-b/media", {"metadata": {"genres": ["Fantasy", "Action", "Adventure"]}})])
+        log = json.loads((Path(self.tmp.name) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["k1-b"], ["Fantasy", "Action", "Adventure"])
+        states = {u["key"]: u["state"] for u in client.get("/api/enrichment/batch").json()["units"]}
+        self.assertEqual(states, {"k1": "applied", "k2": "compiled"})

@@ -77,6 +77,7 @@ from app.enrichment_sources import (
     series_level_labels,
     summarize_status,
 )
+from app.enrichment_batch import BatchStore, apply_batch, effective_status, run_batch
 from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
 from app.genre_taxonomy import MAIN_ORDER, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
@@ -6435,20 +6436,18 @@ def _collect_extra_sources(
     return extra, series, status
 
 
-@app.post("/api/enrichment/compile")
-def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileResponse:
-    if not _get_abs_api_key():
-        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-
+def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
+    """One unit's (series or standalone) full compile: every source, the
+    vote, evidence. Shared by the series page and the whole-library run."""
     review_module = load_review_module()
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
-    if req.series_key:
-        books = get_series_books(groups, req.series_key, review_module.normalize_series, by_key=True, items=items)
+    if series_key:
+        books = get_series_books(groups, series_key, review_module.normalize_series, by_key=True, items=items)
     else:
-        books = get_series_books(groups, req.series_name, review_module.normalize_series)
+        books = get_series_books(groups, series_name, review_module.normalize_series)
     if not books:
-        raise HTTPException(status_code=404, detail=f"Series not found: {req.series_name or req.series_key}")
+        raise HTTPException(status_code=404, detail=f"Series not found: {series_name or series_key}")
 
     _attach_local_genres(books)
     source_status: dict[str, dict[str, Any]] = {}
@@ -6457,10 +6456,10 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
 
     # Phase 1: Direct Audible when an auth file exists; otherwise fall back to
     # Audiobookshelf's provider search so Enrichment Forge can still compile.
-    auth_path = Path(req.auth_file)
+    auth_path = Path(auth_file)
     if auth_path.exists():
         try:
-            auth = audible.Authenticator.from_file(req.auth_file)
+            auth = audible.Authenticator.from_file(auth_file)
             client = audible.Client(auth=auth)
             # Reuse the real fixer search/lookup functions (including the ASIN
             # keyword-search fallback in audible_lookup_by_asin), just bound to
@@ -6498,7 +6497,7 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     # one process-wide pacer (Meta Forge pacing: 0.5 s gap, breaker 2 -> 180 s).
     # The v2 sources (AudioSilo, Open Library, series-level lists) run
     # alongside it, each on its own pacer.
-    standalone = req.series_key.startswith(STANDALONE_KEY_PREFIX)
+    standalone = series_key.startswith(STANDALONE_KEY_PREFIX)
     series_names = [b.get("series_name") or "" for b in books if b.get("series_name")]
     unit_series_name = max(set(series_names), key=series_names.count) if series_names else ""
     unit_authors = list(dict.fromkeys(
@@ -6538,7 +6537,14 @@ def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileRespon
     compiled["source_status"] = source_status
     compiled["series_explicit"] = series_sources.get("explicit") or {}
     compiled["standalone"] = standalone
-    return EnrichmentCompileResponse(**compiled)
+    return compiled
+
+
+@app.post("/api/enrichment/compile")
+def enrichment_compile(req: EnrichmentCompileRequest) -> EnrichmentCompileResponse:
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    return EnrichmentCompileResponse(**_compile_unit(req.series_key, req.series_name, req.auth_file))
 
 
 class EnrichmentApplyBook(BaseModel):
@@ -6567,6 +6573,125 @@ class EnrichmentApplyResponse(BaseModel):
     # Counts per legacy metadata.json reconcile action (LibraForge #298).
     legacy_json: dict[str, int] = {}
     failed: list[dict] = []
+
+
+# ---------------------------------------------------------------------------
+# Whole-library run: compile every unit in the background, review, then apply.
+# ---------------------------------------------------------------------------
+
+_BATCH_THREAD: threading.Thread | None = None
+_BATCH_STOP = threading.Event()
+_BATCH_START_LOCK = threading.Lock()
+
+
+def _batch_store() -> BatchStore:
+    return BatchStore(REPORTS_DIR / "enrichment-batch.json")
+
+
+def _batch_running() -> bool:
+    return _BATCH_THREAD is not None and _BATCH_THREAD.is_alive()
+
+
+def _batch_units() -> list[dict[str, Any]]:
+    """Every series (split by author where needed) and every standalone book."""
+    review_module = load_review_module()
+    items = _fetch_all_abs_book_items_cached()
+    groups = group_items_by_series(items, review_module.normalize_series)
+    rows = list_series_summary(groups, "", standalones=standalone_items(items))
+    return [{"key": r["key"], "name": r["name"], "standalone": r["standalone"], "book_count": r["book_count"]} for r in rows]
+
+
+class EnrichmentBatchStartRequest(BaseModel):
+    restart: bool = False
+
+
+class EnrichmentBatchSelection(BaseModel):
+    key: str
+    genres: list[str]
+    apply_explicit: bool = False
+
+
+class EnrichmentBatchApplyRequest(BaseModel):
+    selections: list[EnrichmentBatchSelection]
+
+
+@app.post("/api/enrichment/batch/start")
+def enrichment_batch_start(req: EnrichmentBatchStartRequest) -> dict[str, Any]:
+    global _BATCH_THREAD
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    with _BATCH_START_LOCK:
+        if _batch_running():
+            raise HTTPException(status_code=409, detail="The whole-library run is already running.")
+        units = _batch_units()
+        _BATCH_STOP.clear()
+        _BATCH_THREAD = threading.Thread(
+            target=run_batch,
+            args=(_batch_store(), units, lambda key, name: _compile_unit(key, name)),
+            kwargs={"should_stop": _BATCH_STOP.is_set, "restart": req.restart},
+            daemon=True,
+        )
+        _BATCH_THREAD.start()
+    return {"status": "running", "total": len(units)}
+
+
+@app.post("/api/enrichment/batch/stop")
+def enrichment_batch_stop() -> dict[str, Any]:
+    _BATCH_STOP.set()
+    return {"status": "stopping" if _batch_running() else "stopped"}
+
+
+@app.get("/api/enrichment/batch")
+def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
+    data = _batch_store().load()
+    units = [dict(data["units"][key], key=key) for key in data["order"] if key in data["units"]]
+    counts = {state: sum(1 for u in units if u["state"] == state) for state in ("pending", "compiled", "failed", "applied")}
+    out: dict[str, Any] = {
+        "status": effective_status(data, thread_alive=_batch_running()),
+        "total": len(units), "counts": counts, "current": data.get("current", ""),
+        "started_at": data.get("started_at"), "updated_at": data.get("updated_at"),
+    }
+    if summary_only:
+        return out
+    rows = []
+    for u in units:
+        result = u.get("result") or {}
+        books = result.get("books") or []
+        current = split_compound_genres(clean_provider_genres(
+            [g for b in books if b.get("has_audio", True) for g in (b.get("existing_genres") or [])]))
+        rows.append({
+            "key": u["key"], "name": u.get("name", ""), "standalone": u.get("standalone", False),
+            "book_count": u.get("book_count", 0), "state": u["state"], "error": u.get("error", ""),
+            "main_genres": result.get("main_genres") or [], "sub_genres": result.get("sub_genres") or [],
+            "pinned_genres": result.get("pinned_genres") or [], "agreement": result.get("agreement", ""),
+            "coverage": result.get("coverage", 0), "current_genres": current,
+            "explicit_suggested": sum(1 for b in books if (b.get("explicit") or {}).get("strength") == "authoritative"),
+            "applied_genres": u.get("applied_genres") or [], "failures": u.get("failures") or [],
+        })
+    out["units"] = rows
+    return out
+
+
+@app.post("/api/enrichment/batch/apply")
+def enrichment_batch_apply(req: EnrichmentBatchApplyRequest) -> dict[str, Any]:
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    if _batch_running():
+        raise HTTPException(status_code=409, detail="Stop the whole-library run before applying its results.")
+    abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
+    written: dict[str, list[str]] = {}
+
+    def apply_fn(book: dict[str, Any], genres: list[str], explicit: bool | None) -> None:
+        clean = split_compound_genres(clean_provider_genres(genres))
+        _apply_book_via_abs(book["id"], book.get("path") or "", clean, [], explicit, abs_url, abs_api_key)
+        if clean:
+            written[book["id"]] = clean
+
+    selections = [sel.model_dump() for sel in req.selections]
+    result = apply_batch(_batch_store(), selections, apply_fn)
+    if written:
+        _record_enrichment_genre_writes(written)
+    return result
 
 
 class EnrichmentCollectionsApplyRequest(BaseModel):
@@ -6631,6 +6756,26 @@ def enrichment_collections_apply(req: EnrichmentCollectionsApplyRequest) -> dict
     return out
 
 
+def _apply_book_via_abs(book_id: str, path: str, genres: list[str], narrators: list[str], explicit: bool | None,
+                        abs_url: str, abs_api_key: str) -> str:
+    """Write one book straight to ABS; returns the legacy metadata.json action.
+    Blank genre/narrator and explicit=None are left untouched. Raises on failure."""
+    fields: dict[str, Any] = {}
+    if genres:
+        fields["genres"] = genres
+    if narrators:
+        fields["narrators"] = narrators
+    if explicit is not None:
+        fields["explicit"] = bool(explicit)
+    # A legacy metadata.json in the book's folder would revert this write on
+    # the next rescan: reconcile it into ABS and delete it first (#298).
+    item = abs_get_json(f"/api/items/{book_id}", {"expanded": "1"}, abs_url, abs_api_key)
+    legacy = reconcile_legacy_metadata_json(path, item, abs_url=abs_url, abs_api_key=abs_api_key)
+    if fields:
+        abs_patch_json(f"/api/items/{book_id}/media", {"metadata": fields}, abs_url, abs_api_key)
+    return legacy.get("action") or "none"
+
+
 @app.post("/api/enrichment/apply")
 def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
     """Apply the compiled genre/narrator/explicit to each included book.
@@ -6662,22 +6807,9 @@ def enrichment_apply(req: EnrichmentApplyRequest) -> EnrichmentApplyResponse:
         book_explicit = book.explicit if book.explicit is not None else req.explicit
         if abs_api_key and book.id:
             try:
-                fields: dict[str, Any] = {}
-                if genres:
-                    fields["genres"] = genres
-                if narrators:
-                    fields["narrators"] = narrators
-                if book_explicit is not None:
-                    fields["explicit"] = bool(book_explicit)
-                # A legacy metadata.json in the book's folder would revert this
-                # write on the next rescan: reconcile it into ABS and delete it
-                # first (LibraForge #298).
-                item = abs_get_json(f"/api/items/{book.id}", {"expanded": "1"}, abs_url, abs_api_key)
-                legacy = reconcile_legacy_metadata_json(book.path, item, abs_url=abs_url, abs_api_key=abs_api_key)
-                if legacy.get("action") and legacy["action"] != "none":
-                    legacy_json[legacy["action"]] = legacy_json.get(legacy["action"], 0) + 1
-                if fields:
-                    abs_patch_json(f"/api/items/{book.id}/media", {"metadata": fields}, abs_url, abs_api_key)
+                action = _apply_book_via_abs(book.id, book.path, genres, narrators, book_explicit, abs_url, abs_api_key)
+                if action != "none":
+                    legacy_json[action] = legacy_json.get(action, 0) + 1
                 if genres:
                     written_genres[book.id] = genres
                 applied += 1
