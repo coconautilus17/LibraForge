@@ -185,7 +185,7 @@ def read_current_book_metadata(tags: dict, is_grouped: bool = False) -> dict:
         "genre": parsed["genre"],
         "year": first_existing_tag(tags, ["date", "year"]),
         "isbn": first_existing_tag(tags, ["isbn"]),
-        "asin": first_existing_tag(tags, ["asin"]).upper(),
+        "asin": first_existing_tag(tags, ["asin", "audible_asin"]).upper(),
         "publisher": publisher_scratch.get("publisher", ""),
         "summary": first_existing_tag(tags, ["comment", "description"]),
     }

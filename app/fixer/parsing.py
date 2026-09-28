@@ -101,6 +101,13 @@ def sanitize_technical_labels(value: str) -> str:
         inner = match.group(1)
         if is_technical_label_block(inner):
             return " "
+        # Release-group tags ("[PZG]") and a bracketed publisher or format
+        # label from the publisher catalog ("[Yen Audio]", "(Audiobook)") are
+        # never part of a name.
+        if match.group(0).startswith("[") and re.fullmatch(r"[A-Z]{2,5}", inner):
+            return " "
+        if not strip_publisher_noise(inner):
+            return " "
         # Strip "[Series N - PartN]" part-indicator brackets.
         if re.search(r"-\s*\d+\s*$", inner):
             return " "
@@ -132,6 +139,8 @@ def sanitize_book_title(value: str) -> str:
         value,
         flags=re.IGNORECASE,
     )
+    value = re.sub(r"^(?:audiobook|unabridged)\s*[:\-]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?:\s+(?:unabridged|audiobook))+\s*$", "", value, flags=re.IGNORECASE)
     if is_title_noise(value):
         return ""
 
@@ -182,8 +191,11 @@ def remove_parenthetical(value: str) -> str:
 
 @trace(ALTER, capture=["value"])
 def clean_author_value(value: str) -> str:
-    """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'."""
-    return remove_parenthetical(value)
+    """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'.
+
+    Square-bracketed release tags ("[PZG]") are never a name either.
+    """
+    return remove_parenthetical(re.sub(r"\[[^\]]*\]", " ", value or ""))
 
 
 def _split_author_names(value: str) -> list[str]:
@@ -364,6 +376,32 @@ def extract_series_from_trailing_segment(value: str) -> str:
     return clean_series_value(value)
 
 
+SERIES_DESCRIPTOR_PHRASES = {
+    "audiobook",
+    "chronological order",
+    "complete",
+    "dramatized adaptation",
+    "light novel",
+    "publication order",
+    "reading order",
+    "retail",
+    "unabridged",
+}
+
+
+def is_descriptor_parenthetical(value: str) -> bool:
+    """True when a parenthetical describes a series instead of naming one."""
+    value = re.sub(
+        r",?\s*(?:books?|vol(?:ume)?s?\.?)\s*#?\d+(?:\.\d+)?\s*$",
+        "",
+        clean_text(value),
+        flags=re.IGNORECASE,
+    ).strip(" ,")
+    if not value:
+        return False
+    return value.lower() in SERIES_DESCRIPTOR_PHRASES or is_title_noise(value)
+
+
 @trace(ALTER, capture=["value"])
 def clean_series_value(value: str) -> str:
     """Prefer the series-looking value inside parentheses when metadata is polluted.
@@ -382,7 +420,11 @@ def clean_series_value(value: str) -> str:
 
     parenthetical = extract_first_parenthetical(value)
 
-    if parenthetical and not re.search(r"#|\d+\s*-\s*\d+", parenthetical):
+    if parenthetical and is_descriptor_parenthetical(parenthetical):
+        # "(light novel)", "(A LitRPG series, Book 7)", "(publication order)"
+        # describe the series; the name is outside them.
+        value = remove_parenthetical(value) or value
+    elif parenthetical and not re.search(r"#|\d+\s*-\s*\d+", parenthetical):
         value = parenthetical
 
     if normalize_for_match(value) in {
