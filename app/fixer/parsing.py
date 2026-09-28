@@ -1380,7 +1380,11 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
             book_number = title_number
             book_number_source = "title"
 
-    if not book_number and track:
+    # A track number is a series position only next to a real series tag
+    # (LibraForge writes the Audible sequence there beside "grouping"). On
+    # its own it is the file's position in a rip ("1/1", "1/4294967295"),
+    # not evidence of any sequence.
+    if not book_number and track and series_from_real_tag:
         track_match = re.search(r"\d+", track)
 
         if track_match:
