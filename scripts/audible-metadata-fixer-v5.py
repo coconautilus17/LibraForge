@@ -3070,11 +3070,41 @@ def build_multi_file_search_context(
     queries = build_search_queries_from_clues(clues)
     return queries, clues
 
+# A folder holding two numbered sets of at least this many files each is two
+# copies of one book (e.g. a 25-file chapter rip next to a 13-file part rip):
+# grouping one set would orphan every file of the other as a fake book.
+DUPLICATE_SET_MIN_FILES = 3
+DUPLICATE_SET_FOLDERS: dict[Path, str] = {}
+
+
+def find_duplicate_set_folders(files: list[Path]) -> dict[Path, str]:
+    """Folders whose audio files form two separate numbered sets, with the
+    reason to report. Uses the same sequence detection grouping does."""
+    by_parent: dict[Path, list[Path]] = {}
+    for file_path in files:
+        if is_multi_part_audio_candidate(file_path):
+            by_parent.setdefault(file_path.parent, []).append(file_path)
+    found: dict[Path, str] = {}
+    for parent, group in by_parent.items():
+        first = part_sequence_files(group)
+        if len(first) < DUPLICATE_SET_MIN_FILES:
+            continue
+        rest = [f for f in group if f not in first]
+        second = part_sequence_files(rest) if len(rest) >= DUPLICATE_SET_MIN_FILES else set()
+        if len(second) >= DUPLICATE_SET_MIN_FILES:
+            found[parent] = (
+                f"skipped: folder holds two numbered sets of audio files ({len(first)} and {len(second)} files), "
+                "likely two copies of the same audiobook; keep one set and run again"
+            )
+    return found
+
+
 def build_multi_part_group_map(
     files: list[Path],
     chapter_count_reader=None,
 ) -> dict[Path, list[Path]]:
     grouped: dict[Path, list[Path]] = {}
+    duplicate_sets = find_duplicate_set_folders(files)
 
     for file_path in files:
         if not is_multi_part_audio_candidate(file_path):
@@ -3086,7 +3116,7 @@ def build_multi_part_group_map(
     for parent, group_files in sorted(grouped.items()):
         group_files = sorted(group_files, key=natural_audio_sort_key)
 
-        if len(group_files) <= 1:
+        if len(group_files) <= 1 or parent in duplicate_sets:
             continue
 
         numeric_parts = part_sequence_files(group_files)
@@ -3197,12 +3227,20 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
         _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
-    files: list[Path], multi_part_group_map: dict[Path, list[Path]]
+    files: list[Path],
+    multi_part_group_map: dict[Path, list[Path]],
+    duplicate_set_folders: dict[Path, str] | None = None,
 ) -> list[Path]:
     items: list[Path] = []
     seen_group_parents: set[Path] = set()
 
     for file_path in files:
+        if duplicate_set_folders and file_path.parent in duplicate_set_folders:
+            # One item for the whole folder: it is reported, never processed.
+            if file_path.parent not in seen_group_parents:
+                items.append(file_path)
+                seen_group_parents.add(file_path.parent)
+            continue
         group_files = multi_part_group_map.get(file_path.parent)
         if group_files and file_path in group_files:
             if file_path.parent in seen_group_parents:
@@ -3344,6 +3382,16 @@ def search_item(
 
     trace_set_subject(display_path)
     try:
+        duplicate_reason = DUPLICATE_SET_FOLDERS.get(file_path.parent)
+        if duplicate_reason:
+            result.display_path = file_path.parent
+            log.append(f"  SKIP: {duplicate_reason.removeprefix('skipped: ')}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = duplicate_reason
+            result.add_to_manual_review = True
+            return result
+
         existing_marker = load_marker(file_path)
         if existing_marker:
             log.append(
@@ -5667,7 +5715,11 @@ def main():
         files = files[: args.max_files]
         multi_part_group_map = build_multi_part_group_map(files)
 
-    processing_items = build_processing_items(files, multi_part_group_map)
+    DUPLICATE_SET_FOLDERS.clear()
+    DUPLICATE_SET_FOLDERS.update(find_duplicate_set_folders(files))
+    for _dup_folder, _dup_reason in sorted(DUPLICATE_SET_FOLDERS.items()):
+        print(f"  WARNING: {_dup_folder}: {_dup_reason.removeprefix('skipped: ')}")
+    processing_items = build_processing_items(files, multi_part_group_map, DUPLICATE_SET_FOLDERS)
 
     if args.restore_metadata:
         print(f"Found {len(processing_items)} supported files.")
