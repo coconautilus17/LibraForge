@@ -146,6 +146,12 @@ def vote_unit(
     if "Classics" in mains and main_votes["Classics"] < max(1, math.ceil(0.5 * n)):
         mains.remove("Classics")
 
+    # progressionfantasy.co.uk curates exactly this split: its non-LitRPG
+    # listing overrules LitRPG from blurbs ("from the author of the LitRPG
+    # series ...") and loose reader shelving (A Thousand Li). Pinned still wins.
+    if pf_progression and not standalone and "LitRPG" in mains:
+        mains.remove("LitRPG")
+
     # No cap on main genres: every genre the evidence supports is kept.
     progression_kind = any(g in mains for g in PROGRESSION_KINDS)
     if progression_kind and "Progression Fantasy" in mains:

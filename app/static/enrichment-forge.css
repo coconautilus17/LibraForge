@@ -594,3 +594,80 @@
 .collections-table th:first-child {
   width: 32px;
 }
+
+/* Whole-library run. */
+.batch-actions {
+  justify-content: flex-end;
+}
+
+.batch-progress {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-bar {
+  height: 6px;
+  margin: 4px 0 12px;
+  border-radius: 99px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.batch-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.batch-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.batch-table-wrap {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.batch-now {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-genre {
+  display: inline-block;
+  margin: 1px 2px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.batch-genre.main {
+  background: var(--accent-dim);
+  color: var(--accent-dim-text);
+  font-weight: 650;
+}
+
+.batch-genre.pinned {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.batch-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.batch-row.applied td {
+  opacity: 0.7;
+}
+
+.batch-apply-row {
+  justify-content: space-between;
+  margin-top: 10px;
+}

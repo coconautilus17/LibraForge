@@ -50,6 +50,7 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(data["status"], "stopped")
         self.assertEqual([k for k, u in data["units"].items() if u["state"] == "compiled"], ["a"])
         self.assertEqual(data["units"]["c"]["state"], "pending")
+        self.assertNotIn("current", data)  # nothing is being compiled once stopped
 
     def test_restart_forgets_previous_results(self):
         eb.run_batch(self.store, UNITS[:1], lambda k, n: compiled(k), should_stop=lambda: False)
@@ -92,3 +93,16 @@ class BatchTests(unittest.TestCase):
     def test_a_run_left_running_by_a_restart_reads_as_stopped(self):
         self.store.save({"status": "running", "units": {}, "order": []})
         self.assertEqual(eb.effective_status(self.store.load(), thread_alive=False), "stopped")
+
+
+class EffectiveStatusTests(unittest.TestCase):
+    """The thread is the truth: right after Start the file may still say
+    idle/done (the thread hasn't saved yet), and Stop is only seen by the
+    thread between units."""
+
+    def test_alive_thread_is_running_whatever_the_file_says(self):
+        for file_status in ("idle", "done", "stopped", "running"):
+            self.assertEqual(eb.effective_status({"status": file_status}, thread_alive=True), "running")
+
+    def test_stop_requested_on_a_live_thread_is_stopping(self):
+        self.assertEqual(eb.effective_status({"status": "running"}, thread_alive=True, stop_requested=True), "stopping")

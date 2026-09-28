@@ -44,12 +44,14 @@ class BatchStore:
         tmp.replace(self.path)
 
 
-def effective_status(data: dict[str, Any], *, thread_alive: bool) -> str:
-    """A run the process no longer drives (container restart) is resumable."""
+def effective_status(data: dict[str, Any], *, thread_alive: bool, stop_requested: bool = False) -> str:
+    """The thread is the truth: alive means running (or stopping once asked),
+    even before it has saved; a run the process no longer drives (container
+    restart) is resumable."""
+    if thread_alive:
+        return "stopping" if stop_requested else "running"
     status = data.get("status", "idle")
-    if status in ("running", "stopping") and not thread_alive:
-        return "stopped"
-    return status
+    return "stopped" if status in ("running", "stopping") else status
 
 
 def slim_result(compiled: dict[str, Any]) -> dict[str, Any]:
@@ -104,6 +106,7 @@ def run_batch(
             continue
         if should_stop():
             data["status"] = "stopped"
+            data.pop("current", None)
             with store.lock:
                 store.save(data)
             return data

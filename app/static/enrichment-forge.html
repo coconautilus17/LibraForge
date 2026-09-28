@@ -6,7 +6,7 @@
   <title>LibraForge - Enrichment Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
-  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-5" />
+  <link rel="stylesheet" href="/static/enrichment-forge.css?v=20260929-6" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -130,8 +130,40 @@
       </div>
     </section>
 
+
+    <section class="card" id="batchCard">
+      <div class="card-title"><span class="step-n">3</span><h2>Whole library</h2></div>
+      <p class="section-note">Compiles every series and standalone book the same way as above, one at a time, respecting every source's pacing (a full library takes a while; you can stop and resume). Nothing is written until you review the results and apply the ones you want.</p>
+      <div class="actions batch-actions">
+        <span id="batchProgress" class="batch-progress"></span>
+        <button id="batchStopBtn" type="button" class="secondary" hidden>Stop</button>
+        <button id="batchRestartBtn" type="button" class="secondary" hidden>Start over</button>
+        <button id="batchStartBtn" type="button">Start</button>
+      </div>
+      <div class="batch-bar" hidden><div id="batchBarFill"></div></div>
+      <div id="batchReview" hidden>
+        <div class="batch-filters">
+          <label class="collections-toggle">Show
+            <select id="batchFilter">
+              <option value="review">Needs review</option>
+              <option value="changed">Would change</option>
+              <option value="all">All</option>
+              <option value="failed">Failed</option>
+              <option value="applied">Applied</option>
+            </select>
+          </label>
+          <span id="batchCount" class="section-note"></span>
+        </div>
+        <div id="batchTable" class="batch-table-wrap"></div>
+        <div class="actions batch-apply-row">
+          <label class="collections-toggle"><input id="batchApplyExplicit" type="checkbox" /> Also apply explicit flags the HaremLit wiki gives</label>
+          <button id="batchApplyBtn" type="button">Apply selected</button>
+        </div>
+        <p id="batchResult" class="section-note"></p>
+      </div>
+    </section>
     <section class="card" id="collectionsCard">
-      <div class="card-title"><span class="step-n">3</span><h2>Collections from genres</h2></div>
+      <div class="card-title"><span class="step-n">4</span><h2>Collections from genres</h2></div>
       <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone.</p>
       <div class="actions collections-actions">
         <label class="collections-toggle"><input id="collectionsAllGenres" type="checkbox" /> Show subgenres too</label>
@@ -146,6 +178,6 @@
   </main>
 
   <script src="/static/ui-common.js?v=20260711-10"></script>
-  <script src="/static/enrichment-forge.js?v=20260929-6"></script>
+  <script src="/static/enrichment-forge.js?v=20260929-8"></script>
 </body>
 </html>

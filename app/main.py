@@ -79,7 +79,7 @@ from app.enrichment_sources import (
 )
 from app.enrichment_batch import BatchStore, apply_batch, effective_status, run_batch
 from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
-from app.genre_taxonomy import MAIN_ORDER, split_compound_genres
+from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
     abs_get_json,
@@ -6647,7 +6647,7 @@ def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
     units = [dict(data["units"][key], key=key) for key in data["order"] if key in data["units"]]
     counts = {state: sum(1 for u in units if u["state"] == state) for state in ("pending", "compiled", "failed", "applied")}
     out: dict[str, Any] = {
-        "status": effective_status(data, thread_alive=_batch_running()),
+        "status": effective_status(data, thread_alive=_batch_running(), stop_requested=_BATCH_STOP.is_set()),
         "total": len(units), "counts": counts, "current": data.get("current", ""),
         "started_at": data.get("started_at"), "updated_at": data.get("updated_at"),
     }
@@ -6658,7 +6658,8 @@ def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
         result = u.get("result") or {}
         books = result.get("books") or []
         current = split_compound_genres(clean_provider_genres(
-            [g for b in books if b.get("has_audio", True) for g in (b.get("existing_genres") or [])]))
+            [g for b in books if b.get("has_audio", True) for g in (b.get("existing_genres") or [])
+             if normalize_label(g) not in NON_GENRES]))
         rows.append({
             "key": u["key"], "name": u.get("name", ""), "standalone": u.get("standalone", False),
             "book_count": u.get("book_count", 0), "state": u["state"], "error": u.get("error", ""),

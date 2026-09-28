@@ -177,3 +177,19 @@ class PinnedGenresTests(unittest.TestCase):
     def test_pinned_alone_is_agreement(self):
         r = unit([book_vote({})], pinned={"Thriller": 1}, standalone=True)
         self.assertEqual((r["main"], r["agreement"]), (["Thriller"], "ok"))
+
+
+class CuratedListAuthorityTests(unittest.TestCase):
+    def test_a_non_litrpg_listing_overrules_litrpg_from_blurbs_and_shelves(self):
+        # A Thousand Li: blurbs mention the author's LitRPG series; readers
+        # shelve it litrpg; progressionfantasy.co.uk lists it as non-LitRPG.
+        votes = [book_vote({"audible": ["fantasy"], "keywords": ["litrpg", "cultivation"],
+                            "goodreads": ["fantasy", "litrpg", "cultivation"]}) for _ in range(4)]
+        r = unit(votes, pf_progression=True)
+        self.assertNotIn("LitRPG", r["main"])
+        self.assertIn("Cultivation", r["main"])
+        self.assertIn("LitRPG", r["candidates"])  # still one click away
+
+    def test_a_pinned_litrpg_still_wins(self):
+        votes = [book_vote({"audible": ["fantasy"], "keywords": ["litrpg"]}) for _ in range(2)]
+        self.assertIn("LitRPG", unit(votes, pf_progression=True, pinned={"LitRPG": 1})["main"])

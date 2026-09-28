@@ -478,3 +478,161 @@ async function applyCollections() {
 $("collectionsLoadBtn").addEventListener("click", loadCollections);
 $("collectionsAllGenres").addEventListener("change", renderCollections);
 $("collectionsApplyBtn").addEventListener("click", applyCollections);
+
+// Whole-library run.
+let batchUnits = [];
+let batchPoll = null;
+
+function sameGenres(a, b) {
+  const norm = (list) => [...new Set((list || []).map((g) => g.toLowerCase()))].sort().join("|");
+  return norm(a) === norm(b);
+}
+
+function batchProposed(unit) {
+  return [...(unit.main_genres || []), ...(unit.sub_genres || [])];
+}
+
+function batchMatches(unit, filter) {
+  if (filter === "all") return true;
+  if (filter === "failed") return unit.state === "failed";
+  if (filter === "applied") return unit.state === "applied";
+  if (filter === "changed") return unit.state === "compiled" && !sameGenres(batchProposed(unit), unit.current_genres);
+  // Needs review: nothing agreed, little evidence, or it failed.
+  return unit.state === "failed" || (unit.state === "compiled" && (unit.agreement === "none" || unit.coverage <= 2));
+}
+
+function renderBatchProgress(data) {
+  const counts = data.counts || {};
+  const done = (counts.compiled || 0) + (counts.failed || 0) + (counts.applied || 0);
+  const running = data.status === "running" || data.status === "stopping";
+  const parts = [];
+  if (data.total) parts.push(`${done} of ${data.total} compiled`);
+  if (counts.failed) parts.push(`${counts.failed} failed`);
+  if (counts.applied) parts.push(`${counts.applied} applied`);
+  if (running && data.current) parts.push(`now: ${data.current}`);
+  if (data.status === "stopping") parts.push("stopping after this one");
+  $("batchProgress").textContent = data.total ? parts.join(" · ") : "Not run yet.";
+  document.querySelector(".batch-bar").hidden = !data.total;
+  $("batchBarFill").style.width = data.total ? `${Math.round((100 * done) / data.total)}%` : "0";
+  const resumable = data.status === "stopped" && (counts.pending || 0) + (counts.failed || 0) > 0;
+  $("batchStartBtn").hidden = running;
+  $("batchStartBtn").textContent = resumable ? "Resume" : (data.total ? "Run again" : "Start");
+  $("batchStopBtn").hidden = !running;
+  $("batchRestartBtn").hidden = running || !data.total;
+}
+
+function renderBatchTable() {
+  const filter = $("batchFilter").value;
+  const rows = batchUnits.filter((u) => batchMatches(u, filter));
+  $("batchCount").textContent = `${rows.length} of ${batchUnits.length}`;
+  $("batchTable").innerHTML = rows.length ? `
+    <table class="collections-table batch-table">
+      <thead><tr><th></th><th>Series or book</th><th>Sources</th><th>Now</th><th>Proposed</th><th>Explicit</th><th></th></tr></thead>
+      <tbody>${rows.map((u) => {
+        const pickable = u.state === "compiled";
+        const checked = pickable && u.agreement !== "none";
+        const pinned = new Set(u.pinned_genres || []);
+        const chip = (g, main) => `<span class="batch-genre${main ? " main" : ""}${pinned.has(g) ? " pinned" : ""}">${escapeHtml(g)}</span>`;
+        const proposed = u.state === "failed"
+          ? `<span class="batch-error">${escapeHtml(u.error || "failed")}</span>`
+          : u.state === "pending" ? '<span class="section-note">not compiled yet</span>'
+          : [...(u.main_genres || []).map((g) => chip(g, true)), ...(u.sub_genres || []).map((g) => chip(g, false))].join(" ") || '<span class="section-note">no agreement</span>';
+        return `<tr class="batch-row ${u.state}">
+          <td><input type="checkbox" class="batch-pick" data-key="${escapeHtml(u.key)}"${pickable ? "" : " disabled"}${checked ? " checked" : ""} aria-label="Apply ${escapeHtml(u.name)}" /></td>
+          <td>${escapeHtml(u.name)} ${u.standalone ? '<span class="badge standalone-badge">Standalone</span>' : `<span class="section-note">${u.book_count} book${u.book_count === 1 ? "" : "s"}</span>`}${u.state === "applied" ? ' <span class="badge">applied</span>' : ""}</td>
+          <td>${u.state === "pending" ? "" : (u.coverage || 0)}</td>
+          <td class="batch-now">${escapeHtml((u.current_genres || []).join(", ") || "none")}</td>
+          <td>${proposed}</td>
+          <td>${u.explicit_suggested ? `${u.explicit_suggested} (HaremLit)` : ""}</td>
+          <td><button type="button" class="secondary batch-edit" data-key="${escapeHtml(u.key)}" data-name="${escapeHtml(u.name)}">Edit</button></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>` : '<p class="section-note">Nothing here.</p>';
+  $("batchTable").querySelectorAll(".batch-edit").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("seriesSearch").value = btn.dataset.name;
+      compileSeries(btn.dataset.name, btn.dataset.key);
+      $("compileCard").scrollIntoView({ behavior: "smooth" });
+    });
+  });
+}
+
+async function loadBatch(summaryOnly) {
+  const res = await fetch(`/api/enrichment/batch${summaryOnly ? "?summary_only=1" : ""}`).catch(() => null);
+  if (!res || !res.ok) return null;
+  const data = await res.json();
+  renderBatchProgress(data);
+  if (!summaryOnly) {
+    batchUnits = data.units || [];
+    $("batchReview").hidden = !batchUnits.some((u) => u.state !== "pending");
+    renderBatchTable();
+  }
+  const running = data.status === "running" || data.status === "stopping";
+  if (running && !batchPoll) {
+    batchPoll = setInterval(async () => {
+      const latest = await loadBatch(true);
+      if (latest && latest.status !== "running" && latest.status !== "stopping") {
+        clearInterval(batchPoll);
+        batchPoll = null;
+        loadBatch(false);
+      }
+    }, 3000);
+  }
+  return data;
+}
+
+async function startBatch(restart) {
+  if (restart && !window.confirm("Start over? This forgets the current results (nothing in Audiobookshelf changes).")) return;
+  const res = await fetch("/api/enrichment/batch/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ restart: !!restart }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("batchProgress").textContent = `Could not start${detail ? `: ${detail}` : "."}`;
+    return;
+  }
+  loadBatch(true);
+}
+
+async function applyBatch() {
+  const keys = Array.from(document.querySelectorAll(".batch-pick:checked")).map((el) => el.dataset.key);
+  const units = batchUnits.filter((u) => keys.includes(u.key));
+  if (!units.length) {
+    $("batchResult").textContent = "Tick at least one row.";
+    return;
+  }
+  const books = units.reduce((sum, u) => sum + (u.book_count || 0), 0);
+  if (!window.confirm(`Write genres to about ${books} book${books === 1 ? "" : "s"} in ${units.length} series or books?`)) return;
+  $("batchResult").textContent = "Applying...";
+  const res = await fetch("/api/enrichment/batch/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      selections: units.map((u) => ({ key: u.key, genres: batchProposed(u), apply_explicit: $("batchApplyExplicit").checked })),
+    }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("batchResult").textContent = `Apply failed${detail ? `: ${detail}` : "."}`;
+    return;
+  }
+  const data = await res.json();
+  const parts = [`Applied to ${data.books} book${data.books === 1 ? "" : "s"} in ${data.units} series or books.`];
+  if (data.failed && data.failed.length) {
+    parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.unit} / ${f.title} (${f.error})`).join("; ")}`);
+  }
+  await loadBatch(false);
+  $("batchResult").textContent = parts.join(" ");
+}
+
+$("batchStartBtn").addEventListener("click", () => startBatch(false));
+$("batchRestartBtn").addEventListener("click", () => startBatch(true));
+$("batchStopBtn").addEventListener("click", async () => {
+  await fetch("/api/enrichment/batch/stop", { method: "POST" }).catch(() => null);
+  loadBatch(true);
+});
+$("batchFilter").addEventListener("change", renderBatchTable);
+$("batchApplyBtn").addEventListener("click", applyBatch);
+loadBatch(false);

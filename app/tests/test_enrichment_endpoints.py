@@ -732,7 +732,7 @@ class EnrichmentBatchEndpointTests(unittest.TestCase):
             return {"main_genres": ["Fantasy"], "sub_genres": [], "pinned_genres": [], "genre_evidence": {}, "agreement": "ok",
                     "series_evidence": [], "explicit_summary": {}, "source_status": {"audible": {"found": 1}},
                     "books": [{"id": f"{key}-b", "path": f"/audiobooks/{key}", "is_file": False, "title": name,
-                               "has_audio": True, "existing_genres": ["Audiobook"], "explicit": {}}]}
+                               "has_audio": True, "existing_genres": ["Audiobook", "Science Fiction & Fantasy", "Horror"], "explicit": {}}]}
 
         for p_ in (patch.object(main, "REPORTS_DIR", Path(self.tmp.name)),
                    patch.object(main, "_get_abs_api_key", return_value="key"),
@@ -754,7 +754,8 @@ class EnrichmentBatchEndpointTests(unittest.TestCase):
         body = client.get("/api/enrichment/batch").json()
         self.assertEqual((body["status"], body["counts"]["compiled"], body["total"]), ("done", 2, 2))
         self.assertEqual([u["main_genres"] for u in body["units"]], [["Fantasy"], ["Fantasy"]])
-        self.assertEqual(body["units"][0]["current_genres"], [])  # "Audiobook" is not a genre
+        # Only real genres: no "Audiobook", no store umbrella shelf split into two.
+        self.assertEqual(body["units"][0]["current_genres"], ["Horror"])
 
     def test_second_start_while_running_is_refused(self):
         alive = MagicMock(); alive.is_alive.return_value = True
