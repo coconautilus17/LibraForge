@@ -1033,14 +1033,9 @@ def score_product_for_metadata(
     narrator_good = False
 
     if local_narrator and audible_narrators:
-        narrator_score = SequenceMatcher(
-            None, local_narrator, audible_narrators
-        ).ratio()
+        narrator_score = narrator_match_score(clues, product)
 
-        if local_narrator in audible_narrators:
-            narrator_score = 1.0
-
-        if narrator_score >= 0.70:
+        if narrator_score >= NARRATOR_GOOD_SCORE:
             narrator_good = True
 
         score += narrator_score * 0.10
@@ -1143,6 +1138,25 @@ def _candidate_duration(
     )
 
 
+NARRATOR_GOOD_SCORE = 0.70
+
+
+def narrator_match_score(clues: dict, product: dict) -> float:
+    """How well the product's narrators match the local narrator, 0.0 to 1.0.
+
+    Containment counts as a full match (a local "Narrator Y" against a
+    product read by "Narrator Y, Other Reader"). 0.0 when either side is
+    missing.
+    """
+    local_narrator = normalize_for_match(clues.get("narrator", ""))
+    audible_narrators = normalize_for_match(" ".join(get_people(product, "narrators")))
+    if not local_narrator or not audible_narrators:
+        return 0.0
+    if local_narrator in audible_narrators:
+        return 1.0
+    return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
+
+
 @trace(CHOOSE, capture=["local_duration_minutes"], show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
@@ -1214,6 +1228,19 @@ def pick_best_match_for_metadata(
             if (second_diff - best_diff) >= TIE_DURATION_MARGIN_MINUTES:
                 resolved = True
 
+    # Duration cannot separate them: the one recording read by the local
+    # narrator wins. Several (or no) narrator matches leave it unresolved.
+    resolved_by = "duration"
+    if not resolved:
+        narrated = [
+            item for item in top
+            if narrator_match_score(clues, item[1]) >= NARRATOR_GOOD_SCORE
+        ]
+        if len(narrated) == 1:
+            best_score_value, best_product = narrated[0]
+            resolved = True
+            resolved_by = "narrator"
+
     def label(product: dict) -> str:
         title = product.get("title", "") or "?"
         asin = product.get("asin", "") or "?"
@@ -1223,13 +1250,13 @@ def pick_best_match_for_metadata(
         "count": len(top),
         "resolved": resolved,
         "chosen": label(best_product),
-        "alternatives": [label(product) for _score, product in top[1:]],
+        "alternatives": [label(product) for _score, product in top if product is not best_product],
         "reason": (
             f"ambiguous match: {len(top)} candidates at score {best_score_value} "
             + (
-                f"(chose {label(best_product)} on duration)"
+                f"(chose {label(best_product)} on {resolved_by})"
                 if resolved
-                else "with no clear duration winner"
+                else "with no clear duration or narrator winner"
             )
         ),
     }
