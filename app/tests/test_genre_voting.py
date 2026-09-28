@@ -45,11 +45,11 @@ class VotingTests(unittest.TestCase):
         votes = [book_vote({"audible": ["history"], "audiosilo": ["history"], "openlibrary": ["fantasy"]}) for _ in range(3)]
         self.assertEqual(unit(votes)["main"], ["Non-Fiction"])
 
-    def test_at_most_three_mains_counting_strong_ones(self):
+    def test_no_cap_on_main_genres(self):
+        # Every genre the evidence supports is kept; no arbitrary cap.
         labels = ["fantasy", "thriller", "mystery", "horror", "humor", "litrpg"]
         r = unit([book_vote({"audible": labels, "audiosilo": labels})])
-        self.assertIn("LitRPG", r["main"])
-        self.assertLessEqual(len(r["main"]), 3)
+        self.assertEqual(r["main"], ["Fantasy", "LitRPG", "Thriller", "Mystery", "Horror", "Humor"])
 
     def test_no_votes_means_no_agreement(self):
         r = unit([book_vote({})], standalone=True)
@@ -105,3 +105,45 @@ class FinalReviewVotingTests(unittest.TestCase):
 
     def test_tie_break_never_picks_a_crowd_only_strong_genre(self):
         self.assertEqual(book_vote({"audible": ["thriller"], "goodreads": ["litrpg"]})["main"], {"Thriller"})
+
+
+class ProgressionHierarchyTests(unittest.TestCase):
+    """LitRPG and Cultivation are kinds of progression fantasy: when either is
+    a main genre, Progression Fantasy is kept as a subgenre instead."""
+
+    def test_litrpg_main_moves_progression_to_subgenre(self):
+        votes = [book_vote({"audible": ["fantasy", "litrpg"], "audiosilo": ["fantasy", "litrpg", "progression fantasy"],
+                            "keywords": ["progression fantasy"]}) for _ in range(3)]
+        r = unit(votes)
+        self.assertEqual(r["main"], ["Fantasy", "LitRPG"])
+        self.assertIn("Progression Fantasy", r["sub"])
+
+    def test_litrpg_implies_progression_subgenre_even_unnamed(self):
+        r = unit([book_vote({"audible": ["fantasy", "litrpg"], "audiosilo": ["fantasy", "litrpg"]})])
+        self.assertEqual(r["sub"][:1], ["Progression Fantasy"])
+        self.assertEqual(r["evidence"]["Progression Fantasy"], {"implied": 1})
+
+    def test_cultivation_is_a_main_genre(self):
+        r = unit([book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"], "keywords": ["cultivation"]})])
+        self.assertEqual(r["main"], ["Fantasy", "Cultivation"])
+        self.assertIn("Progression Fantasy", r["sub"])
+
+    def test_plain_progression_stays_main_without_litrpg_or_cultivation(self):
+        r = unit([book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"], "keywords": ["progression fantasy"]})])
+        self.assertEqual(r["main"], ["Fantasy", "Progression Fantasy"])
+
+    def test_pf_non_litrpg_listing_confirms_goodreads_cultivation(self):
+        # Cradle: Goodreads shelves it as cultivation; progressionfantasy.co.uk
+        # lists it as non-LitRPG progression. Together: Cultivation.
+        votes = [book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"], "goodreads": ["fantasy", "cultivation", "litrpg"]})
+                 for _ in range(4)]
+        r = unit(votes, pf_progression=True)
+        self.assertEqual(r["main"], ["Fantasy", "Cultivation"])
+        self.assertIn("Progression Fantasy", r["sub"])
+        self.assertIn("series-source", r["evidence"]["Cultivation"])
+
+    def test_harem_pairs_with_romance(self):
+        r = unit([book_vote({"audible": ["fantasy", "romance"], "audiosilo": ["romance", "harem"]})],
+                 series_labels=["haremlit"], series_evidence=["HaremLit wiki: X"])
+        self.assertIn("Harem", r["main"])
+        self.assertIn("Romance", r["main"])

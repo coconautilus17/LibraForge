@@ -16,6 +16,7 @@ const SOURCE_LABELS = {
   keywords: "Keywords in descriptions",
   abs_existing: "Your current genres/tags",
   "series-source": "Series list",
+  implied: "Implied by LitRPG / Cultivation",
   progressionfantasy: "progressionfantasy.co.uk",
   haremlit: "HaremLit wiki",
 };
@@ -35,7 +36,7 @@ function evidenceText(genre) {
   if (!ev || !Object.keys(ev).length) return "Added by you";
   const parts = Object.entries(ev)
     .sort((a, b) => b[1] - a[1])
-    .map(([src, n]) => (src === "series-source" ? SOURCE_LABELS[src] : `${SOURCE_LABELS[src] || src} ×${n}`));
+    .map(([src, n]) => (src === "series-source" || src === "implied" ? SOURCE_LABELS[src] : `${SOURCE_LABELS[src] || src} ×${n}`));
   return `Supported by ${parts.join(", ")}`;
 }
 

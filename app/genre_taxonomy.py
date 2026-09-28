@@ -17,7 +17,7 @@ import math
 import re
 from typing import Any
 
-MAIN_ORDER = ["Fantasy","Science Fiction","LitRPG","Progression Fantasy","Harem","Thriller","Mystery","Horror","Romance","Humor",
+MAIN_ORDER = ["Fantasy","Science Fiction","LitRPG","Progression Fantasy","Cultivation","Harem","Thriller","Mystery","Horror","Romance","Humor",
             "Historical Fiction","Young Adult","Children's","Classics","Literary Fiction","Non-Fiction","Audio Drama"]
 # source label (lowercase) -> (main genres, subgenres)
 LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
@@ -35,7 +35,7 @@ LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
  "galactic empire":(["Science Fiction"],["Space Opera"]), "time travel":(["Science Fiction"],["Time Travel"]), "alternate history":([],["Alternate History"]),
  "steampunk":([],["Steampunk"]), "superhero":([],["Superhero"]), "superheroes":([],["Superhero"]), "genetic engineering":(["Science Fiction"],[]),
  "litrpg":(["LitRPG"],[]), "gamelit":(["LitRPG"],["GameLit"]), "dungeon core":(["LitRPG"],["Dungeon Core"]), "dungeon":([],["Dungeon"]),
- "progression fantasy":(["Progression Fantasy"],[]), "cultivation":(["Progression Fantasy"],["Cultivation"]), "xianxia":(["Progression Fantasy"],["Cultivation"]), "wuxia":(["Progression Fantasy"],["Cultivation"]),
+ "progression fantasy":(["Progression Fantasy"],[]), "cultivation":(["Cultivation"],[]), "xianxia":(["Cultivation"],[]), "wuxia":(["Cultivation"],[]),
  "haremlit":(["Harem"],[]), "harem":(["Harem"],[]),
  "action & adventure":([],["Action & Adventure"]), "adventure":([],["Action & Adventure"]), "action":([],["Action & Adventure"]),
  "military":([],["Military"]), "war & military":([],["Military"]),
@@ -101,7 +101,10 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "non-fiction":"non fiction","biography":"memoir","children's":"children's audiobooks"}
 
 
-STRONG_MAINS = {"LitRPG", "Progression Fantasy", "Harem"}
+STRONG_MAINS = {"LitRPG", "Progression Fantasy", "Cultivation", "Harem"}
+# LitRPG and Cultivation are kinds of progression fantasy: when either is a
+# main genre, Progression Fantasy is kept as a subgenre (app/genre_voting.py).
+PROGRESSION_KINDS = ("LitRPG", "Cultivation")
 
 # Composite Audible category names that contain a comma themselves.
 _COMPOSITES = ("Mystery, Thriller & Suspense", "Movie, TV & Video Game Tie-Ins")

@@ -98,8 +98,11 @@ whole series at once, instead of fixing each book one at a time.
   failed and rate-limited counts for every source.
 - **Genres are voted, not piled up:** every source's labels are mapped onto one
   controlled list of genres. A book's main genre needs two sources agreeing (LitRPG,
-  progression fantasy and harem need only one, unless that one is Goodreads' crowd
-  shelving alone); a series keeps a genre supported by at least a quarter of its books.
+  cultivation, progression fantasy and harem need only one, unless that one is Goodreads'
+  crowd shelving or the book's current genres alone); a series keeps every genre supported
+  by at least a quarter of its books, with no fixed limit. LitRPG and cultivation are kinds
+  of progression fantasy, so when either is a main genre, Progression Fantasy is kept as a
+  subgenre (a Progression Fantasy collection still gathers them).
   The series-level lists count as support for the whole series, but
   progressionfantasy.co.uk's broad progression list only counts when something else
   agrees or nothing contradicts it.

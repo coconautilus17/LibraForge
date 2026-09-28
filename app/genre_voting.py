@@ -16,14 +16,13 @@ import collections
 import math
 from typing import Any
 
-from app.genre_taxonomy import MAIN_ORDER, STRONG_MAINS, classify
+from app.genre_taxonomy import MAIN_ORDER, PROGRESSION_KINDS, STRONG_MAINS, classify
 
 SERIES_SOURCE = "series-source"
 _MAINSTREAM = ("Mystery", "Thriller", "Horror", "Romance")
 _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology", "Religion", "Society",
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
 _REAL_SF_SUBS = ("Space Opera", "Military Science Fiction", "Post-Apocalyptic", "Hard Science Fiction")
-MAX_MAINS = 3
 # Crowd shelving: Goodreads readers shelve progression and harem fantasy as
 # "litrpg" loosely (Cradle, Dragon Emperor), so a strong genre from Goodreads
 # alone needs a second source like any other genre.
@@ -99,10 +98,14 @@ def vote_unit(
         if pf_progression:
             # progressionfantasy.co.uk's "Non-LitRPG" list is broad (it has The
             # Dresden Files): trust it only when corroborated or uncontested.
-            corroborated = main_votes["Progression Fantasy"] > 0 or sub_votes.get("Cultivation", 0) > 0
+            corroborated = any(main_votes[g] > 0 or mentioned[g] > 0 for g in ("Progression Fantasy", "Cultivation"))
             conflict = any(main_votes[g] >= threshold for g in _MAINSTREAM)
             if corroborated or not conflict:
                 series_mains.append("Progression Fantasy")
+            # The listing also confirms readers' "cultivation" shelving, which
+            # alone is crowd evidence (Cradle).
+            if mentioned["Cultivation"] >= threshold:
+                series_mains.append("Cultivation")
     for genre in series_mains:
         main_votes[genre] = max(main_votes[genre], threshold)
         evidence[genre][SERIES_SOURCE] += 1
@@ -126,13 +129,10 @@ def vote_unit(
     if "Classics" in mains and main_votes["Classics"] < max(1, math.ceil(0.5 * n)):
         mains.remove("Classics")
 
-    strong = [g for g in mains if g in STRONG_MAINS]
-    rest = sorted((g for g in mains if g not in STRONG_MAINS), key=lambda g: (-main_votes[g], MAIN_ORDER.index(g)))
-    # Strong genres are what readers of this audience browse by, so they are
-    # kept first, but one broad genre always survives when there is one.
-    keep_rest = rest[:max(1, MAX_MAINS - len(strong))]
-    keep_strong = strong[:MAX_MAINS - len(keep_rest)]
-    mains = sorted(keep_rest + keep_strong, key=MAIN_ORDER.index)
+    # No cap on main genres: every genre the evidence supports is kept.
+    progression_kind = any(g in mains for g in PROGRESSION_KINDS)
+    if progression_kind and "Progression Fantasy" in mains:
+        mains.remove("Progression Fantasy")
 
     if "Non-Fiction" in mains:
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k in _NON_FICTION_SUBS})
@@ -140,6 +140,13 @@ def vote_unit(
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k not in _NON_FICTION_SUBS})
     subs = [s for s, c in sorted(sub_votes.items(), key=lambda kv: (-kv[1], kv[0]))
             if c >= threshold and s not in mains and not s.endswith("?")][:MAX_SUBS]
+    if progression_kind:
+        # LitRPG and Cultivation are progression fantasy: keep the umbrella as
+        # a subgenre so a Progression Fantasy collection still gathers them.
+        subs = ["Progression Fantasy"] + [s for s in subs if s != "Progression Fantasy"]
+        sub_evidence["Progression Fantasy"].update(evidence.get("Progression Fantasy", {}))
+        if not sub_evidence["Progression Fantasy"]:
+            sub_evidence["Progression Fantasy"]["implied"] = 1
     excluded_subs = _NON_FICTION_SUBS if "Non-Fiction" not in mains else set()
     candidates = [g for g, _c in sorted(mentioned.items(), key=lambda kv: (-kv[1], kv[0]))
                   if g not in mains and g not in subs and not g.endswith("?") and g not in excluded_subs][:MAX_CANDIDATES]
