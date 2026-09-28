@@ -196,3 +196,39 @@ class HaremLitTests(unittest.TestCase):
         self.assertEqual(len(ev), 2)
         labels, ev, pfp = s.series_level_labels({"status": "found", "category": "LitRPG", "title": "A – B"}, {"status": "not_found"})
         self.assertEqual((labels, pfp), (["litrpg"], False))
+
+
+class FinalReviewFixTests(unittest.TestCase):
+    def test_pf_index_stops_at_the_page_cap_and_reports_failed(self):
+        calls = []
+
+        def get(url, timeout):
+            calls.append(url)
+            return [{"title": {"rendered": "A – B"}, "categories": [8]}]  # a site that ignores page=
+
+        idx = s.ProgressionFantasyIndex(http_get=get)
+        self.assertEqual(idx.lookup("B", ["A"])["status"], "failed")
+        self.assertLessEqual(len(calls), s.PF_MAX_PAGES)
+
+    def test_pf_empty_first_page_is_failed_not_an_empty_catalogue(self):
+        idx = s.ProgressionFantasyIndex(http_get=lambda url, timeout: [])
+        self.assertEqual(idx.lookup("Cradle", ["Will Wight"])["status"], "failed")
+
+    def test_audiosilo_title_match_by_another_author_is_not_found(self):
+        get = lambda url, timeout: {"matches": [{"title": "Blackflame Rising: A Romance", "author": "Jane Doe", "genres": ["Romance"]}]}
+        r = s.audiosilo_lookup({**BOOK, "title": "Blackflame", "asin": ""}, pacer=P(), http_get=get)
+        self.assertEqual((r["status"], r["labels"]), ("not_found", []))
+
+    def test_openlibrary_other_author_is_not_found(self):
+        get = lambda url, timeout: {"docs": [{"title": "Unsouled", "author_name": ["Someone Else"], "subject": ["Horror"]}]}
+        self.assertEqual(s.openlibrary_lookup(BOOK, pacer=P(), http_get=get)["status"], "not_found")
+
+    def test_haremlit_author_page_needs_an_exact_series_link(self):
+        def get(url, timeout):
+            if "list=search" in url:
+                return {"query": {"search": []}}
+            return {"parse": {"wikitext": {"*": "* [[Summoner (Series)|Summoner]]\n[[Category:Fantasy Series]]"}}}
+
+        self.assertEqual(s.haremlit_lookup("Summoner School", ["Eric Vall"], http_get=get)["status"], "not_found")
+        self.assertEqual(s.haremlit_lookup("Fantasy", ["Eric Vall"], http_get=get)["status"], "not_found")
+        self.assertEqual(s.haremlit_lookup("Summoner", ["Eric Vall"], http_get=get)["status"], "found")

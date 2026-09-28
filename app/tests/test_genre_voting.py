@@ -12,7 +12,7 @@ def unit(votes, **kw):
 
 class VotingTests(unittest.TestCase):
     def test_main_needs_two_sources_unless_strong(self):
-        v = book_vote({"audible": ["thriller"], "audiosilo": ["horror"], "goodreads": ["litrpg", "fantasy"]})
+        v = book_vote({"audible": ["thriller"], "audiosilo": ["horror"], "keywords": ["litrpg"]})
         self.assertIn("LitRPG", v["main"])
         self.assertNotIn("Horror", v["main"])
 
@@ -96,3 +96,12 @@ class EvidenceAndSuggestionTests(unittest.TestCase):
         self.assertIn("Sword & Sorcery", r["candidates"])
         self.assertNotIn("Fantasy", r["candidates"])
         self.assertFalse([c for c in r["candidates"] if c.endswith("?")])
+
+
+class FinalReviewVotingTests(unittest.TestCase):
+    def test_existing_abs_genres_alone_cannot_make_a_strong_main(self):
+        # v1 wrote Goodreads' loose LitRPG into ABS genres; it must not come back on its own.
+        self.assertNotIn("LitRPG", book_vote({"audible": ["fantasy"], "abs_existing": ["fantasy", "litrpg"]})["main"])
+
+    def test_tie_break_never_picks_a_crowd_only_strong_genre(self):
+        self.assertEqual(book_vote({"audible": ["thriller"], "goodreads": ["litrpg"]})["main"], {"Thriller"})

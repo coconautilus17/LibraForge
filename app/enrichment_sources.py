@@ -74,6 +74,14 @@ def _primary_author(book: dict[str, Any]) -> str:
     return str(book.get("author") or "").split(",")[0].split(" - ")[0].strip()
 
 
+def _same_author(found_author: Any, wanted_author: str) -> bool:
+    """A title match alone isn't enough for one-word titles ("Blackflame"):
+    when the source names an author, it must share the wanted surname."""
+    if not str(found_author or "").strip() or not wanted_author:
+        return True
+    return _author_matches(str(found_author), [wanted_author])
+
+
 def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_PACER,
                      http_get: HttpGet = http_get_json) -> dict[str, Any]:
     """AudioSilo by real ASIN first, then by clean title + author surname."""
@@ -94,7 +102,7 @@ def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_
         if not matches:
             continue
         found = matches[0]
-        if not title_matches(str(found.get("title") or ""), wanted):
+        if not title_matches(str(found.get("title") or ""), wanted) or not _same_author(found.get("author"), author):
             return _result("not_found", found.get("title"))
         return _result("found", found.get("title"), labels_from_genres(found.get("genres") or []))
     return _result("not_found")
@@ -105,7 +113,7 @@ def openlibrary_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = OPENLIBR
     """Open Library subjects, kept only when they map into the taxonomy
     (its subjects are noisy: 'Fiction', 'Wizards', place names...)."""
     wanted = clean_query_title(str(book.get("title") or ""))
-    params = {"title": wanted, "author": _primary_author(book), "fields": "title,subject", "limit": "1"}
+    params = {"title": wanted, "author": _primary_author(book), "fields": "title,author_name,subject", "limit": "1"}
     status, data = _paced_get(OPENLIBRARY_SEARCH_URL + "?" + urllib.parse.urlencode(params), pacer, http_get)
     if status != "ok":
         return _result(status)
@@ -113,7 +121,7 @@ def openlibrary_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = OPENLIBR
     if not docs:
         return _result("not_found")
     doc = docs[0]
-    if not title_matches(str(doc.get("title") or ""), wanted):
+    if not title_matches(str(doc.get("title") or ""), wanted) or not _same_author(", ".join(doc.get("author_name") or []), _primary_author(book)):
         return _result("not_found", doc.get("title"))
     labels = []
     for subject in doc.get("subject") or []:
@@ -172,7 +180,11 @@ def summarize_status(label: str, results: dict[str, dict[str, Any]], books: list
 # ---------------------------------------------------------------------------
 
 PROGRESSIONFANTASY_POSTS_URL = "https://progressionfantasy.co.uk/wp-json/wp/v2/posts"
-_PF_CATEGORIES = {8: "LitRPG", 6: "Progression"}  # 8 = "LitRPG & GameLit", 6 = "Non-LitRPG" progression
+_PF_CATEGORIES = {8: "LitRPG", 6: "Progression"}
+# ~9 pages of 100 today; a site that ignores page= must not loop forever
+# while every compile waits on the index lock.
+PF_MAX_PAGES = 20
+PF_LOAD_DEADLINE_S = 60  # 8 = "LitRPG & GameLit", 6 = "Non-LitRPG" progression
 HAREMLIT_API_URL = "https://haremlit-fiction.fandom.com/api.php"
 
 
@@ -225,8 +237,12 @@ class ProgressionFantasyIndex:
         try:
             page = 1
             while True:
+                if page > PF_MAX_PAGES or self._clock() - now > PF_LOAD_DEADLINE_S:
+                    raise TimeoutError("progressionfantasy.co.uk catalogue did not end")
                 posts = self._http_get(f"{PROGRESSIONFANTASY_POSTS_URL}?per_page=100&page={page}&_fields=title,categories", 30)
                 if not isinstance(posts, list) or not posts:
+                    if page == 1:
+                        raise ValueError("progressionfantasy.co.uk returned an empty catalogue")
                     break
                 for post in posts:
                     title = html.unescape(str((post.get("title") or {}).get("rendered") or ""))
@@ -267,6 +283,8 @@ PF_INDEX = ProgressionFantasyIndex()
 
 _TEMPLATE_RE = re.compile(r"\{\{(Book_Series_Template|Book_Template)\|(.*?)\}\}", re.S)
 _WIKILINK_RE = re.compile(r"\[\[(?::?Category:)?([^|\]]+)(?:\|[^\]]*)?\]\]")
+# Page links only: no Category:/File: links on an author's page.
+_PAGE_LINK_RE = re.compile(r"\[\[(?!:?(?:Category|File|Image):)([^|\]]+)(?:\|[^\]]*)?\]\]", re.I)
 
 
 def _wiki(params: dict[str, str], http_get: HttpGet) -> dict[str, Any]:
@@ -313,8 +331,10 @@ def haremlit_lookup(series_name: str, authors: list[str], *, http_get: HttpGet =
         for author in authors:
             if not str(author or "").strip():
                 continue
-            for link in _WIKILINK_RE.findall(_wikitext(author, http_get)):
-                if _series_names_match(link, series_name):
+            for link in _PAGE_LINK_RE.findall(_wikitext(author, http_get)):
+                # Exact name only (as the prototype's curated catalogue did):
+                # an author page links other, non-harem work too.
+                if _norm_series(link) and _norm_series(link) == _norm_series(series_name):
                     return {"status": "found", "match": f"{author}: {link.strip()}", "explicit": None, "genres": [], "via": "author"}
     except Exception:
         return {**empty, "status": "failed"}

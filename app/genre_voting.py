@@ -27,7 +27,9 @@ MAX_MAINS = 3
 # Crowd shelving: Goodreads readers shelve progression and harem fantasy as
 # "litrpg" loosely (Cradle, Dragon Emperor), so a strong genre from Goodreads
 # alone needs a second source like any other genre.
-_CROWD_SOURCES = {"goodreads"}
+# The library's own current genres count the same way: v1 wrote Goodreads'
+# loose LitRPG into ABS, and it must not come back on its own.
+_CROWD_SOURCES = {"goodreads", "abs_existing"}
 MAX_SUBS = 5
 MAX_CANDIDATES = 10
 
@@ -51,8 +53,11 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     needed = 2 if len(voters) >= 2 else 1
     main = {g for g, c in votes.items()
             if c >= needed or (g in STRONG_MAINS and evidence[g] - _CROWD_SOURCES)}
-    if not main and votes:
-        # Nothing agreed: fall back to the best-supported genre(s), at most two.
+    fallback = {g: c for g, c in votes.items() if not (g in STRONG_MAINS and not evidence[g] - _CROWD_SOURCES)}
+    if not main and fallback:
+        # Nothing agreed: fall back to the best-supported genre(s), at most two,
+        # never a strong genre only crowd shelving named.
+        votes = collections.Counter(fallback)
         top = max(votes.values())
         tied = sorted((g for g, c in votes.items() if c == top), key=MAIN_ORDER.index)
         main = set(tied[:2])
