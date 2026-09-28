@@ -102,5 +102,64 @@ class AuthorInTitleTests(unittest.TestCase):
         self.assertEqual(clues["title"], "1177 B.C. (Revised and Updated) The Year Civilization Collapsed")
 
 
+class AlbumIsNotASeriesTests(unittest.TestCase):
+    """Sapiens (album "Sapiens") and Reforged (album "Intra Mundum:
+    Reforged"): an album that is the book's own title was taken as the
+    series, so Sapiens fell to series_only and Homo Deus scored 0.93 through
+    Harari's "Sapiens" umbrella series."""
+
+    def parse(self, **tags):
+        return FIXER.parse_title_series_number_from_metadata(tags)
+
+    def test_album_that_is_the_title_is_not_a_series(self):
+        self.assertEqual(self.parse(title="Sapiens", album="Sapiens")["series"], "")
+
+    def test_album_that_starts_the_title_is_not_a_series(self):
+        parsed = self.parse(title="Intra Mundum: Reforged: A LitRPG Adventure", album="Intra Mundum: Reforged")
+        self.assertEqual(parsed["series"], "")
+
+    def test_a_different_album_is_still_a_series_clue(self):
+        self.assertEqual(self.parse(title="Soul Harvest", album="Dread Knight")["series"], "Dread Knight")
+
+
+class ParentheticalSeriesInTitleTests(unittest.TestCase):
+    """Reforged's title tag ends "(The Tower Series, Book 2)", its real series."""
+
+    def test_trailing_series_parenthetical_gives_series_number_and_title(self):
+        parsed = FIXER.parse_title_series_number_from_metadata({
+            "title": "Intra Mundum: Reforged: A LitRPG Adventure (The Tower Series, Book 2)",
+            "album": "Intra Mundum: Reforged",
+        })
+        self.assertEqual(parsed["series"], "The Tower Series")
+        self.assertEqual(parsed["book_number"], "2")
+        self.assertEqual(parsed["title"], "Intra Mundum: Reforged")
+
+    def test_descriptor_parenthetical_is_not_a_series(self):
+        parsed = FIXER.parse_title_series_number_from_metadata(
+            {"title": "Family: The Idle System (A LitRPG series, Book 7)"})
+        self.assertEqual(parsed["series"], "")
+        self.assertEqual(parsed["book_number"], "7")
+
+
+class TitleIsItsOwnSeriesTests(unittest.TestCase):
+    """Sapiens: Audible titles the book "Sapiens" inside series "Sapiens" with
+    no number. The title-equals-series special case demanded a numeric
+    sequence, so an exact title/author/duration match wrote nothing."""
+
+    SAPIENS = {"asin": "B00VY2KBAM", "title": "Sapiens", "subtitle": "A Brief History of Humankind",
+               "authors": [{"name": "Yuval Noah Harari"}], "narrators": [{"name": "Derek Perkins"}],
+               "series": [{"title": "Sapiens", "sequence": ""}], "runtime_length_min": 918}
+
+    def test_exact_title_author_and_duration_is_a_full_match(self):
+        clues = {"title": "Sapiens", "author": "Yuval Noah Harari", "narrator": "Derek Perkins",
+                 "local_duration_minutes": 918.7}
+        self.assertEqual(FIXER.metadata_from_product(self.SAPIENS, clues, 1.0)["edit_mode"], "full")
+
+    def test_other_book_in_the_umbrella_series_is_not(self):
+        homo_deus = {**self.SAPIENS, "title": "Homo Deus", "runtime_length_min": 894}
+        clues = {"title": "Sapiens", "author": "Yuval Noah Harari", "local_duration_minutes": 918.7}
+        self.assertNotEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "full")
+
+
 if __name__ == "__main__":
     unittest.main()

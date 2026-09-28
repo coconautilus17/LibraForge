@@ -1518,6 +1518,15 @@ def determine_edit_mode(
             and is_single_numeric_sequence(sequence)
         ):
             return "full"
+        # The product is titled exactly like the local book ("Sapiens" in
+        # series "Sapiens"): it is the book, not a series-named stand-in.
+        if (
+            local_title
+            and local_title == audible_title
+            and author_identity_match
+            and duration_status in {"perfect", "strong"}
+        ):
+            return "full"
 
         return safe_series_only()
 

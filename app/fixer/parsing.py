@@ -1423,6 +1423,16 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     )
 
     series = clean_series_value(grouping or album)
+    # An album that is the book's own title ("Sapiens"), or its opening
+    # ("Intra Mundum: Reforged" for "Intra Mundum: Reforged: ..."), is not a
+    # series clue. A "Series N" echo ("Pocket Dungeon 4") still is.
+    album_norm, title_norm = normalize_for_match(album), normalize_for_match(raw_title)
+    if (
+        not grouping and album_norm and title_norm
+        and title_norm.startswith(album_norm)
+        and not re.search(r"\d\s*$", album_norm)
+    ):
+        series = ""
     # Only a dedicated series-like tag (or a series name parsed out of the
     # title tag below) counts as real embedded series metadata. Falling back
     # to the album tag is a useful search clue (album often echoes the
@@ -1472,6 +1482,22 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         series_from_real_tag = True
         book_number = normalize_book_number(trailing_series.group("number"))
         book_number_source = "title"
+
+    # "Title (Series, Book N)", as Audible writes a series into a subtitle.
+    parenthetical_series = re.match(
+        r"^(?P<title>.+?)\s*\((?P<series>[^()]+?),\s*(?:Book|Vol(?:ume)?\.?)\s*#?"
+        r"(?P<number>\d{1,4}(?:\.\d+)?)\)\s*$",
+        raw_title,
+        flags=re.IGNORECASE,
+    )
+    if parenthetical_series and not book_number:
+        book_number = normalize_book_number(parenthetical_series.group("number"))
+        book_number_source = "title"
+        parenthetical_series_name = clean_series_value(parenthetical_series.group("series"))
+        if parenthetical_series_name:
+            series = parenthetical_series_name
+            series_from_real_tag = True
+            title = sanitize_book_title(parenthetical_series.group("title"))
 
     if not book_number:
         title_number = extract_book_number_from_text(raw_title)
