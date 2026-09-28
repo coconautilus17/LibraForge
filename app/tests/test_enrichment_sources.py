@@ -15,17 +15,22 @@ BOOK = {"id": "b1", "title": "Cradle - Book 001 - Unsouled", "author": "Will Wig
 
 
 class AudioSiloTests(unittest.TestCase):
-    def test_asin_query_and_labels(self):
+    def test_asin_resolves_through_the_lookup_endpoint(self):
+        # /abs/search treats query= as title text; the real ASIN lookup is
+        # /api/v1/lookup, then the work record carries the genres (slugs).
         seen = []
 
         def get(url, timeout):
             seen.append(url)
-            return {"matches": [{"title": "Unsouled", "genres": ["Fantasy", "Progression Fantasy (g)"]}]}
+            if "/api/v1/lookup" in url:
+                return {"work": {"id": "unsouled", "title": "Unsouled"}}
+            return {"id": "unsouled", "title": "Unsouled", "genres": ["epic-fantasy", "progression-fantasy", "science-fiction"]}
 
         r = s.audiosilo_lookup(BOOK, pacer=P(), http_get=get)
         self.assertEqual(r["status"], "found")
-        self.assertIn("progression fantasy", r["labels"])
-        self.assertIn("query=B06XKXD6QR", seen[0])
+        self.assertEqual(sorted(r["labels"]), ["epic fantasy", "progression fantasy", "science fiction"])
+        self.assertIn("/api/v1/lookup?asin=B06XKXD6QR", seen[0])
+        self.assertIn("/api/v1/works/unsouled", seen[1])
 
     def test_title_query_when_asin_is_not_real(self):
         seen = []
@@ -44,10 +49,35 @@ class AudioSiloTests(unittest.TestCase):
 
         def get(url, timeout):
             seen.append(url)
-            return {"matches": []} if len(seen) == 1 else {"matches": [{"title": "Unsouled", "genres": ["Fantasy"]}]}
+            if "/api/v1/lookup" in url:
+                raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+            return {"matches": [{"title": "Unsouled", "genres": ["Fantasy"]}]}
 
         self.assertEqual(s.audiosilo_lookup(BOOK, pacer=P(), http_get=get)["status"], "found")
         self.assertEqual(len(seen), 2)
+
+    def test_title_search_looks_past_other_authors_books(self):
+        # 12 Miles Below: "The Warlock" by Mark Arrows sits below Dante King's.
+        get = lambda url, timeout: {"matches": [
+            {"title": "The Warlock 2", "author": "Dante King", "genres": ["Harem"]},
+            {"title": "12 Miles Below V: The Warlock", "author": "Mark Arrows", "genres": ["Fantasy"]}]}
+        book = {**BOOK, "title": "12 Miles Below - Book 005 - The Warlock", "author": "Mark Arrows", "asin": ""}
+        r = s.audiosilo_lookup(book, pacer=P(), http_get=get)
+        self.assertEqual((r["status"], r["title"]), ("found", "12 Miles Below V: The Warlock"))
+
+    def test_series_and_title_is_the_last_attempt(self):
+        seen = []
+
+        def get(url, timeout):
+            seen.append(url)
+            if "Miles" in url:
+                return {"matches": [{"title": "12 Miles Below: The Frozen Realm", "author": "Mark Arrows", "genres": ["Fantasy"]}]}
+            return {"matches": []}
+
+        book = {**BOOK, "title": "The Frozen Realm", "author": "Mark Arrows", "asin": "", "series_name": "12 Miles Below"}
+        r = s.audiosilo_lookup(book, pacer=P(), http_get=get)
+        self.assertEqual(r["status"], "found")
+        self.assertIn("query=12+Miles+Below+The+Frozen+Realm", seen[-1])
 
     def test_fuzzy_wrong_book_is_not_found(self):
         get = lambda url, timeout: {"matches": [{"title": "Blue Moon Australia", "genres": ["Mystery"]}]}

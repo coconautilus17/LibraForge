@@ -84,30 +84,63 @@ def _same_author(found_author: Any, wanted_author: str) -> bool:
     return _author_matches(str(found_author), [wanted_author])
 
 
+AUDIOSILO_LOOKUP_URL = "https://meta.audiosilo.app/api/v1/lookup"
+AUDIOSILO_WORK_URL = "https://meta.audiosilo.app/api/v1/works/"
+
+
+def _audiosilo_labels(genres: Any) -> list[str]:
+    """AudioSilo genres come as names ("Epic Fantasy") from /abs/search and as
+    slugs ("epic-fantasy") from the work record."""
+    out = []
+    for genre in genres or []:
+        label = normalize_label(genre)
+        if label not in LABEL_MAP:
+            label = normalize_label(str(genre).replace("-", " "))
+        out.extend(labels_from_genres([label]))
+    return list(dict.fromkeys(out))
+
+
 def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_PACER,
                      http_get: HttpGet = http_get_json) -> dict[str, Any]:
-    """AudioSilo by real ASIN first, then by clean title + author surname."""
+    """AudioSilo: a real ASIN resolves exactly through /api/v1/lookup (its
+    /abs/search endpoint treats query= as title text and never looks ASINs
+    up). Otherwise the title search, scanning every match for the right title
+    and author (the author is only a loose boost there: "The Warlock" by Mark
+    Arrows ranks below ten other Warlock books), and last "<series> <title>"
+    (AudioSilo often titles books "12 Miles Below V: The Warlock")."""
     wanted = clean_query_title(str(book.get("title") or ""))
     author = _primary_author(book)
-    queries = []
     asin = str(book.get("asin") or "").upper()
     if _REAL_ASIN_RE.fullmatch(asin):
-        queries.append({"query": asin})
-    queries.append({"query": wanted, "author": author.split()[-1] if author else ""})
-    for params in queries:
-        status, data = _paced_get(AUDIOSILO_SEARCH_URL + "?" + urllib.parse.urlencode(params), pacer, http_get)
-        if status != "ok":
-            if status == "not_found":
-                continue
+        status, data = _paced_get(AUDIOSILO_LOOKUP_URL + "?" + urllib.parse.urlencode({"asin": asin}), pacer, http_get)
+        if status in ("failed", "skipped"):
             return _result(status)
-        matches = (data or {}).get("matches") or [] if isinstance(data, dict) else []
-        if not matches:
-            continue
-        found = matches[0]
-        if not title_matches(str(found.get("title") or ""), wanted) or not _same_author(found.get("author"), author):
-            return _result("not_found", found.get("title"))
-        return _result("found", found.get("title"), labels_from_genres(found.get("genres") or []))
-    return _result("not_found")
+        work_id = str(((data or {}).get("work") or {}).get("id") or "") if isinstance(data, dict) else ""
+        if status == "ok" and work_id:
+            status, work = _paced_get(AUDIOSILO_WORK_URL + urllib.parse.quote(work_id), pacer, http_get)
+            if status in ("failed", "skipped"):
+                return _result(status)
+            if status == "ok" and isinstance(work, dict):
+                return _result("found", work.get("title"), _audiosilo_labels(work.get("genres")))
+
+    surname = author.split()[-1] if author else ""
+    queries = [wanted]
+    series = str(book.get("series_name") or "").strip()
+    if series and series.lower() not in wanted.lower():
+        queries.append(f"{series} {wanted}")
+    last_title = None
+    for query in queries:
+        status, data = _paced_get(AUDIOSILO_SEARCH_URL + "?" + urllib.parse.urlencode({"query": query, "author": surname}),
+                                  pacer, http_get)
+        if status in ("failed", "skipped"):
+            return _result(status)
+        matches = ((data or {}).get("matches") or []) if isinstance(data, dict) else []
+        for match in matches:
+            title = str(match.get("title") or "")
+            last_title = last_title or title
+            if title_matches(title, wanted) and _same_author(match.get("author"), author):
+                return _result("found", title, _audiosilo_labels(match.get("genres")))
+    return _result("not_found", last_title)
 
 
 def openlibrary_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = OPENLIBRARY_PACER,
