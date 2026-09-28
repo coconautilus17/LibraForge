@@ -37,6 +37,7 @@
     { "id": "upfront-books", "name": "Upfront Books" },
     { "id": "void-star-publishing-llc", "name": "Void Star Publishing LLC" },
     { "id": "wendy-lynn-clark-publishing", "name": "Wendy Lynn Clark Publishing" },
+    { "id": "yen-audio", "name": "Yen Audio", "aliases": ["Yen Press Audio"] },
     { "id": "noise-unabridged", "name": "Unabridged" },
     { "id": "noise-abridged", "name": "Abridged" },
     { "id": "noise-audiobook", "name": "Audiobook" }

@@ -185,10 +185,27 @@ def read_current_book_metadata(tags: dict, is_grouped: bool = False) -> dict:
         "genre": parsed["genre"],
         "year": first_existing_tag(tags, ["date", "year"]),
         "isbn": first_existing_tag(tags, ["isbn"]),
-        "asin": first_existing_tag(tags, ["asin"]).upper(),
+        "asin": first_existing_tag(tags, ["asin", "audible_asin"]).upper(),
         "publisher": publisher_scratch.get("publisher", ""),
         "summary": first_existing_tag(tags, ["comment", "description"]),
     }
+
+
+AUDIBLE_SKU_RE = re.compile(r"\bBK_[A-Z0-9]+_\d+\b")
+
+
+def capture_sku_clue(clues: dict, tags: dict) -> dict:
+    """Record the Audible SKU a rip carries (UFID "BK_RHUK_002027").
+
+    The SKU names one publisher's edition, so it tells apart the same
+    recording sold under two ASINs (a US and a UK release).
+    """
+    for key in ("ufid", "sku", "audible_sku"):
+        match = AUDIBLE_SKU_RE.search(str(tags.get(key, "") or "").upper())
+        if match:
+            clues["sku"] = match.group(0)
+            break
+    return clues
 
 
 @trace(ALTER, capture=[])

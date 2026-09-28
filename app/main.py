@@ -4,6 +4,7 @@ import functools
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shlex
@@ -6371,16 +6372,24 @@ def _attach_local_genres(books: list[dict[str, Any]]) -> None:
             genres = ((item.get("media") or {}).get("metadata") or {}).get("genres")
             if isinstance(genres, list):
                 book["existing_genres"] = genres
+        wrote_genre = _libraforge_wrote_genre(book)
+        book["file_genres_written_by_libraforge"] = wrote_genre
         book["manual_genres"] = detect_manual_genres(
-            book.get("existing_genres") or [], book["file_genres"], _libraforge_wrote_genre(book), written_log.get(book["id"]))
+            book.get("existing_genres") or [], book["file_genres"], wrote_genre, written_log.get(book["id"]))
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(one, books))
 
 
-# Open Library subjects rarely differ within a series and it asks for ~1 req/s,
-# so only the first few audio books of a unit are looked up there.
-_OPENLIBRARY_BOOKS_PER_UNIT = 3
+# Open Library asks for ~1 req/s and its subjects rarely differ within a
+# series, so not every book is looked up. It checks at least 3 books and about
+# a third of a longer series: enough that Open Library alone can reach the
+# vote's quarter-of-the-series bar (a fixed 3 never could past 12 books).
+_OPENLIBRARY_MIN_BOOKS = 3
+
+
+def _openlibrary_books_to_check(audio_books: int) -> int:
+    return max(_OPENLIBRARY_MIN_BOOKS, math.ceil(audio_books / 3))
 
 
 def _series_source_status(label: str, result: dict[str, Any] | None, standalone: bool, detail_key: str) -> dict[str, Any]:
@@ -6427,7 +6436,7 @@ def _collect_extra_sources(
     with ThreadPoolExecutor(max_workers=4) as pool:
         jobs = [pool.submit(book_source, "audiosilo", "AudioSilo", audiosilo_lookup, AUDIOSILO_PACER),
                 pool.submit(book_source, "openlibrary", "Open Library", openlibrary_lookup, OPENLIBRARY_PACER,
-                            _OPENLIBRARY_BOOKS_PER_UNIT)]
+                            _openlibrary_books_to_check(sum(1 for b in books if b.get("has_audio", True))))]
         if not standalone and series_name:
             pf_job = pool.submit(guarded, PF_INDEX.lookup, series_name, authors)
             hl_job = pool.submit(guarded, haremlit_lookup, series_name, authors)

@@ -183,3 +183,15 @@ class GoodreadsMatchTests(unittest.TestCase):
         xml = XML.replace(b"Will Wight", b"Someone Else")
         r = fetch_book_shelves("Unsouled", "Will Wight", pacer=GoodreadsPacer(sleep=_no_sleep), http_get=lambda url, timeout: xml)
         self.assertEqual(r["status"], "not_found")
+
+
+class DragonsShelfTests(unittest.TestCase):
+    """Measured: real dragon books are shelved "dragons" at 12-120% of their
+    top genre shelf (Eragon 12.5%, Heartstrikers 42%); noise at 0-1.3%."""
+
+    def test_dragon_books_get_dragons(self):
+        self.assertIn("Dragons", shelves_to_genres([("fantasy", 32088), ("dragons", 3995)]))  # Eragon
+        self.assertIn("Dragons", shelves_to_genres([("fantasy", 18), ("dragons", 6)]))        # Dragon Breeder
+
+    def test_a_stray_dragons_shelving_is_not_enough(self):
+        self.assertNotIn("Dragons", shelves_to_genres([("fantasy", 470), ("dragons", 6)]))    # The Primal Hunter

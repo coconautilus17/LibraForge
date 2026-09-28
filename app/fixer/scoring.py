@@ -16,8 +16,9 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.debug_trace import trace, ALTER, CHOOSE, SCORE
-from app.publisher_policy import SPECIAL_PROVIDERS
+from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
+    is_never_series,
     normalize_for_match,
     parse_sequence_number,
     extract_book_number_from_text,
@@ -233,6 +234,10 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     series_name, sequence = split_series_trailing_number(
         sanitize_tag(series_name), sanitize_tag(sequence)
     )
+    # Audible sometimes files books under a genre as the series (Arthur
+    # Stone's "LitRPG" #1-3); that is never written as a series.
+    if is_never_series(series_name):
+        return "", ""
     return series_name, sequence
 
 
@@ -1033,14 +1038,9 @@ def score_product_for_metadata(
     narrator_good = False
 
     if local_narrator and audible_narrators:
-        narrator_score = SequenceMatcher(
-            None, local_narrator, audible_narrators
-        ).ratio()
+        narrator_score = narrator_match_score(clues, product)
 
-        if local_narrator in audible_narrators:
-            narrator_score = 1.0
-
-        if narrator_score >= 0.70:
+        if narrator_score >= NARRATOR_GOOD_SCORE:
             narrator_good = True
 
         score += narrator_score * 0.10
@@ -1143,6 +1143,46 @@ def _candidate_duration(
     )
 
 
+NARRATOR_GOOD_SCORE = 0.70
+
+
+def narrator_match_score(clues: dict, product: dict) -> float:
+    """How well the product's narrators match the local narrator, 0.0 to 1.0.
+
+    Containment counts as a full match (a local "Narrator Y" against a
+    product read by "Narrator Y, Other Reader"). 0.0 when either side is
+    missing.
+    """
+    local_narrator = normalize_for_match(clues.get("narrator", ""))
+    audible_narrators = normalize_for_match(" ".join(get_people(product, "narrators")))
+    if not local_narrator or not audible_narrators:
+        return 0.0
+    if local_narrator in audible_narrators:
+        return 1.0
+    return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
+
+
+def _sku_matches(clues: dict, product: dict) -> bool:
+    local = str(clues.get("sku", "") or "").upper()
+    return bool(local) and local in {
+        str(product.get("sku", "") or "").upper(),
+        str(product.get("sku_lite", "") or "").upper(),
+    }
+
+
+def _publisher_matches(clues: dict, product: dict) -> bool:
+    local = clues.get("publisher", "")
+    remote = product.get("publisher_name", "")
+    if not local or not remote:
+        return False
+    local_entry = match_canonical_publisher(local)
+    remote_entry = match_canonical_publisher(remote)
+    if local_entry and remote_entry:
+        return local_entry.get("id") == remote_entry.get("id")
+    local_n, remote_n = normalize_for_match(local), normalize_for_match(remote)
+    return bool(local_n and remote_n) and (local_n in remote_n or remote_n in local_n)
+
+
 @trace(CHOOSE, capture=["local_duration_minutes"], show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
@@ -1214,6 +1254,24 @@ def pick_best_match_for_metadata(
             if (second_diff - best_diff) >= TIE_DURATION_MARGIN_MINUTES:
                 resolved = True
 
+    # Duration cannot separate them: fall back to what the file itself says,
+    # narrator first, then the edition it was ripped from (the same recording
+    # is often sold under two ASINs, e.g. a US and a UK publisher). Each step
+    # decides only when exactly one tied candidate fits.
+    resolved_by = "duration"
+    if not resolved:
+        for evidence, fits in (
+            ("narrator", lambda p: narrator_match_score(clues, p) >= NARRATOR_GOOD_SCORE),
+            ("sku", lambda p: _sku_matches(clues, p)),
+            ("publisher", lambda p: _publisher_matches(clues, p)),
+        ):
+            fitting = [item for item in top if fits(item[1])]
+            if len(fitting) == 1:
+                best_score_value, best_product = fitting[0]
+                resolved = True
+                resolved_by = evidence
+                break
+
     def label(product: dict) -> str:
         title = product.get("title", "") or "?"
         asin = product.get("asin", "") or "?"
@@ -1223,13 +1281,13 @@ def pick_best_match_for_metadata(
         "count": len(top),
         "resolved": resolved,
         "chosen": label(best_product),
-        "alternatives": [label(product) for _score, product in top[1:]],
+        "alternatives": [label(product) for _score, product in top if product is not best_product],
         "reason": (
             f"ambiguous match: {len(top)} candidates at score {best_score_value} "
             + (
-                f"(chose {label(best_product)} on duration)"
+                f"(chose {label(best_product)} on {resolved_by})"
                 if resolved
-                else "with no clear duration winner"
+                else "with no clear duration, narrator or edition winner"
             )
         ),
     }
@@ -1309,10 +1367,19 @@ def determine_edit_mode(
         gr_title = normalize_for_match(product.get("title", "") or "")
         gr_local_title_bookless = normalize_book_label_for_match(clues.get("title", ""))
         gr_title_bookless = normalize_book_label_for_match(product.get("title", "") or "")
+        # A longer candidate title counts only when the extra is a separated
+        # subtitle ("Moonrise: Rise of the ..."), not run-on text ("48 Laws of
+        # Power Robert and Joost Elffers Greene" is a notebook listing).
+        gr_raw_local = clean_text(clues.get("title", "")).lower()
+        gr_raw_title = clean_text(product.get("title", "") or "").lower()
+        gr_candidate_adds_subtitle = bool(
+            gr_raw_local
+            and re.match(re.escape(gr_raw_local) + r"\s*[:(\[\-\u2013\u2014]", gr_raw_title)
+        )
         gr_title_ok = bool(gr_local_title and (
             gr_local_title == gr_title
             or gr_local_title_bookless == gr_title_bookless
-            or gr_local_title in gr_title
+            or gr_candidate_adds_subtitle
             or gr_title in gr_local_title
         ))
         # Series + sequence identity is an alternative to title-string identity:
@@ -1590,8 +1657,30 @@ def metadata_from_product(
         year_to_write = ""
         summary_to_write = ""
 
+    # Goodreads/Open Library often list no series. That is missing data, not
+    # a statement that the book has none, so keep the file's own series tag
+    # instead of blanking it on a full write.
+    if (
+        edit_mode == "full"
+        and not series_name
+        and product.get("_abs_provider") in SPARSE_PROVIDERS
+    ):
+        current = clues.get("current") or {}
+        series_name = sanitize_tag(current.get("series", ""))
+        sequence_to_write = clean_sequence(current.get("sequence", "")) if series_name else ""
+
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
+    if not genre_text:
+        # An Audible match: its store categories through Enrichment Forge's
+        # taxonomy, i.e. what EF's own vote says from Audible alone (main
+        # genres, then subgenres; shelf-only labels like "Dragons & Mythical
+        # Creatures" follow EF's rules instead of being copied verbatim).
+        from app.enrichment import audible_category_ladder_genres
+        from app.genre_taxonomy import classify, labels_from_genres
+
+        mains, subs = classify([labels_from_genres(audible_category_ladder_genres(product))])
+        genre_text = ", ".join(clean_provider_genres(mains + subs))
 
     # A special-provider match (GraphicAudio, SoundBooth Theater) is its own
     # publisher by definition, regardless of what clues["publisher"] holds --

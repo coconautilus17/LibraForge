@@ -737,6 +737,16 @@ class BuildBookVotersTests(unittest.TestCase):
         self.assertEqual(voters["audible"], ["thriller", "suspense"])
         self.assertEqual(voters["keywords"], ["harem"])
 
+    def test_file_genre_tag_votes_when_it_is_the_files_own(self):
+        voters = enrichment.build_book_voters(_vbook("b", file_genres=["Horror"]), None, None, {}, None, None)
+        self.assertEqual(voters["file_tags"], ["horror"])
+
+    def test_file_genre_tag_written_by_libraforge_does_not_vote(self):
+        # Metadata Forge writes Audible's categories into the tag; counting it
+        # again as the file's own editorial genre would double Audible's vote.
+        book = _vbook("b", file_genres=["Horror"], file_genres_written_by_libraforge=True)
+        self.assertNotIn("file_tags", enrichment.build_book_voters(book, None, None, {}, None, None))
+
     def test_no_audio_book_has_no_voters(self):
         self.assertEqual(enrichment.build_book_voters(_vbook("p", has_audio=False, existing_tags=["Horror"]), _EPIC, None, {}, None, None), {})
 

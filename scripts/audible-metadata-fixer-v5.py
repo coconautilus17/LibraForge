@@ -83,6 +83,7 @@ try:
     from app.fixer.clues import (
         apply_structured_path_override,
         capture_publisher_clue,
+        capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
         infer_group_identity_from_path,
@@ -158,7 +159,7 @@ try:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, has_real_genres, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -218,6 +219,7 @@ except ModuleNotFoundError:
     from app.fixer.clues import (
         apply_structured_path_override,
         capture_publisher_clue,
+        capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
         infer_group_identity_from_path,
@@ -293,7 +295,7 @@ except ModuleNotFoundError:
         get_thread_client,
         cached_audible_search,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
+    from app.abs_client import abs_get_json, build_item_index, has_real_genres, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
 try:
@@ -2903,7 +2905,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # Audible ASINs always start with B0; the B0-prefix pattern avoids false matches on other bracket
     # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
     # because it removes noise rather than extracting for validation.
-    existing_asin = (tags or {}).get("asin", "").strip().upper()
+    existing_asin = first_existing_tag(tags or {}, ["asin", "audible_asin"]).upper()
     if not existing_asin:
         # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
         # The tighter pattern avoids false matches on other bracket tokens in filenames.
@@ -2925,6 +2927,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
             clues["author_source"] = "title"
 
     capture_publisher_clue(clues, tags or {})
+    capture_sku_clue(clues, tags or {})
 
     return recover_invalid_local_title(clues, file_path)
 
@@ -2965,6 +2968,22 @@ def build_multi_file_search_context(
     )
     folder_descriptive = parse_descriptive_book_text(folder_name)
     folder_identity = parse_identity_rich_book_text(folder_name)
+    # "Series, Book N - Title" and "Series, Book N - Author" are the same
+    # shape, so a one-word title can be misread as the author. When the
+    # group's tags already agree on an author that shares no name with the
+    # folder's, keep the folder parse only if the same rule the per-file path
+    # uses would prefer its author; a misread author means the rest of that
+    # parse is wrong too, so drop all of it.
+    tag_author = pick_most_common_value([clues.get("author", "") for clues in clues_list])
+    identity_author = folder_identity.get("author", "")
+    if (
+        identity_author
+        and has_author_identity_conflict(
+            {"author": tag_author}, {"authors": [{"name": identity_author}]}
+        )
+        and not should_prefer_path_author(tag_author, identity_author)
+    ):
+        folder_identity = {}
 
     specific_titles = [
         clues.get("title", "")
@@ -3052,6 +3071,9 @@ def build_multi_file_search_context(
         clues["publisher"] = group_publisher
         canonical = match_canonical_publisher(group_publisher)
         clues["publisher_verified"] = bool(canonical)
+    group_sku = pick_most_common_value([c.get("sku", "") for c in clues_list if c.get("sku")])
+    if group_sku:
+        clues["sku"] = group_sku
 
     # "current" is a pure, matcher-untouched snapshot of what the group's
     # representative file (the first, by natural sort) actually has in its
@@ -3070,11 +3092,83 @@ def build_multi_file_search_context(
     queries = build_search_queries_from_clues(clues)
     return queries, clues
 
+# A folder holding two numbered sets of at least this many files each is two
+# copies of one book (e.g. a 25-file chapter rip next to a 13-file part rip):
+# grouping one set would orphan every file of the other as a fake book.
+DUPLICATE_SET_MIN_FILES = 3
+DUPLICATE_SET_FOLDERS: dict[Path, str] = {}
+
+
+def find_duplicate_set_folders(files: list[Path]) -> dict[Path, str]:
+    """Folders whose audio files form two separate numbered sets, with the
+    reason to report. Uses the same sequence detection grouping does."""
+    by_parent: dict[Path, list[Path]] = {}
+    for file_path in files:
+        if is_multi_part_audio_candidate(file_path):
+            by_parent.setdefault(file_path.parent, []).append(file_path)
+    found: dict[Path, str] = {}
+    for parent, group in by_parent.items():
+        first = part_sequence_files(group)
+        if len(first) < DUPLICATE_SET_MIN_FILES:
+            continue
+        rest = [f for f in group if f not in first]
+        second = part_sequence_files(rest) if len(rest) >= DUPLICATE_SET_MIN_FILES else set()
+        if len(second) >= DUPLICATE_SET_MIN_FILES:
+            found[parent] = (
+                f"skipped: folder holds two numbered sets of audio files ({len(first)} and {len(second)} files), "
+                "likely two copies of the same audiobook; keep one set and run again"
+            )
+    return found
+
+
+# A split part is rarely this big (the largest real parts in the library are
+# ~170 MB); full books routinely are. Below it the album check is skipped, so
+# chapter splits never pay for a tag read.
+DISTINCT_BOOK_MIN_FILE_BYTES = 250_000_000
+
+
+def _album_identity(album: str) -> str:
+    """The book an album tag names, ignoring an explicit part marker."""
+    marker = detect_part_marker(album)
+    return marker[0] if marker else normalize_part_filename(album)
+
+
+def looks_like_distinct_books(
+    group_files: list[Path],
+    tag_reader=None,
+    size_reader=None,
+) -> bool:
+    """True when every file is book-sized and each one's album names a
+    different book (Tunnel Rat, Tunnel Rat 2, Tunnel Rat 3). Parts of one
+    long book share an album and stay a group; a missing album decides
+    nothing."""
+    size_reader = size_reader or (lambda path: path.stat().st_size)
+    tag_reader = tag_reader or (lambda path: read_tags_and_duration(path)[0])
+    if len(group_files) < 2:
+        return False
+    try:
+        if min(size_reader(path) for path in group_files) < DISTINCT_BOOK_MIN_FILE_BYTES:
+            return False
+    except OSError:
+        return False
+    identities = []
+    for path in group_files:
+        album = first_existing_tag(tag_reader(path) or {}, ["album"])
+        identity = _album_identity(album) if album else ""
+        if not identity:
+            return False
+        identities.append(identity)
+    return len(set(identities)) == len(identities)
+
+
 def build_multi_part_group_map(
     files: list[Path],
     chapter_count_reader=None,
+    tag_reader=None,
+    size_reader=None,
 ) -> dict[Path, list[Path]]:
     grouped: dict[Path, list[Path]] = {}
+    duplicate_sets = find_duplicate_set_folders(files)
 
     for file_path in files:
         if not is_multi_part_audio_candidate(file_path):
@@ -3086,7 +3180,7 @@ def build_multi_part_group_map(
     for parent, group_files in sorted(grouped.items()):
         group_files = sorted(group_files, key=natural_audio_sort_key)
 
-        if len(group_files) <= 1:
+        if len(group_files) <= 1 or parent in duplicate_sets:
             continue
 
         numeric_parts = part_sequence_files(group_files)
@@ -3095,6 +3189,10 @@ def build_multi_part_group_map(
             if len(numeric_parts) >= 2
             else group_files
         )
+        if looks_like_distinct_books(candidate_files, tag_reader, size_reader):
+            print(f"  WARNING: not grouping folder of separate full-length books: {parent}")
+            continue
+
         validation = validate_multi_part_group_files(
             candidate_files,
             chapter_count_reader=chapter_count_reader,
@@ -3197,12 +3295,20 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
         _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
-    files: list[Path], multi_part_group_map: dict[Path, list[Path]]
+    files: list[Path],
+    multi_part_group_map: dict[Path, list[Path]],
+    duplicate_set_folders: dict[Path, str] | None = None,
 ) -> list[Path]:
     items: list[Path] = []
     seen_group_parents: set[Path] = set()
 
     for file_path in files:
+        if duplicate_set_folders and file_path.parent in duplicate_set_folders:
+            # One item for the whole folder: it is reported, never processed.
+            if file_path.parent not in seen_group_parents:
+                items.append(file_path)
+                seen_group_parents.add(file_path.parent)
+            continue
         group_files = multi_part_group_map.get(file_path.parent)
         if group_files and file_path in group_files:
             if file_path.parent in seen_group_parents:
@@ -3344,6 +3450,16 @@ def search_item(
 
     trace_set_subject(display_path)
     try:
+        duplicate_reason = DUPLICATE_SET_FOLDERS.get(file_path.parent)
+        if duplicate_reason:
+            result.display_path = file_path.parent
+            log.append(f"  SKIP: {duplicate_reason.removeprefix('skipped: ')}")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = duplicate_reason
+            result.add_to_manual_review = True
+            return result
+
         existing_marker = load_marker(file_path)
         if existing_marker:
             log.append(
@@ -4299,6 +4415,10 @@ def merge_fill_missing_metadata(current_tags: dict, metadata: dict) -> tuple[dic
             "",
         )
         planned_value = str(metadata.get(field, "") or "").strip()
+        # A genre tag with no real genre in it ("Audiobook", a foreign store
+        # label) is as good as empty.
+        if field == "genre" and not has_real_genres(current_value):
+            current_value = ""
         if normalize_for_match(current_value):
             merged[field] = sanitize_tag(current_value)
         elif planned_value:
@@ -5667,7 +5787,11 @@ def main():
         files = files[: args.max_files]
         multi_part_group_map = build_multi_part_group_map(files)
 
-    processing_items = build_processing_items(files, multi_part_group_map)
+    DUPLICATE_SET_FOLDERS.clear()
+    DUPLICATE_SET_FOLDERS.update(find_duplicate_set_folders(files))
+    for _dup_folder, _dup_reason in sorted(DUPLICATE_SET_FOLDERS.items()):
+        print(f"  WARNING: {_dup_folder}: {_dup_reason.removeprefix('skipped: ')}")
+    processing_items = build_processing_items(files, multi_part_group_map, DUPLICATE_SET_FOLDERS)
 
     if args.restore_metadata:
         print(f"Found {len(processing_items)} supported files.")

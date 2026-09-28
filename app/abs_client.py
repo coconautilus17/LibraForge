@@ -418,6 +418,27 @@ def _names(values: Any) -> list[str]:
     return out
 
 
+def has_real_genres(values: Any) -> bool:
+    """True when any value names a known genre once merged store labels are
+    split. "Audiobook", foreign-store labels ("Fantasía") and keyword soup
+    don't, so they are safe to replace."""
+    from app.genre_taxonomy import _canonical, _is_known_genre, split_compound_genres
+
+    return any(
+        _canonical(g) or _is_known_genre(g)
+        for g in split_compound_genres(_as_list(values), canonical=False)
+    )
+
+
+def apply_genre_ownership(fields: dict[str, Any], current_genres: Any, new_genres: list[str]) -> None:
+    """Metadata Forge sets ABS genres only when ABS holds no real ones. Real
+    genres belong to Enrichment Forge and the user, and an empty value never
+    clears them, whatever the write mode."""
+    fields.pop("genres", None)
+    if new_genres and not has_real_genres(current_genres):
+        fields["genres"] = new_genres
+
+
 def _real_genres(values: Any) -> set[str]:
     return {g.strip().lower() for g in _as_list(values) if str(g).strip() and str(g).strip().lower() not in GENRE_BLOCKLIST}
 
@@ -665,6 +686,9 @@ def sync_book_metadata(
     new_payload = build_media_patch_payload(metadata)
     fields = compute_selective_patch_fields(
         base_media, new_payload["metadata"], fill_missing=fill_missing, skip_blank_fields=skip_blank_fields
+    )
+    apply_genre_ownership(
+        fields, (base_media.get("metadata") or {}).get("genres"), new_payload["metadata"]["genres"]
     )
 
     series_name = str(metadata.get("series") or "").strip()

@@ -29,6 +29,19 @@ def load_module(name: str, relative_path: str):
 FIXER = load_module("fixer_v5_publisher", "scripts/audible-metadata-fixer-v5.py")
 
 
+class SkuCaptureTests(unittest.TestCase):
+    def test_audible_sku_captured_from_ufid_tag(self):
+        # Sapiens.mp3 carries UFID=BK_RHUK_002027, Audible's SKU for its edition.
+        clues = {}
+        FIXER.capture_sku_clue(clues, {"ufid": "BK_RHUK_002027"})
+        self.assertEqual(clues["sku"], "BK_RHUK_002027")
+
+    def test_non_audible_ufid_is_ignored(self):
+        clues = {}
+        FIXER.capture_sku_clue(clues, {"ufid": "http://musicbrainz.org 1234"})
+        self.assertNotIn("sku", clues)
+
+
 class PublisherCaptureTests(unittest.TestCase):
     def test_capture_from_dedicated_tag(self):
         clues = {"author": "Jane Doe", "narrator": "Reader"}
@@ -224,6 +237,17 @@ class FillMarkerHelperTests(unittest.TestCase):
         merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
         self.assertEqual(merged["genre"], "Fantasy")
         self.assertIn("genre", filled)
+
+    def test_junk_genre_tag_counts_as_missing(self):
+        # "Audiobook" (2663 books) or a foreign store label is not a genre, so
+        # fill-missing replaces it with the match's genres.
+        for junk in ["Audiobook", "Fantasía, Acción y aventura", "Hörbuch"]:
+            with self.subTest(junk=junk):
+                current = {"title": "The Book", "artist": "Jane Doe", "genre": junk}
+                metadata = {"title": "The Book", "author": "Jane Doe", "genre": "Fantasy", "edit_mode": "full"}
+                merged, filled = FIXER.merge_fill_missing_metadata(current, metadata)
+                self.assertEqual(merged["genre"], "Fantasy")
+                self.assertIn("genre", filled)
 
     def test_genre_is_preserved_when_already_present(self):
         current = {"title": "The Book", "artist": "Jane Doe", "genre": "Horror"}

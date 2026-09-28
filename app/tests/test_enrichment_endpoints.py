@@ -818,3 +818,31 @@ class LocalGenresFetchFailureTests(unittest.TestCase):
             books = [{"id": "x", "path": "/audiobooks/x", "is_file": False, "has_audio": True, "existing_genres": ["Horror", "Crime"]}]
             main._attach_local_genres(books)
         self.assertEqual((books[0]["manual_genres"], books[0]["file_genres"]), ([], []))
+
+
+class OpenLibraryCoverageTests(unittest.TestCase):
+    """Open Library checks enough books (at least 3, about a third) that it can
+    reach the quarter-of-the-series bar on its own."""
+
+    def limit_for(self, n):
+        books = [{"id": f"b{i}", "title": f"T{i}", "author": "A", "has_audio": True} for i in range(n)]
+        books.append({"id": "p", "title": "Placeholder", "author": "A", "has_audio": False})
+        limits = {}
+
+        def fake(books_arg, lookup, pacer, *a, limit=None, **k):
+            limits[lookup] = limit
+            return {}
+
+        with patch.object(main, "search_series_sources", side_effect=fake), \
+             patch.object(main.PF_INDEX, "lookup", return_value={"status": "not_found"}), \
+             patch.object(main, "haremlit_lookup", return_value={"status": "not_found"}):
+            _REAL_COLLECT_EXTRA_SOURCES(books, "S", ["A"], False)
+        return limits[main.openlibrary_lookup]
+
+    def test_scales_with_the_series(self):
+        self.assertEqual(self.limit_for(20), 7)
+        self.assertEqual(self.limit_for(40), 14)
+
+    def test_short_series_still_check_three(self):
+        self.assertEqual(self.limit_for(6), 3)
+        self.assertEqual(self.limit_for(2), 3)

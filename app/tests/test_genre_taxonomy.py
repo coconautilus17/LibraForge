@@ -115,3 +115,31 @@ class SciFiNameTests(unittest.TestCase):
         self.assertEqual(t.classify([t.labels_from_genres(["Science Fiction"])])[0], ["Sci-Fi"])
         self.assertEqual(t.LABEL_MAP["military science fiction"], (["Sci-Fi"], ["Military Sci-Fi"]))
         self.assertNotIn("Science Fiction", t.MAIN_ORDER)
+
+
+class DragonsTests(unittest.TestCase):
+    """Audible's "Dragons & Mythical Creatures" is a publisher discoverability
+    shelf (12 Miles Below, The Witcher, Spellmonger, Primal Hunter all sit on
+    it); only dragon-specific evidence makes the Dragons subgenre."""
+
+    def test_audibles_creature_shelf_is_fantasy_evidence_only(self):
+        mains, subs = t.classify([t.labels_from_genres(["Science Fiction & Fantasy: Fantasy: Dragons & Mythical Creatures"])])
+        self.assertEqual(mains, ["Fantasy"])
+        self.assertNotIn("Dragons", subs)
+
+    def test_open_library_dragons_subject_still_counts(self):
+        self.assertIn("Dragons", t.classify([t.labels_from_genres(["Dragons"])])[1])
+
+
+class DragonKeywordTests(unittest.TestCase):
+    """Dragon-specific wording in the publisher's description; the bare word
+    "dragon" is not (Wheel of Time's "the Dragon Reborn" is a person)."""
+
+    def test_dragon_specific_wording(self):
+        self.assertIn("dragons", t.labels_from_text("set their sights on a nest of fire-breathing dragons"))
+        self.assertIn("dragons", t.labels_from_text("Rise of the Last Dragon Rider"))
+
+    def test_not_dragon_evidence(self):
+        self.assertNotIn("dragons", t.labels_from_text("the Dragon Reborn will break the world"))
+        self.assertNotIn("dragons", t.labels_from_text("Perfect for fans of Dungeons and Dragons, The Murderbot Diaries"))
+        self.assertNotIn("dragons", t.labels_from_text("Beneath the Dragoneye Moons"))
