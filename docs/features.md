@@ -128,11 +128,13 @@ whole series at once, instead of fixing each book one at a time.
 - **Narrator is opt-in:** narrators differ per book and per edition, so the narrator box
   starts empty with the narrators found listed underneath; it is only written when you
   tick "Also set this narrator on every included book".
-- **Explicit content is a judgment call, not an auto-fill:** evidence from Audible's
-  adult/Erotica categories and from Goodreads readers shelving a book as erotica/smut/nsfw
-  is shown alongside the choice, but nothing is pre-selected - neither signal is reliable
-  proof a book is clean, only a hint it might not be. Choose Don't change (the default),
-  Explicit, or Not explicit (clears a wrong flag) for every included book.
+- **Explicit content, book by book:** each book shows its explicit evidence (Audible's
+  adult/Erotica categories, Goodreads readers shelving it as erotica/smut/nsfw, Open
+  Library erotica subjects) and its own Explicit / Not explicit / Don't change choice.
+  Only the HaremLit wiki's own rating for the series pre-selects a choice; the other
+  signals are hints for you to judge, and "harem" alone is shown as a "check", not
+  evidence. A series where only some books are flagged is called out. The series-wide
+  choice sets every book at once, and each book can still differ.
 - **Per-book include/exclude** before applying. Items with no audio files (for example
   an ebook checklist in a series folder) are never searched and start excluded.
 - **Same-named series by different authors are listed separately**, for example
@@ -144,6 +146,19 @@ whole series at once, instead of fixing each book one at a time.
   (the more recently edited side wins) and then removed. Only if Audiobookshelf isn't
   configured does Apply write `metadata.json` instead; if Audiobookshelf's "Store
   metadata with item" setting is on, ABS will overwrite it on its next scan.
+- **Whole library at once:** the "Whole library" card compiles every series and standalone
+  book the same way, one at a time and at every source's normal pace, so a full library
+  takes a while; it can be stopped and resumed (also after a restart). The results are a
+  review table (current vs proposed genres, how many sources answered, explicit
+  suggestions) with filters for what needs review, what would change, failures and what
+  was applied. Nothing is written until you apply the rows you tick; a row already
+  applied is never applied twice, one failing book never stops the rest, and "Edit"
+  opens that series above for full curation. Explicit flags are only written in bulk
+  when you tick the option, and then only where the HaremLit wiki rates the series.
+- **Collections from genres:** creates or refreshes one Audiobookshelf collection per
+  genre from the genres currently in Audiobookshelf (store category shelves like
+  "Science Fiction & Fantasy" never count). LibraForge marks the collections it creates
+  and only ever changes those; a collection of yours with the same name is left alone.
 - **Clearing old metadata.json files library-wide:** `scripts/migrate-legacy-metadata-json.py`
   does the same compare-then-remove for every book at once. It is a dry run by default
   (writes a JSON report of what it would do); add `--apply` to perform it. `--apply` first
