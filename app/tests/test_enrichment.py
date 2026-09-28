@@ -79,8 +79,8 @@ class ListSeriesSummaryTests(unittest.TestCase):
         }
         summary = enrichment.list_series_summary(groups)
         self.assertEqual(summary, [
-            {"key": "scholomance", "name": "Scholomance", "book_count": 2},
-            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1},
+            {"key": "scholomance", "name": "Scholomance", "book_count": 2, "standalone": False},
+            {"key": "dungeon core", "name": "Dungeon Core", "book_count": 1, "standalone": False},
         ])
 
     def test_query_filters_case_insensitively(self):
@@ -89,7 +89,7 @@ class ListSeriesSummaryTests(unittest.TestCase):
             "dungeon core": [{"media": {"metadata": {"seriesName": "Dungeon Core #1"}}}],
         }
         summary = enrichment.list_series_summary(groups, query="scho")
-        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1}])
+        self.assertEqual(summary, [{"key": "scholomance", "name": "Scholomance", "book_count": 1, "standalone": False}])
 
 
 class GetSeriesBooksTests(unittest.TestCase):
@@ -128,6 +128,9 @@ class GetSeriesBooksTests(unittest.TestCase):
             "existing_genres": [],
             "existing_tags": ["Fantasy", "LitRPG"],
             "has_audio": True,
+            "description": "",
+            "duration_minutes": None,
+            "series_name": "",
             "existing_narrator": "Andrea Parsneau",
             "existing_explicit": False,
             "sequence": None,
@@ -271,7 +274,7 @@ class SearchSeriesGoodreadsTests(unittest.TestCase):
         calls = []
         pacer = object()
 
-        def fetch(title, author, *, pacer):
+        def fetch(title, author, *, pacer, book=None):
             calls.append((title, author, pacer))
             return {"status": "found", "title": title, "shelves": [("fantasy", 5)]}
 
@@ -398,7 +401,7 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         compiled = enrichment.compile_series_enrichment(
             books, audible_results, goodreads_results, self._clean_genres
         )
-        self.assertEqual(compiled["genre"], ["Fantasy", "Young Adult", "Erotica"])
+        self.assertEqual(compiled["genre_union"], ["Fantasy", "Young Adult", "Erotica"])
         self.assertEqual(compiled["books"][1]["goodreads_explicit"]["votes"], 4)
         self.assertEqual(compiled["books"][0]["goodreads_explicit"]["votes"], 0)
         self.assertEqual(compiled["narrator"], "Andrea Parsneau")
@@ -441,7 +444,7 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         compiled = enrichment.compile_series_enrichment(
             books, {}, {}, self._clean_genres, abs_results=abs_results
         )
-        self.assertEqual(compiled["genre"], ["Fantasy", "Adventure", "Local Fantasy"])
+        self.assertEqual(compiled["genre_union"], ["Fantasy", "Adventure", "Local Fantasy"])
         self.assertEqual(compiled["narrator"], "ABS Narrator")
         self.assertEqual(compiled["books"][0]["audible_genres"], ["Fantasy", "Adventure"])
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Local Fantasy"])
@@ -451,14 +454,14 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
             {"id": "1", "title": "Dashing Devil", "existing_genres": ["Romance", "Fantasy"], "existing_narrator": "", "existing_explicit": False},
         ]
         compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
-        self.assertEqual(compiled["genre"], ["Romance", "Fantasy"])
+        self.assertEqual(compiled["genre_union"], ["Romance", "Fantasy"])
         self.assertEqual(compiled["books"][0]["audible_genres"], [])
 
     def test_tags_still_feed_the_union_and_are_returned_separately(self):
         books = [{"id": "1", "title": "T", "existing_genres": ["Fantasy"], "existing_tags": ["Epic"],
                   "existing_narrator": "", "existing_explicit": False}]
         compiled = enrichment.compile_series_enrichment(books, {}, {}, self._clean_genres)
-        self.assertEqual(compiled["genre"], ["Fantasy", "Epic"])
+        self.assertEqual(compiled["genre_union"], ["Fantasy", "Epic"])
         self.assertEqual(compiled["books"][0]["existing_tags"], ["Epic"])
         self.assertEqual(compiled["books"][0]["existing_genres"], ["Fantasy"])
 
@@ -472,7 +475,7 @@ class CompileSeriesEnrichmentTests(unittest.TestCase):
         ]
         audible_results = {"1": {"category_ladders": [{"ladder": [{"name": "Fantasy"}]}]}}
         compiled = enrichment.compile_series_enrichment(books, audible_results, {}, self._clean_genres)
-        self.assertEqual(compiled["genre"], ["Fantasy", "Local Only"])
+        self.assertEqual(compiled["genre_union"], ["Fantasy", "Local Only"])
 
     def test_sequence_range_spans_min_to_max(self):
         books = [
@@ -675,3 +678,183 @@ class SplitGroupByAuthorTests(unittest.TestCase):
         for r in rows:
             books = enrichment.get_series_books(groups, r["key"], _fake_normalize_series, by_key=True)
             self.assertEqual({b["author"] for b in books}, {r["name"].split("[")[1].rstrip("]")})
+
+
+class StandaloneUnitsTests(unittest.TestCase):
+    """Enrichment Forge v2: books with no series are units of their own."""
+
+    def setUp(self):
+        placeholder = _item("p1", "", "Nobody", title="Notes")
+        placeholder["media"]["numAudioFiles"] = 0
+        self.items = [_item("s1", "", "Dean Koontz", title="Intensity"), _item("b1", "Dune #1", "Frank Herbert", title="Dune"), placeholder]
+        self.groups = enrichment.group_items_by_series(self.items, _fake_normalize_series)
+
+    def test_standalones_listed_after_series_and_resolvable(self):
+        standalones = enrichment.standalone_items(self.items)
+        self.assertEqual([it["id"] for it in standalones], ["s1"])  # no-audio items are not units
+        rows = enrichment.list_series_summary(self.groups, "", standalones=standalones)
+        self.assertEqual([r["standalone"] for r in rows], [False, True])
+        self.assertEqual(rows[1]["name"], "Intensity [Dean Koontz]")
+        books = enrichment.get_series_books(self.groups, rows[1]["key"], _fake_normalize_series, by_key=True, items=self.items)
+        self.assertEqual([b["id"] for b in books], ["s1"])
+
+    def test_query_matches_standalone_title_or_author(self):
+        standalones = enrichment.standalone_items(self.items)
+        self.assertEqual([r["name"] for r in enrichment.list_series_summary(self.groups, "koontz", standalones=standalones)], ["Intensity [Dean Koontz]"])
+        self.assertEqual(len(enrichment.list_series_summary(self.groups, "intens", standalones=standalones)), 1)
+
+    def test_books_carry_description_for_keyword_votes(self):
+        self.items[0]["media"]["metadata"]["description"] = "A thriller."
+        books = enrichment.get_series_books(self.groups, enrichment.STANDALONE_KEY_PREFIX + "s1", _fake_normalize_series, by_key=True, items=self.items)
+        self.assertEqual(books[0]["description"], "A thriller.")
+
+
+def _vbook(book_id, **kw):
+    book = {"id": book_id, "title": f"Book {book_id}", "has_audio": True, "existing_genres": [], "existing_tags": [],
+            "description": "", "path": "", "is_file": False}
+    book.update(kw)
+    return book
+
+
+_EPIC = {"category_ladders": [{"ladder": [{"name": "Science Fiction & Fantasy"}, {"name": "Fantasy"}, {"name": "Epic"}]}]}
+_NO_SERIES = {"labels": [], "evidence": [], "pf_progression": False}
+
+
+class BuildBookVotersTests(unittest.TestCase):
+    def test_each_source_votes_under_its_own_name(self):
+        gr = {"status": "found", "shelves": [("fantasy", 1000), ("litrpg", 300)]}
+        voters = enrichment.build_book_voters(
+            _vbook("b", existing_tags=["Horror"], description="A cultivation saga"),
+            {**_EPIC, "publisher_summary": "<p>The LitRPG hit</p>"}, None, gr,
+            {"status": "found", "labels": ["fantasy"]}, {"status": "not_found", "labels": []})
+        self.assertEqual(set(voters), {"audible", "goodreads", "audiosilo", "abs_existing", "keywords"})
+        self.assertIn("litrpg", voters["goodreads"])
+        self.assertEqual(sorted(voters["keywords"]), ["cultivation", "litrpg"])
+        self.assertEqual(voters["abs_existing"], ["horror"])
+
+    def test_abs_provider_fallback_genre_and_description(self):
+        voters = enrichment.build_book_voters(_vbook("b"), None, {"genre": "Thriller, Suspense", "description": "a harem romp"}, {}, None, None)
+        self.assertEqual(voters["audible"], ["thriller", "suspense"])
+        self.assertEqual(voters["keywords"], ["harem"])
+
+    def test_no_audio_book_has_no_voters(self):
+        self.assertEqual(enrichment.build_book_voters(_vbook("p", has_audio=False, existing_tags=["Horror"]), _EPIC, None, {}, None, None), {})
+
+
+class CompileVotingTests(unittest.TestCase):
+    def test_votes_evidence_and_chip_prefill(self):
+        books = [_vbook(f"b{i}", description="A LitRPG tale") for i in range(3)]
+        audible = {f"b{i}": _EPIC for i in range(3)}
+        extra = {"audiosilo": {f"b{i}": {"status": "found", "labels": ["fantasy"]} for i in range(3)}, "openlibrary": {}}
+        out = enrichment.compile_series_enrichment(books, audible, {}, lambda g: g, extra_results=extra, series_sources=_NO_SERIES)
+        self.assertEqual(out["main_genres"], ["Fantasy", "LitRPG"])
+        self.assertEqual(out["genre_evidence"]["Fantasy"]["audible"], 3)
+        self.assertEqual(out["genre_evidence"]["LitRPG"], {"keywords": 3})
+        self.assertEqual(out["genre"][:2], ["Fantasy", "LitRPG"])
+        self.assertIn("Epic Fantasy", out["sub_genres"])
+        self.assertIn("keywords", out["books"][0]["sources"])
+        self.assertEqual(out["books"][0]["book_main"], ["Fantasy", "LitRPG"])
+        self.assertEqual(out["agreement"], "ok")
+
+    def test_series_sources_flow_into_the_vote(self):
+        books = [_vbook(f"b{i}") for i in range(4)]
+        extra = {"audiosilo": {f"b{i}": {"status": "found", "labels": ["fantasy"]} for i in range(4)}}
+        out = enrichment.compile_series_enrichment(books, {f"b{i}": _EPIC for i in range(4)}, {}, lambda g: g, extra_results=extra,
+                                                   series_sources={"labels": ["haremlit"], "evidence": ["HaremLit wiki: X"], "pf_progression": False})
+        self.assertIn("Harem", out["main_genres"])
+        self.assertEqual(out["series_evidence"], ["HaremLit wiki: X"])
+
+    def test_no_agreement_keeps_the_old_union_for_the_chips(self):
+        books = [_vbook("p", has_audio=False, existing_genres=["Horror"])]
+        out = enrichment.compile_series_enrichment(books, {}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        self.assertEqual((out["main_genres"], out["agreement"]), ([], "none"))
+
+    def test_standalone_ignores_series_sources(self):
+        out = enrichment.compile_series_enrichment([_vbook("s")], {"s": _EPIC}, {}, lambda g: g, extra_results={},
+                                                   series_sources={"labels": ["haremlit"], "evidence": ["x"], "pf_progression": False}, standalone=True)
+        self.assertNotIn("Harem", out["main_genres"])
+
+
+class CompileSuggestionsTests(unittest.TestCase):
+    def test_suggestions_are_taxonomy_names_not_raw_labels(self):
+        books = [_vbook(f"b{i}") for i in range(5)]
+        audible = {f"b{i}": _EPIC for i in range(5)}
+        audible["b0"] = {"category_ladders": [{"ladder": [{"name": "Literature & Fiction"}, {"name": "Romance"}, {"name": "Romantic Comedy"}]}]}
+        extra = {"audiosilo": {f"b{i}": {"status": "found", "labels": ["fantasy"]} for i in range(5)}}
+        out = enrichment.compile_series_enrichment(books, audible, {}, lambda g: g, extra_results=extra, series_sources=_NO_SERIES)
+        self.assertIn("Romance", out["genre_suggestions"])
+        self.assertNotIn("Literature & Fiction", out["genre_suggestions"])
+        self.assertNotIn("Epic", out["genre_suggestions"])
+
+
+class LocalGenreTests(unittest.TestCase):
+    """The file's embedded genre tag is an editorial source; genres the user
+    set by hand in ABS (different from the file, not written by LibraForge)
+    are pinned."""
+
+    def test_file_tag_genres_from_the_expanded_item(self):
+        item = {"media": {"audioFiles": [{"metaTags": {"tagGenre": "Literature & Fiction / Action & Adventure; Thriller"}}]}}
+        self.assertEqual(enrichment.file_tag_genres(item), ["Literature & Fiction", "Action & Adventure", "Thriller"])
+        self.assertEqual(enrichment.file_tag_genres({"media": {"audioFiles": []}}), [])
+
+    def test_manual_genres_detection(self):
+        detect = enrichment.detect_manual_genres
+        self.assertEqual(detect(["Audiobook"], [], False, None), [])                      # placeholder
+        self.assertEqual(detect(["Thriller"], ["Thriller"], False, None), [])             # came from the file
+        self.assertEqual(detect(["Horror"], ["Thriller"], True, None), [])                # Meta Forge wrote it
+        self.assertEqual(detect(["Horror", "Crime"], ["Thriller"], False, ["Crime", "Horror"]), [])  # Enrichment Forge wrote it
+        self.assertEqual(detect(["Horror", "Action & Adventure", "Audiobook"], ["Thriller"], False, None),
+                         ["Horror", "Action", "Adventure"])                               # yours, merged names split
+        self.assertEqual(detect(["Radio Drama"], [], False, None), ["Radio Drama"])       # no file tag: still yours
+        self.assertEqual(detect(["Horror", "Literature & Fiction"], [], False, ["Literature & Fiction", "Horror"]), [])  # umbrella labels on both sides
+
+    def test_voters_use_file_tags_and_leave_pinned_genres_out_of_the_crowd_vote(self):
+        book = _vbook("b", existing_genres=["Horror", "Fantasy"], manual_genres=["Horror"], file_genres=["History"])
+        voters = enrichment.build_book_voters(book, None, None, {}, None, None)
+        self.assertEqual(voters["file_tags"], ["history"])
+        self.assertEqual(voters["abs_existing"], ["fantasy"])
+
+    def test_compile_pins_manual_genres(self):
+        books = [_vbook("a", manual_genres=["Small Town"]), _vbook("b")]
+        out = enrichment.compile_series_enrichment(books, {"a": _EPIC, "b": _EPIC}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        self.assertIn("Small Town", out["sub_genres"])
+        self.assertEqual(out["pinned_genres"], ["Small Town"])
+        self.assertEqual(out["genre_evidence"]["Small Town"], {"yours": 1})
+
+
+class CompileExplicitTests(unittest.TestCase):
+    def test_rows_carry_explicit_evidence_and_the_series_summary(self):
+        books = [_vbook("a", existing_explicit=True), _vbook("b")]
+        out = enrichment.compile_series_enrichment(
+            books, {"a": _EPIC, "b": _EPIC}, {}, lambda g: g, extra_results={},
+            series_sources={"labels": [], "evidence": [], "pf_progression": False, "explicit": {"haremlit": "Yes"}})
+        self.assertEqual([r["explicit"]["suggestion"] for r in out["books"]], ["explicit", "explicit"])
+        self.assertEqual((out["explicit_summary"]["flagged_now"], out["explicit_summary"]["inconsistent"]), (1, True))
+
+
+class PinnedAcrossAppliesTests(unittest.TestCase):
+    """The write log remembers which written genres were the user's own, and
+    only genres the user added since are new pins."""
+
+    def test_a_pinned_genre_stays_pinned_after_enrichment_forge_writes_it(self):
+        log = {"written": ["Fantasy", "Small Town"], "pinned": ["Small Town"]}
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "Small Town"], [], False, log), ["Small Town"])
+
+    def test_only_what_the_user_added_since_is_pinned(self):
+        log = {"written": ["Fantasy", "LitRPG"], "pinned": []}
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "LitRPG", "Small Town"], [], False, log), ["Small Town"])
+
+    def test_genres_from_the_file_tag_are_not_pins_but_additions_are(self):
+        self.assertEqual(enrichment.detect_manual_genres(["Thriller", "Horror"], ["Thriller"], False, None), ["Horror"])
+
+    def test_old_list_shaped_log_entries_still_work(self):
+        self.assertEqual(enrichment.detect_manual_genres(["Fantasy", "Small Town"], [], False, ["Fantasy"]), ["Small Town"])
+
+
+class UmbrellaChipTests(unittest.TestCase):
+    def test_store_shelves_are_never_offered_as_chips(self):
+        books = [_vbook("a", existing_genres=["Literature & Fiction", "Science Fiction & Fantasy", "Sports"])]
+        out = enrichment.compile_series_enrichment(books, {}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        for field in ("genre", "genre_union"):
+            self.assertFalse({"Literature", "Fiction", "Literature & Fiction", "Science Fiction & Fantasy"} & set(out[field]), out[field])
+        self.assertIn("Sports", out["genre_union"])

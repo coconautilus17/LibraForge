@@ -81,17 +81,44 @@ Metadata Forge (shown above the planned moves) to flag moves worth a second look
   scheme, so the folder layout can be adapted to match how you already organise books.
 
 ## Enrichment Forge (`/enrichment-forge`)
-Finds a series already indexed in your Audiobookshelf library, then compiles genre and
-narrator across every book in it from Audible and Goodreads at once, instead of fixing
-each book one at a time.
+Finds a series (or a standalone book) already indexed in your Audiobookshelf library,
+looks every book up in several sources, and compiles the genres they agree on for the
+whole series at once, instead of fixing each book one at a time.
 
 - **Series lookup is ABS-native:** searches series already in your Audiobookshelf
   library index (not a provider search), with tag variants normalized into one entry.
-- **Compiled, editable result:** genre is a deduped union across the series from
-  Audible (every level of its category path, so a Space Opera book also gets Science
-  Fiction), Goodreads reader shelves, and the books' current genres and tags, shown as
-  removable chips with a free-text add. "Audiobook" is a format label and is never
-  proposed or written as a genre. Sequence range is shown for context.
+  Books with no series are listed too, marked Standalone.
+- **Sources:** per book, Audible (every level of its category path), Goodreads reader
+  shelves, AudioSilo (a community audiobook database), Open Library subjects (first three
+  books of a series), keywords such as "LitRPG" or "cultivation" in the Audible summary
+  and the book's description, and the book's current genres and tags. Per series,
+  progressionfantasy.co.uk's catalogue and the HaremLit Fiction wiki. A match whose title
+  doesn't fit the book is ignored rather than trusted. Each source has its own request
+  pacing and pauses on its own if it starts failing; the source strip shows found,
+  failed and rate-limited counts for every source.
+- **Genres are voted, not piled up, and sources are ranked:** every source's labels are
+  mapped onto one controlled list of genres. Editorial sources (Audible's categories and
+  summary, the genre tag embedded in the book's audio file, AudioSilo) count double;
+  crowd sources (Goodreads shelves, Open Library subjects, genres already in
+  Audiobookshelf from earlier tools) count single; a book's main genre needs one
+  editorial source or two crowd sources agreeing. A series keeps every genre supported by
+  at least a quarter of its books, with no fixed limit. The series-level lists count as
+  support for the whole series, but progressionfantasy.co.uk's broad progression list
+  only counts when something else agrees or nothing contradicts it. LitRPG and
+  cultivation are kinds of progression fantasy, so when either is a main genre,
+  Progression Fantasy is kept as a subgenre.
+- **Your own genres are pinned:** genres you set by hand in Audiobookshelf (real genres
+  that differ from the audio file's own tag and weren't written by Metadata Forge or
+  Enrichment Forge) are always pre-filled, marked "yours", and never outvoted.
+- **Library genres, not store categories:** merged store names are split ("Action &
+  Adventure" becomes Action and Adventure) wherever a genre is shown or written; a name
+  is kept whole only when neither part is a genre on its own (Sword & Sorcery).
+- **Compiled, editable result:** main genres (the collection-worthy ones) and subgenres
+  as removable chips. Hover a chip to see which sources support it and on how many
+  books; each book row shows what every source said about it and its own vote. Other
+  genres some source suggested are one click away, and typing a main genre name files it
+  as a main genre. "Audiobook" is a format label and is never proposed or written as a
+  genre. Sequence range is shown for context.
 - **Goodreads shelves, read directly:** Enrichment Forge reads each book's Goodreads
   reader shelves with their vote counts (not through abs-tract, whose Goodreads output is
   limited to three generic genres), so LitRPG, progression fantasy, cultivation, harem and
@@ -101,11 +128,13 @@ each book one at a time.
 - **Narrator is opt-in:** narrators differ per book and per edition, so the narrator box
   starts empty with the narrators found listed underneath; it is only written when you
   tick "Also set this narrator on every included book".
-- **Explicit content is a judgment call, not an auto-fill:** evidence from Audible's
-  adult/Erotica categories and from Goodreads readers shelving a book as erotica/smut/nsfw
-  is shown alongside the choice, but nothing is pre-selected - neither signal is reliable
-  proof a book is clean, only a hint it might not be. Choose Don't change (the default),
-  Explicit, or Not explicit (clears a wrong flag) for every included book.
+- **Explicit content, book by book:** each book shows its explicit evidence (Audible's
+  adult/Erotica categories, Goodreads readers shelving it as erotica/smut/nsfw, Open
+  Library erotica subjects) and its own Explicit / Not explicit / Don't change choice.
+  Only the HaremLit wiki's own rating for the series pre-selects a choice; the other
+  signals are hints for you to judge, and "harem" alone is shown as a "check", not
+  evidence. A series where only some books are flagged is called out. The series-wide
+  choice sets every book at once, and each book can still differ.
 - **Per-book include/exclude** before applying. Items with no audio files (for example
   an ebook checklist in a series folder) are never searched and start excluded.
 - **Same-named series by different authors are listed separately**, for example
@@ -117,6 +146,19 @@ each book one at a time.
   (the more recently edited side wins) and then removed. Only if Audiobookshelf isn't
   configured does Apply write `metadata.json` instead; if Audiobookshelf's "Store
   metadata with item" setting is on, ABS will overwrite it on its next scan.
+- **Whole library at once:** the "Whole library" card compiles every series and standalone
+  book the same way, one at a time and at every source's normal pace, so a full library
+  takes a while; it can be stopped and resumed (also after a restart). The results are a
+  review table (current vs proposed genres, how many sources answered, explicit
+  suggestions) with filters for what needs review, what would change, failures and what
+  was applied. Nothing is written until you apply the rows you tick; a row already
+  applied is never applied twice, one failing book never stops the rest, and "Edit"
+  opens that series above for full curation. Explicit flags are only written in bulk
+  when you tick the option, and then only where the HaremLit wiki rates the series.
+- **Collections from genres:** creates or refreshes one Audiobookshelf collection per
+  genre from the genres currently in Audiobookshelf (store category shelves like
+  "Science Fiction & Fantasy" never count). LibraForge marks the collections it creates
+  and only ever changes those; a collection of yours with the same name is left alone.
 - **Clearing old metadata.json files library-wide:** `scripts/migrate-legacy-metadata-json.py`
   does the same compare-then-remove for every book at once. It is a dry run by default
   (writes a JSON report of what it would do); add `--apply` to perform it. `--apply` first

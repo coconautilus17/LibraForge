@@ -14,6 +14,16 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from app.genre_taxonomy import (
+    MAIN_ORDER,
+    NON_GENRES,
+    labels_from_genres,
+    labels_from_text,
+    normalize_label,
+    split_compound_genres,
+)
+from app.explicit_evidence import book_explicit_evidence, series_explicit_summary
+from app.genre_voting import book_vote, vote_unit
 from app.goodreads_shelves import shelves_explicit_evidence, shelves_to_genres
 
 _SERIES_SEQUENCE_SUFFIX_RE = re.compile(r"\s*#\d+\s*$")
@@ -114,6 +124,20 @@ def _display_series_name(group_items: list[dict[str, Any]]) -> str:
 
 
 _SERIES_KEY_AUTHOR_SEP = "\x1f"
+# Standalone units are keyed by item id; the prefix can't occur in a
+# normalized series key.
+STANDALONE_KEY_PREFIX = "\x1estandalone:"
+
+
+def _has_audio(item: dict[str, Any]) -> bool:
+    count = (item.get("media") or {}).get("numAudioFiles")
+    return count is None or int(count or 0) > 0
+
+
+def standalone_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Audio items with no series: each is its own Enrichment Forge unit."""
+    return [it for it in items
+            if not str(((it.get("media") or {}).get("metadata") or {}).get("seriesName") or "").strip() and _has_audio(it)]
 
 
 def _item_authors(item: dict[str, Any]) -> list[str]:
@@ -149,6 +173,7 @@ def split_group_by_author(items: list[dict[str, Any]]) -> dict[str, list[dict[st
 def list_series_summary(
     groups: dict[str, list[dict[str, Any]]],
     query: str = "",
+    standalones: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return [{key, name, book_count}] sorted by book_count descending,
     filtered by a case-insensitive substring match on the display name.
@@ -166,9 +191,19 @@ def list_series_summary(
             if query_lower and query_lower not in display_name.lower():
                 continue
             key = f"{group_key}{_SERIES_KEY_AUTHOR_SEP}{author}" if author else group_key
-            summary.append({"key": key, "name": display_name, "book_count": len(bucket)})
+            summary.append({"key": key, "name": display_name, "book_count": len(bucket), "standalone": False})
     summary.sort(key=lambda row: (-row["book_count"], row["name"].lower()))
-    return summary
+    rows = []
+    for item in standalones or []:
+        metadata = (item.get("media") or {}).get("metadata") or {}
+        authors = _item_authors(item)
+        title = str(metadata.get("title") or "").strip()
+        display_name = f"{title} [{authors[0]}]" if authors else title
+        if query_lower and query_lower not in display_name.lower() and query_lower not in str(metadata.get("authorName") or "").lower():
+            continue
+        rows.append({"key": STANDALONE_KEY_PREFIX + str(item.get("id") or ""), "name": display_name, "book_count": 1, "standalone": True})
+    rows.sort(key=lambda row: row["name"].lower())
+    return summary + rows
 
 
 def get_series_books(
@@ -176,11 +211,15 @@ def get_series_books(
     series_name: str,
     normalize_series_fn: Callable[[str], str],
     by_key: bool = False,
+    items: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the lightweight per-book dicts for a chosen series (matched by
     its display or normalized name), used to drive the compile step.
     """
-    if by_key:
+    if by_key and series_name.startswith(STANDALONE_KEY_PREFIX):
+        item_id = series_name[len(STANDALONE_KEY_PREFIX):]
+        group_items = [it for it in items or [] if it.get("id") == item_id]
+    elif by_key:
         group_key, _, author = series_name.partition(_SERIES_KEY_AUTHOR_SEP)
         group_items = groups.get(group_key, [])
         if author:
@@ -207,7 +246,10 @@ def get_series_books(
             "existing_tags": list(media.get("tags") or []),
             # Ebook-only / placeholder items have no audio and must not be
             # searched as audiobooks (#301). Unknown count = assume audio.
-            "has_audio": media.get("numAudioFiles") is None or int(media.get("numAudioFiles") or 0) > 0,
+            "has_audio": _has_audio(item),
+            "description": str(metadata.get("description") or ""),
+            "duration_minutes": round(float(media.get("duration") or 0) / 60, 1) or None,
+            "series_name": strip_series_sequence_suffix(raw_series_name),
             "existing_narrator": metadata.get("narratorName", "") or "",
             "existing_explicit": bool(metadata.get("explicit", False)),
             "sequence": extract_series_sequence(raw_series_name),
@@ -286,7 +328,7 @@ def search_series_goodreads(
             return book["id"], {"status": "skipped", "title": None, "shelves": []}  # #301
         author = (str(book.get("author", "") or "").split(",")[0]).strip()
         try:
-            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer)
+            return book["id"], fetch_fn(book.get("title", ""), author, pacer=pacer, book=book)
         except Exception:
             return book["id"], {"status": "failed", "title": None, "shelves": []}
 
@@ -464,16 +506,106 @@ def _split_abs_genre(value: Any) -> list[str]:
     return [part.strip() for part in str(value or "").split(",")]
 
 
+def file_tag_genres(expanded_item: dict[str, Any] | None) -> list[str]:
+    """The genre tag embedded in the book's first audio file, as ABS read it
+    (split on '/' and ';', the way ABS splits genre tags)."""
+    for audio in ((expanded_item or {}).get("media") or {}).get("audioFiles") or []:
+        tag = str(((audio or {}).get("metaTags") or {}).get("tagGenre") or "").strip()
+        if tag:
+            return [part.strip() for part in re.split(r"[/;]", tag) if part.strip()]
+    return []
+
+
+def _genre_key_set(genres: list[str]) -> set[str]:
+    """Comparable form of a genre list: non-genres and store umbrellas are
+    dropped before splitting, the same way on both sides of a comparison."""
+    real = [g for g in genres if normalize_label(g) not in NON_GENRES]
+    return {normalize_label(g) for g in split_compound_genres(real)}
+
+
+def detect_manual_genres(
+    abs_genres: list[str],
+    file_genres: list[str],
+    libraforge_wrote_genre: bool,
+    enrichment_written: Any,
+) -> list[str]:
+    """Genres the user set by hand in Audiobookshelf, to be pinned. ABS keeps
+    no per-field history, so per genre: a real genre (not "Audiobook" or a
+    store umbrella) that isn't in the file's own genre tag and wasn't written
+    by Metadata Forge (sidecar) or Enrichment Forge (its write log). Genres the
+    log recorded as the user's own stay pinned after Enrichment Forge rewrites
+    them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
+    older plain list of written genres."""
+    real = split_compound_genres([g for g in abs_genres or [] if str(g).strip() and normalize_label(g) not in NON_GENRES])
+    if not real:
+        return []
+    if isinstance(enrichment_written, dict):
+        written, pinned_before = enrichment_written.get("written") or [], enrichment_written.get("pinned") or []
+    else:
+        written, pinned_before = enrichment_written or [], []
+    written_keys, pinned_keys = _genre_key_set(written), _genre_key_set(pinned_before)
+    file_keys = _genre_key_set(file_genres or [])
+    out = []
+    for genre in real:
+        key = normalize_label(genre)
+        if key in pinned_keys:
+            out.append(genre)
+        elif not (libraforge_wrote_genre or key in written_keys or key in file_keys):
+            out.append(genre)
+    return out
+
+
+def build_book_voters(
+    book: dict[str, Any],
+    product: dict | None,
+    abs_product: dict | None,
+    goodreads_result: dict | None,
+    audiosilo_result: dict | None,
+    openlibrary_result: dict | None,
+) -> dict[str, list[str]]:
+    """Normalized labels per evidence source for one book; sources with
+    nothing to say are left out. A no-audio item votes nothing (#301)."""
+    if not book.get("has_audio", True):
+        return {}
+    voters: dict[str, list[str]] = {}
+    audible = audible_category_ladder_genres(product) or _split_abs_genre((abs_product or {}).get("genre", ""))
+    voters["audible"] = labels_from_genres(audible)
+    if (goodreads_result or {}).get("status") == "found":
+        voters["goodreads"] = labels_from_genres(shelves_to_genres(goodreads_result.get("shelves") or []))
+    for name, result in (("audiosilo", audiosilo_result), ("openlibrary", openlibrary_result)):
+        if (result or {}).get("status") == "found":
+            voters[name] = list(result.get("labels") or [])
+    voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
+    # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
+    pinned = {g.lower() for g in book.get("manual_genres") or []}
+    existing = [g for g in split_compound_genres(book.get("existing_genres") or []) if g.lower() not in pinned]
+    voters["abs_existing"] = labels_from_genres(existing + list(book.get("existing_tags") or []))
+    text = " ".join(str(x or "") for x in (
+        (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),
+        (abs_product or {}).get("description"), book.get("description")))
+    voters["keywords"] = labels_from_text(text)
+    return {name: labels for name, labels in voters.items() if labels}
+
+
 def compile_series_enrichment(
     books: list[dict[str, Any]],
     audible_results: dict[str, dict | None],
     goodreads_results: dict[str, list[dict]],
     clean_provider_genres_fn: Callable[[list[str]], list[str]],
     abs_results: dict[str, dict | None] | None = None,
+    extra_results: dict[str, dict[str, dict]] | None = None,
+    series_sources: dict[str, Any] | None = None,
+    standalone: bool = False,
 ) -> dict[str, Any]:
-    """Build the full compile payload: per-book rows plus series-level
-    aggregate genre/narrator union and the explicit evidence note.
+    """Build the full compile payload: per-book rows, the voted main genres and
+    subgenres with their evidence, the narrator union and the explicit note.
+
+    `extra_results` holds the other book-level sources ({"audiosilo": {id:
+    result}, "openlibrary": {...}}); `series_sources` the series-level labels
+    ({"labels", "evidence", "pf_progression"}, app/enrichment_sources.py).
     """
+    extra = extra_results or {}
+    book_votes = []
     rows = []
     all_genres: list[str] = []
     all_narrators: list[str] = []
@@ -503,6 +635,10 @@ def compile_series_enrichment(
             narrators.extend(str(n) for n in ((abs_product or {}).get("narrators") or []) if str(n).strip())
 
         has_audio = book.get("has_audio", True)
+        voters = build_book_voters(book, product, abs_product, gr,
+                                   (extra.get("audiosilo") or {}).get(book["id"]), (extra.get("openlibrary") or {}).get(book["id"]))
+        vote = book_vote(voters)
+        book_votes.append(vote)
         if has_audio:  # #301: a placeholder/ebook's genres are not evidence about the series
             all_genres.extend(audible_genres)
             all_genres.extend(goodreads_genres)
@@ -524,11 +660,43 @@ def compile_series_enrichment(
             "default_include": has_audio,
             "existing_narrator": book.get("existing_narrator", ""),
             "existing_explicit": book.get("existing_explicit", False),
+            "file_genres": book.get("file_genres") or [],
+            "manual_genres": book.get("manual_genres") or [],
+            "sources": voters,
+            "book_main": sorted(vote["main"], key=MAIN_ORDER.index),
         })
+
+    series = series_sources or {}
+    for row in rows:
+        row["explicit"] = book_explicit_evidence(row, series.get("explicit") or {})
+    pinned: dict[str, int] = {}
+    for book in books:
+        for genre in book.get("manual_genres") or []:
+            pinned[genre] = pinned.get(genre, 0) + 1
+    unit = vote_unit(book_votes, series_labels=series.get("labels") or [], series_evidence=series.get("evidence") or [],
+                     pf_progression=bool(series.get("pf_progression")), standalone=standalone, pinned=pinned)
+    voted = unit["main"] + unit["sub"]
+    # Store umbrella shelves ("Literature & Fiction") are never offered as
+    # chips; only a genre the user types or pins is split and kept.
+    union = [g for g in _dedupe_preserve_order(all_genres) if normalize_label(g) not in NON_GENRES]
 
     return {
         "books": rows,
-        "genre": _dedupe_preserve_order(all_genres),
+        # The chips pre-fill with the vote; with no agreement, every genre any
+        # source suggested (mapped if possible, else raw), so the user still
+        # has something to pick from.
+        "genre": voted or unit["candidates"] or union,
+        # Taxonomy genres some source supported that didn't make the cut.
+        "genre_suggestions": unit["candidates"],
+        "pinned_genres": unit["pinned"],
+        "explicit_summary": series_explicit_summary(rows),
+        # Every genre any source suggested, cleaned: "other suggestions" in the UI.
+        "genre_union": union,
+        "main_genres": unit["main"],
+        "sub_genres": unit["sub"],
+        "genre_evidence": unit["evidence"],
+        "series_evidence": unit["series_evidence"],
+        "agreement": unit["agreement"],
         "narrator": ", ".join(_dedupe_preserve_order(all_narrators)),
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),

@@ -139,18 +139,41 @@
   background: #5fae9c;
 }
 
+.source-chip.audiosilo .dot {
+  background: #8b7fd1;
+}
+
+.source-chip.openlibrary .dot {
+  background: #6f9fd8;
+}
+
+.source-chip.progressionfantasy .dot {
+  background: #c7a23a;
+}
+
+.source-chip.haremlit .dot {
+  background: #d27aa0;
+}
+
+.source-chip.not-used {
+  opacity: 0.6;
+}
+
+.source-chip.failed,
+.source-chip.degraded {
+  color: var(--warning);
+}
+
+.source-chip.failed .dot {
+  background: var(--danger);
+}
+
 .source-chip.skipped {
   color: var(--muted);
 }
 
 .source-chip.skipped .dot {
   background: var(--border-strong);
-}
-
-.source-strip .sep {
-  width: 1px;
-  height: 13px;
-  background: var(--border);
 }
 
 .source-strip .time {
@@ -172,8 +195,18 @@
 #compileCard .field label {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  gap: 5px;
+  flex-wrap: wrap;
+  /* Label and hint share a text baseline and wrap under each other on narrow
+     screens, so every field's control starts at the same height. */
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+#compileCard .field-hint {
+  /* style.css gives every hint a 4px/12px vertical margin for stacked forms;
+     here it would lift the hint off its label and make this row taller. */
+  margin: 0;
 }
 
 #compileCard .field-label {
@@ -395,8 +428,314 @@
   margin-top: 18px;
 }
 
+#compileCard .dryrun-notice strong {
+  /* The lead-in keeps its width; only the paragraph wraps. */
+  flex: none;
+  white-space: nowrap;
+}
+
 #includedCount {
   margin-right: auto;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* Enrichment Forge v2: per-genre support count, suggestions, standalones. */
+.chip-support {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: rgb(0 0 0 / 12%);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.genre-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.genre-suggestions:empty {
+  display: none;
+}
+
+.suggestions-label {
+  color: var(--muted);
+}
+
+.genre-suggestions .suggestion {
+  min-height: 0;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.genre-suggestions .suggestion:hover {
+  border-style: solid;
+  color: var(--text);
+}
+
+#seriesEvidence:empty {
+  display: none;
+}
+
+.standalone-badge {
+  flex: none;
+}
+
+.book-src-line .src-audible {
+  color: #d9954f;
+}
+
+.book-src-line .src-goodreads {
+  color: #5fae9c;
+}
+
+.book-src-line .src-audiosilo {
+  color: #8b7fd1;
+}
+
+.book-src-line .src-openlibrary {
+  color: #6f9fd8;
+}
+
+.book-src-line .src-keywords,
+.book-src-line .src-abs_existing {
+  color: var(--accent);
+}
+
+/* Genres the user set by hand in Audiobookshelf: pinned, always pre-filled. */
+.chip.pinned {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.chip-yours {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.book-src-line .src-file_tags {
+  color: #d9954f;
+}
+
+/* Explicit panel: per-book evidence and choice. */
+.book-explicit-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 340px;
+}
+
+.book-explicit {
+  min-height: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.evidence-pill.check {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.explicit-summary {
+  margin: 6px 0 0;
+  color: var(--warning);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Collections from genres. */
+.collections-actions {
+  justify-content: space-between;
+}
+
+.collections-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.collections-table th,
+.collections-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.collections-table th {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.collection-row.name_taken td,
+.collection-row.empty td,
+.collection-row.in_sync td {
+  color: var(--muted);
+}
+
+.collections-toggle {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.collections-table td:first-child,
+.collections-table th:first-child {
+  width: 32px;
+}
+
+/* Whole-library run. */
+.batch-actions {
+  justify-content: flex-end;
+}
+
+.batch-progress {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-bar {
+  height: 6px;
+  margin: 4px 0 12px;
+  border-radius: 99px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.batch-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.batch-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.batch-table-wrap {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.batch-now {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-genre {
+  display: inline-block;
+  margin: 1px 2px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.batch-genre.main {
+  background: var(--accent-dim);
+  color: var(--accent-dim-text);
+  font-weight: 650;
+}
+
+.batch-genre.pinned {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.batch-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.batch-row.applied td {
+  opacity: 0.7;
+}
+
+.batch-apply-row {
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+/* Source strip: the chips wrap as one group (each dot is its own separator)
+   and the timer stays at the top-right however many lines the chips take. */
+.source-strip {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.source-chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  min-width: 0;
+}
+
+.source-strip .time {
+  flex: none;
+}
+
+/* Book rows: a source name never breaks in the middle ("Current ABS /
+   genres/tags"); the values after it wrap normally. */
+.book-src-line .src-name {
+  white-space: nowrap;
+}
+
+/* The explicit column has one width, so the evidence pills and the choice
+   share a left edge instead of each hugging the right at its own width. */
+.book-explicit-cell {
+  flex: 0 0 clamp(200px, 24%, 280px);
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  max-width: none;
+}
+
+.book-explicit-cell .evidence-pill {
+  white-space: normal;
+  text-align: left;
+}
+
+@media (max-width: 760px) {
+  .book-row {
+    flex-wrap: wrap;
+  }
+
+  .book-main {
+    flex: 1 1 100%;
+  }
+
+  .book-explicit-cell {
+    flex: 1 1 auto;
+  }
+
+  #compileCard .grid {
+    grid-template-columns: 1fr;
+  }
 }

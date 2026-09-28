@@ -1241,6 +1241,11 @@ def pick_best_match_for_metadata(
 # Edit-mode decision
 # ---------------------------------------------------------------------------
 
+# Sources that return only title and authors (no narrator, runtime or
+# composer), whose structurally low scores can't pass the normal gate.
+SPARSE_PROVIDERS = {"goodreads", "openlibrary"}
+
+
 @trace(CHOOSE, capture=[])
 def determine_edit_mode(
     product: dict,
@@ -1297,8 +1302,9 @@ def determine_edit_mode(
     # Goodreads (abs-tract) fallback: no narrator, no duration, no composer
     # signal, and scores are structurally low. Accept only on a strong title +
     # author identity match -- that is the "enough metadata was found" bar -- and
-    # write full; otherwise reject (leave as a manual-review miss).
-    if product.get("_abs_provider") == "goodreads":
+    # write full; otherwise reject (leave as a manual-review miss). Open Library
+    # results (Enrichment Forge) are equally sparse and judged the same way.
+    if product.get("_abs_provider") in SPARSE_PROVIDERS:
         gr_local_title = normalize_for_match(clues.get("title", ""))
         gr_title = normalize_for_match(product.get("title", "") or "")
         gr_local_title_bookless = normalize_book_label_for_match(clues.get("title", ""))

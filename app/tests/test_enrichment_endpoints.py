@@ -11,6 +11,24 @@ from app import main
 
 client = TestClient(main.app)
 
+# The v2 sources (AudioSilo, Open Library, progressionfantasy.co.uk, HaremLit)
+# are network calls: stubbed for every test in this module; the real collector
+# is tested on its own below with its callees stubbed.
+_REAL_COLLECT_EXTRA_SOURCES = main._collect_extra_sources
+_NO_EXTRA = ({}, {"labels": [], "evidence": [], "pf_progression": False}, {})
+_extra_patch = patch.object(main, "_collect_extra_sources", return_value=_NO_EXTRA)
+_no_network = patch("urllib.request.urlopen", side_effect=AssertionError("network call in an endpoint test"))
+
+
+def setUpModule():
+    _extra_patch.start()
+    _no_network.start()
+
+
+def tearDownModule():
+    _no_network.stop()
+    _extra_patch.stop()
+
 
 class _FakeReviewModule:
     """Stand-in for the dynamically loaded review-libraforge-report.py."""
@@ -85,7 +103,7 @@ class EnrichmentSeriesEndpointTests(unittest.TestCase):
              patch("app.main.load_review_module", return_value=_FakeReviewModule):
             resp = client.get("/api/enrichment/series?q=schol")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"series": [{"key": "scholomance", "name": "Scholomance", "book_count": 2}]})
+        self.assertEqual(resp.json(), {"series": [{"key": "scholomance", "name": "Scholomance", "book_count": 2, "standalone": False}]})
 
 
 class EnrichmentItemsCacheTests(unittest.TestCase):
@@ -119,7 +137,8 @@ class EnrichmentItemsCacheTests(unittest.TestCase):
         calls = []
 
         def counting_abs_request(path, params):
-            calls.append((path, dict(params)))
+            if path.startswith("/api/libraries"):  # the catalog, not per-book lookups
+                calls.append((path, dict(params)))
             return _abs_request(path, params)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -457,9 +476,37 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
             "http://abs", "key",
         )
 
+    def test_merged_genres_are_split_before_writing(self):
+        self.post(genre=["Action & Adventure", "Sword & Sorcery", "Adventure"])
+        self.assertEqual(self.sent()["genres"], ["Action", "Adventure", "Sword & Sorcery"])
+
+    def test_genre_writes_are_logged_so_they_are_not_mistaken_for_manual_edits(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            self.post(genre=["Fantasy", "LitRPG"])
+            log = json.loads((Path(tmp) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["abs-item-1"], {"written": ["Fantasy", "LitRPG"], "pinned": []})
+
+    def test_pinned_genres_are_logged_as_the_users(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            self.post(genre=["Fantasy", "Small Town"], pinned=["Small Town", "Gone"])
+            log = json.loads((Path(tmp) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["abs-item-1"], {"written": ["Fantasy", "Small Town"], "pinned": ["Small Town"]})
+
     def test_audiobook_can_never_be_written_as_a_genre(self):
         self.post(genre=["Audiobook", "Fantasy", "Audio Book"])
         self.assertEqual(self.sent()["genres"], ["Fantasy"])
+
+    def test_per_book_explicit_overrides_the_series_choice(self):
+        other = dict(self.book, id="abs-item-2", title="Two")
+        client.post("/api/enrichment/apply", json={"books": [dict(self.book, explicit=True), dict(other, explicit=None)],
+                                                    "genre": ["Fantasy"], "explicit": None})
+        sent = {c[0][0]: c[0][1]["metadata"] for c in self.patch_mock.call_args_list}
+        self.assertEqual(sent["/api/items/abs-item-1/media"].get("explicit"), True)
+        self.assertNotIn("explicit", sent["/api/items/abs-item-2/media"])
+
+    def test_per_book_false_beats_a_series_wide_true(self):
+        self.post(genre=[], explicit=True, books=[dict(self.book, explicit=False)])
+        self.assertEqual(self.sent(), {"explicit": False})
 
     def test_explicit_false_clears_the_flag(self):
         self.post(genre=[], explicit=False)
@@ -498,3 +545,276 @@ class EnrichmentApplyAbsEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _abs_request_with_standalone(path, params):
+    data = _abs_request(path, params)
+    if path == "/api/libraries/lib1/items" and int(params["page"]) == 0:
+        standalone = {"id": "item-s", "path": "/audiobooks/Dean Koontz/Intensity", "isFile": False,
+                      "media": {"numAudioFiles": 1, "tags": [],
+                                "metadata": {"title": "Intensity", "authorName": "Dean Koontz", "seriesName": ""}}}
+        data = {"total": 3, "results": data["results"] + [standalone]}
+    return data
+
+
+class EnrichmentStandaloneEndpointTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_standalone_listed_and_compilable(self):
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request_with_standalone), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}):
+            rows = client.get("/api/enrichment/series?q=intensity").json()["series"]
+            self.assertEqual([(r["name"], r["standalone"]) for r in rows], [("Intensity [Dean Koontz]", True)])
+            resp = client.post("/api/enrichment/compile", json={"series_key": rows[0]["key"], "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual([b["id"] for b in resp.json()["books"]], ["item-s"])
+        self.assertTrue(resp.json()["standalone"])
+
+
+_BOOKS = [{"id": "a", "title": "Unsouled", "author": "Will Wight", "has_audio": True},
+          {"id": "b", "title": "Soulsmith", "author": "Will Wight", "has_audio": True}]
+
+
+class CollectExtraSourcesTests(unittest.TestCase):
+    def run_it(self, standalone=False, audiosilo=None):
+        found = lambda books, lookup, pacer, *a, **k: {b["id"]: {"status": "found", "title": b["title"], "labels": ["fantasy"]} for b in books}
+        calls = {"hl": 0}
+
+        def hl(name, authors, **k):
+            calls["hl"] += 1
+            return {"status": "found", "match": "X (Series)", "genres": [], "explicit": "Yes", "via": "series"}
+
+        with patch.object(main, "search_series_sources", side_effect=audiosilo or found), \
+             patch.object(main.PF_INDEX, "lookup", return_value={"status": "found", "category": "Progression", "title": "Will Wight \u2013 Cradle"}), \
+             patch.object(main, "haremlit_lookup", side_effect=hl):
+            out = _REAL_COLLECT_EXTRA_SOURCES(_BOOKS, "Cradle", ["Will Wight"], standalone)
+        return out, calls
+
+    def test_collects_all_sources_with_status(self):
+        (extra, series, status), calls = self.run_it()
+        self.assertEqual(set(extra), {"audiosilo", "openlibrary"})
+        self.assertEqual(set(status), {"audiosilo", "openlibrary", "progressionfantasy", "haremlit"})
+        self.assertEqual(status["audiosilo"]["found"], 2)
+        self.assertEqual(status["progressionfantasy"]["found"], 1)
+        self.assertTrue(series["pf_progression"])
+        self.assertIn("haremlit", series["labels"])
+        self.assertEqual(series["explicit"], {"haremlit": "Yes"})
+
+    def test_a_broken_source_is_failed_not_fatal(self):
+        def boom(books, lookup, pacer, *a, **k):
+            if lookup is main.audiosilo_lookup:
+                raise RuntimeError("AudioSilo down")
+            return {}
+        (extra, _series, status), _calls = self.run_it(audiosilo=boom)
+        self.assertEqual(status["audiosilo"]["state"], "failed")
+        self.assertIn("AudioSilo down", status["audiosilo"]["detail"])
+        self.assertEqual(status["openlibrary"]["state"], "searched")
+
+    def test_standalone_skips_series_sources(self):
+        (_extra, series, status), calls = self.run_it(standalone=True)
+        self.assertEqual(calls["hl"], 0)
+        self.assertEqual(status["haremlit"]["state"], "not used")
+        self.assertEqual(series["labels"], [])
+
+
+class CompileV2ResponseTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_response_carries_votes_evidence_and_all_source_statuses(self):
+        extra = ({"audiosilo": {"item-1": {"status": "found", "labels": ["litrpg"]}},
+                  "openlibrary": {"item-1": {"status": "found", "labels": ["litrpg"]}}},  # two crowd sources agree
+                 {"labels": [], "evidence": [], "pf_progression": False},
+                 {k: {"label": k, "state": "searched"} for k in ("audiosilo", "openlibrary", "progressionfantasy", "haremlit")})
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}), \
+             patch.object(main, "_collect_extra_sources", return_value=extra) as collect:
+            resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance", "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(set(body["source_status"]), {"audible", "goodreads", "audiosilo", "openlibrary", "progressionfantasy", "haremlit"})
+        self.assertIn("LitRPG", body["main_genres"])
+        self.assertIn("audiosilo", body["genre_evidence"]["LitRPG"])
+        self.assertEqual(body["books"][0]["sources"]["audiosilo"], ["litrpg"])
+        self.assertIn("genre_union", body)
+        self.assertEqual(collect.call_args[0][1], "Scholomance")  # the series name the sources search for
+        self.assertIn("LitRPG", body["main_vocabulary"])
+        self.assertEqual(body["source_status"]["audible"]["found"], 0)  # ABS provider stub found nothing
+
+
+def _abs_request_with_local_genres(path, params):
+    if path == "/api/items/item-1":
+        return {"media": {"metadata": {"genres": ["Horror", "Audiobook"]},
+                          "audioFiles": [{"metaTags": {"tagGenre": "Science Fiction & Fantasy/Fantasy"}}]}}
+    if path == "/api/items/item-2":
+        return {"media": {"metadata": {"genres": ["Fantasy"]}, "audioFiles": [{"metaTags": {"tagGenre": "Fantasy"}}]}}
+    return _abs_request(path, params)
+
+
+class CompileLocalGenresTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_file_tags_vote_and_hand_set_genres_are_pinned(self):
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request_with_local_genres), \
+             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_goodreads", return_value={}), \
+             tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            resp = client.post("/api/enrichment/compile", json={"series_name": "Scholomance", "auth_file": "/nonexistent"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["pinned_genres"], ["Horror"])  # item-1: set by hand (differs from its file tag)
+        self.assertIn("Horror", body["main_genres"])
+        self.assertIn("Fantasy", body["main_genres"])     # the file tags vote (editorial)
+        rows = {b["id"]: b for b in body["books"]}
+        self.assertEqual(rows["item-1"]["manual_genres"], ["Horror"])
+        self.assertEqual(rows["item-2"]["manual_genres"], [])   # same as its file tag: not a hand edit
+        self.assertIn("file_tags", rows["item-2"]["sources"])
+
+
+def _abs_request_collections(path, params):
+    if path == "/api/libraries":
+        return {"libraries": [{"id": "lib1", "mediaType": "book"}]}
+    if path == "/api/libraries/lib1/items":
+        if int(params["page"]) > 0:
+            return {"total": 3, "results": []}
+        return {"total": 3, "results": [
+            {"id": "a", "libraryId": "lib1", "media": {"metadata": {"genres": ["Fantasy", "Audiobook"]}}},
+            {"id": "b", "libraryId": "lib1", "media": {"metadata": {"genres": ["Fantasy", "Sci-Fi"]}}},
+            {"id": "c", "libraryId": "lib1", "media": {"metadata": {"genres": ["Explicit"]}}}]}
+    raise AssertionError(path)
+
+
+class EnrichmentCollectionsEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.posted, self.patched = [], []
+        existing = {"collections": [{"id": "u1", "libraryId": "lib1", "name": "Explicit", "description": None, "books": []}]}
+
+        def post(path, body, *a, **k):
+            if body.get("name") == "Sci-Fi":
+                raise RuntimeError("ABS 500")
+            self.posted.append(body)
+            return {"id": "new"}
+
+        for p_ in (patch.object(main, "_get_abs_api_key", return_value="key"),
+                   patch.object(main, "_get_abs_url", return_value="http://abs"),
+                   patch.object(main, "_abs_request", side_effect=_abs_request_collections),
+                   patch.object(main, "abs_get_json", return_value=existing),
+                   patch.object(main, "abs_post_json", side_effect=post),
+                   patch.object(main, "abs_patch_json", side_effect=lambda p, b, *a, **k: self.patched.append((p, b)))):
+            p_.start(); self.addCleanup(p_.stop)
+
+    def test_plan_lists_genres_with_counts_and_status(self):
+        rows = {r["genre"]: r for r in client.get("/api/enrichment/collections/plan").json()["rows"]}
+        self.assertEqual((rows["Fantasy"]["book_count"], rows["Fantasy"]["action"]), (2, "create"))
+        self.assertEqual(rows["Explicit"]["action"], "name_taken")
+        self.assertNotIn("Audiobook", rows)
+
+    def test_apply_creates_only_chosen_free_genres_and_reports_failures(self):
+        body = client.post("/api/enrichment/collections/apply", json={"genres": ["Fantasy", "Explicit", "Sci-Fi"]}).json()
+        self.assertEqual([p["name"] for p in self.posted], ["Fantasy"])
+        self.assertEqual(sorted(self.posted[0]["books"]), ["a", "b"])
+        self.assertEqual((body["created"], body["skipped"]), (1, 1))
+        self.assertEqual(body["failed"], [{"genre": "Sci-Fi", "error": "ABS 500"}])
+        self.assertEqual(self.patched, [])
+
+
+class EnrichmentBatchEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.patched = []
+        units = [{"key": "k1", "name": "One", "standalone": False, "book_count": 1},
+                 {"key": "k2", "name": "Two", "standalone": True, "book_count": 1}]
+
+        def compile_unit(key, name, auth_file="/x"):
+            return {"main_genres": ["Fantasy"], "sub_genres": [], "pinned_genres": [], "genre_evidence": {}, "agreement": "ok",
+                    "series_evidence": [], "explicit_summary": {}, "source_status": {"audible": {"found": 1}},
+                    "books": [{"id": f"{key}-b", "path": f"/audiobooks/{key}", "is_file": False, "title": name,
+                               "has_audio": True, "existing_genres": ["Audiobook", "Science Fiction & Fantasy", "Horror"], "explicit": {}}]}
+
+        for p_ in (patch.object(main, "REPORTS_DIR", Path(self.tmp.name)),
+                   patch.object(main, "_get_abs_api_key", return_value="key"),
+                   patch.object(main, "_get_abs_url", return_value="http://abs"),
+                   patch.object(main, "_batch_units", return_value=units),
+                   patch.object(main, "_compile_unit", side_effect=compile_unit),
+                   patch.object(main, "abs_get_json", return_value={"id": "x", "path": "/nowhere", "isFile": False, "media": {"metadata": {}}}),
+                   patch.object(main, "abs_patch_json", side_effect=lambda p, b, *a, **k: self.patched.append((p, b)))):
+            p_.start(); self.addCleanup(p_.stop)
+
+    def wait(self):
+        thread = main._BATCH_THREAD
+        if thread is not None:
+            thread.join(timeout=10)
+
+    def test_run_compiles_every_unit_and_reports_progress(self):
+        self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 200)
+        self.wait()
+        body = client.get("/api/enrichment/batch").json()
+        self.assertEqual((body["status"], body["counts"]["compiled"], body["total"]), ("done", 2, 2))
+        self.assertEqual([u["main_genres"] for u in body["units"]], [["Fantasy"], ["Fantasy"]])
+        # Only real genres: no "Audiobook", no store umbrella shelf split into two.
+        self.assertEqual(body["units"][0]["current_genres"], ["Horror"])
+
+    def test_second_start_while_running_is_refused(self):
+        alive = MagicMock(); alive.is_alive.return_value = True
+        with patch.object(main, "_BATCH_THREAD", alive):
+            self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 409)
+            self.assertEqual(client.post("/api/enrichment/batch/apply", json={"selections": []}).status_code, 409)
+
+    def test_a_series_page_apply_marks_the_batch_unit_applied(self):
+        client.post("/api/enrichment/batch/start", json={})
+        self.wait()
+        client.post("/api/enrichment/apply", json={"books": [{"id": "k1-b", "path": "/audiobooks/k1", "is_file": False,
+                                                               "include": True, "title": "One"}],
+                                                    "genre": ["Horror"], "series_key": "k1"})
+        units = {u["key"]: u for u in client.get("/api/enrichment/batch").json()["units"]}
+        self.assertEqual((units["k1"]["state"], units["k1"]["applied_genres"]), ("applied", ["Horror"]))
+        self.assertEqual(units["k2"]["state"], "compiled")
+        # and a later batch apply skips it instead of overwriting the curation
+        body = client.post("/api/enrichment/batch/apply", json={"selections": [{"key": "k1", "genres": ["Fantasy"]}]}).json()
+        self.assertEqual(body["skipped"], ["k1"])
+
+    def test_one_store_per_file_and_nothing_starts_or_applies_during_an_apply(self):
+        self.assertIs(main._batch_store(), main._batch_store())
+        with patch.object(main, "_BATCH_APPLYING", True):
+            self.assertEqual(client.post("/api/enrichment/batch/start", json={}).status_code, 409)
+            self.assertEqual(client.post("/api/enrichment/batch/apply", json={"selections": []}).status_code, 409)
+
+    def test_apply_writes_selected_units_and_logs_the_genres(self):
+        client.post("/api/enrichment/batch/start", json={})
+        self.wait()
+        body = client.post("/api/enrichment/batch/apply", json={"selections": [
+            {"key": "k1", "genres": ["Fantasy", "Action & Adventure"], "apply_explicit": False}]}).json()
+        self.assertEqual((body["units"], body["books"]), (1, 1))
+        self.assertEqual(self.patched, [("/api/items/k1-b/media", {"metadata": {"genres": ["Fantasy", "Action", "Adventure"]}})])
+        log = json.loads((Path(self.tmp.name) / "enrichment-genre-writes.json").read_text(encoding="utf-8"))
+        self.assertEqual(log["k1-b"], {"written": ["Fantasy", "Action", "Adventure"], "pinned": []})
+        states = {u["key"]: u["state"] for u in client.get("/api/enrichment/batch").json()["units"]}
+        self.assertEqual(states, {"k1": "applied", "k2": "compiled"})
+
+
+def _abs_request_item_fetch_fails(path, params):
+    if path.startswith("/api/items/"):
+        raise TimeoutError("ABS slow")
+    return _abs_request(path, params)
+
+
+class LocalGenresFetchFailureTests(unittest.TestCase):
+    def setUp(self):
+        main._reset_enrichment_items_cache_for_tests()
+
+    def test_a_failed_item_fetch_pins_nothing(self):
+        with patch.object(main, "_abs_request", side_effect=_abs_request_item_fetch_fails), \
+             tempfile.TemporaryDirectory() as tmp, patch.object(main, "REPORTS_DIR", Path(tmp)):
+            books = [{"id": "x", "path": "/audiobooks/x", "is_file": False, "has_audio": True, "existing_genres": ["Horror", "Crime"]}]
+            main._attach_local_genres(books)
+        self.assertEqual((books[0]["manual_genres"], books[0]["file_genres"]), ([], []))
