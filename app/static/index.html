@@ -82,7 +82,6 @@
             <option value="soundbooththeater">SoundBooth Theater</option>
             <option value="goodreads">Goodreads (abs-tract)</option>
             <option value="kindle">Kindle cover (abs-tract)</option>
-            <option value="pocketfm">Pocket FM (paste show link)</option>
           </select>
         </label>
         <label id="manualAbsProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf. Audible.com is the default and most complete for audiobooks."></span></span>
@@ -420,7 +419,11 @@
         <button id="manualReloadCoverBtn" class="secondary">Reload Current Cover</button>
         <button id="manualEditBtn" class="secondary">Edit Book</button>
       </div>
-      <p id="manualPocketFmNote" class="provider-query-note" hidden>&#9432; Pocket FM has no public search: paste the show's link (<strong>pocketfm.com/show/...</strong>) as the search query. It gives the series' details (title, author, genre, cover, description); Pocket FM has no volumes, so set this book's own title and number when applying. For several volumes at once, use <strong>Fix Series</strong> in the report.</p>
+      <div class="fs-sibling-bar">
+        <input id="manualPocketFmLink" style="flex:1" placeholder="Pocket FM show link (pocketfm.com/show/...)" />
+        <button type="button" id="manualPocketFmBtn" class="secondary">Fill from Pocket FM</button>
+      </div>
+      <p class="provider-query-note">&#9432; For Pocket FM series that aren't on Audible (Supreme Magus, Shadow Slave): paste the show's link to get its series details (title, author, genre, cover, description) as a match below. Pocket FM has no volumes, so set this book's own title and number when applying. For several volumes at once, use <strong>Fix Series</strong> in the report.</p>
       <p id="manualTitleQueryNote" class="provider-query-note" hidden>&#9432; For this provider, construct the search with the book title in <strong>Title clue</strong> and the author in <strong>Author clue</strong>. Do not repeat the author in the title query.</p>
       <p id="manualBackupNote" class="provider-query-note" hidden>&#9432; <strong>Search from original backup</strong> is active: the metadata clues and the compare table's "Current" column show the pre-fixer values stored in the backup, not the live file tags. This also affects manual apply -- the comparison will reflect the original, not the post-apply, state. Uncheck <em>Search from original backup</em> (or <em>Force reprocess</em>) to return to live values.</p>
       <p id="manualCoverStatus" class="note">Load a target to inspect its current cover.</p>
@@ -435,8 +438,8 @@
     </div>
    </div>
   </main>
-  <script src="/static/ui-common.js?v=20260929-1"></script>
-  <script src="/static/app.js?v=20260929-3"></script>
+  <script src="/static/ui-common.js?v=20260929-4"></script>
+  <script src="/static/app.js?v=20260929-4"></script>
   <script src="/static/manual-review-edit.js?v=20260707-1"></script>
   <script src="/static/fix-series.js?v=20260929-1"></script>
 </body>

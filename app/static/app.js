@@ -168,12 +168,6 @@ async function startRun() {
   } else if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
     return;
   }
-  // Pocket FM has no search to run against; it is a Manual Review / Fix
-  // Series source only.
-  if ($('manualProvider').value === 'pocketfm') {
-    alert('Pocket FM has no public search, so it works only in Manual Review and Fix Series. Pick another provider to start a run.');
-    return;
-  }
   // Block if a previous run's workers are still draining.
   const drainCheck = await fetch('/api/runs/draining').then(r => r.json()).catch(() => ({ draining: false }));
   if (drainCheck.draining) {
@@ -1082,12 +1076,6 @@ async function runManualProviderSearch() {
       provider,
       limit: 10,
     });
-  } else if (provider === 'pocketfm') {
-    res = await fetch('/api/pocketfm/show', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ link: $('manualQuery').value.trim() }),
-    });
   } else if (provider === 'goodreads' || provider === 'kindle') {
     res = await fetch('/api/abs-tract/search', {
       method: 'POST',
@@ -1143,6 +1131,30 @@ async function searchManualTarget() {
     return;
   }
   $('manualMeta').textContent = data.queries?.length ? `Search queries tried: ${data.queries.join(' | ')}` : 'No search queries were produced.';
+  renderManualSearchResults(data.results || []);
+}
+
+// Pocket FM series aren't on Audible and Pocket FM has no public search, so
+// the show is given by its link; its series details come back as a normal
+// result card, applied like any other match.
+async function fillManualFromPocketFm() {
+  if (!manualContext?.path) {
+    alert('Load a manual review target first.');
+    return;
+  }
+  const res = await fetch('/api/pocketfm/show', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ link: $('manualPocketFmLink').value.trim() }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.detail || 'Could not read that Pocket FM show.');
+    return;
+  }
+  const show = data.show || {};
+  $('manualMeta').textContent = `Pocket FM: "${show.title}"${show.author ? ` by ${show.author}` : ''}`
+    + `${show.episodes ? `, ${show.episodes} episodes` : ''}. Set this book's own title and number when applying.`;
   renderManualSearchResults(data.results || []);
 }
 
@@ -1801,6 +1813,7 @@ $('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
 $('manualReviewFilter')?.addEventListener('change', renderManualReviewList);
 $('manualSearchBtn').addEventListener('click', searchManualTarget);
+$('manualPocketFmBtn').addEventListener('click', fillManualFromPocketFm);
 $("manualDiscoverBtn").addEventListener("click", () => discoverManualTargets());
 $("manualBrowseBtn").addEventListener("click", () => browseManualPath());
 $("manualReloadCoverBtn").addEventListener("click", loadManualCurrentCover);
@@ -1943,8 +1956,6 @@ if ($('targetScanBtn')) {
     if ($('manualTitleQueryNote')) {
       $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater' || v === 'goodreads' || v === 'kindle');
     }
-    if ($('manualPocketFmNote')) $('manualPocketFmNote').hidden = v !== 'pocketfm';
-    $('manualQuery').placeholder = v === 'pocketfm' ? 'https://pocketfm.com/show/...' : 'Title Author';
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
   toggleManualProviderFields();
