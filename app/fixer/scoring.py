@@ -219,6 +219,12 @@ def split_series_trailing_number(series_name: str, sequence: str) -> tuple[str, 
     return series_name, sequence
 
 
+def literal_text(value: str) -> str:
+    """Case and punctuation removed, words kept (unlike normalize_for_match,
+    which also drops marketing text)."""
+    return re.sub(r"[\W_]+", " ", str(value or "").lower()).strip()
+
+
 @trace(ALTER, capture=[])
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
@@ -239,14 +245,10 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     # book's own "title: subtitle" (Goodreads' Postwar, "#1945").
     if is_never_series(series_name):
         return "", ""
-    # Compared literally (case and punctuation only): the matcher's
-    # normalization strips marketing subtitles, so "Tunnel Rat: A LitRPG
-    # Adventure" would equal series "Tunnel Rat".
-    def literal(value: str) -> str:
-        return re.sub(r"[\W_]+", " ", value.lower()).strip()
-
+    # Compared literally: the matcher's normalization strips marketing
+    # subtitles, so "Tunnel Rat: A LitRPG Adventure" would equal "Tunnel Rat".
     subtitle = str(product.get("subtitle") or "").strip()
-    if subtitle and literal(series_name) == literal(f"{product.get('title') or ''} {subtitle}"):
+    if subtitle and literal_text(series_name) == literal_text(f"{product.get('title') or ''} {subtitle}"):
         return "", ""
     return series_name, sequence
 
@@ -444,6 +446,14 @@ def title_evidence_score(clues: dict, product: dict) -> float:
         # single word being contained in "arena road 4" should NOT score 1.0.
         and len(significant_title_tokens(audible_title)) >= 2
     ):
+        audible_in_local = 1.0
+
+    # "Main: Subtitle" whose main title is exactly the product's title: the
+    # same book under another edition's subtitle ("Troy: The Siege of Troy
+    # Retold" vs Audible's "Troy"). A bare containment ("Arena" in "Arena
+    # Road 4") is not enough; the separator marks where the title ends.
+    main_title = normalize_for_match((clean_title or clean_raw_title).split(":", 1)[0])
+    if ":" in (clean_title or clean_raw_title) and main_title and main_title == audible_title:
         audible_in_local = 1.0
 
     return max(
@@ -1199,7 +1209,7 @@ def _same_recording(a: dict, b: dict) -> bool:
         return {normalize_for_match(n) for n in get_people(p, role)}
 
     same_book = bool(
-        normalize_for_match(a.get("title") or "") == normalize_for_match(b.get("title") or "")
+        literal_text(a.get("title")) == literal_text(b.get("title"))
         and people(a, "authors") and people(a, "authors") == people(b, "authors")
     )
     if a.get("_abs_provider") in SPARSE_PROVIDERS and b.get("_abs_provider") in SPARSE_PROVIDERS:

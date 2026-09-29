@@ -128,6 +128,12 @@ class AlbumIsNotASeriesTests(unittest.TestCase):
         parsed = self.parse(title="Intra Mundum: Reforged: A LitRPG Adventure", album="Intra Mundum: Reforged")
         self.assertEqual(parsed["series"], "")
 
+    def test_title_ending_in_a_year_is_not_a_series_number_echo(self):
+        # Postwar: "... Since 1945" ends in a year, not a book number.
+        parsed = self.parse(title="Postwar: A History of Europe Since 1945",
+                            album="Postwar: A History of Europe Since 1945")
+        self.assertEqual(parsed["series"], "")
+
     def test_a_different_album_is_still_a_series_clue(self):
         self.assertEqual(self.parse(title="Soul Harvest", album="Dread Knight")["series"], "Dread Knight")
 
@@ -370,6 +376,42 @@ class SparseEditionsTieTests(unittest.TestCase):
             clues, [edition("9780143037750"), edition("9781594200656")], 2581.5)
         self.assertEqual(chosen["_abs_isbn"], "9780143037750")
         self.assertTrue(ambiguity is None or ambiguity["resolved"])
+
+    def test_stray_bracket_listing_is_the_same_book(self):
+        # Goodreads also listed a marketplace scrape "[Postwar" with a
+        # bracketed subtitle; it tied within the score epsilon.
+        real = {"_abs_provider": "goodreads", "asin": "", "_abs_isbn": "9780143037750", "title": "Postwar",
+                "subtitle": "A History of Europe Since 1945", "authors": [{"name": "Tony Judt"}],
+                "narrators": [], "series": []}
+        scrape = {**real, "_abs_isbn": "", "title": "[Postwar",
+                  "subtitle": "A History of Europe Since 1945] [By: T. Judt] [January, 2010]"}
+        clues = {"title": "Postwar: A History of Europe Since 1945", "author": "Tony Judt"}
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(clues, [real, scrape], 2581.5)
+        self.assertEqual(chosen["_abs_isbn"], "9780143037750")
+        self.assertTrue(ambiguity is None or ambiguity["resolved"])
+
+
+class MainTitleBeforeSubtitleTests(unittest.TestCase):
+    """Troy: the local tag title carries the UK subtitle ("Troy: The Siege of
+    Troy Retold"), Audible the US one ("Troy" / "The Greek Myths
+    Reimagined"); same author, narrator and runtime, yet 0.69 and no match."""
+
+    TROY = {"asin": "1797213024", "title": "Troy", "subtitle": "The Greek Myths Reimagined",
+            "authors": [{"name": "Stephen Fry"}], "narrators": [{"name": "Stephen Fry"}],
+            "series": [{"title": "Mythos", "sequence": "3"}], "runtime_length_min": 661}
+    CLUES = {"title": "Troy: The Siege of Troy Retold", "raw_title": "Troy: The Siege of Troy Retold",
+             "author": "Stephen Fry", "narrator": "Stephen Fry", "local_duration_minutes": 660.4}
+
+    def test_main_title_equal_before_a_different_subtitle_matches(self):
+        score = FIXER.score_product_for_metadata(self.CLUES, self.TROY, 660.4)
+        self.assertGreaterEqual(score, 0.7)
+        self.assertEqual(FIXER.metadata_from_product(self.TROY, self.CLUES, score)["edit_mode"], "full")
+
+    def test_one_word_title_inside_a_longer_title_is_still_not_a_match(self):
+        # "Arena" in "Arena Road 4" (no subtitle separator) stays weak.
+        arena = {**self.TROY, "title": "Arena", "subtitle": "", "series": [], "authors": [{"name": "Stephen Fry"}]}
+        clues = {**self.CLUES, "title": "Arena Road 4", "raw_title": "Arena Road 4"}
+        self.assertLess(FIXER.title_evidence_score(clues, arena), 0.75)
 
 
 if __name__ == "__main__":

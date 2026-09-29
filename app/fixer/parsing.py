@@ -1451,12 +1451,13 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     series = clean_series_value(grouping or album)
     # An album that is the book's own title ("Sapiens"), or its opening
     # ("Intra Mundum: Reforged" for "Intra Mundum: Reforged: ..."), is not a
-    # series clue. A "Series N" echo ("Pocket Dungeon 4") still is.
+    # series clue. A "Series N" echo ("Pocket Dungeon 4") still is; a year
+    # ("... Since 1945") is not a book number.
     album_norm, title_norm = normalize_for_match(album), normalize_for_match(raw_title)
     if (
         not grouping and album_norm and title_norm
         and title_norm.startswith(album_norm)
-        and not re.search(r"\d\s*$", album_norm)
+        and not re.search(r"(?<!\d)\d{1,3}\s*$", album_norm)
     ):
         series = ""
     # Only a dedicated series-like tag (or a series name parsed out of the
