@@ -1220,6 +1220,8 @@ class RunRequest(BaseModel):
     provider: str = "audible"
     abs_provider: str = "audible"
     enable_goodreads_fallback: bool = False
+    # Ebooks only: Open Library through ABS, tried last (it is slow).
+    enable_openlibrary_fallback: bool = False
     debug_trace: bool = False
     debug_trace_file: str = ""
 
@@ -4197,7 +4199,11 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         stream_process_output(state, cmd, threshold=threshold)
         if state.status != "cancelled":
             try:
-                state.report_items.extend(scan_ebook_units_for_report(Path(req.target_path)))
+                state.report_items.extend(scan_ebook_units_for_report(
+                    Path(req.target_path),
+                    goodreads=req.enable_goodreads_fallback,
+                    open_library=req.enable_openlibrary_fallback,
+                ))
             except Exception as exc:
                 print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
@@ -6994,82 +7000,65 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
     return {"queries": [title], "results": results}
 
 
-def search_ebook_candidates(*, title: str, author: str = "", limit: int = 5) -> dict[str, Any] | None:
-    """Open-Library-primary, Goodreads-backfill metadata lookup for an ebook.
+def match_ebook_unit(
+    path: Path, epub_path: Path | None, *, goodreads: bool = True, open_library: bool = True,
+) -> dict[str, Any]:
+    """Match one ebook with the audio fixer's own search and scoring.
 
-    Open Library is used first. A missing result, or a top result with a
-    blank cover_url/summary, is backfilled from Goodreads via abs-tract --
-    live-testing (see docs/superpowers/specs/2026-07-18-ebook-support-design.md)
-    showed Goodreads fills exactly those two fields far more consistently
-    than Open Library does. Only descriptive fields are backfilled: title/
-    author identity always stays whatever Open Library reported when it
-    reported anything at all. Returns None if both sources come back empty.
+    Clues come from the epub's embedded title/author (else the filename),
+    through the fixer's clue parser, so series and volume numbers are read
+    the same way as for audiobooks; fixer.match_ebook then searches Open
+    Goodreads (throttled, circuit-breaker aware) and then Open Library, each
+    only when enabled, and accepts only a full match. Returns the report/
+    Manual Review fields: match, score, provider, used_query,
+    goodreads_rate_limited.
     """
-    try:
-        primary = search_abs_candidates(title=title, author=author, provider="openlibrary", limit=limit)
-    except HTTPException:
-        primary = {"results": []}
-    top = primary["results"][0] if primary["results"] else None
-
-    needs_backfill = top is None or not top.get("cover_url") or not top.get("summary")
-    if needs_backfill:
-        abs_tract_config = _load_abs_tract_config()
-        if abs_tract_config.get("url"):
-            try:
-                fallback = search_abs_tract_candidates(
-                    query=title,
-                    author=author,
-                    base_url=abs_tract_config["url"],
-                    provider="goodreads",
-                    kindle_region=abs_tract_config.get("kindle_region", "us"),
-                    limit=limit,
-                )
-                fallback_results = fallback["results"]
-            except HTTPException:
-                fallback_results = []
-            fb_top = fallback_results[0] if fallback_results else None
-            if fb_top:
-                if top is None:
-                    top = fb_top
-                else:
-                    for field_name in ("cover_url", "summary"):
-                        if not top.get(field_name) and fb_top.get(field_name):
-                            top[field_name] = fb_top[field_name]
-    return top
-
-
-def score_ebook_candidate(
-    query_title: str, query_author: str, candidate_title: str, candidate_author: str,
-) -> float:
-    """Similarity score (0.0-1.0) between a search query and one candidate.
-
-    Purpose-built for ebooks, not a reuse of app/fixer/scoring.py -- that
-    module is tuned around duration/narrator/ASIN signals ebooks don't
-    have. Title carries most of the weight; author only contributes when
-    the query actually supplied one (an epub's embedded dc:creator can be
-    blank even when dc:title is present).
-    """
-    def _norm(value: str) -> str:
-        return re.sub(r"\s+", " ", (value or "").strip().lower())
-
-    q_title, c_title = _norm(query_title), _norm(candidate_title)
-    if not q_title or not c_title:
-        return 0.0
-    title_sim = difflib.SequenceMatcher(None, q_title, c_title).ratio()
-
-    q_author, c_author = _norm(query_author), _norm(candidate_author)
-    if not q_author:
-        return round(title_sim, 4)
-
-    author_sim = difflib.SequenceMatcher(None, q_author, c_author).ratio()
-    return round(title_sim * 0.7 + author_sim * 0.3, 4)
+    fixer_module = load_fixer_module(default_fixer_script())
+    embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
+    tags = (
+        {"title": embedded_title, "artist": embedded_author} if embedded_title
+        else {"title": _ebook_query_from_stem(path.stem)}
+    )
+    clues = fixer_module.build_search_clues_from_file(path, tags=tags)
+    found = fixer_module.match_ebook(
+        clues,
+        abs_url=_get_abs_url() if open_library else "",
+        abs_api_key=_get_abs_api_key() if open_library else "",
+        abs_tract_url=_load_abs_tract_config().get("url", "") if goodreads else "",
+    )
+    match: dict[str, Any] | None = None
+    if found["product"]:
+        md = fixer_module.metadata_from_product(found["product"], clues, found["score"])
+        ebook_series, ebook_sequence = split_series_trailing_number(md.get("series", ""), md.get("sequence", ""))
+        match = {
+            "title": md.get("audible_title") or md.get("title", ""),
+            "subtitle": md.get("subtitle", ""),
+            "author": md.get("author", ""),
+            "series": ebook_series,
+            "sequence": ebook_sequence,
+            "year": md.get("audible_year") or md.get("year", ""),
+            "genre": "",
+            "isbn": md.get("isbn", ""),
+            "cover_url": md.get("cover_url", ""),
+            "summary": md.get("summary", ""),
+        }
+    return {
+        "match": match,
+        "score": round(found["score"], 4) if match else None,
+        "provider": found["provider"] if match else "",
+        "used_query": found["query"] or clues.get("title", ""),
+        "goodreads_rate_limited": found["goodreads_rate_limited"],
+    }
 
 
-EBOOK_MATCH_SCORE_FLOOR = 0.35
-
-
-def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
+def scan_ebook_units_for_report(
+    root: Path, *, goodreads: bool = False, open_library: bool = False,
+) -> list[dict[str, Any]]:
     """Score every discovered ebook unit against a fresh provider search.
+
+    Goodreads and Open Library are the run's opt-ins (Enable Goodreads /
+    Open Library fallback); with both off nothing is searched and every
+    ebook is reported unmatched with that reason.
 
     Companion to the audio Fixer's per-item report entries -- same shape
     (path/local/match/score/status/provider/used_query) plus media_type/
@@ -7083,38 +7072,14 @@ def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for unit in library_index.build_ebook_index(root):
         local = fixer_module.read_book_sidecar(unit.path) or {}
-        epub_path = unit.formats.get("epub")
-        embedded_title, embedded_author = (
-            _extract_epub_metadata(epub_path) if epub_path else ("", "")
-        )
-        query = embedded_title or _ebook_query_from_stem(unit.path.stem)
-
-        candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
-        score = None
-        match: dict[str, Any] | None = None
-        provider = ""
-        if candidate:
-            authors = candidate.get("authors") or []
-            candidate_author = authors[0] if authors else ""
-            score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
-            if score >= EBOOK_MATCH_SCORE_FLOOR:
-                ebook_series, ebook_sequence = split_series_trailing_number(
-                    str(candidate.get("series") or ""), str(candidate.get("sequence") or "")
-                )
-                match = {
-                    "title": candidate.get("title", ""),
-                    "subtitle": candidate.get("subtitle", ""),
-                    "author": candidate_author,
-                    "series": ebook_series,
-                    "sequence": ebook_sequence,
-                    "year": candidate.get("year", ""),
-                    "genre": "",
-                    "isbn": candidate.get("isbn", ""),
-                    "cover_url": candidate.get("cover_url", ""),
-                    "summary": candidate.get("summary", ""),
-                }
-                provider = "goodreads" if (candidate.get("cover_url") or candidate.get("summary")) else "openlibrary"
-
+        if goodreads or open_library:
+            found = match_ebook_unit(
+                unit.path, unit.formats.get("epub"), goodreads=goodreads, open_library=open_library,
+            )
+        else:
+            found = {"match": None, "score": None, "provider": "", "used_query": "",
+                     "goodreads_rate_limited": False}
+        match = found["match"]
         items.append({
             "path": str(unit.path),
             "local": {
@@ -7129,10 +7094,14 @@ def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
                 "summary": local.get("summary", ""),
             },
             "match": match,
-            "score": score if match else None,
+            "score": found["score"],
             "status": "matched" if match else "unmatched",
-            "provider": provider,
-            "used_query": query,
+            "provider": found["provider"],
+            "used_query": found["used_query"],
+            "goodreads_rate_limited": found["goodreads_rate_limited"],
+            "skip_reason": "" if (goodreads or open_library) else (
+                "not searched: Goodreads and Open Library are both off for this run"
+            ),
             "media_type": "ebook",
             "formats": sorted(unit.formats.keys()),
         })
@@ -7182,7 +7151,7 @@ def _ebook_query_from_stem(stem: str) -> str:
     cheap, always-safe improvement; fully space-free stems (e.g.
     "efficientlinuxatthecommandline") are a known, accepted gap -- both
     Open Library and Goodreads reliably return zero results for those
-    (verified live), so search_ebook_candidates correctly returns None
+    (verified live), so match_ebook_unit correctly finds no match
     for them rather than guessing at a wrong match.
     """
     return re.sub(r"[_\-\.]+", " ", stem).strip()
@@ -9078,34 +9047,8 @@ def load_manual_review_ebook_target(req: ManualReviewEbookLoadRequest) -> dict[s
         else target_path if target_path.suffix.lower() == ".epub"
         else None
     )
-    embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
-    query = embedded_title or _ebook_query_from_stem(target_path.stem)
-
-    candidate = search_ebook_candidates(title=query, author=embedded_author) if query else None
-    score = None
-    match: dict[str, Any] | None = None
-    if candidate:
-        authors = candidate.get("authors") or []
-        candidate_author = authors[0] if authors else ""
-        score = score_ebook_candidate(query, embedded_author, candidate.get("title", ""), candidate_author)
-        if score >= EBOOK_MATCH_SCORE_FLOOR:
-            ebook_series, ebook_sequence = split_series_trailing_number(
-                str(candidate.get("series") or ""), str(candidate.get("sequence") or "")
-            )
-            match = {
-                "title": candidate.get("title", ""),
-                "subtitle": candidate.get("subtitle", ""),
-                "author": candidate_author,
-                "series": ebook_series,
-                "sequence": ebook_sequence,
-                "year": candidate.get("year", ""),
-                "genre": "",
-                "isbn": candidate.get("isbn", ""),
-                "cover_url": candidate.get("cover_url", ""),
-                "summary": candidate.get("summary", ""),
-            }
-        else:
-            score = None
+    found = match_ebook_unit(target_path, epub_path)
+    match, score = found["match"], found["score"]
 
     return {
         "path": str(target_path),

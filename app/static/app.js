@@ -126,6 +126,7 @@ function collectRequest() {
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualProvider')?.value || 'audible') : 'audible',
     abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualAbsProvider')?.value || 'audible') : 'audible',
     enable_goodreads_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableGoodreadsFallback')?.checked) : false,
+    enable_openlibrary_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableOpenLibraryFallback')?.checked) : false,
     debug_trace: fixerMajorVersion($('script').value) >= 5 ? Boolean(prefs.debugTrace) : false,
     debug_trace_file: prefs.debugTraceFile || "",
     min_score: parseFloat($('minScore').value || '0.7'),
@@ -1670,7 +1671,7 @@ function matchStatusInfo(item) {
   }
   if (s === 'error' || s === 'failed') return { label: 'Error', cls: 'status-error' };
   if (s === 'matched' || s === 'applied' || s === 'written') return { label: 'Matched', cls: 'status-matched' };
-  return { label: 'Not Matched', cls: 'status-unmatched' };
+  return { label: item.skip_reason ? `Not Matched: ${item.skip_reason}` : 'Not Matched', cls: 'status-unmatched' };
 }
 
 function buildMatchCard(item) {
