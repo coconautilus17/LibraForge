@@ -250,6 +250,35 @@ class TagProbeTests(unittest.TestCase):
         self.assertEqual(tags["encoder"], "fre:ac")
         self.assertEqual(minutes, 1.0)
 
+    def test_timed_out_probe_is_retried_with_more_time(self):
+        # Mythos' 440 MB m4b timed out twice under a 5-worker NAS load in the
+        # full run, and a timeout read as "no tags".
+        payload = {"format": {"duration": "60", "tags": {"artist": "Stephen Fry"}}, "streams": []}
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(kwargs["timeout"])
+            if len(calls) == 1:
+                raise FIXER.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            return self._ffprobe(payload)
+
+        with patch.object(FIXER.subprocess, "run", side_effect=run):
+            tags, _ = FIXER.probe_file(Path("/x/Mythos.m4b"))
+        self.assertEqual(tags["artist"], "Stephen Fry")
+        self.assertGreater(calls[1], calls[0])
+
+    def test_failed_probe_never_becomes_the_original_backup(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            book = Path(tmp) / "Mythos (Unabridged).m4b"
+            book.write_bytes(b"")
+            (Path(tmp) / "other.m4b").write_bytes(b"")
+            with patch.object(FIXER, "probe_file", return_value=({}, None)):
+                FIXER.write_original_metadata_backup(book)
+            sidecar = book.with_name(book.name + FIXER.LIBRAFORGE_SUFFIX)
+            payload = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+        self.assertNotIn("backup", payload)
+
     def test_container_tags_win_over_stream_tags(self):
         payload = {"format": {"duration": "60", "tags": {"title": "Mythos"}},
                    "streams": [{"codec_type": "audio", "tags": {"title": "Track 1"}}]}
@@ -313,9 +342,34 @@ class SeriesThatIsTheBookTests(unittest.TestCase):
                    "series": [{"title": "Postwar: A History of Europe Since 1945", "sequence": "1945"}]}
         self.assertEqual(FIXER.get_primary_series(product), ("", ""))
 
+    def test_marketing_subtitle_does_not_make_the_title_a_series_echo(self):
+        # Regression: "Tunnel Rat" + "A LitRPG Adventure" normalized (noise
+        # stripped) to "tunnel rat", dropping Book 1's real series; Dreamer's
+        # Throne and Soul Caller Book 1 then lost to their Book 2.
+        product = {"title": "Tunnel Rat", "subtitle": "A LitRPG Adventure",
+                   "series": [{"title": "Tunnel Rat", "sequence": "1"}]}
+        self.assertEqual(FIXER.get_primary_series(product), ("Tunnel Rat", "1"))
+
     def test_book_named_after_its_series_keeps_it(self):
         product = {"title": "Dune", "subtitle": "", "series": [{"title": "Dune", "sequence": "1"}]}
         self.assertEqual(FIXER.get_primary_series(product), ("Dune", "1"))
+
+
+class SparseEditionsTieTests(unittest.TestCase):
+    """Postwar: Goodreads returned two editions of the same book (same title
+    and author, different ISBNs); with no narrator or runtime from Goodreads
+    the tie went to manual review."""
+
+    def test_same_title_and_author_editions_resolve(self):
+        def edition(isbn):
+            return {"_abs_provider": "goodreads", "asin": "", "_abs_isbn": isbn, "title": "Postwar",
+                    "subtitle": "A History of Europe Since 1945", "authors": [{"name": "Tony Judt"}],
+                    "narrators": [], "series": []}
+        clues = {"title": "Postwar: A History of Europe Since 1945", "author": "Tony Judt"}
+        chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
+            clues, [edition("9780143037750"), edition("9781594200656")], 2581.5)
+        self.assertEqual(chosen["_abs_isbn"], "9780143037750")
+        self.assertTrue(ambiguity is None or ambiguity["resolved"])
 
 
 if __name__ == "__main__":

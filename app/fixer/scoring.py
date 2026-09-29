@@ -239,10 +239,14 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     # book's own "title: subtitle" (Goodreads' Postwar, "#1945").
     if is_never_series(series_name):
         return "", ""
+    # Compared literally (case and punctuation only): the matcher's
+    # normalization strips marketing subtitles, so "Tunnel Rat: A LitRPG
+    # Adventure" would equal series "Tunnel Rat".
+    def literal(value: str) -> str:
+        return re.sub(r"[\W_]+", " ", value.lower()).strip()
+
     subtitle = str(product.get("subtitle") or "").strip()
-    if subtitle and normalize_for_match(series_name) == normalize_for_match(
-        f"{product.get('title') or ''} {subtitle}"
-    ):
+    if subtitle and literal(series_name) == literal(f"{product.get('title') or ''} {subtitle}"):
         return "", ""
     return series_name, sequence
 
@@ -1188,15 +1192,22 @@ def narrator_match_score(clues: dict, product: dict) -> float:
 
 
 def _same_recording(a: dict, b: dict) -> bool:
-    """Same title, authors, narrators and runtime: one recording, two listings."""
+    """Same title, authors, narrators and runtime: one recording, two listings.
+    Goodreads/Open Library list neither narrator nor runtime, so there two
+    editions with the same title and authors are the same book."""
     def people(p: dict, role: str) -> set[str]:
         return {normalize_for_match(n) for n in get_people(p, role)}
 
+    same_book = bool(
+        normalize_for_match(a.get("title") or "") == normalize_for_match(b.get("title") or "")
+        and people(a, "authors") and people(a, "authors") == people(b, "authors")
+    )
+    if a.get("_abs_provider") in SPARSE_PROVIDERS and b.get("_abs_provider") in SPARSE_PROVIDERS:
+        return same_book
     a_minutes, b_minutes = get_audible_duration_minutes(a), get_audible_duration_minutes(b)
     return bool(
-        a_minutes and b_minutes and abs(a_minutes - b_minutes) <= 1
-        and normalize_for_match(a.get("title") or "") == normalize_for_match(b.get("title") or "")
-        and people(a, "authors") == people(b, "authors")
+        same_book
+        and a_minutes and b_minutes and abs(a_minutes - b_minutes) <= 1
         and people(a, "narrators") and people(a, "narrators") == people(b, "narrators")
     )
 

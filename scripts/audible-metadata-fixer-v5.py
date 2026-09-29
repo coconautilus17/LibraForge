@@ -751,7 +751,9 @@ def write_original_metadata_backup(
         if duration_minutes is None:
             duration_minutes = probed_duration
 
-    if existing is not None and not tags:
+    # No tags and no duration is a failed probe (every readable file has a
+    # duration): never record it as the file's original tags.
+    if not tags and (existing is not None or duration_minutes is None):
         return lf_path
 
     payload.setdefault("schema_version", 2)
@@ -2576,6 +2578,9 @@ def refresh_multipart_sidecar_audio_profile(
     _write_libraforge(lf_path, lf_payload)
     return lf_path
 
+PROBE_TIMEOUTS_SECONDS = (30, 180)
+
+
 def probe_file(file_path: Path) -> tuple[dict, float | None]:
     """Single ffprobe call returning (tags_dict, duration_minutes).
 
@@ -2596,17 +2601,24 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
         str(file_path),
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"  WARNING: ffprobe timed out for: {file_path}")
+    # A big file whose index sits at its end can take long to read over a
+    # network share under load; a timeout means slow, not untagged, so one
+    # retry gets more time (Mythos, 440 MB, timed out at 30 s).
+    result = None
+    for timeout in PROBE_TIMEOUTS_SECONDS:
+        try:
+            result = subprocess.run(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+            )
+            break
+        except subprocess.TimeoutExpired:
+            print(f"  WARNING: ffprobe timed out after {timeout}s for: {file_path}")
+    if result is None:
         return {}, None
 
     if result.returncode != 0:
