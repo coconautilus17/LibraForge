@@ -4732,6 +4732,10 @@ def _build_report_item(result: "ItemResult") -> dict:
         # written: the universal author-name scheme unified them.
         if scheme_enabled() and initials_only_change(local["author"], item["match"]["author"]):
             item["author_initials_fixed"] = True
+        # The match is another recording of this book: its narrator was not
+        # written, the book's own was kept (scoring.different_edition).
+        if meta.get("different_edition"):
+            item["different_edition"] = meta["different_edition"]
     return item
 
 def print_plan(

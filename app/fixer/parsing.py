@@ -198,11 +198,16 @@ def clean_author_value(value: str) -> str:
     return remove_parenthetical(re.sub(r"\[[^\]]*\]", " ", value or ""))
 
 
-def _split_author_names(value: str) -> list[str]:
-    """Split a credit string into individual normalized author names."""
+def split_credit_names(value: str) -> list[str]:
+    """Split a credit string ("A/B & C") into its individual names."""
     value = clean_author_value(value or "")
     parts = re.split(r"\s*(?:,|;|&|/|\band\b|\bwith\b)\s*", value, flags=re.IGNORECASE)
-    return [n for n in (normalize_for_match(p) for p in parts) if n]
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _split_author_names(value: str) -> list[str]:
+    """Split a credit string into individual normalized author names."""
+    return [n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n]
 
 
 def _authors_compatible(local: str, candidate: str) -> bool | None:
