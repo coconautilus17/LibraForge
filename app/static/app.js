@@ -421,6 +421,7 @@ function renderStats(stats, startedAt, finishedAt) {
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
     stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads (abs-tract) circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
     matchReportItems.some((i) => i.author_initials_fixed) ? stat('Author initials fixed', matchReportItems.filter((i) => i.author_initials_fixed).length, 'Author names whose initials were unified by the author-name scheme (Settings, Author names). Filter the match report by Author Initials Fixed to list them.') : '',
+    matchReportItems.some((i) => i.different_edition) ? stat('Different edition', matchReportItems.filter((i) => i.different_edition).length, 'Matched to another recording of the same book (different narrator and length). The match\'s title, series and details were used, but the book\'s own narrator was kept. Filter the match report by Different edition to list them.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -1621,6 +1622,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'goodreads' && (item.provider || '').toLowerCase() !== 'goodreads') continue;
       if (statusFilter === 'gr_limited' && !item.goodreads_rate_limited) continue;
       if (statusFilter === 'initials_fixed' && !item.author_initials_fixed) continue;
+      if (statusFilter === 'different_edition' && !item.different_edition) continue;
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
       if (statusFilter === 'would_write' && writeAction !== 'would_write') continue;
       if (statusFilter === 'written' && writeAction !== 'written') continue;
@@ -1696,6 +1698,12 @@ function buildMatchCard(item) {
   const details = document.createElement('details');
   details.className = 'mrep-details';
 
+  // Matched another recording of the book: its narrator was not written.
+  const edition = item.different_edition;
+  const editionMinutes = (v) => (v != null ? `${Math.round(v)} min` : 'unknown length');
+  const editionNote = edition
+    ? `Different edition: this book is read by ${edition.local_narrator} (${editionMinutes(edition.local_minutes)}), the match is read by ${edition.match_narrator} (${editionMinutes(edition.match_minutes)}). The match's details are used, but the narrator stays ${edition.local_narrator}.`
+    : '';
   const summary = document.createElement('summary');
   summary.className = 'mrep-head';
   summary.innerHTML = `
@@ -1709,6 +1717,7 @@ function buildMatchCard(item) {
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${item.author_initials_fixed ? `<span class="match-initials-badge" title="${escapeHtml(`The author initials were unified by the author-name scheme: ${local.author || ''} to ${m.author || ''}`)}">Initials Fixed</span>` : ''}
+      ${edition ? `<span class="match-edition-badge" title="${escapeHtml(editionNote)}">Different edition</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
       ${ebookBadge}
     </div>
@@ -1740,12 +1749,13 @@ function buildMatchCard(item) {
       <div><strong>${providerLabel}</strong>${matchCoverImg}</div>
     </div>
     ${queryHtml}
+    ${edition ? `<p class="mrep-edition-note">&#9888; ${escapeHtml(editionNote)}</p>` : ''}
     <table class="compare-table mrep-compare">
       <thead><tr><th></th><th>Local</th><th>${hasMatch ? providerLabel : 'Match'}</th></tr></thead>
       <tbody>
         ${mrepRow('Title', local.title, titleMatch)}
         ${mrepRow('Author', local.author, m.author)}
-        ${mrepRow('Narrator', local.narrator, m.narrator)}
+        ${mrepRow('Narrator', local.narrator || edition?.local_narrator, edition ? `${m.narrator} (kept; match: ${edition.match_narrator})` : m.narrator)}
         ${mrepRow('Series', local.series, m.series)}
         ${mrepRow('Sequence', local.sequence, m.sequence)}
         ${mrepRow('Genre', local.genre, m.genre)}

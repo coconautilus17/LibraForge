@@ -3553,6 +3553,7 @@ button.danger:hover:not(:disabled) {
 .match-write-badge,
 .match-gr-limited-badge,
 .match-initials-badge,
+.match-edition-badge,
 .match-grouped-badge,
 .match-ebook-badge {
   display: inline-block;
@@ -3570,6 +3571,7 @@ button.danger:hover:not(:disabled) {
 .match-write-badge      { background: var(--accent-dim);            color: var(--accent-dim-text); }
 .match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
 .match-initials-badge   { background: var(--warning-soft);          color: var(--warning); }
+.match-edition-badge    { background: var(--danger-soft);           color: var(--danger);  }
 .match-grouped-badge    { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 .match-ebook-badge      { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }
 
@@ -3597,6 +3599,15 @@ button.danger:hover:not(:disabled) {
 }
 .mrep-query span {
   font-style: italic;
+}
+
+.mrep-edition-note {
+  margin: 6px 0;
+  padding: 6px var(--space-sm);
+  border-left: 3px solid var(--danger);
+  background: var(--danger-soft);
+  color: var(--text);
+  font-size: var(--font-xs);
 }
 
 #matchReportList {

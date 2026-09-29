@@ -40,6 +40,7 @@ from app.fixer.parsing import (
     strip_title_search_noise,
     strip_leading_sequence_from_title,
     parse_book_number_range,
+    split_credit_names,
 )
 
 # ---------------------------------------------------------------------------
@@ -1201,6 +1202,47 @@ def narrator_match_score(clues: dict, product: dict) -> float:
     return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
 
 
+def different_edition(clues: dict, product: dict, duration_result: dict) -> dict | None:
+    """The book's own narrator when the match is another recording of it.
+
+    Same book, different edition: the local files credit a reader the match
+    doesn't have, and the lengths differ past the "perfect" band (Tunnels
+    05 Spiral: Recorded Books, Steven Crossley, 728 min; Audible sells the
+    Audible Studios edition, Paul Chequer, 682 min). The narrator comes from
+    the narrator tag, else from credit tags: rips list the reader after the
+    authors ("Roderick Gordon/Brian Williams/Steven Crossley"), and the match
+    may not list every co-author, so a credit's reader is its last name that
+    isn't an author. Any credit that names the match's narrator makes it the
+    same recording.
+    """
+    if duration_result.get("status") in {"perfect", "unknown"}:
+        return None
+    match_narrator = ", ".join(get_people(product, "narrators"))
+    if not match_narrator:
+        return None
+    authors = " ".join(get_people(product, "authors"))
+
+    def readers(values) -> list[str]:
+        return [name for value in values for name in split_credit_names(value)
+                if _authors_compatible(name, authors) is not True]
+
+    tagged = readers([clues.get("narrator", "")])
+    credits = clues.get("credit_names") or []
+    credited = list(dict.fromkeys(names[-1] for names in (readers([c]) for c in credits) if names))
+    local = tagged or credited
+    if not local or any(
+        narrator_match_score({"narrator": name}, product) >= NARRATOR_GOOD_SCORE
+        for name in tagged + readers(credits)
+    ):
+        return None
+    return {
+        "local_narrator": ", ".join(local),
+        "match_narrator": match_narrator,
+        "local_minutes": duration_result.get("local_minutes"),
+        "match_minutes": duration_result.get("audible_minutes"),
+    }
+
+
 def _same_recording(a: dict, b: dict) -> bool:
     """Same title, authors, narrators and runtime: one recording, two listings.
     Goodreads/Open Library list neither narrator nor runtime, so there two
@@ -1698,6 +1740,7 @@ def metadata_from_product(
         product.get("publisher_summary") or product.get("merchandising_summary") or ""
     )
 
+    edition = None
     if edit_mode == "full":
         title = choose_best_title(
             audible_title=audible_title,
@@ -1706,7 +1749,8 @@ def metadata_from_product(
         )
         album = title
         sequence_to_write = clean_seq
-        narrator_to_write = narrator_text
+        edition = different_edition(clues, product, duration_result)
+        narrator_to_write = edition["local_narrator"] if edition else narrator_text
         year_to_write = year
         summary_to_write = summary
     elif edit_mode == "series_only":
@@ -1789,6 +1833,7 @@ def metadata_from_product(
         "duration": duration_result,
         "edit_mode": edit_mode,
         "recommended_edit_mode": recommended_edit_mode,
+        **({"different_edition": edition} if edition else {}),
     }
 
 
