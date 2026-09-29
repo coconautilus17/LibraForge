@@ -155,12 +155,41 @@ Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade lat
 > new installs and off after an upgrade, so an existing organized library is not affected
 > unless you turn it on.
 
-<!-- TODO: this published image is the lean default (Dockerfile) -- it doesn't
-include Chapter Forge's optional Hybrid/Full transcription ASR backends
-(faster-whisper adds ~825MB, so it's opt-in). Until a second image is
-published (see the TODO in .github/workflows/publish-image.yml), getting
-that capability means cloning the repo and building Dockerfile.unified
-yourself. Document the real command + tag here once that's live. -->
+#### Two published images
+
+| Tag | Base | Chapter Forge ASR (Hybrid / Full transcription) |
+|---|---|---|
+| `ghcr.io/coconautilus17/libraforge:latest` | lean (`Dockerfile`) | not included |
+| `ghcr.io/coconautilus17/libraforge:latest-chaptering` | `Dockerfile.unified` | included |
+
+Chapter Forge's **Audible chapters** backend (pulls the official chapter list from
+Audible) works in *either* image, no extra weight. Its other two backends, **Hybrid**
+(silence detection + speech-to-text) and **Full transcription**, need
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) and its `ctranslate2`
+runtime (the actual speech-recognition models) to transcribe audio locally - that
+stack alone is **~825MB**, so it ships only in the `-chaptering` tag, not the default
+image. Pull `latest-chaptering` if you want local ASR transcription; otherwise
+`latest` has everything else, is smaller, and also supports `linux/arm64`
+(`-chaptering` is `linux/amd64` only for now).
+
+```bash
+docker run -d --name libraforge \
+  --user "$(id -u):$(id -g)" \
+  -p 127.0.0.1:5056:5056 \
+  -v /path/to/your/audiobooks:/audiobooks \
+  -v libraforge-auth:/auth \
+  -v libraforge-reports:/app/reports \
+  -v libraforge-settings:/app/settings \
+  -e LIBRAFORGE_SETTINGS_DIR=/app/settings \
+  ghcr.io/coconautilus17/libraforge:latest-chaptering
+```
+
+Or with Compose, set the tag via an env var:
+
+```bash
+LIBRAFORGE_IMAGE_TAG=latest-chaptering AUDIOBOOKS_PATH=/path/to/your/audiobooks \
+  docker compose -f docker-compose.dist.yml up -d
+```
 
 ### Optional companion services
 

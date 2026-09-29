@@ -11,9 +11,15 @@
 # the settings you save in the UI (patterns, Audiobookshelf connection, retention).
 #
 # To upgrade: `docker compose -f docker-compose.dist.yml pull && ... up -d`.
+#
+# Two published tags (see README's "Two published images"): the default
+# "latest" is the lean image; "latest-chaptering" adds Chapter Forge's
+# faster-whisper ASR models (~825MB) for its Hybrid / Full transcription
+# backends. Pick one with LIBRAFORGE_IMAGE_TAG, e.g.:
+#   LIBRAFORGE_IMAGE_TAG=latest-chaptering AUDIOBOOKS_PATH=... docker compose -f docker-compose.dist.yml up -d
 services:
   libraforge:
-    image: ghcr.io/coconautilus17/libraforge:latest
+    image: ghcr.io/coconautilus17/libraforge:${LIBRAFORGE_IMAGE_TAG:-latest}
     container_name: libraforge
     # Run as your host user so files written into the library keep your
     # ownership. Defaults to 1000:1000; set UID/GID if your user differs.
