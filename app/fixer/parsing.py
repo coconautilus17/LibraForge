@@ -213,8 +213,8 @@ def _authors_compatible(local: str, candidate: str) -> bool | None:
     source listing only the primary author of a co-authored book: a single shared
     author name is enough. Containment is length-guarded to avoid tiny matches.
     """
-    local_names = _split_author_names(local)
-    cand_names = _split_author_names(candidate)
+    local_names = _split_author_names(_surname_first_to_natural(local))
+    cand_names = _split_author_names(_surname_first_to_natural(candidate))
     if not local_names or not cand_names:
         return None
     for c in cand_names:
@@ -226,7 +226,30 @@ def _authors_compatible(local: str, candidate: str) -> bool | None:
                 return True
             if SequenceMatcher(None, c, l).ratio() >= 0.85:
                 return True
+            if _same_person_middle_names(c, l):
+                return True
     return False
+
+
+def _surname_first_to_natural(value: str) -> str:
+    """"Judt, Tony" -> "Tony Judt": a one-word surname, a comma, then one to
+    three given names is one person, not two co-authors."""
+    match = re.fullmatch(r"\s*([^\s,;&/]+),\s*((?:[^\s,;&/]+\s*){1,3})", value or "")
+    if not match or re.search(r"\b(?:and|with)\b", match.group(2), re.IGNORECASE):
+        return value
+    return f"{match.group(2).strip()} {match.group(1)}"
+
+
+def _same_person_middle_names(a: str, b: str) -> bool:
+    """Same first and last name, middle names agreeing up to initials or
+    omission: "barbara wertheim tuchman" / "barbara w tuchman" / "barbara tuchman"."""
+    a_tokens, b_tokens = a.replace(".", " ").split(), b.replace(".", " ").split()
+    if len(a_tokens) < 2 or len(b_tokens) < 2 or len(a_tokens) == len(b_tokens) == 2:
+        return False
+    if a_tokens[0] != b_tokens[0] or a_tokens[-1] != b_tokens[-1]:
+        return False
+    a_mid, b_mid = a_tokens[1:-1], b_tokens[1:-1]
+    return all(x.startswith(y) or y.startswith(x) for x, y in zip(a_mid, b_mid))
 
 
 def _initials_dedup_key(name: str) -> str:
@@ -1733,6 +1756,10 @@ def goodreads_title_query_variants(title: str) -> list[str]:
             r"\1",
             title,
             flags=re.IGNORECASE,
+        )
+        # "Vol. 04: Subtitle" finds nothing on Goodreads; "Vol. 4: Subtitle" does.
+        no_book_label = re.sub(
+            r"\b(vol(?:ume)?\.?\s*)0+(\d)", r"\1\2", no_book_label, flags=re.IGNORECASE,
         )
         no_book_label = no_book_label.replace(",", " ")
         no_book_label = re.sub(r"\s+", " ", no_book_label).strip(" ,")

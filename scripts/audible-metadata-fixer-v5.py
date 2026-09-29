@@ -3486,6 +3486,108 @@ def evaluate_goodreads_breaker_state(log: list[str]) -> bool:
         return True
     return False
 
+def find_goodreads_match(
+    clues: dict, abs_tract_url: str, limit: int, log: list[str],
+    local_duration_minutes: float | None = None,
+) -> tuple[dict | None, float, dict | None, str]:
+    """The first full Goodreads match over the book's title query variants.
+
+    Returns (product, score, ambiguity, query), or (None, 0.0, None, "").
+    Goodreads lists no duration or narrator, so acceptance is gated on a
+    strong title+author match (determine_edit_mode -> "full"). Every request
+    goes through abs_tract_search's throttle, retries and circuit breaker.
+    """
+    gr_queries = goodreads_title_query_variants(clues.get("title", ""))
+    _gr_series = clues.get("series", "")
+    _gr_number = clues.get("book_number", "")
+    if (
+        is_generic_series_number_title(clues)
+        and clean_sequence(_gr_number) == "1"
+        and _gr_series
+    ):
+        gr_queries.extend(goodreads_title_query_variants(_gr_series))
+    # When the title looks like a subtitle (different from series+N),
+    # also try "Series N" directly - often better-indexed on Goodreads.
+    if _gr_series and _gr_number and not is_generic_series_number_title(clues):
+        _sn_query = f"{_gr_series} {_gr_number}"
+        gr_queries.extend(goodreads_title_query_variants(_sn_query))
+    gr_queries = list(dict.fromkeys(q for q in gr_queries if q))
+
+    for gr_query in gr_queries:
+        gr_products = abs_tract_search(
+            title=gr_query,
+            author=clues.get("author", ""),
+            provider="goodreads",
+            abs_tract_url=abs_tract_url,
+            limit=limit,
+            existing_asin=clues.get("existing_asin", ""),
+            log=log,
+        )
+        log.append(f"  Goodreads results: {len(gr_products)}")
+        if gr_products:
+            gr_candidate, gr_score, gr_ambiguity = pick_best_match_for_metadata(
+                clues, gr_products, local_duration_minutes
+            )
+            if gr_candidate:
+                gr_md = metadata_from_product(gr_candidate, clues, gr_score)
+                log.append(
+                    f"  Goodreads candidate: title={gr_md.get('audible_title')} "
+                    f"mode={gr_md.get('edit_mode')}"
+                )
+                if gr_md.get("edit_mode") == "full":
+                    return gr_candidate, gr_score, gr_ambiguity, gr_query
+        if _abs_tract_breaker_is_open():
+            break
+    return None, 0.0, None, ""
+
+
+def match_ebook(
+    clues: dict, abs_url: str, abs_api_key: str, abs_tract_url: str,
+    limit: int = 10, log: list[str] | None = None,
+) -> dict:
+    """Best Open Library / Goodreads match for an ebook, judged like an audiobook.
+
+    Same clues, scoring and full-match gate as the audio fixer. Open Library
+    (through ABS) first; Goodreads when Open Library has no full match, or
+    to fill the cover/summary Open Library usually lacks. When the abs-tract
+    breaker is open Goodreads is skipped and the result says so, so a
+    rate-limited ebook isn't reported as a genuine no-match.
+    """
+    log = [] if log is None else log
+    result = {"product": None, "score": 0.0, "query": "", "provider": "", "goodreads_rate_limited": False}
+    title = clues.get("title", "")
+    if not title:
+        return result
+
+    if abs_url and abs_api_key:
+        ol_products = abs_search(title, clues.get("author", ""), "openlibrary", abs_url, abs_api_key, limit)
+        if ol_products:
+            candidate, score, _ = pick_best_match_for_metadata(clues, ol_products, None)
+            if candidate and metadata_from_product(candidate, clues, score).get("edit_mode") == "full":
+                result.update(product=candidate, score=score, query=title, provider="openlibrary")
+
+    ol = result["product"]
+    complete = bool(ol and (ol.get("product_images") or {}).get("500") and ol.get("publisher_summary"))
+    if complete or not abs_tract_url:
+        return result
+    if evaluate_goodreads_breaker_state(log):
+        result["goodreads_rate_limited"] = True
+        return result
+
+    gr, gr_score, _, gr_query = find_goodreads_match(clues, abs_tract_url, limit, log)
+    if not gr:
+        result["goodreads_rate_limited"] = not ol and _abs_tract_breaker_is_open()
+        return result
+    if ol:
+        # Only descriptive fields: identity stays what Open Library reported.
+        cover = (ol.get("product_images") or {}).get("500") or (gr.get("product_images") or {}).get("500", "")
+        result["product"] = {**ol, "product_images": {"500": cover},
+                             "publisher_summary": ol.get("publisher_summary") or gr.get("publisher_summary", "")}
+        return result
+    result.update(product=gr, score=gr_score, query=gr_query, provider="goodreads")
+    return result
+
+
 def search_item(
     index: int,
     file_path: Path,
@@ -3931,80 +4033,43 @@ def search_item(
                         )
                     else:
                         log.append("  No Audible match -> trying Goodreads (abs-tract)")
-                    gr_queries = goodreads_title_query_variants(clues.get("title", ""))
-                    _gr_series = clues.get("series", "")
-                    _gr_number = clues.get("book_number", "")
-                    if (
-                        is_generic_series_number_title(clues)
-                        and clean_sequence(_gr_number) == "1"
-                        and _gr_series
-                    ):
-                        gr_queries.extend(goodreads_title_query_variants(_gr_series))
-                    # When the title looks like a subtitle (different from series+N),
-                    # also try "Series N" directly - often better-indexed on Goodreads.
-                    if _gr_series and _gr_number and not is_generic_series_number_title(clues):
-                        _sn_query = f"{_gr_series} {_gr_number}"
-                        gr_queries.extend(goodreads_title_query_variants(_sn_query))
-                    gr_queries = list(dict.fromkeys(q for q in gr_queries if q))
-
-                    for gr_query in gr_queries:
-                        gr_products = abs_tract_search(
-                            title=gr_query,
-                            author=clues.get("author", ""),
-                            provider="goodreads",
-                            abs_tract_url=abs_tract_url,
-                            limit=args.limit,
-                            existing_asin=clues.get("existing_asin", ""),
-                            log=log,
-                        )
-                        log.append(f"  Goodreads results: {len(gr_products)}")
-                        if gr_products:
-                            gr_candidate, gr_score, gr_ambiguity = pick_best_match_for_metadata(
-                                clues, gr_products, local_duration_minutes
+                    gr_candidate, gr_score, gr_ambiguity, gr_query = find_goodreads_match(
+                        clues, abs_tract_url, args.limit, log, local_duration_minutes,
+                    )
+                    if gr_candidate:
+                        # Enrich the cover from Kindle (high quality; ASIN
+                        # ignored) only when the run is actually writing a
+                        # cover. Without a cover flag the Kindle scrape is
+                        # wasted work (and an extra slow abs-tract round-trip),
+                        # so skip it.
+                        if getattr(args, "cover_if_missing", False) or getattr(
+                            args, "replace_cover", False
+                        ):
+                            k_products = abs_tract_search(
+                                title=gr_query,
+                                author=clues.get("author", ""),
+                                provider="kindle",
+                                abs_tract_url=abs_tract_url,
+                                limit=args.limit,
+                                existing_asin=clues.get("existing_asin", ""),
+                                kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
+                                log=log,
                             )
-                            if gr_candidate:
-                                gr_md = metadata_from_product(gr_candidate, clues, gr_score)
-                                log.append(
-                                    f"  Goodreads candidate: title={gr_md.get('audible_title')} "
-                                    f"mode={gr_md.get('edit_mode')}"
+                            k_cover = ""
+                            if k_products:
+                                k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
+                                    clues, k_products, local_duration_minutes
                                 )
-                                if gr_md.get("edit_mode") == "full":
-                                    # Enrich the cover from Kindle (high quality; ASIN
-                                    # ignored) only when the run is actually writing a
-                                    # cover. Without a cover flag the Kindle scrape is
-                                    # wasted work (and an extra slow abs-tract round-trip),
-                                    # so skip it.
-                                    if getattr(args, "cover_if_missing", False) or getattr(
-                                        args, "replace_cover", False
-                                    ):
-                                        k_products = abs_tract_search(
-                                            title=gr_query,
-                                            author=clues.get("author", ""),
-                                            provider="kindle",
-                                            abs_tract_url=abs_tract_url,
-                                            limit=args.limit,
-                                            existing_asin=clues.get("existing_asin", ""),
-                                            kindle_region=getattr(args, "abs_tract_kindle_region", "us"),
-                                            log=log,
-                                        )
-                                        k_cover = ""
-                                        if k_products:
-                                            k_cand, _k_score, _k_amb = pick_best_match_for_metadata(
-                                                clues, k_products, local_duration_minutes
-                                            )
-                                            k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
-                                        if k_cover:
-                                            gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
-                                            log.append("  Kindle cover enrichment applied")
-                                    product = gr_candidate
-                                    score = gr_score
-                                    used_query = f"goodreads:{gr_query}"
-                                    match_ambiguity = gr_ambiguity
-                                    result.source_provider = "goodreads"
-                                    effective_min_score = min(effective_min_score, gr_score)
-                                    break
-                        if result.source_provider == "goodreads":
-                            break
+                                k_cover = ((k_cand or {}).get("product_images") or {}).get("500", "")
+                            if k_cover:
+                                gr_candidate = {**gr_candidate, "product_images": {"500": k_cover}}
+                                log.append("  Kindle cover enrichment applied")
+                        product = gr_candidate
+                        score = gr_score
+                        used_query = f"goodreads:{gr_query}"
+                        match_ambiguity = gr_ambiguity
+                        result.source_provider = "goodreads"
+                        effective_min_score = min(effective_min_score, gr_score)
 
             # Store in match_cache; if another thread beat us, use its result
             with match_cache_lock:
