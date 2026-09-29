@@ -6,16 +6,16 @@ onward is tracked here going forward.
 
 ---
 
-## v0.2.5 (unreleased)
+## v0.2.5 (2026-09-29)
 
 - Author names: a production/broadcaster credit (`BBC - Andrew Marshall & John Lloyd`)
-  is no longer misread as a person's initials (`B.B.C. - ...`) -- the unspaced-capitals
-  rule now checks against the known publisher catalog first. (Issue #278)
+  is no longer misread as a person's initials (`B.B.C. - ...`); the unspaced-capitals
+  rule now checks the token against the known publisher catalog first.
 - Folder Forge: a real series name that merely ends in a genre word (`Street
   Cultivation`) is no longer wiped by the marketing-cleanup filter when it comes from
   trusted (fixer/Manual Review) metadata. A series that is nothing but a genre bucket
   with no real content (`LitRPG`, `Fantasy Cultivation`) is still correctly dropped,
-  trusted or not. (Issue #276)
+  trusted or not.
 - Folder Forge: the organizer now flags books whose series or title was dropped or
   trimmed as generic marketing/genre text, and warns (with the folder and file paths)
   when a merged single file sits next to its own chapter files, so the two editions
@@ -56,6 +56,7 @@ onward is tracked here going forward.
   or `docker-compose.dist.yml`: saved patterns, the Audiobookshelf connection and report
   retention now live in a `libraforge-settings` volume (`LIBRAFORGE_SETTINGS_DIR`). Add the
   volume once when upgrading (see the README).
+- Docs: fixed the Uvicorn credit link in the README (`uvicorn.org` to `uvicorn.dev`).
 
 ---
 
