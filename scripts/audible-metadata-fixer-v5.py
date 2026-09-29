@@ -78,7 +78,7 @@ try:
         extract_author_from_title, goodreads_title_query_variants,
         normalize_book_label_for_match, strip_leading_sequence_from_title,
         # misc utilities
-        is_generic_chapter_title, pick_most_common_value,
+        is_generic_chapter_title, pick_majority_value, pick_most_common_value,
     )
     from app.fixer.clues import (
         apply_structured_path_override,
@@ -86,6 +86,7 @@ try:
         capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
+        group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
         read_current_book_metadata,
@@ -214,7 +215,7 @@ except ModuleNotFoundError:
         extract_author_from_title, goodreads_title_query_variants,
         normalize_book_label_for_match, strip_leading_sequence_from_title,
         # misc utilities
-        is_generic_chapter_title, pick_most_common_value,
+        is_generic_chapter_title, pick_majority_value, pick_most_common_value,
     )
     from app.fixer.clues import (
         apply_structured_path_override,
@@ -222,6 +223,7 @@ except ModuleNotFoundError:
         capture_sku_clue,
         build_search_queries_from_clues,
         choose_group_book_number,
+        group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
         read_current_book_metadata,
@@ -758,7 +760,10 @@ def write_original_metadata_backup(
     """
     lf_path, payload = _load_libraforge_raw(source, alone=alone)
 
-    if "backup" in payload:
+    existing = payload.get("backup")
+    # An empty original-tags backup is a failed probe; it is replaced while
+    # the file still holds its originals (nothing ever applied).
+    if existing is not None and (existing.get("format_tags") or existing.get("applied_tags")):
         return lf_path
 
     if tags is None or duration_minutes is None:
@@ -767,6 +772,11 @@ def write_original_metadata_backup(
             tags = probed_tags
         if duration_minutes is None:
             duration_minutes = probed_duration
+
+    # No tags and no duration is a failed probe (every readable file has a
+    # duration): never record it as the file's original tags.
+    if not tags and (existing is not None or duration_minutes is None):
+        return lf_path
 
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
@@ -2590,11 +2600,15 @@ def refresh_multipart_sidecar_audio_profile(
     _write_libraforge(lf_path, lf_payload)
     return lf_path
 
-def probe_file(file_path: Path) -> tuple[dict, float | None]:
-    """Single ffprobe -show_format call returning (tags_dict, duration_minutes).
+PROBE_TIMEOUTS_SECONDS = (30, 180)
 
-    -show_format already includes both the embedded tag block and the
-    container duration, so one subprocess call covers both needs.
+
+def probe_file(file_path: Path) -> tuple[dict, float | None]:
+    """Single ffprobe call returning (tags_dict, duration_minutes).
+
+    -show_format gives the container's tag block and duration; the first
+    audio stream's tags fill in what the container lacks (Opus/OGG keep
+    their tags there).
     """
     cmd = [
         "ffprobe",
@@ -2603,20 +2617,30 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
         "-print_format",
         "json",
         "-show_format",
+        "-show_streams",
+        "-select_streams",
+        "a:0",
         str(file_path),
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"  WARNING: ffprobe timed out for: {file_path}")
+    # A big file whose index sits at its end can take long to read over a
+    # network share under load; a timeout means slow, not untagged, so one
+    # retry gets more time (Mythos, 440 MB, timed out at 30 s).
+    result = None
+    for timeout in PROBE_TIMEOUTS_SECONDS:
+        try:
+            result = subprocess.run(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+            )
+            break
+        except subprocess.TimeoutExpired:
+            print(f"  WARNING: ffprobe timed out after {timeout}s for: {file_path}")
+    if result is None:
         return {}, None
 
     if result.returncode != 0:
@@ -2630,11 +2654,16 @@ def probe_file(file_path: Path) -> tuple[dict, float | None]:
         return {}, None
 
     fmt = data.get("format", {}) or {}
-    tags = {
-        str(key).lower(): str(value).strip()
-        for key, value in (fmt.get("tags", {}) or {}).items()
-        if str(value).strip()
-    }
+    # Opus/OGG keep their tags on the audio stream, not the container; those
+    # fill whatever the container lacks.
+    stream_tags = ((data.get("streams") or [{}])[0] or {}).get("tags", {}) or {}
+    tags = {}
+    for source in (stream_tags, fmt.get("tags", {}) or {}):
+        tags.update({
+            str(key).lower(): str(value).strip()
+            for key, value in source.items()
+            if str(value).strip()
+        })
 
     try:
         seconds = float(fmt.get("duration") or 0)
@@ -2780,7 +2809,9 @@ def read_tags_and_duration(
                             if book
                             else entry.get("format_tags")
                         )
-                    if isinstance(tags, dict):
+                    # An empty snapshot is a failed probe, not a file
+                    # without tags: read the file instead.
+                    if isinstance(tags, dict) and tags:
                         return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
@@ -2795,7 +2826,7 @@ def read_tags_and_duration(
                 tags = backup.get("format_tags")
             else:
                 tags = backup.get("applied_tags") or backup.get("format_tags")
-            if isinstance(tags, dict):
+            if isinstance(tags, dict) and tags:
                 return tags, float(duration), False
     except (json.JSONDecodeError, OSError, ValueError):
         pass
@@ -2864,11 +2895,16 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         file_path, known_author=clues.get("author", "")
     )
     if descriptive_path_meta:
+        path_narrator = normalize_for_match(descriptive_path_meta.get("narrator", ""))
         if (
             descriptive_path_meta.get("author")
-            and should_prefer_path_author(
-                clues.get("author", ""),
-                descriptive_path_meta.get("author", ""),
+            and (
+                should_prefer_path_author(
+                    clues.get("author", ""),
+                    descriptive_path_meta.get("author", ""),
+                )
+                # The tag "author" is the reader the path credits ("Read by").
+                or (path_narrator and path_narrator == normalize_for_match(clues.get("author", "")))
             )
         ):
             clues["author"] = descriptive_path_meta["author"]
@@ -3007,6 +3043,7 @@ def build_multi_file_search_context(
     ):
         folder_identity = {}
 
+    parts_numbered = group_numbers_are_part_indices(clues_list)
     specific_titles = [
         clues.get("title", "")
         for clues in clues_list
@@ -3025,8 +3062,8 @@ def build_multi_file_search_context(
         folder_structured.get("title")
         or folder_descriptive.get("title")
         or (folder_name if not is_generic_chapter_title(folder_name) else "")
-        or pick_most_common_value(specific_titles)
-        or pick_most_common_value(raw_titles)
+        or pick_majority_value(specific_titles, len(clues_list))
+        or pick_majority_value(raw_titles, len(clues_list))
     )
     author = (
         folder_identity.get("author")
@@ -3034,15 +3071,20 @@ def build_multi_file_search_context(
         or pick_most_common_value([clues.get("author", "") for clues in clues_list])
         or path_author
     )
+    if not author:
+        # "... By Eric H. Cline": the same recovery single files get.
+        author = extract_author_from_title(sanitize_book_title(title))
     if title == folder_name:
         title = clean_group_folder_title(title, author) or title
     narrator = pick_most_common_value(
         [clues.get("narrator", "") for clues in clues_list]
-    )
+    ) or folder_descriptive.get("narrator", "")
     series = (
         folder_identity.get("series")
         or folder_structured.get("series")
-        or pick_most_common_value([clues.get("series", "") for clues in clues_list])
+        or pick_most_common_value([
+            clues.get("tag_series" if parts_numbered else "series", "") for clues in clues_list
+        ])
         or path_series
     )
     book_number, book_number_source = choose_group_book_number(clues_list, folder_name)
@@ -3072,6 +3114,9 @@ def build_multi_file_search_context(
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": author,
+        "credit_names": list(dict.fromkeys(
+            name for clues in clues_list for name in clues.get("credit_names") or []
+        )),
         "narrator": narrator,
         "album": pick_most_common_value([clues.get("album", "") for clues in clues_list]),
         "local_duration_minutes": local_duration_minutes,

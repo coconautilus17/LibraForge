@@ -1058,6 +1058,12 @@ def parse_structured_book_text(value: str, known_author: str = "") -> dict:
     return {}
 
 
+_READ_BY_RE = re.compile(
+    r"\s*[(\[]\s*(?:read|narrated|performed)\s+by\s+(?P<narrator>[^)\]]+?)\s*[)\]]\s*$",
+    re.IGNORECASE,
+)
+
+
 @trace(ALTER, capture=["value", "known_author"])
 def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
     """Parse common author/title path names, using known author tags to orient them."""
@@ -1065,6 +1071,26 @@ def parse_descriptive_book_text(value: str, known_author: str = "") -> dict:
 
     if not value:
         return {}
+
+    # "Virgil - The Aeneid (Read by David Collins)": the credit names the
+    # narrator, and what's left reads as "Author - Title".
+    read_by = _READ_BY_RE.search(value)
+    if read_by:
+        narrator = clean_text(read_by.group("narrator"))
+        rest = value[: read_by.start()]
+        parsed = parse_descriptive_book_text(rest)
+        if not parsed.get("author"):
+            segments = [clean_text(part) for part in rest.split(" - ") if clean_text(part)]
+            if len(segments) == 2 and not is_generic_chapter_title(segments[1]):
+                parsed = {
+                    "title": segments[1],
+                    "author": clean_author_value(segments[0]),
+                    "year": "",
+                    "series": "",
+                    "book_number": extract_book_number_from_text(segments[1]),
+                }
+        if parsed.get("author"):
+            return {**parsed, "raw_title": value, "narrator": narrator}
 
     if parse_structured_book_text(value, known_author=known_author):
         return {}
@@ -1423,6 +1449,17 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     )
 
     series = clean_series_value(grouping or album)
+    # An album that is the book's own title ("Sapiens"), or its opening
+    # ("Intra Mundum: Reforged" for "Intra Mundum: Reforged: ..."), is not a
+    # series clue. A "Series N" echo ("Pocket Dungeon 4") still is; a year
+    # ("... Since 1945") is not a book number.
+    album_norm, title_norm = normalize_for_match(album), normalize_for_match(raw_title)
+    if (
+        not grouping and album_norm and title_norm
+        and title_norm.startswith(album_norm)
+        and not re.search(r"(?<!\d)\d{1,3}\s*$", album_norm)
+    ):
+        series = ""
     # Only a dedicated series-like tag (or a series name parsed out of the
     # title tag below) counts as real embedded series metadata. Falling back
     # to the album tag is a useful search clue (album often echoes the
@@ -1473,6 +1510,22 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         book_number = normalize_book_number(trailing_series.group("number"))
         book_number_source = "title"
 
+    # "Title (Series, Book N)", as Audible writes a series into a subtitle.
+    parenthetical_series = re.match(
+        r"^(?P<title>.+?)\s*\((?P<series>[^()]+?),\s*(?:Book|Vol(?:ume)?\.?)\s*#?"
+        r"(?P<number>\d{1,4}(?:\.\d+)?)\)\s*$",
+        raw_title,
+        flags=re.IGNORECASE,
+    )
+    if parenthetical_series and not book_number:
+        book_number = normalize_book_number(parenthetical_series.group("number"))
+        book_number_source = "title"
+        parenthetical_series_name = clean_series_value(parenthetical_series.group("series"))
+        if parenthetical_series_name:
+            series = parenthetical_series_name
+            series_from_real_tag = True
+            title = sanitize_book_title(parenthetical_series.group("title"))
+
     if not book_number:
         title_number = extract_book_number_from_text(raw_title)
         if title_number:
@@ -1501,6 +1554,14 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         "book_number": book_number,
         "book_number_source": book_number_source,
         "author": clean_author_value(artist),
+        # Every credit tag: rips often put the author in composer or artist
+        # and an uploader or narrator in album_artist.
+        "credit_names": list(dict.fromkeys(
+            name
+            for name in (clean_author_value(first_existing_tag(tags, [key]))
+                         for key in ("album_artist", "artist", "author", "composer"))
+            if name
+        )),
         "narrator": narrator,
         "genre": genre,
         "album": album,
@@ -1581,8 +1642,11 @@ SEARCH_TITLE_PREFIX_NOISE = [
 ]
 
 _TRAILING_BY_AUTHOR_RE = re.compile(
-    r"\s+by\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
+    r"\s+(?i:by)\s+([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})(\s*\d{1,3})?\s*$"
 )
+# A name with an initial ("Eric H. Cline") is a person, not a title phrase
+# like "Death by Black Hole".
+_NAME_INITIAL_RE = re.compile(r"\b[A-Z]\.(?:\s|$)")
 
 
 @trace(ALTER, capture=["text"])
@@ -1640,15 +1704,16 @@ def strip_title_search_noise(text: str, author: str = "") -> str:
 def extract_author_from_title(text: str) -> str:
     """Recover an author name baked into a title as "... by <Name> <number>".
 
-    A trailing book/part number is required so legitimate titles like
-    "Death by Black Hole" are not misread as having author "Black Hole".
+    A trailing book/part number, or an initial in the name ("By Eric H.
+    Cline"), is required so legitimate titles like "Death by Black Hole" are
+    not misread as having author "Black Hole".
     Returns "" when no such pattern is present.
     """
     if not text:
         return ""
 
     match = _TRAILING_BY_AUTHOR_RE.search(clean_text(text))
-    if match and match.group(2):
+    if match and (match.group(2) or _NAME_INITIAL_RE.search(match.group(1))):
         return match.group(1).strip()
     return ""
 
@@ -1704,6 +1769,11 @@ def strip_leading_sequence_from_title(value: str) -> str:
     value = clean_text(value)
     if not value:
         return ""
+    # A bare 3-4 digit number followed by just a space is part of the title
+    # ("1177 B.C.", "2001 A Space Odyssey"); ordering prefixes are short,
+    # zero-padded, or set off by a separator ("01 Title", "2011 - Title").
+    if re.match(r"^[1-9]\d{2,3} +[^\s\-_.:]", value):
+        return sanitize_book_title(value)
 
     cleaned = re.sub(
         r"^\s*(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)?\s*"
@@ -1764,3 +1834,14 @@ def pick_most_common_value(values: list[str]) -> str:
 
     counts = Counter(cleaned_values)
     return max(counts.items(), key=lambda item: (item[1], len(item[0])))[0]
+
+
+def pick_majority_value(values: list[str], total: int) -> str:
+    """The most common value only when more than half of `total` files carry
+    it. Values that differ from file to file (part numbers, chapter titles)
+    describe the files, not the book."""
+    chosen = pick_most_common_value(values)
+    if not chosen:
+        return ""
+    count = sum(1 for value in values if sanitize_technical_labels(value) == chosen)
+    return chosen if count * 2 > total else ""

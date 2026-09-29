@@ -219,6 +219,12 @@ def split_series_trailing_number(series_name: str, sequence: str) -> tuple[str, 
     return series_name, sequence
 
 
+def literal_text(value: str) -> str:
+    """Case and punctuation removed, words kept (unlike normalize_for_match,
+    which also drops marketing text)."""
+    return re.sub(r"[\W_]+", " ", str(value or "").lower()).strip()
+
+
 @trace(ALTER, capture=[])
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
@@ -235,8 +241,14 @@ def get_primary_series(product: dict) -> tuple[str, str]:
         sanitize_tag(series_name), sanitize_tag(sequence)
     )
     # Audible sometimes files books under a genre as the series (Arthur
-    # Stone's "LitRPG" #1-3); that is never written as a series.
+    # Stone's "LitRPG" #1-3); that is never written as a series. Nor is the
+    # book's own "title: subtitle" (Goodreads' Postwar, "#1945").
     if is_never_series(series_name):
+        return "", ""
+    # Compared literally: the matcher's normalization strips marketing
+    # subtitles, so "Tunnel Rat: A LitRPG Adventure" would equal "Tunnel Rat".
+    subtitle = str(product.get("subtitle") or "").strip()
+    if subtitle and literal_text(series_name) == literal_text(f"{product.get('title') or ''} {subtitle}"):
         return "", ""
     return series_name, sequence
 
@@ -434,6 +446,14 @@ def title_evidence_score(clues: dict, product: dict) -> float:
         # single word being contained in "arena road 4" should NOT score 1.0.
         and len(significant_title_tokens(audible_title)) >= 2
     ):
+        audible_in_local = 1.0
+
+    # "Main: Subtitle" whose main title is exactly the product's title: the
+    # same book under another edition's subtitle ("Troy: The Siege of Troy
+    # Retold" vs Audible's "Troy"). A bare containment ("Arena" in "Arena
+    # Road 4") is not enough; the separator marks where the title ends.
+    main_title = normalize_for_match((clean_title or clean_raw_title).split(":", 1)[0])
+    if ":" in (clean_title or clean_raw_title) and main_title and main_title == audible_title:
         audible_in_local = 1.0
 
     return max(
@@ -847,12 +867,31 @@ def has_reordered_title_conflict(clues: dict, product: dict) -> bool:
 # Main scorer
 # ---------------------------------------------------------------------------
 
+def with_best_local_author(clues: dict, product: dict) -> dict:
+    """The clues with the local credit that names the product's author.
+
+    Rips scatter credits: an uploader or narrator can sit in the author tag
+    while the real author is in composer ([PZG] Tanya rips). When the chosen
+    author doesn't match the product but another local credit tag does,
+    score and judge the product against that credit."""
+    names = clues.get("credit_names") or []
+    product_authors = " ".join(get_people(product, "authors"))
+    current = clues.get("author", "")
+    if not names or not product_authors or _authors_compatible(current, product_authors) is True:
+        return clues
+    for name in names:
+        if name != current and _authors_compatible(name, product_authors) is True:
+            return {**clues, "author": name}
+    return clues
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
     product: dict,
     local_duration_minutes: float | None = None,
 ) -> float:
+    clues = with_best_local_author(clues, product)
     # ASIN identity: embedded ASIN + title + author is bullet-proof confirmation.
     # When all three match, skip hard-reject guards designed for wrong-book
     # false positives and guarantee a floor score above the min_score gate.
@@ -1162,6 +1201,27 @@ def narrator_match_score(clues: dict, product: dict) -> float:
     return SequenceMatcher(None, local_narrator, audible_narrators).ratio()
 
 
+def _same_recording(a: dict, b: dict) -> bool:
+    """Same title, authors, narrators and runtime: one recording, two listings.
+    Goodreads/Open Library list neither narrator nor runtime, so there two
+    editions with the same title and authors are the same book."""
+    def people(p: dict, role: str) -> set[str]:
+        return {normalize_for_match(n) for n in get_people(p, role)}
+
+    same_book = bool(
+        literal_text(a.get("title")) == literal_text(b.get("title"))
+        and people(a, "authors") and people(a, "authors") == people(b, "authors")
+    )
+    if a.get("_abs_provider") in SPARSE_PROVIDERS and b.get("_abs_provider") in SPARSE_PROVIDERS:
+        return same_book
+    a_minutes, b_minutes = get_audible_duration_minutes(a), get_audible_duration_minutes(b)
+    return bool(
+        same_book
+        and a_minutes and b_minutes and abs(a_minutes - b_minutes) <= 1
+        and people(a, "narrators") and people(a, "narrators") == people(b, "narrators")
+    )
+
+
 def _sku_matches(clues: dict, product: dict) -> bool:
     local = str(clues.get("sku", "") or "").upper()
     return bool(local) and local in {
@@ -1271,6 +1331,11 @@ def pick_best_match_for_metadata(
                 resolved = True
                 resolved_by = evidence
                 break
+    # Nothing in the file tells them apart, but they are one recording sold
+    # under several ASINs: any of them is the book, so take Audible's first.
+    if not resolved and all(_same_recording(best_product, item[1]) for item in top[1:]):
+        resolved = True
+        resolved_by = "same recording"
 
     def label(product: dict) -> str:
         title = product.get("title", "") or "?"
@@ -1311,6 +1376,7 @@ def determine_edit_mode(
     score: float,
     duration_result: dict | None = None,
 ) -> str:
+    clues = with_best_local_author(clues, product)
     # Dedicated catalog sources (GraphicAudio, SoundBooth Theater) don't expose
     # runtime data via abs-agg so duration is always "unknown". Their scores are
     # structurally low even for perfect matches, so evaluate them before the
@@ -1516,6 +1582,15 @@ def determine_edit_mode(
             duration_status in {"perfect", "strong", "acceptable"}
             and series_name
             and is_single_numeric_sequence(sequence)
+        ):
+            return "full"
+        # The product is titled exactly like the local book ("Sapiens" in
+        # series "Sapiens"): it is the book, not a series-named stand-in.
+        if (
+            local_title
+            and local_title == audible_title
+            and author_identity_match
+            and duration_status in {"perfect", "strong"}
         ):
             return "full"
 

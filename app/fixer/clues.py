@@ -21,6 +21,7 @@ from app.fixer.parsing import (
     normalize_book_number,
     strip_leading_sequence_from_title,
     strip_publisher_search_noise,
+    pick_majority_value,
     pick_most_common_value,
     extract_folder_book_number,
     sanitize_technical_labels,
@@ -341,6 +342,18 @@ def build_search_queries_from_clues(clues: dict) -> list[str]:
 
 
 @trace(CHOOSE, capture=["folder_name"])
+def group_numbers_are_part_indices(clues_list: list[dict]) -> bool:
+    """True when the files' own numbers differ from file to file ("48 Laws of
+    Power 01".."52", "1.mp3".."N.mp3"): they number the parts, not the book,
+    and whatever each file's name parsed as its series is only the title."""
+    numbers = [
+        normalize_book_number(clues.get("book_number", ""))
+        for clues in clues_list
+        if clues.get("book_number_source") in {"path", "title"} and clues.get("book_number")
+    ]
+    return len(numbers) >= 2 and not pick_majority_value(numbers, len(numbers))
+
+
 def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[str, str]:
     priority_sources = ["path", "title"]
 
@@ -350,7 +363,9 @@ def choose_group_book_number(clues_list: list[dict], folder_name: str) -> tuple[
             for clues in clues_list
             if clues.get("book_number_source") == source and clues.get("book_number")
         ]
-        chosen = pick_most_common_value(values)
+        # Only a number most of the files agree on names the book; a spread of
+        # different numbers is the part numbering.
+        chosen = pick_majority_value(values, len(clues_list))
         if chosen:
             return chosen, source
 
@@ -401,7 +416,7 @@ def clean_group_folder_title(value: str, author: str) -> str:
     author = clean_author_value(author)
     if author:
         cleaned = re.sub(
-            rf"[\s_-]+{re.escape(author)}\s*$",
+            rf"[\s_-]+(?:by\s+)?{re.escape(author)}\s*$",
             "",
             cleaned,
             flags=re.IGNORECASE,
