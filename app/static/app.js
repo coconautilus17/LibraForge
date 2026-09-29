@@ -1480,6 +1480,7 @@ let seriesGroupsRenderToken = 0;
 async function renderMatchReport(items) {
   matchReportItems = items || [];
   matchReportGroups = [];
+  if ($('matchReportNoSeriesNote')) $('matchReportNoSeriesNote').hidden = true;
   const count = $('matchReportCount');
   const card = $('matchReportCard');
   if (!card) return;
@@ -1499,6 +1500,11 @@ async function renderMatchReport(items) {
     const groups = await ensureSeriesGroupsForMatchReport(currentReportId);
     if (myToken !== seriesGroupsRenderToken) return; // a newer render call superseded this one
     matchReportGroups = groups;
+    // In a dry run nothing is written yet, so books without a series tag
+    // form "no series" groups even when their match brings one.
+    const isDryRun = matchReportItems.some((item) => (item.write_action || '').toLowerCase() === 'would_write');
+    const hasNoSeriesGroups = groups.some((g) => ((g.reasons || [])[0] || {}).code === 'series_group_missing');
+    $('matchReportNoSeriesNote').hidden = !(isDryRun && hasNoSeriesGroups);
     buildMatchReportCards();
   }
 }
