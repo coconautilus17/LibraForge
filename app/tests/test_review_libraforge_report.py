@@ -422,6 +422,75 @@ class GroupMissingSeriesByTitlePatternTests(unittest.TestCase):
         paths = {m["path"] for m in groups[0]["members"]}
         self.assertEqual(paths, {"/lib/A2.m4b", "/lib/A3.m4b"})
 
+    def test_trailing_book_label_is_not_part_of_the_group_name(self):
+        # Report 20260929-080823: "The Saga of Tanya the Evil, Vol. 6" grouped
+        # under "The Saga of Tanya the Evil, Vol.".
+        items = [
+            self._item("/lib/T6.m4b", "The Saga of Tanya the Evil, Vol. 6", "Carlo Zen"),
+            self._item("/lib/T10.m4b", "The Saga of Tanya the Evil, Vol. 10", "Carlo Zen"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(groups[0]["suggested_series"], "The Saga of Tanya the Evil")
+        self.assertEqual(REVIEW.split_title_base_and_number("Mayor of Mythos, Book 3"), ("Mayor of Mythos", "3"))
+
+    def test_numbered_label_before_a_subtitle_splits(self):
+        # Untagged Tanya audiobooks are "Series, Vol. N: Subtitle"; only a
+        # trailing number used to split.
+        self.assertEqual(REVIEW.split_title_base_and_number("The Saga of Tanya the Evil, Vol. 06: Nil Admirari"),
+                         ("The Saga of Tanya the Evil", "6"))
+        items = [
+            self._item("/lib/T5.m4b", "The Saga of Tanya the Evil, Vol. 05: Abyssus Abyssum Invocat", "Carlo Zen"),
+            self._item("/lib/T7.m4b", "The Saga of Tanya the Evil, Vol. 07: Ut Sementem Feceris", "Carlo Zen"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual(groups[0]["suggested_series"], "The Saga of Tanya the Evil")
+        self.assertEqual([m["sequence"] for m in groups[0]["members"]], ["5", "7"])
+
+    def test_series_parenthetical_in_the_title(self):
+        # "(A LitRPG series, Book 1)" describes the series; "(The Tower
+        # Series, Book 2)" names it.
+        self.assertEqual(REVIEW.split_title_base_and_number("The Idle System (A LitRPG series, Book 1)"),
+                         ("The Idle System", "1"))
+        self.assertEqual(REVIEW.split_title_base_and_number("Reforged: A LitRPG Adventure (The Tower Series, Book 2)"),
+                         ("The Tower Series", "2"))
+
+    def test_a_bare_book_label_is_not_a_series(self):
+        # Supreme Magus "Volume 1".."Volume 3" became a group named "Volume".
+        items = [self._item(f"/lib/V{n}.mp3", f"Volume {n}", "") for n in (1, 2, 3)]
+        self.assertEqual(REVIEW.group_missing_series_by_title_pattern(items), [])
+
+    def test_same_unnumbered_title_twice_is_not_a_series(self):
+        # "The Guns of August" audiobook and its own epub: no member numbered.
+        items = [
+            self._item("/lib/G/Chapter 01.m4a", "The Guns of August", "Barbara W. Tuchman"),
+            self._item("/lib/G/Guns.m4b", "The Guns of August", "Barbara W. Tuchman"),
+        ]
+        self.assertEqual(REVIEW.group_missing_series_by_title_pattern(items), [])
+
+    def test_unnumbered_opener_and_one_sequel_is_a_series(self):
+        # Soul Caller, then Soul Caller 2.
+        items = [
+            self._item("/lib/SC1.m4b", "Soul Caller", "Seth Ring"),
+            self._item("/lib/SC2.m4b", "Soul Caller 2", "Seth Ring"),
+        ]
+        self.assertEqual(len(REVIEW.group_missing_series_by_title_pattern(items)), 1)
+
+    def test_ebooks_are_not_members_of_audiobook_series_groups(self):
+        # Tunnel Rat: each .epub (its own item, with its own title) joined the
+        # audiobooks' group; Fix Series writes audio tags and has no ebook path.
+        items = [
+            self._item("/lib/TR/Tunnel Rat 01.mp3", "Tunnel Rat 01", "Walrus King"),
+            self._item("/lib/TR/Tunnel Rat 02.mp3", "Tunnel Rat 2", "Walrus King"),
+            self._item("/lib/TR/Tunnel Rat 01.epub", "Tunnel Rat 3", "Walrus King", media_type="ebook"),
+        ]
+        groups = REVIEW.group_missing_series_by_title_pattern(items)
+        self.assertEqual({m["path"] for m in groups[0]["members"]},
+                         {"/lib/TR/Tunnel Rat 01.mp3", "/lib/TR/Tunnel Rat 02.mp3"})
+        tagged = [self._item(f"/lib/C/{n}.m4b", f"Creature Farm {n}", "A", series="Creature Farm") for n in (1, 2)]
+        tagged.append(self._item("/lib/C/1.epub", "Creature Farm 1", "A", series="Creature Farm", media_type="ebook"))
+        tag_groups = REVIEW.group_existing_series_by_normalized_tag(tagged, set())
+        self.assertEqual(len(tag_groups[0]["members"]), 2)
+
     def test_unconfirmed_match_series_does_not_exclude_an_untagged_book(self):
         # Regression: a book with no local series tag at all must still be
         # treated as untagged even when an unconfirmed/low-score provider

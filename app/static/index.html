@@ -291,6 +291,7 @@
       </div>
       <div id="matchReportWidget" hidden>
         <p class="note" style="margin-top:10px">Per-book results from the last run. Covers on the left are local (folder cover.jpg), covers on the right are from the match provider.</p>
+        <p id="matchReportNoSeriesNote" class="provider-query-note" hidden>&#9432; This was a dry run, so <strong>"no series" groups are expected</strong>: the files don't carry their series yet. Books whose match has a series get it when you apply; any "no series" group still here after an apply run is one to fix.</p>
         <div class="mrep-controls">
           <input id="matchReportSearch" type="search" placeholder="Filter by title, author, series, path..." />
           <select id="matchReportFilter">
@@ -435,7 +436,7 @@
    </div>
   </main>
   <script src="/static/ui-common.js?v=20260929-1"></script>
-  <script src="/static/app.js?v=20260929-1"></script>
+  <script src="/static/app.js?v=20260929-3"></script>
   <script src="/static/manual-review-edit.js?v=20260707-1"></script>
   <script src="/static/fix-series.js?v=20260929-1"></script>
 </body>

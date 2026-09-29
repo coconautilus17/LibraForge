@@ -1480,6 +1480,7 @@ let seriesGroupsRenderToken = 0;
 async function renderMatchReport(items) {
   matchReportItems = items || [];
   matchReportGroups = [];
+  if ($('matchReportNoSeriesNote')) $('matchReportNoSeriesNote').hidden = true;
   const count = $('matchReportCount');
   const card = $('matchReportCard');
   if (!card) return;
@@ -1499,6 +1500,11 @@ async function renderMatchReport(items) {
     const groups = await ensureSeriesGroupsForMatchReport(currentReportId);
     if (myToken !== seriesGroupsRenderToken) return; // a newer render call superseded this one
     matchReportGroups = groups;
+    // In a dry run nothing is written yet, so books without a series tag
+    // form "no series" groups even when their match brings one.
+    const isDryRun = matchReportItems.some((item) => (item.write_action || '').toLowerCase() === 'would_write');
+    const hasNoSeriesGroups = groups.some((g) => ((g.reasons || [])[0] || {}).code === 'series_group_missing');
+    $('matchReportNoSeriesNote').hidden = !(isDryRun && hasNoSeriesGroups);
     buildMatchReportCards();
   }
 }
@@ -1573,8 +1579,16 @@ function buildMatchReportCards() {
   const statusFilter = $('matchReportFilter')?.value || '';
   list.innerHTML = '';
   let shown = 0;
+  // One search rule for books and series groups alike.
+  const matchesQuery = (parts) => !query || parts.filter(Boolean).join(' ').toLowerCase().includes(query);
   if (!statusFilter || statusFilter === 'series_groups') {
     for (const group of matchReportGroups) {
+      const evidence = ((group.reasons || [])[0] || {}).evidence || {};
+      const members = evidence.members || [];
+      if (!matchesQuery([
+        evidence.suggested_series, evidence.suggested_author,
+        ...members.flatMap((m) => [m.title, m.path, m.series, m.author]),
+      ])) continue;
       list.appendChild(window.UiCommon.buildSeriesGroupCard(group));
       shown++;
     }
@@ -1604,15 +1618,12 @@ function buildMatchReportCards() {
       if (statusFilter === 'multi_file' && !item.is_grouped) continue;
       if (statusFilter === 'ebooks' && item.media_type !== 'ebook') continue;
     }
-    if (query) {
-      const local = item.local || {};
-      const m = item.match || {};
-      const haystack = [
-        item.path, local.title, local.author, local.series,
-        m.title, m.author, m.series, m.asin,
-      ].filter(Boolean).join(' ').toLowerCase();
-      if (!haystack.includes(query)) continue;
-    }
+    const local = item.local || {};
+    const m = item.match || {};
+    if (!matchesQuery([
+      item.path, local.title, local.author, local.series,
+      m.title, m.author, m.series, m.asin,
+    ])) continue;
     list.appendChild(buildMatchCard(item));
     shown++;
   }
