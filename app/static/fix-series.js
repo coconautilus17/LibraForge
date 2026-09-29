@@ -20,6 +20,11 @@ function fsBuildDialog() {
     <h3 class="manual-apply-title">Fix Series</h3>
     <p id="fsContextNote" class="manual-apply-body"></p>
     <p id="fsAuthorNote" class="manual-apply-body fs-author-note" hidden></p>
+    <div class="fs-sibling-bar">
+      <input id="fsPocketFmLink" placeholder="Pocket FM show link (pocketfm.com/show/...)" />
+      <button type="button" id="fsPocketFmBtn" class="secondary">Fill from Pocket FM</button>
+    </div>
+    <p id="fsPocketFmNote" class="note" hidden></p>
     <div class="manual-apply-edit-fields">
       <label>Series<input id="fsSeries" /></label>
       <label>Author<input id="fsAuthor" /></label>
@@ -47,10 +52,45 @@ function fsBuildDialog() {
   document.body.appendChild(dlg);
 
   $('fsAddSiblingsBtn').addEventListener('click', fsAddTaggedSiblings);
+  $('fsPocketFmBtn').addEventListener('click', fsFillFromPocketFm);
   $('fsSearchInput').addEventListener('input', fsRunSearch);
   $('fsSearchInput').addEventListener('blur', () => {
     setTimeout(() => { $('fsSearchDropdown').hidden = true; }, 150);
   });
+}
+
+// Pocket FM series (Supreme Magus, Shadow Slave) aren't on Audible: its
+// public show page gives the series-level fields for every book at once.
+// Pocket FM has no volumes, so each book keeps its own number below.
+async function fsFillFromPocketFm() {
+  const note = $('fsPocketFmNote');
+  const btn = $('fsPocketFmBtn');
+  btn.disabled = true;
+  note.hidden = false;
+  note.textContent = 'Reading the Pocket FM show page...';
+  try {
+    const res = await fetch('/api/pocketfm/show', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link: $('fsPocketFmLink').value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      note.textContent = data.detail || 'Could not read that Pocket FM show.';
+      return;
+    }
+    const show = data.show || {};
+    if (show.title) $('fsSeries').value = show.title;
+    if (show.author) $('fsAuthor').value = show.author;
+    if (show.genre) $('fsGenre').value = show.genre;
+    if (show.language) $('fsLanguage').value = show.language;
+    note.textContent = `Filled from Pocket FM: "${show.title}"${show.author ? ` by ${show.author}` : ''}`
+      + `${show.episodes ? `, ${show.episodes} episodes` : ''}. Check each book's number below.`;
+  } catch (e) {
+    note.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function fsRenderBookList() {
@@ -254,6 +294,8 @@ function fsOpen(group) {
   $('fsGenre').value = group.suggestedGenre || '';
   $('fsNarrator').value = group.suggestedNarrator || '';
   $('fsLanguage').value = '';
+  $('fsPocketFmLink').value = '';
+  $('fsPocketFmNote').hidden = true;
   $('fsExplicit').checked = false;
   $('fsExplicit').dataset.touched = 'false';
   $('fsExplicit').onchange = () => { $('fsExplicit').dataset.touched = 'true'; };
