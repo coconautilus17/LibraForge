@@ -371,9 +371,31 @@ TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
 # the current book's writes complete rather than being killed mid-write.
 _cancel_requested = False
 
+def needs_duplicate_asin_check(all_results: list) -> bool:
+    """Whether the library-wide duplicate-ASIN scan has anything to guard.
+    Never after a cancel: nothing is written then, and the scan probes every
+    file in the library (LibraForge #321)."""
+    if _cancel_requested:
+        return False
+    return any(
+        result.status == "matched"
+        and not result.asin_conflict
+        and (result.metadata or {}).get("asin")
+        for result in all_results
+    )
+
+
+# A dry run writes nothing, so a cancel may end it at once instead of
+# finishing its current phase; main() sets this for runs without --apply.
+_exit_on_cancel = False
+
+
 def _handle_sigterm(signum: int, frame: object) -> None:
     global _cancel_requested
     _cancel_requested = True
+    if _exit_on_cancel:
+        print("\nCancelled - dry run stopped.", flush=True)
+        os._exit(143)
 
 try:
     signal.signal(signal.SIGTERM, _handle_sigterm)
@@ -5726,6 +5748,8 @@ def main():
     )
 
     args = parser.parse_args()
+    global _exit_on_cancel
+    _exit_on_cancel = not args.apply and not args.restore_metadata
 
     if args.debug_trace:
         cats = None
@@ -5924,13 +5948,7 @@ def main():
     # Then guard against assigning a duplicate ASIN globally: same ASIN matched to
     # multiple books this run (cross-series), or an ASIN already embedded on a
     # different book on disk. Scans every file's embedded ASIN once (parallelised).
-    needs_dup_check = any(
-        result.status == "matched"
-        and not result.asin_conflict
-        and (result.metadata or {}).get("asin")
-        for result in all_results
-    )
-    if needs_dup_check:
+    if needs_duplicate_asin_check(all_results):
         print(
             "Checking the library for existing ASINs to prevent duplicates...",
             flush=True,
