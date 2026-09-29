@@ -115,6 +115,8 @@ from app.title_noise_policy import load_title_noise_policy, save_title_noise_pol
 from app import install_state
 from app.settings_paths import settings_dir, user_settings_file
 from app.author_names import load_author_policy, save_author_policy
+from app.manual_candidates import build_manual_candidate_row
+from app.pocketfm import fetch_show as fetch_pocketfm_show, parse_show_id as parse_pocketfm_show_id, show_to_manual_row as pocketfm_show_row
 from app.publisher_policy import SPECIAL_PROVIDERS, load_publisher_policy, save_publisher_policy
 from app.chaptering import (
     ChapterDetectionCancelled,
@@ -378,61 +380,25 @@ def search_abs_agg_candidates(
             duration_minutes = round(raw_duration / 60, 2)
         genre = _pick_genre(match.get("genres") or [])
 
-        full_meta = {
-            "title": title,
-            "subtitle": subtitle,
-            "author": author,
-            "narrator": narrator,
-            "series": series_name,
-            "sequence": sequence,
-            "year": year,
-            "cover_url": cover_url,
-            "asin": asin,
-            "publisher": publisher,
-            "summary": summary,
-            "genre": genre,
-            "language": language,
-        }
-        series_only_meta = {
-            "title": "",
-            "subtitle": "",
-            "author": "",
-            "narrator": "",
-            "series": series_name,
-            "sequence": sequence,
-            "year": "",
-            "cover_url": "",
-            "asin": asin,
-            "publisher": publisher,
-            "summary": "",
-            "genre": genre,
-            "language": language,
-        }
-        allowed_modes = ["full"] + (["series_only"] if series_name else [])
-
-        results.append({
-            "asin": asin,
-            "query": query,
-            "score": None,
-            "edit_mode": "full",
-            "recommended_edit_mode": "full",
-            "allowed_edit_modes": allowed_modes,
-            "title": title,
-            "subtitle": subtitle,
-            "authors": [author] if author else [],
-            "narrators": [narrator] if narrator else [],
-            "series": series_name,
-            "sequence": sequence,
-            "duration_minutes": duration_minutes,
-            "year": year,
-            "cover_url": cover_url,
-            "summary": summary,
-            "chosen_metadata": full_meta,
-            "chosen_metadata_by_mode": {"full": full_meta, "series_only": series_only_meta},
-            "duration": {},
-            "provider": "abs-agg",
-            "abs_agg_provider": provider,
-        })
+        results.append(build_manual_candidate_row(
+            provider="abs-agg",
+            query=query,
+            title=title,
+            subtitle=subtitle,
+            author=author,
+            narrator=narrator,
+            series=series_name,
+            sequence=sequence,
+            year=year,
+            cover_url=cover_url,
+            asin=asin,
+            summary=summary,
+            genre=genre,
+            duration_minutes=duration_minutes,
+            language=language,
+            publisher=publisher,
+            abs_agg_provider=provider,
+        ))
 
     return {"queries": [query], "results": results}
 
@@ -496,44 +462,23 @@ def search_abs_tract_candidates(
 
         genre = _pick_genre(match.get("genres") or [])
 
-        full_meta = {
-            "title": title, "subtitle": subtitle, "author": m_author,
-            "narrator": narrator, "series": series_name, "sequence": sequence,
-            "year": year, "cover_url": cover_url, "asin": asin, "summary": summary,
-            "genre": genre,
-        }
-        series_only_meta = {
-            "title": "", "subtitle": "", "author": "", "narrator": "",
-            "series": series_name, "sequence": sequence, "year": "",
-            "cover_url": "", "asin": asin, "summary": "",
-            "genre": genre,
-        }
-        allowed_modes = ["full"] + (["series_only"] if series_name else [])
-
-        results.append({
-            "asin": asin,
-            "display_key": display_key,
-            "query": query,
-            "score": None,
-            "edit_mode": "full",
-            "recommended_edit_mode": "full",
-            "allowed_edit_modes": allowed_modes,
-            "title": title,
-            "subtitle": subtitle,
-            "authors": [m_author] if m_author else [],
-            "narrators": [narrator] if narrator else [],
-            "series": series_name,
-            "sequence": sequence,
-            "duration_minutes": None,
-            "year": year,
-            "cover_url": cover_url,
-            "summary": summary,
-            "chosen_metadata": full_meta,
-            "chosen_metadata_by_mode": {"full": full_meta, "series_only": series_only_meta},
-            "duration": {},
-            "provider": "abs-tract",
-            "abs_tract_provider": provider,
-        })
+        results.append(build_manual_candidate_row(
+            provider="abs-tract",
+            query=query,
+            title=title,
+            subtitle=subtitle,
+            author=m_author,
+            narrator=narrator,
+            series=series_name,
+            sequence=sequence,
+            year=year,
+            cover_url=cover_url,
+            asin=asin,
+            summary=summary,
+            genre=genre,
+            display_key=display_key,
+            abs_tract_provider=provider,
+        ))
 
     return {"queries": [query], "results": results}
 
@@ -6169,6 +6114,27 @@ def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
     )
 
 
+class PocketFmShowRequest(BaseModel):
+    link: str
+
+
+@app.post("/api/pocketfm/show")
+def pocketfm_show_endpoint(req: PocketFmShowRequest) -> dict[str, Any]:
+    """A Pocket FM show's series metadata from its public page, as a Manual
+    Review result row (and the raw show for Fix Series). Pocket FM has no
+    public search, so the show is given by its link."""
+    show_id = parse_pocketfm_show_id(req.link)
+    if not show_id:
+        raise HTTPException(status_code=400, detail="Paste a Pocket FM show link (pocketfm.com/show/...).")
+    try:
+        show = fetch_pocketfm_show(show_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Pocket FM could not be reached: {exc}") from exc
+    if not show.get("title"):
+        raise HTTPException(status_code=404, detail="No show details found on that Pocket FM page.")
+    return {"queries": [req.link], "results": [pocketfm_show_row(show, req.link)], "show": show}
+
+
 # ---------------------------------------------------------------------------
 # Enrichment Forge
 # ---------------------------------------------------------------------------
@@ -6982,45 +6948,25 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
 
         genre = _pick_genre(match.get("genres") or [])
 
-        full_meta = {
-            "title": title_val, "subtitle": subtitle, "author": author_val,
-            "narrator": narrator, "series": series_name, "sequence": sequence,
-            "year": year, "cover_url": cover_url, "asin": asin, "summary": summary,
-            "genre": genre,
-        }
-        series_only_meta = {
-            "title": "", "subtitle": "", "author": "", "narrator": "",
-            "series": series_name, "sequence": sequence,
-            "year": "", "cover_url": "", "asin": asin, "summary": "",
-            "genre": genre,
-        }
-        allowed_modes = ["full"] + (["series_only"] if series_name else [])
-
-        results.append({
-            "asin": asin,
-            "isbn": isbn,
-            "query": title,
-            "score": None,
-            "edit_mode": "full",
-            "recommended_edit_mode": "full",
-            "allowed_edit_modes": allowed_modes,
-            "title": title_val,
-            "subtitle": subtitle,
-            "authors": [author_val] if author_val else [],
-            "narrators": [narrator] if narrator else [],
-            "series": series_name,
-            "sequence": sequence,
-            "duration_minutes": duration_minutes,
-            "year": year,
-            "cover_url": cover_url,
-            "summary": summary,
-            "chosen_metadata": full_meta,
-            "chosen_metadata_by_mode": {"full": full_meta, "series_only": series_only_meta},
-            "duration": {},
-            "provider": "abs",
-            "abs_provider": provider,
-            "abs_region": region,
-        })
+        results.append(build_manual_candidate_row(
+            provider="abs",
+            query=title,
+            title=title_val,
+            subtitle=subtitle,
+            author=author_val,
+            narrator=narrator,
+            series=series_name,
+            sequence=sequence,
+            year=year,
+            cover_url=cover_url,
+            asin=asin,
+            summary=summary,
+            genre=genre,
+            duration_minutes=duration_minutes,
+            isbn=isbn,
+            abs_provider=provider,
+            abs_region=region,
+        ))
 
     return {"queries": [title], "results": results}
 

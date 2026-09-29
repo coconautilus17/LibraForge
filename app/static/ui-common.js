@@ -206,6 +206,8 @@
   // same "stop and explain" behavior, no silent switch.
   const _ABS_AGG_PROVIDER_VALUES = new Set(["abs-agg", "graphicaudio", "soundbooththeater"]);
   const _ABS_TRACT_PROVIDER_VALUES = new Set(["goodreads", "kindle"]);
+  // Public pages read directly: nothing to connect (and nothing to swap to).
+  const _NO_CONNECTION_PROVIDER_VALUES = new Set(["pocketfm"]);
 
   // Single entry point for every provider <select> (Start run, m4b-tool
   // search, Search For Selected Target): dispatches to the right check for
@@ -213,6 +215,7 @@
   // family a value belongs to. Returns true if it's safe to proceed.
   async function ensureProviderConnected(selectEl, actionLabel) {
     const value = selectEl?.value;
+    if (_NO_CONNECTION_PROVIDER_VALUES.has(value)) return true;
     if (_ABS_AGG_PROVIDER_VALUES.has(value)) return ensureConnected("abs-agg");
     if (_ABS_TRACT_PROVIDER_VALUES.has(value)) return ensureConnected("abs-tract");
     // audible/abs family: auto-swap if the pick isn't connected but the other
@@ -304,7 +307,8 @@
     if (result.score !== null && result.score !== undefined) {
       return Number(result.score).toFixed(2);
     }
-    return result.abs_agg_provider || "abs-agg";
+    // Unscored rows come from catalog providers: name the one that answered.
+    return result.abs_agg_provider || result.abs_tract_provider || result.provider || "abs-agg";
   }
 
   /**

@@ -40,6 +40,7 @@ const PROVIDER_LABELS = {
   'soundbooththeater': 'SoundBooth Theater',
   'goodreads': 'Goodreads',
   'kindle': 'Kindle (cover)',
+  'pocketfm': 'Pocket FM',
   'librivox': 'LibriVox',
   'storytel': 'Storytel',
   'audioteka': 'Audioteka',
@@ -165,6 +166,12 @@ async function startRun() {
       return;
     }
   } else if (window.LibraForgeAuth && !(await window.LibraForgeAuth.ensureConnected())) {
+    return;
+  }
+  // Pocket FM has no search to run against; it is a Manual Review / Fix
+  // Series source only.
+  if ($('manualProvider').value === 'pocketfm') {
+    alert('Pocket FM has no public search, so it works only in Manual Review and Fix Series. Pick another provider to start a run.');
     return;
   }
   // Block if a previous run's workers are still draining.
@@ -962,7 +969,7 @@ function renderManualSearchResults(results = []) {
               <strong>${
                 result.provider === 'abs-agg' ? (PROVIDER_LABELS[result.abs_agg_provider] || result.abs_agg_provider || 'abs-agg')
                 : result.provider === 'abs-tract' ? (result.abs_tract_provider === 'kindle' ? 'Kindle (cover)' : 'Goodreads')
-                : 'Audible'
+                : (PROVIDER_LABELS[result.provider] || 'Audible')
               }</strong>
               ${result.cover_url
                 ? `<img class="cover-thumb" src="${escapeHtml(result.cover_url)}" alt="Match cover" />`
@@ -1058,6 +1065,12 @@ async function runManualProviderSearch() {
       author: $('manualAuthor').value.trim(),
       provider,
       limit: 10,
+    });
+  } else if (provider === 'pocketfm') {
+    res = await fetch('/api/pocketfm/show', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link: $('manualQuery').value.trim() }),
     });
   } else if (provider === 'goodreads' || provider === 'kindle') {
     res = await fetch('/api/abs-tract/search', {
@@ -1903,6 +1916,8 @@ if ($('targetScanBtn')) {
     if ($('manualTitleQueryNote')) {
       $('manualTitleQueryNote').hidden = !(v === 'graphicaudio' || v === 'soundbooththeater' || v === 'goodreads' || v === 'kindle');
     }
+    if ($('manualPocketFmNote')) $('manualPocketFmNote').hidden = v !== 'pocketfm';
+    $('manualQuery').placeholder = v === 'pocketfm' ? 'https://pocketfm.com/show/...' : 'Title Author';
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
   toggleManualProviderFields();
