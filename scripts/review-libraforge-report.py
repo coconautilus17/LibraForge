@@ -35,6 +35,12 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+try:
+    from app.fixer.parsing import extract_book_number_from_text, parse_title_series_number_from_metadata
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.fixer.parsing import extract_book_number_from_text, parse_title_series_number_from_metadata
+
 TOOL_NAME = "libraforge-suspect-review"
 SCHEMA_VERSION = 2
 
@@ -128,6 +134,9 @@ def _strip_series_display_suffix(raw: str) -> str:
 
 
 _TRAILING_NUMBER_RE = re.compile(r"^(?P<base>.*\S)\s+(?P<number>\d+(?:\.\d+)?)$")
+_TRAILING_BOOK_LABEL_RE = re.compile(
+    r"[\s,:\-]*\b(?:book|vol(?:ume)?|part|no)\.?\s*#?$|[\s,:\-]*#$", re.IGNORECASE
+)
 
 
 def split_title_base_and_number(title: str) -> tuple[str, str]:
@@ -140,8 +149,29 @@ def split_title_base_and_number(title: str) -> tuple[str, str]:
     title = clean_text(title)
     match = _TRAILING_NUMBER_RE.match(title)
     if not match:
+        # "Title (The Tower Series, Book 2)" and the other title shapes the
+        # fixer understands name their series directly.
+        parsed = parse_title_series_number_from_metadata({"title": title})
+        if parsed.get("tag_series") and parsed.get("book_number"):
+            return parsed["tag_series"], parsed["book_number"]
+        # "Series, Vol. 06: Subtitle": the fixer's own number parser finds a
+        # labelled number mid-title; the base is what precedes the label (and
+        # any descriptor parenthetical it sits in, "(A LitRPG series, Book 1)").
+        number = extract_book_number_from_text(title)
+        label = re.search(
+            rf"[\s,:\-]*\b(?:book|vol(?:ume)?|part|no)\.?\s*#?\s*0*{re.escape(number)}\b",
+            title, flags=re.IGNORECASE,
+        ) if number else None
+        if label and label.start() > 0:
+            base = title[: label.start()]
+            if base.count("(") > base.count(")"):
+                base = base[: base.rfind("(")]
+            return base.strip(" ,:-"), number
         return title, ""
-    return match.group("base").strip(), match.group("number")
+    # A book label before the number isn't part of the base: "Tanya the Evil,
+    # Vol. 6" -> "Tanya the Evil"; a bare "Volume 1" leaves no base at all.
+    base = _TRAILING_BOOK_LABEL_RE.sub("", match.group("base")).strip()
+    return base, match.group("number")
 
 
 def similarity(left: Any, right: Any) -> float:
@@ -699,6 +729,10 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
     """
     candidates: list[dict[str, Any]] = []
     for item in report_items:
+        # Fix Series writes audiobook tags; an ebook is the same book in
+        # another format, not another book of the series.
+        if item.get("media_type") == "ebook":
+            continue
         local = item.get("local") or {}
         match = item.get("match") or {}
         # "already has a series" must be judged from the local tag only -- an
@@ -758,6 +792,10 @@ def group_missing_series_by_title_pattern(report_items: list[dict[str, Any]]) ->
     for base_key, members in sorted(numbered_groups.items()):
         if len(members) <= 1:
             continue
+        # A title pattern is a series only when some member carries a number;
+        # the same unnumbered title twice is one book (or a copy of it).
+        if not any(m["sequence"] for m in members):
+            continue
         majority_author, author_note = _majority_author_and_note(members)
 
         member_rows = []
@@ -811,7 +849,7 @@ def group_existing_series_by_normalized_tag(
 
     for item in report_items:
         path = item.get("path") or item.get("source") or ""
-        if path in claimed_paths:
+        if path in claimed_paths or item.get("media_type") == "ebook":
             continue
         local = item.get("local") or {}
         match = item.get("match") or {}
