@@ -47,7 +47,7 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
         self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         candidate = ol_product("Kubernetes Up and Running", "Kelsey Hightower", "", "", cover="https://x/y.jpg", summary="...")
         with providers([candidate]):
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         self.assertEqual(len(items), 1)
         item = items[0]
         self.assertEqual(item["status"], "matched")
@@ -60,7 +60,7 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
     def test_no_candidate_is_status_unmatched(self):
         self._touch("Linux/PDF/totally-unrecoverable-name.pdf")
         with providers():
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         self.assertEqual(items[0]["status"], "unmatched")
         self.assertIsNone(items[0]["match"])
 
@@ -68,7 +68,7 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
         self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         wrong_candidate = ol_product("The Hobbit", "J. R. R. Tolkien", year="1937")
         with providers([wrong_candidate]):
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         self.assertEqual(items[0]["status"], "unmatched")
         self.assertIsNone(items[0]["match"])
 
@@ -83,7 +83,7 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
                   "genre": "", "isbn": "", "cover_url": ""},
         )
         with providers():
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         self.assertEqual(items[0]["local"]["title"], "Kubernetes Up and Running")
 
     def test_a_redundant_book_number_suffix_is_cleaned_from_the_candidates_series(self):
@@ -93,7 +93,7 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
         self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         candidate = ol_product("Kubernetes Up and Running", "Kelsey Hightower", "K8s Guides, Book 1", "", cover="https://x/y.jpg", summary="...")
         with providers([candidate]):
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         match = items[0]["match"]
         self.assertEqual(match["series"], "K8s Guides")
         self.assertEqual(match["sequence"], "1")
@@ -102,16 +102,29 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
         self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         candidate = ol_product("Kubernetes Up and Running", "Kelsey Hightower", "K8s Guides", "1", cover="https://x/y.jpg", summary="...")
         with providers([candidate]):
-            items = scan_ebook_units_for_report(self.root)
+            items = scan_ebook_units_for_report(self.root, open_library=True)
         match = items[0]["match"]
         self.assertEqual(match["series"], "K8s Guides")
         self.assertEqual(match["sequence"], "1")
+
+    def test_sources_left_off_are_never_searched(self):
+        # Goodreads and Open Library are opt-in for batch runs, as for audiobooks.
+        self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
+        fixer = main_module.load_fixer_module(main_module.default_fixer_script())
+        with providers([ol_product("Kubernetes Up and Running", "Kelsey Hightower")]), \
+             patch.object(fixer, "abs_tract_search") as gr_mock, \
+             patch.object(fixer, "abs_search") as ol_mock:
+            items = scan_ebook_units_for_report(self.root)
+        gr_mock.assert_not_called()
+        ol_mock.assert_not_called()
+        self.assertEqual(items[0]["status"], "unmatched")
+        self.assertIn("Goodreads and Open Library are both off", items[0]["skip_reason"])
 
     def test_never_writes_to_the_sidecar(self):
         epub_path = self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         candidate = ol_product("Kubernetes Up and Running", "Kelsey Hightower", "", "", cover="", summary="")
         with providers([candidate]):
-            scan_ebook_units_for_report(self.root)
+            scan_ebook_units_for_report(self.root, open_library=True)
         import app.main as main_module
         fixer_module = main_module.load_fixer_module(main_module.default_fixer_script())
         self.assertIsNone(fixer_module.read_book_sidecar(epub_path))

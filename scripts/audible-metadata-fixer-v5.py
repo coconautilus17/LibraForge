@@ -3545,13 +3545,14 @@ def match_ebook(
     clues: dict, abs_url: str, abs_api_key: str, abs_tract_url: str,
     limit: int = 10, log: list[str] | None = None,
 ) -> dict:
-    """Best Open Library / Goodreads match for an ebook, judged like an audiobook.
+    """Best Goodreads / Open Library match for an ebook, judged like an audiobook.
 
-    Same clues, scoring and full-match gate as the audio fixer. Open Library
-    (through ABS) first; Goodreads when Open Library has no full match, or
-    to fill the cover/summary Open Library usually lacks. When the abs-tract
-    breaker is open Goodreads is skipped and the result says so, so a
-    rate-limited ebook isn't reported as a genuine no-match.
+    Same clues, scoring and full-match gate as the audio fixer. Goodreads
+    first; Open Library (through ABS) last, only when Goodreads found
+    nothing, because it routinely takes its full timeout. An empty URL turns
+    that source off. When the abs-tract breaker is open Goodreads is skipped,
+    and if nothing else matches the result says so, so a rate-limited ebook
+    isn't reported as a genuine no-match.
     """
     log = [] if log is None else log
     result = {"product": None, "score": 0.0, "query": "", "provider": "", "goodreads_rate_limited": False}
@@ -3559,32 +3560,25 @@ def match_ebook(
     if not title:
         return result
 
+    rate_limited = False
+    if abs_tract_url:
+        rate_limited = evaluate_goodreads_breaker_state(log)
+        if not rate_limited:
+            gr, gr_score, _, gr_query = find_goodreads_match(clues, abs_tract_url, limit, log)
+            if gr:
+                result.update(product=gr, score=gr_score, query=gr_query, provider="goodreads")
+                return result
+            rate_limited = _abs_tract_breaker_is_open()
+
     if abs_url and abs_api_key:
         ol_products = abs_search(title, clues.get("author", ""), "openlibrary", abs_url, abs_api_key, limit)
         if ol_products:
             candidate, score, _ = pick_best_match_for_metadata(clues, ol_products, None)
             if candidate and metadata_from_product(candidate, clues, score).get("edit_mode") == "full":
                 result.update(product=candidate, score=score, query=title, provider="openlibrary")
+                return result
 
-    ol = result["product"]
-    complete = bool(ol and (ol.get("product_images") or {}).get("500") and ol.get("publisher_summary"))
-    if complete or not abs_tract_url:
-        return result
-    if evaluate_goodreads_breaker_state(log):
-        result["goodreads_rate_limited"] = True
-        return result
-
-    gr, gr_score, _, gr_query = find_goodreads_match(clues, abs_tract_url, limit, log)
-    if not gr:
-        result["goodreads_rate_limited"] = not ol and _abs_tract_breaker_is_open()
-        return result
-    if ol:
-        # Only descriptive fields: identity stays what Open Library reported.
-        cover = (ol.get("product_images") or {}).get("500") or (gr.get("product_images") or {}).get("500", "")
-        result["product"] = {**ol, "product_images": {"500": cover},
-                             "publisher_summary": ol.get("publisher_summary") or gr.get("publisher_summary", "")}
-        return result
-    result.update(product=gr, score=gr_score, query=gr_query, provider="goodreads")
+    result["goodreads_rate_limited"] = rate_limited
     return result
 
 

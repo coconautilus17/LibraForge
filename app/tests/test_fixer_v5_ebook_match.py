@@ -89,10 +89,11 @@ class MatchEbookTests(unittest.TestCase):
         with fixer_search._ABS_TRACT_BREAKER_LOCK:
             fixer_search._ABS_TRACT_BREAKER.update(consecutive_failures=0, open_until=0.0, logged_open=False)
 
-    def match(self, clues, ol=(), gr=None, abs_tract_url="http://abs-tract:5555"):
+    def match(self, clues, ol=(), gr=None, abs_tract_url="http://abs-tract:5555", abs_url="http://abs"):
+        # An empty URL means that source is off (not opted in, or not configured).
         with patch.object(FIXER, "abs_search", return_value=list(ol)) as ol_mock, \
              patch.object(FIXER, "abs_tract_search", side_effect=gr or (lambda **_: [])) as gr_mock:
-            result = FIXER.match_ebook(clues, abs_url="http://abs", abs_api_key="k", abs_tract_url=abs_tract_url)
+            result = FIXER.match_ebook(clues, abs_url=abs_url, abs_api_key="k", abs_tract_url=abs_tract_url)
         return result, ol_mock, gr_mock
 
     def test_padded_volume_matches_through_the_unpadded_query(self):
@@ -111,33 +112,47 @@ class MatchEbookTests(unittest.TestCase):
     def test_open_circuit_breaker_skips_goodreads_and_says_so(self):
         with fixer_search._ABS_TRACT_BREAKER_LOCK:
             fixer_search._ABS_TRACT_BREAKER["open_until"] = 9e18
-        result, _, gr_mock = self.match(TANYA_4, gr=goodreads_knows_only_unpadded)
+        result, _, gr_mock = self.match(TANYA_4, gr=goodreads_knows_only_unpadded, abs_url="")
         gr_mock.assert_not_called()
         self.assertIsNone(result["product"])
         self.assertTrue(result["goodreads_rate_limited"])
 
-    def test_complete_open_library_match_needs_no_goodreads_call(self):
+    def test_goodreads_match_never_waits_on_open_library(self):
+        # Open Library through ABS routinely takes the full 15 s timeout, so
+        # it is the last source, tried only when Goodreads found nothing.
+        clues = {"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}
+        gr = product("The Guns of August", "Barbara W. Tuchman")
+        ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary")
+        result, ol_mock, _ = self.match(clues, ol=[ol], gr=lambda **_: [gr])
+        ol_mock.assert_not_called()
+        self.assertEqual(result["provider"], "goodreads")
+
+    def test_open_library_is_the_last_resort(self):
         clues = {"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}
         ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary")
-        result, _, gr_mock = self.match(clues, ol=[ol])
+        result, ol_mock, gr_mock = self.match(clues, ol=[ol])
+        gr_mock.assert_called()
+        ol_mock.assert_called_once()
+        self.assertEqual(result["provider"], "openlibrary")
+
+    def test_open_library_off_is_never_searched(self):
+        result, ol_mock, _ = self.match({"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}, abs_url="")
+        ol_mock.assert_not_called()
+        self.assertIsNone(result["product"])
+
+    def test_goodreads_off_goes_straight_to_open_library(self):
+        ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary")
+        result, _, gr_mock = self.match({"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}, ol=[ol], abs_tract_url="")
         gr_mock.assert_not_called()
         self.assertEqual(result["provider"], "openlibrary")
 
-    def test_open_library_cover_and_summary_are_backfilled_from_goodreads(self):
-        clues = {"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}
-        ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary", cover="", summary="")
-        gr = product("The Guns of August", "Barbara W. Tuchman")
-        result, _, _ = self.match(clues, ol=[ol], gr=lambda **_: [gr])
+    def test_rate_limited_goodreads_still_falls_back_to_open_library(self):
+        with fixer_search._ABS_TRACT_BREAKER_LOCK:
+            fixer_search._ABS_TRACT_BREAKER["open_until"] = 9e18
+        ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary")
+        result, _, _ = self.match({"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}, ol=[ol])
         self.assertEqual(result["provider"], "openlibrary")
-        self.assertEqual(result["product"]["product_images"]["500"], "https://gr/c.jpg")
-        self.assertEqual(result["product"]["publisher_summary"], "About.")
-
-    def test_no_abs_tract_configured_uses_open_library_alone(self):
-        clues = {"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}
-        ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary", cover="", summary="")
-        result, _, gr_mock = self.match(clues, ol=[ol], abs_tract_url="")
-        gr_mock.assert_not_called()
-        self.assertEqual(result["provider"], "openlibrary")
+        self.assertFalse(result["goodreads_rate_limited"])
 
     def test_nothing_found_anywhere(self):
         result, _, _ = self.match(TANYA_4)

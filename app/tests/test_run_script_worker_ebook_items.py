@@ -46,6 +46,24 @@ class RunScriptWorkerIncludesEbookItemsTests(unittest.TestCase):
         self.assertIn("ebook", media_types)
         self.assertEqual(len(report["report_items"]), 2)
 
+    def test_the_runs_source_opt_ins_reach_the_ebook_scan(self):
+        run_id = "test-run-ebook-opt-ins"
+        state = RunState(id=run_id)
+        with runs_lock:
+            runs[run_id] = state
+        req = RunRequest(script_name="audible-metadata-fixer-v5.py", target_path=str(self.root), apply=False,
+                         enable_goodreads_fallback=True, enable_openlibrary_fallback=False)
+
+        def fake_stream_process_output(state, cmd, threshold=None):
+            state.returncode = 0
+
+        with patch("app.main.stream_process_output", side_effect=fake_stream_process_output), \
+             patch("app.main.scan_ebook_units_for_report", return_value=[]) as scan_mock, \
+             patch("app.main.build_command", return_value=(["true"], 10.0)):
+            run_script_worker(run_id, req)
+
+        scan_mock.assert_called_once_with(self.root, goodreads=True, open_library=False)
+
 
 if __name__ == "__main__":
     unittest.main()

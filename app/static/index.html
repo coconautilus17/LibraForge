@@ -200,9 +200,15 @@
         </div>
         <div class="goodreads-fallback-row">
           <div class="checks goodreads-fallback-check">
-            <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads via abs-tract when Audible does not return a confident full match."></span></label>
+            <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads via abs-tract when Audible does not return a confident full match. Also the first source for ebooks."></span></label>
           </div>
           <div class="inline-warning">Goodreads rate-limits aggressively. Use only 5 search workers when enabling this fallback.</div>
+        </div>
+        <div class="goodreads-fallback-row">
+          <div class="checks goodreads-fallback-check">
+            <label><input id="enableOpenLibraryFallback" type="checkbox" /> Enable Open Library fallback <span class="info-tip" data-tooltip="Ebooks only. Tried last, after Goodreads, for ebooks nothing else matched."></span></label>
+          </div>
+          <div class="inline-warning">Open Library is slow (often 15 seconds per book) and will make the run slower. It runs last, only for ebooks Goodreads could not match.</div>
         </div>
       </div>
 
@@ -436,7 +442,7 @@
    </div>
   </main>
   <script src="/static/ui-common.js?v=20260929-1"></script>
-  <script src="/static/app.js?v=20260929-3"></script>
+  <script src="/static/app.js?v=20260929-5"></script>
   <script src="/static/manual-review-edit.js?v=20260707-1"></script>
   <script src="/static/fix-series.js?v=20260929-1"></script>
 </body>

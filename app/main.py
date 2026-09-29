@@ -1220,6 +1220,8 @@ class RunRequest(BaseModel):
     provider: str = "audible"
     abs_provider: str = "audible"
     enable_goodreads_fallback: bool = False
+    # Ebooks only: Open Library through ABS, tried last (it is slow).
+    enable_openlibrary_fallback: bool = False
     debug_trace: bool = False
     debug_trace_file: str = ""
 
@@ -4197,7 +4199,11 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         stream_process_output(state, cmd, threshold=threshold)
         if state.status != "cancelled":
             try:
-                state.report_items.extend(scan_ebook_units_for_report(Path(req.target_path)))
+                state.report_items.extend(scan_ebook_units_for_report(
+                    Path(req.target_path),
+                    goodreads=req.enable_goodreads_fallback,
+                    open_library=req.enable_openlibrary_fallback,
+                ))
             except Exception as exc:
                 print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
@@ -6994,15 +7000,18 @@ def search_abs_candidates(*, title: str, author: str = "", provider: str = "audi
     return {"queries": [title], "results": results}
 
 
-def match_ebook_unit(path: Path, epub_path: Path | None) -> dict[str, Any]:
+def match_ebook_unit(
+    path: Path, epub_path: Path | None, *, goodreads: bool = True, open_library: bool = True,
+) -> dict[str, Any]:
     """Match one ebook with the audio fixer's own search and scoring.
 
     Clues come from the epub's embedded title/author (else the filename),
     through the fixer's clue parser, so series and volume numbers are read
     the same way as for audiobooks; fixer.match_ebook then searches Open
-    Library and Goodreads (throttled, circuit-breaker aware) and accepts only
-    a full match. Returns the report/Manual Review fields: match, score,
-    provider, used_query, goodreads_rate_limited.
+    Goodreads (throttled, circuit-breaker aware) and then Open Library, each
+    only when enabled, and accepts only a full match. Returns the report/
+    Manual Review fields: match, score, provider, used_query,
+    goodreads_rate_limited.
     """
     fixer_module = load_fixer_module(default_fixer_script())
     embedded_title, embedded_author = _extract_epub_metadata(epub_path) if epub_path else ("", "")
@@ -7013,9 +7022,9 @@ def match_ebook_unit(path: Path, epub_path: Path | None) -> dict[str, Any]:
     clues = fixer_module.build_search_clues_from_file(path, tags=tags)
     found = fixer_module.match_ebook(
         clues,
-        abs_url=_get_abs_url(),
-        abs_api_key=_get_abs_api_key(),
-        abs_tract_url=_load_abs_tract_config().get("url", ""),
+        abs_url=_get_abs_url() if open_library else "",
+        abs_api_key=_get_abs_api_key() if open_library else "",
+        abs_tract_url=_load_abs_tract_config().get("url", "") if goodreads else "",
     )
     match: dict[str, Any] | None = None
     if found["product"]:
@@ -7042,8 +7051,14 @@ def match_ebook_unit(path: Path, epub_path: Path | None) -> dict[str, Any]:
     }
 
 
-def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
+def scan_ebook_units_for_report(
+    root: Path, *, goodreads: bool = False, open_library: bool = False,
+) -> list[dict[str, Any]]:
     """Score every discovered ebook unit against a fresh provider search.
+
+    Goodreads and Open Library are the run's opt-ins (Enable Goodreads /
+    Open Library fallback); with both off nothing is searched and every
+    ebook is reported unmatched with that reason.
 
     Companion to the audio Fixer's per-item report entries -- same shape
     (path/local/match/score/status/provider/used_query) plus media_type/
@@ -7057,7 +7072,13 @@ def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for unit in library_index.build_ebook_index(root):
         local = fixer_module.read_book_sidecar(unit.path) or {}
-        found = match_ebook_unit(unit.path, unit.formats.get("epub"))
+        if goodreads or open_library:
+            found = match_ebook_unit(
+                unit.path, unit.formats.get("epub"), goodreads=goodreads, open_library=open_library,
+            )
+        else:
+            found = {"match": None, "score": None, "provider": "", "used_query": "",
+                     "goodreads_rate_limited": False}
         match = found["match"]
         items.append({
             "path": str(unit.path),
@@ -7078,6 +7099,9 @@ def scan_ebook_units_for_report(root: Path) -> list[dict[str, Any]]:
             "provider": found["provider"],
             "used_query": found["used_query"],
             "goodreads_rate_limited": found["goodreads_rate_limited"],
+            "skip_reason": "" if (goodreads or open_library) else (
+                "not searched: Goodreads and Open Library are both off for this run"
+            ),
             "media_type": "ebook",
             "formats": sorted(unit.formats.keys()),
         })
