@@ -2,8 +2,9 @@
 
 Pocket FM publishes audio series (Supreme Magus, Shadow Slave, ...) that
 Audible doesn't carry. Its API (api.pocketfm.com) requires an app session,
-so LibraForge reads only the public show page a browser gets, whose
-schema.org PodcastSeries block holds the series-level metadata. There is no
+so LibraForge reads only the public show page a browser gets. Its
+schema.org PodcastSeries block holds the series-level metadata, and its
+embedded Cast credits supply the narrator. There is no
 public search, so a show is looked up by its link; Pocket FM has no volumes,
 so book numbers come from the local folders.
 """
@@ -22,8 +23,10 @@ _SHOW_ID_RE = re.compile(
     re.IGNORECASE,
 )
 _LD_JSON_RE = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.DOTALL)
+_FLIGHT_SCRIPT_RE = re.compile(r'<script[^>]*>self\.__next_f\.push\((\[.*?\])\)</script>', re.DOTALL)
 # Credits that name no author: Pocket FM's placeholders and its AI voice.
 _PLACEHOLDER_CREATORS = {"anonymous", "new", "pocket fm", "unknown", "virtual voice"}
+_PLACEHOLDER_CAST = _PLACEHOLDER_CREATORS - {"virtual voice"}
 _LANGUAGES = {
     "de": "German", "en": "English", "es": "Spanish", "fr": "French", "hi": "Hindi",
     "it": "Italian", "ja": "Japanese", "pt": "Portuguese",
@@ -36,8 +39,41 @@ def parse_show_id(value: str) -> str:
     return match.group("id").lower() if match else ""
 
 
+def _cast_from_page(page: str) -> str:
+    """Read Pocket FM's Cast credits from the page's embedded React data."""
+    for script in _FLIGHT_SCRIPT_RE.findall(page):
+        try:
+            chunk = json.loads(script)
+        except ValueError:
+            continue
+        if not isinstance(chunk, list) or len(chunk) < 2 or chunk[0] != 1 or not isinstance(chunk[1], str):
+            continue
+        payload = chunk[1]
+        for match in re.finditer(r'"credits"\s*:\s*', payload):
+            try:
+                credits, _ = json.JSONDecoder().raw_decode(payload[match.end():])
+            except ValueError:
+                continue
+            if not isinstance(credits, list):
+                continue
+            for group in credits:
+                if not isinstance(group, dict):
+                    continue
+                for role in group.get("all_credits") or []:
+                    if not isinstance(role, dict) or str(role.get("title") or "").strip().lower() != "cast":
+                        continue
+                    names = dict.fromkeys(
+                        str(user.get("fullname") or "").strip()
+                        for user in role.get("credit_users") or [] if isinstance(user, dict)
+                    )
+                    cast = [name for name in names if name and name.lower() not in _PLACEHOLDER_CAST]
+                    if cast:
+                        return ", ".join(cast)
+    return ""
+
+
 def parse_show_page(page: str) -> dict[str, Any]:
-    """Series metadata from the page's PodcastSeries block ({} when absent)."""
+    """Series metadata from PodcastSeries and narrator from Cast credits."""
     for block in _LD_JSON_RE.findall(page or ""):
         try:
             data = json.loads(block)
@@ -57,6 +93,7 @@ def parse_show_page(page: str) -> dict[str, Any]:
             return {
                 "title": str(item.get("name") or "").strip(),
                 "author": author,
+                "narrator": _cast_from_page(page),
                 "genre": ", ".join(g.strip() for g in (genres if isinstance(genres, list) else [genres]) if g.strip()),
                 "language": _LANGUAGES.get(language, language),
                 "year": str(item.get("datePublished") or "")[:4],
@@ -85,6 +122,7 @@ def show_to_manual_row(show: dict[str, Any], link: str) -> dict[str, Any]:
         query=link,
         title=show.get("title", ""),
         author=show.get("author", ""),
+        narrator=show.get("narrator", ""),
         series=show.get("title", ""),
         year=show.get("year", ""),
         cover_url=show.get("cover_url", ""),

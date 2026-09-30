@@ -1,4 +1,4 @@
-"""Pocket FM show metadata from the public show page (schema.org PodcastSeries).
+"""Pocket FM show metadata from public PodcastSeries and Cast credits.
 
 Pocket FM's own API (api.pocketfm.com) needs an app session, so LibraForge
 reads only the public show page, the same one a browser gets. Fixtures are
@@ -32,6 +32,15 @@ def page(*blocks):
     return f"<html><head>{scripts}</head><body></body></html>"
 
 
+def cast_credits(*names):
+    credits = [{"title": "Show Writers & Cast", "all_credits": [
+        {"title": "Show Writers", "credit_users": [{"fullname": "Legion20"}]},
+        {"title": "Cast", "credit_users": [{"fullname": name} for name in names]},
+    ]}]
+    payload = json.dumps({"credits": credits})
+    return f'<script>self.__next_f.push({json.dumps([1, "1:" + payload])})</script>'
+
+
 class ShowIdTests(unittest.TestCase):
     def test_link_and_bare_id(self):
         sid = "6d490170d41444017ad8573036509e92d867abb6"
@@ -53,6 +62,7 @@ class ParseShowPageTests(unittest.TestCase):
         show = pocketfm.parse_show_page(page(faq, SUPREME_MAGUS))
         self.assertEqual(show["title"], "Supreme Magus")
         self.assertEqual(show["author"], "Legion20")
+        self.assertEqual(show["narrator"], "")
         self.assertEqual(show["genre"], "Fantasy")
         self.assertEqual(show["language"], "English")
         self.assertEqual(show["year"], "2023")
@@ -65,6 +75,20 @@ class ParseShowPageTests(unittest.TestCase):
         self.assertEqual(show["author"], "")
         self.assertEqual(show["language"], "Hindi")
 
+    def test_cast_credits_supply_narrators_without_writers(self):
+        show = pocketfm.parse_show_page(page(SUPREME_MAGUS) + cast_credits("T.J. Anthony", "Alex Reader"))
+        self.assertEqual(show["narrator"], "T.J. Anthony, Alex Reader")
+
+    def test_cast_placeholders_and_malformed_flight_data(self):
+        show = pocketfm.parse_show_page(page(SUPREME_MAGUS) + '<script>self.__next_f.push([1,broken])</script>'
+                                        + cast_credits("Anonymous", "Virtual Voice"))
+        self.assertEqual(show["narrator"], "Virtual Voice")
+
+    def test_empty_cast_group_does_not_hide_later_credits(self):
+        show = pocketfm.parse_show_page(page(SUPREME_MAGUS) + cast_credits("Unknown")
+                                        + cast_credits("T.J. Anthony"))
+        self.assertEqual(show["narrator"], "T.J. Anthony")
+
     def test_page_without_a_show_block(self):
         self.assertEqual(pocketfm.parse_show_page(page({"@type": "FAQPage"})), {})
         self.assertEqual(pocketfm.parse_show_page("<html>not json</html>"), {})
@@ -72,17 +96,20 @@ class ParseShowPageTests(unittest.TestCase):
 
 class ManualRowTests(unittest.TestCase):
     def test_show_becomes_a_manual_review_row_for_the_series(self):
-        show = pocketfm.parse_show_page(page(SUPREME_MAGUS))
+        show = pocketfm.parse_show_page(page(SUPREME_MAGUS) + cast_credits("T.J. Anthony"))
         row = pocketfm.show_to_manual_row(show, "https://pocketfm.com/show/6d490170d41444017ad8573036509e92d867abb6")
         self.assertEqual(row["provider"], "pocketfm")
         self.assertEqual(row["series"], "Supreme Magus")
         self.assertEqual(row["authors"], ["Legion20"])
+        self.assertEqual(row["narrators"], ["T.J. Anthony"])
         self.assertEqual(set(row["allowed_edit_modes"]), {"full", "series_only"})
         full = row["chosen_metadata_by_mode"]["full"]
         self.assertEqual((full["title"], full["series"], full["author"], full["genre"]),
                          ("Supreme Magus", "Supreme Magus", "Legion20", "Fantasy"))
         self.assertEqual(full["asin"], "")
+        self.assertEqual(full["narrator"], "T.J. Anthony")
         self.assertEqual(row["chosen_metadata_by_mode"]["series_only"]["title"], "")
+        self.assertEqual(row["chosen_metadata_by_mode"]["series_only"]["narrator"], "")
 
 
 class FetchShowTests(unittest.TestCase):
@@ -112,7 +139,7 @@ class ShowEndpointTests(unittest.TestCase):
         self.main = main
 
     def test_link_returns_the_show_as_a_manual_review_row(self):
-        show = pocketfm.parse_show_page(page(SUPREME_MAGUS))
+        show = pocketfm.parse_show_page(page(SUPREME_MAGUS) + cast_credits("T.J. Anthony"))
         with patch.object(self.main, "fetch_pocketfm_show", return_value=show) as fetch:
             response = self.client.post("/api/pocketfm/show", json={
                 "link": "https://pocketfm.com/show/6d490170d41444017ad8573036509e92d867abb6"})
@@ -120,7 +147,9 @@ class ShowEndpointTests(unittest.TestCase):
         fetch.assert_called_once_with("6d490170d41444017ad8573036509e92d867abb6")
         data = response.json()
         self.assertEqual(data["show"]["author"], "Legion20")
+        self.assertEqual(data["show"]["narrator"], "T.J. Anthony")
         self.assertEqual(data["results"][0]["provider"], "pocketfm")
+        self.assertEqual(data["results"][0]["narrators"], ["T.J. Anthony"])
 
     def test_a_non_pocketfm_link_is_refused_before_any_fetch(self):
         with patch.object(self.main, "fetch_pocketfm_show") as fetch:
