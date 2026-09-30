@@ -1205,18 +1205,15 @@ def narrator_match_score(clues: dict, product: dict) -> float:
 def different_edition(clues: dict, product: dict, duration_result: dict) -> dict | None:
     """The book's own narrator when the match is another recording of it.
 
-    Same book, different edition: the local files credit a reader the match
-    doesn't have, and the lengths differ past the "perfect" band (Tunnels
-    05 Spiral: Recorded Books, Steven Crossley, 728 min; Audible sells the
-    Audible Studios edition, Paul Chequer, 682 min). The narrator comes from
-    the narrator tag, else from credit tags: rips list the reader after the
-    authors ("Roderick Gordon/Brian Williams/Steven Crossley"), and the match
+    Same book, different recording: the local files credit a reader the match
+    doesn't have. Even nearly identical runtimes can have different readers
+    (The Guns of August: John Lee locally, Wanda McCaddon on Audible).
+    The narrator comes from the narrator tag, else from credit tags: rips list
+    the reader after the authors ("Roderick Gordon/Brian Williams/Steven Crossley"), and the match
     may not list every co-author, so a credit's reader is its last name that
     isn't an author. Any credit that names the match's narrator makes it the
     same recording.
     """
-    if duration_result.get("status") in {"perfect", "unknown"}:
-        return None
     match_narrator = ", ".join(get_people(product, "narrators"))
     if not match_narrator:
         return None
@@ -1226,10 +1223,16 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
         return [name for value in values for name in split_credit_names(value)
                 if _authors_compatible(name, authors) is not True]
 
-    tagged = readers([clues.get("narrator", "")])
+    # The author can also narrate. Trust an explicit narrator tag unless another
+    # local credit identifies the matched recording's reader.
+    tagged = split_credit_names(clues.get("narrator", ""))
     credits = clues.get("credit_names") or []
     credited = list(dict.fromkeys(names[-1] for names in (readers([c]) for c in credits) if names))
-    local = tagged or credited
+    # A composer tag sometimes holds the author while the actual reader sits
+    # in another credit. Prefer that reader, but keep the tag if no other
+    # reader is identifiable (the author may narrate).
+    tagged_reader = [name for name in tagged if _authors_compatible(name, authors) is not True]
+    local = tagged_reader or credited or tagged
     if not local or any(
         narrator_match_score({"narrator": name}, product) >= NARRATOR_GOOD_SCORE
         for name in tagged + readers(credits)
