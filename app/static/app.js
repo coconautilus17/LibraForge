@@ -1823,6 +1823,7 @@ $('suspectReportBtn').addEventListener('click', () => {
 $('startBtn').addEventListener('click', startRun);
 $('cancelBtn').addEventListener('click', cancelRun);
 $('loadLastReportBtn').addEventListener('click', loadLastReport);
+$('viewLastRunLogBtn').addEventListener('click', () => window.UiCommon.showRunLog('fixer'));
 $('script').addEventListener('change', updateV5Fields);
 $('categorySelect').addEventListener('change', renderCategoryFiles);
 $('manualReviewFilter')?.addEventListener('change', renderManualReviewList);

@@ -44,6 +44,58 @@
     });
   }
 
+  async function showRunLog(tool) {
+    let data;
+    try {
+      const response = await fetch(`/api/run-logs/latest?tool=${encodeURIComponent(tool)}`);
+      if (!response.ok) throw new Error((await response.json()).detail || "Run log unavailable");
+      data = await response.json();
+    } catch (error) {
+      await showNotice("Run log unavailable", escapeHtml(error.message || String(error)));
+      return;
+    }
+
+    const errors = data.error_count;
+    const warnings = data.issue_count - errors;
+    const outcome = data.status === "completed" && errors ? "Completed with failures"
+      : data.status === "completed" && warnings ? "Completed with warnings"
+      : data.status === "completed" ? "Completed successfully"
+      : data.status === "failed" ? "Run failed"
+      : data.status === "cancelled" ? "Run cancelled" : data.status;
+    const tone = data.status === "failed" || errors ? "error"
+      : data.status === "completed" && !warnings ? "success" : "warning";
+    const dates = [data.started_at, data.finished_at]
+      .map((stamp) => stamp ? new Date(stamp * 1000).toLocaleString() : "In progress");
+    const metrics = data.metrics.map((metric) =>
+      `<div class="run-log-metric"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>`
+    ).join("");
+    const issues = data.issues.length
+      ? `<ul class="run-log-issues">${data.issues.map((issue) =>
+        `<li class="run-log-issue ${issue.severity}">${escapeHtml(issue.text)}</li>`
+      ).join("")}</ul>`
+      : `<p class="run-log-empty">No write or move failures recorded.</p>`;
+    const dlg = document.createElement("dialog");
+    dlg.className = "manual-apply-dialog run-log-dialog";
+    dlg.setAttribute("aria-label", "Last run log");
+    dlg.innerHTML = `
+      <div class="run-log-heading">
+        <div><h3 class="manual-apply-title">Last run log</h3><p class="run-log-id mono">${escapeHtml(data.id)}</p></div>
+        <button type="button" class="secondary run-log-close" aria-label="Close run log" title="Close">&times;</button>
+      </div>
+      <div class="run-log-outcome ${tone}"><strong>${escapeHtml(outcome)}</strong><span>${escapeHtml(data.mode)} &middot; ${escapeHtml(dates[0])} to ${escapeHtml(dates[1])}</span></div>
+      <div class="run-log-metrics">${metrics}</div>
+      <section class="run-log-section"><h4>Failures and warnings <span>${data.issue_count}</span></h4>${issues}${data.issue_count > data.issues.length ? `<p class="note">Showing the last ${data.issues.length} issues. Download the log for all of them.</p>` : ""}</section>
+      <details class="run-log-raw"><summary>Full output</summary><pre></pre></details>
+      <div class="manual-apply-actions"><a class="run-log-download" href="${escapeHtml(data.download)}">Download log</a><button type="button" class="secondary run-log-done">Close</button></div>`;
+    dlg.querySelector(".run-log-raw pre").textContent = data.log;
+    document.body.appendChild(dlg);
+    dlg.addEventListener("close", () => dlg.remove(), { once: true });
+    dlg.querySelector(".run-log-close").addEventListener("click", () => dlg.close());
+    dlg.querySelector(".run-log-done").addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", (event) => { if (event.target === dlg) dlg.close(); });
+    dlg.showModal();
+  }
+
   // Redirect to the Settings Accounts section if this page's provider
   // requirement isn't met, unless the user explicitly skipped setup or debug
   // mode is on. See CONNECTION_NOTICE_KEY below for how this avoids
@@ -805,6 +857,7 @@
     renderDownloadLinks,
     statCard,
     showNotice,
+    showRunLog,
     saveActiveRun,
     clearActiveRun,
     loadActiveRun,
