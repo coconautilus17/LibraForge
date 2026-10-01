@@ -1824,13 +1824,6 @@ def should_skip_due_to_marker(
         return False, ""
 
     if marker.get("applied") is True:
-        try:
-            marker_score = float(marker.get("score"))
-        except (TypeError, ValueError):
-            marker_score = None
-
-        if marker_score is not None and marker_score < minimum_score:
-            return False, ""
         return True, "already processed"
 
     return False, ""
