@@ -70,6 +70,39 @@ class DistinctBooksFolderTests(unittest.TestCase):
         files = [Path(f"/x/Book - 0{i}.mp3") for i in (1, 2)]
         self.assertEqual(group(files, ["Book", ""], 900), {Path("/x"): files})
 
+    def test_unnumbered_long_works_with_own_titles_are_not_one_book(self):
+        names = ["Charmides", "Cratylus", "Gorgias", "Laches", "Symposium"]
+        files = [Path(f"/philosophy/Plato Dramatized Audio/{name}.mp3") for name in names]
+        groups = FIXER.build_multi_part_group_map(
+            files,
+            tag_reader=lambda path: {"title": path.stem},
+            size_reader=lambda _path: 100 * MB,
+        )
+        self.assertEqual(groups, {})
+        self.assertEqual(len(FIXER.build_processing_items(files, groups)), len(files))
+
+    def test_unnumbered_chapters_with_shared_album_stay_grouped(self):
+        files = [Path(f"/book/{name}.mp3") for name in (
+            "Arrival", "Discovery", "Conflict", "Return", "Epilogue",
+        )]
+        groups = FIXER.build_multi_part_group_map(
+            files,
+            tag_reader=lambda path: {"title": path.stem, "album": "One Book"},
+            size_reader=lambda _path: 100 * MB,
+        )
+        self.assertEqual(groups[Path("/book")], sorted(files, key=FIXER.natural_audio_sort_key))
+
+    def test_short_unnumbered_chapters_stay_grouped_without_album(self):
+        files = [Path(f"/book/{name}.mp3") for name in (
+            "Arrival", "Discovery", "Conflict", "Return", "Epilogue",
+        )]
+        groups = FIXER.build_multi_part_group_map(
+            files,
+            tag_reader=lambda path: {"title": path.stem},
+            size_reader=lambda _path: 20 * MB,
+        )
+        self.assertEqual(groups[Path("/book")], sorted(files, key=FIXER.natural_audio_sort_key))
+
 
 if __name__ == "__main__":
     unittest.main()
