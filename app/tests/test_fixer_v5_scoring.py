@@ -786,6 +786,43 @@ class CrossSeriesFolderNumberTests(unittest.TestCase):
         self.assertTrue(FIXER.has_sequence_conflict(numbered, self.match, 1263.44))
         self.assertEqual(FIXER.score_product_for_metadata(numbered, self.match, 1263.44), 0)
 
+    def test_voyage_of_sable_keech_allows_one_missing_article(self):
+        clues = dict(
+            self.clues, title="17 - The Voyage of Sable Keech",
+            raw_title="17 - The Voyage of Sable Keech", narrator="William Gaminara",
+            book_number="17",
+        )
+        match = product(
+            asin="B004JJRGJQ", title="The Voyage of the Sable Keech",
+            series="Spatterjay", sequence="2", authors=("Neal Asher",),
+            narrators=("William Gaminara",), minutes=1007,
+        )
+        self.assertTrue(FIXER.has_number_identity_conflict(clues, match))
+        self.assertFalse(FIXER.has_sequence_conflict(clues, match, 1006.7956))
+        self.assertEqual(FIXER.score_product_for_metadata(clues, match, 1006.7956), 1.0)
+
+    def test_article_difference_does_not_hide_other_title_changes(self):
+        clues = dict(self.clues, title="17 - The Voyage of Sable Keech", book_number="17")
+        for title in ("The Voyage of the Other Keech", "The Voyage of the Keech Sable"):
+            with self.subTest(title=title):
+                wrong = product(
+                    title=title, series="Spatterjay", sequence="2",
+                    authors=("Neal Asher",), minutes=1007,
+                )
+                self.assertTrue(FIXER.has_sequence_conflict(clues, wrong, 1006.7956))
+                self.assertEqual(FIXER.score_product_for_metadata(clues, wrong, 1006.7956), 0)
+
+    def test_article_difference_does_not_override_same_series_number(self):
+        clues = dict(
+            self.clues, title="17 - The Voyage of Sable Keech",
+            series="Spatterjay", book_number="17",
+        )
+        wrong = product(
+            title="The Voyage of the Sable Keech", series="Spatterjay", sequence="2",
+            authors=("Neal Asher",), minutes=1007,
+        )
+        self.assertEqual(FIXER.score_product_for_metadata(clues, wrong, 1006.7956), 0)
+
     def test_requires_author_and_perfect_duration(self):
         other_author = product(
             title="Brass Man", series="Agent Cormac", sequence="3",

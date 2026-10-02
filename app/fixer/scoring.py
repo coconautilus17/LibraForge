@@ -583,8 +583,19 @@ def has_cross_series_folder_identity(
         return False
     local_title = strip_leading_sequence_from_title(local_title)
     audible_title = product.get("title", "") or ""
-    if not literal_text(local_title) or literal_text(local_title) != literal_text(audible_title):
+    local_words = literal_text(local_title).split()
+    audible_words = literal_text(audible_title).split()
+    if not local_words or not audible_words:
         return False
+    if local_words != audible_words:
+        articles = {"a", "an", "the"}
+        meaningful_words = [word for word in local_words if word not in articles]
+        if (
+            not meaningful_words
+            or meaningful_words != [word for word in audible_words if word not in articles]
+            or abs(len(local_words) - len(audible_words)) != 1
+        ):
+            return False
     if extract_title_identity_number(local_title) or extract_book_number_from_text(local_title):
         return False
     if extract_title_identity_number(audible_title) or extract_book_number_from_text(audible_title):
