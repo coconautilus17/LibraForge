@@ -1821,9 +1821,6 @@ def should_skip_due_to_marker(
     if marker.get("applied") is True:
         return True, "already processed"
 
-    if marker.get("processed_at") and not marker.get("restored_at"):
-        return True, "already searched (not applied)"
-
     return False, ""
 
 # Fields the fixer fills into file tags / metadata.json, in report order.
@@ -2059,8 +2056,8 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     sidecar's marker.audible.asin). Only writes NOREALASIN when no real ASIN
     is known anywhere, so the Start Here scanner can skip mutagen on books
     with no ASIN while keeping the correct value for books that do have one.
-    Does not set applied=True, but records the completed attempt so a later
-    run only re-searches this book when --force is supplied.
+    Does not set applied=True: an unsuccessful search is retried on the next
+    normal run, while applied books remain skipped unless --force is supplied.
     """
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
@@ -5600,7 +5597,7 @@ def main():
     parser.add_argument(
         "--aggressive",
         action="store_true",
-        help="Use aggressive matching for new books. Previously searched books still require --force to reprocess.",
+        help="Use aggressive matching for unapplied books. Applied books still require --force to reprocess.",
     )
 
     parser.add_argument(

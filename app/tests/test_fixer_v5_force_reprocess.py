@@ -73,13 +73,13 @@ class ForceReprocessMarkerTests(unittest.TestCase):
             (False, ""),
         )
 
-    def test_previously_searched_unapplied_book_is_skipped(self):
+    def test_previously_searched_unapplied_book_is_retried(self):
         self._write_marker(applied=False, score=0.29, processed_at="2026-10-01T00:00:00Z")
         self.assertEqual(
             FIXER.should_skip_due_to_marker(
                 self.media, aggressive_run=False, force=False, minimum_score=0.7
             ),
-            (True, "already searched (not applied)"),
+            (False, ""),
         )
 
     def test_force_researches_previously_skipped_book(self):
@@ -112,7 +112,7 @@ class ForceReprocessMarkerTests(unittest.TestCase):
             (True, "already processed"),
         )
 
-    def test_completed_search_after_restore_is_not_retried(self):
+    def test_completed_search_after_restore_is_retried(self):
         self._write_marker(
             applied=False, score=None,
             processed_at="2026-10-01T00:00:00Z", restored_at="2026-10-02T00:00:00Z",
@@ -122,7 +122,7 @@ class ForceReprocessMarkerTests(unittest.TestCase):
             FIXER.should_skip_due_to_marker(
                 self.media, aggressive_run=False, force=False, minimum_score=0.7
             ),
-            (True, "already searched (not applied)"),
+            (False, ""),
         )
 
 
