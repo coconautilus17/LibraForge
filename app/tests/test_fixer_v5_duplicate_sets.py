@@ -48,3 +48,47 @@ class DuplicateSetTests(unittest.TestCase):
 
     def test_a_normal_single_set_folder_is_untouched(self):
         self.assertEqual(FIXER.find_duplicate_set_folders(CHAPTER_RIP), {})
+
+    def test_nested_volume_chapters_are_one_book_not_duplicate_sets(self):
+        folder = Path("/philosophy/The Enneads")
+        files = [folder / "0-00. Preface.mp3"] + [
+            folder / f"{volume}-{chapter:02d}. Essay.mp3"
+            for volume in range(1, 4) for chapter in range(1, 4)
+        ]
+        track_by_path = {path: index for index, path in enumerate(files, 1)}
+
+        def tags(path):
+            return {"album": "The Enneads", "track": str(track_by_path[path])}
+
+        self.assertEqual(FIXER.find_duplicate_set_folders(files, tags), {})
+        groups = FIXER.build_multi_part_group_map(files, tag_reader=tags)
+        self.assertEqual(groups[folder], sorted(files, key=FIXER.natural_audio_sort_key))
+        self.assertEqual(len(FIXER.build_processing_items(files, groups)), 1)
+
+    def test_nested_numbers_without_shared_album_are_not_trusted(self):
+        folder = Path("/philosophy/Unrelated Volumes")
+        files = [
+            folder / f"{volume}-{chapter:02d}. Essay.mp3"
+            for volume in range(1, 3) for chapter in range(1, 4)
+        ]
+        self.assertEqual(
+            FIXER.nested_chapter_sequence_files(
+                files, lambda path: {"album": f"Volume {path.stem[0]}", "track": "1"}
+            ),
+            set(),
+        )
+
+    def test_nested_numbers_with_out_of_order_track_tags_are_not_trusted(self):
+        folder = Path("/philosophy/Mixed Volumes")
+        files = [
+            folder / f"{volume}-{chapter:02d}. Essay.mp3"
+            for volume in range(1, 3) for chapter in range(1, 4)
+        ]
+        tracks = {path: index for index, path in enumerate(files, 1)}
+        tracks[files[0]], tracks[files[1]] = tracks[files[1]], tracks[files[0]]
+        self.assertEqual(
+            FIXER.nested_chapter_sequence_files(
+                files, lambda path: {"album": "One Book", "track": str(tracks[path])}
+            ),
+            set(),
+        )

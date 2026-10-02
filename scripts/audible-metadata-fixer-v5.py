@@ -3159,15 +3159,81 @@ DUPLICATE_SET_MIN_FILES = 3
 DUPLICATE_SET_FOLDERS: dict[Path, str] = {}
 
 
-def find_duplicate_set_folders(files: list[Path]) -> dict[Path, str]:
+def nested_chapter_sequence_files(
+    files: list[Path], tag_reader=None,
+) -> set[Path]:
+    """Recognize one album numbered as volume-chapter, with continuous tracks."""
+    if len(files) < 6:
+        return set()
+    by_volume: dict[int, set[int]] = {}
+    for path in files:
+        match = re.match(r"^(\d{1,2})-(\d{2,3})[.)\s_-]", path.stem)
+        if not match:
+            return set()
+        volume, chapter = map(int, match.groups())
+        chapters = by_volume.setdefault(volume, set())
+        if chapter in chapters:
+            return set()
+        chapters.add(chapter)
+    if len(by_volume) < 2:
+        return set()
+    volumes = sorted(by_volume)
+    if volumes != list(range(volumes[0], volumes[-1] + 1)):
+        return set()
+    if any(
+        sorted(chapters) != list(range(min(chapters), max(chapters) + 1))
+        for chapters in by_volume.values()
+    ):
+        return set()
+
+    tag_reader = tag_reader or read_file_tags
+    albums: set[str] = set()
+    tracks: dict[Path, int] = {}
+    for path in files:
+        tags = tag_reader(path) or {}
+        album = normalize_part_filename(first_existing_tag(tags, ["album"]))
+        track_text = first_existing_tag(tags, ["track"]).split("/", 1)[0]
+        if not album or not track_text.isdigit():
+            return set()
+        albums.add(album)
+        tracks[path] = int(track_text)
+    ordered_tracks = [tracks[path] for path in sorted(files, key=natural_audio_sort_key)]
+    if len(albums) != 1 or ordered_tracks != list(range(1, len(files) + 1)):
+        return set()
+    return set(files)
+
+
+def multi_part_files_by_parent(files: list[Path]) -> dict[Path, list[Path]]:
+    grouped: dict[Path, list[Path]] = {}
+    for path in files:
+        if is_multi_part_audio_candidate(path):
+            grouped.setdefault(path.parent, []).append(path)
+    return grouped
+
+
+def find_nested_chapter_groups(files: list[Path], tag_reader=None) -> dict[Path, set[Path]]:
+    return {
+        parent: nested
+        for parent, group in multi_part_files_by_parent(files).items()
+        if (nested := nested_chapter_sequence_files(group, tag_reader))
+    }
+
+
+def find_duplicate_set_folders(
+    files: list[Path], tag_reader=None,
+    nested_groups: dict[Path, set[Path]] | None = None,
+) -> dict[Path, str]:
     """Folders whose audio files form two separate numbered sets, with the
     reason to report. Uses the same sequence detection grouping does."""
-    by_parent: dict[Path, list[Path]] = {}
-    for file_path in files:
-        if is_multi_part_audio_candidate(file_path):
-            by_parent.setdefault(file_path.parent, []).append(file_path)
+    by_parent = multi_part_files_by_parent(files)
     found: dict[Path, str] = {}
     for parent, group in by_parent.items():
+        is_nested = (
+            parent in nested_groups if nested_groups is not None
+            else bool(nested_chapter_sequence_files(group, tag_reader))
+        )
+        if is_nested:
+            continue
         first = part_sequence_files(group)
         if len(first) < DUPLICATE_SET_MIN_FILES:
             continue
@@ -3198,27 +3264,45 @@ def looks_like_distinct_books(
     tag_reader=None,
     size_reader=None,
 ) -> bool:
-    """True when every file is book-sized and each one's album names a
-    different book (Tunnel Rat, Tunnel Rat 2, Tunnel Rat 3). Parts of one
-    long book share an album and stay a group; a missing album decides
-    nothing."""
+    """Reject distinct complete works without splitting normal chapter rips."""
     size_reader = size_reader or (lambda path: path.stat().st_size)
     tag_reader = tag_reader or (lambda path: read_tags_and_duration(path)[0])
     if len(group_files) < 2:
         return False
     try:
-        if min(size_reader(path) for path in group_files) < DISTINCT_BOOK_MIN_FILE_BYTES:
-            return False
+        sizes = [size_reader(path) for path in group_files]
     except OSError:
         return False
-    identities = []
-    for path in group_files:
-        album = first_existing_tag(tag_reader(path) or {}, ["album"])
-        identity = _album_identity(album) if album else ""
-        if not identity:
-            return False
-        identities.append(identity)
-    return len(set(identities)) == len(identities)
+    if min(sizes) >= DISTINCT_BOOK_MIN_FILE_BYTES:
+        identities = []
+        for path in group_files:
+            album = first_existing_tag(tag_reader(path) or {}, ["album"])
+            identity = _album_identity(album) if album else ""
+            if not identity:
+                return False
+            identities.append(identity)
+        return len(set(identities)) == len(identities)
+
+    # Unnumbered, hour-long MP3s with their own title tags and no shared album
+    # are individual works (e.g. Plato's 28 dramatized dialogues), not chapters.
+    if (
+        len(group_files) < 5
+        or any(path.suffix.lower() != ".mp3" for path in group_files)
+        or part_sequence_files(group_files)
+        or any(looks_like_chapter_part_filename(path) for path in group_files)
+        or min(sizes) < 30_000_000
+        or sorted(sizes)[len(sizes) // 2] < 80_000_000
+    ):
+        return False
+    tags = [tag_reader(path) or {} for path in group_files]
+    if any(first_existing_tag(item, ["album"]) for item in tags):
+        return False
+    titles = [normalize_part_filename(first_existing_tag(item, ["title"])) for item in tags]
+    return bool(
+        all(titles)
+        and len(set(titles)) == len(titles)
+        and all(title == normalize_part_filename(path.stem) for title, path in zip(titles, group_files))
+    )
 
 
 def build_multi_part_group_map(
@@ -3226,14 +3310,12 @@ def build_multi_part_group_map(
     chapter_count_reader=None,
     tag_reader=None,
     size_reader=None,
+    nested_groups: dict[Path, set[Path]] | None = None,
 ) -> dict[Path, list[Path]]:
-    grouped: dict[Path, list[Path]] = {}
-    duplicate_sets = find_duplicate_set_folders(files)
-
-    for file_path in files:
-        if not is_multi_part_audio_candidate(file_path):
-            continue
-        grouped.setdefault(file_path.parent, []).append(file_path)
+    grouped = multi_part_files_by_parent(files)
+    if nested_groups is None:
+        nested_groups = find_nested_chapter_groups(files, tag_reader)
+    duplicate_sets = find_duplicate_set_folders(files, tag_reader, nested_groups)
 
     accepted: dict[Path, list[Path]] = {}
 
@@ -3243,7 +3325,8 @@ def build_multi_part_group_map(
         if len(group_files) <= 1 or parent in duplicate_sets:
             continue
 
-        numeric_parts = part_sequence_files(group_files)
+        nested_parts = nested_groups.get(parent, set())
+        numeric_parts = nested_parts or part_sequence_files(group_files)
         candidate_files = (
             sorted(numeric_parts, key=natural_audio_sort_key)
             if len(numeric_parts) >= 2
@@ -5906,7 +5989,8 @@ def main():
         print(f"Reading chapter data from {len(files)} files in the library folder...", flush=True)
         prefetch_chapter_counts(files, args.workers)
     print("Analyzing multi-part audiobooks...", flush=True)
-    multi_part_group_map = build_multi_part_group_map(files)
+    nested_groups = find_nested_chapter_groups(files)
+    multi_part_group_map = build_multi_part_group_map(files, nested_groups=nested_groups)
 
     # Full library file list (kept before --max-files truncation) so the duplicate-ASIN
     # check can compare against every book on disk, not just this run's subset.
@@ -5919,10 +6003,11 @@ def main():
 
     if args.max_files > 0:
         files = files[: args.max_files]
-        multi_part_group_map = build_multi_part_group_map(files)
+        nested_groups = find_nested_chapter_groups(files)
+        multi_part_group_map = build_multi_part_group_map(files, nested_groups=nested_groups)
 
     DUPLICATE_SET_FOLDERS.clear()
-    DUPLICATE_SET_FOLDERS.update(find_duplicate_set_folders(files))
+    DUPLICATE_SET_FOLDERS.update(find_duplicate_set_folders(files, nested_groups=nested_groups))
     for _dup_folder, _dup_reason in sorted(DUPLICATE_SET_FOLDERS.items()):
         print(f"  WARNING: {_dup_folder}: {_dup_reason.removeprefix('skipped: ')}")
     processing_items = build_processing_items(files, multi_part_group_map, DUPLICATE_SET_FOLDERS)
