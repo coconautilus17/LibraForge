@@ -76,7 +76,7 @@
           <p>Smart mode compares planned metadata against embedded tags: title and author, plus series, subtitle, genre, and ASIN for most providers. In Full mode it also checks sequence, narrator, and year. Goodreads checks fewer fields because it does not reliably supply audiobook metadata. The narrator is chosen before this comparison, so Smart does not resolve a narrator conflict by itself. It marks the book <span class="match-status-badge status-smart-skipped">Smart-skipped</span> only when every checked field already matches; otherwise the file is written.</p>
         </details>
 
-        <p class="guide-force-note"><strong>Force reprocess</strong> only bypasses the "already processed" check, so the book is re-searched and re-matched from scratch. It does not override what the write mode decides once a fresh match is found:</p>
+        <p class="guide-force-note"><strong>Force reprocess</strong> re-searches books with a completed prior matching attempt, including those where nothing was applied. Manually applied books stay protected. Force does not override what the write mode decides once a fresh match is found:</p>
         <ul>
           <li><strong>Smart + Force</strong>: re-matches from scratch, but if the fresh match's fields are identical to what's already embedded, the book still shows <span class="match-status-badge status-smart-skipped">Smart-skipped</span>. Force restarts the search, not the write.</li>
           <li><strong>Fill missing + Force</strong>: still only fills currently-blank fields either way, a no-op if nothing's blank.</li>
@@ -131,7 +131,7 @@
             </tr>
             <tr>
               <td><span class="match-manual-badge">Manually Applied</span></td>
-              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it permanently from then on (regardless of score), so a later run can never overwrite your manual work by accident. Force reprocess is the only way to make it reprocess again. Also shown in the Manual Review list, using this same badge, for the same reason.</td>
+              <td>This book's metadata was set by hand via Manual Review. Automatic runs skip it, even with Force reprocess, so a batch run cannot overwrite your manual work. Revisit it through Manual Review or restore its metadata before matching again. Also shown in the Manual Review list.</td>
             </tr>
             <tr>
               <td><span class="match-score-badge">87%</span></td>

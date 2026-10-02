@@ -1636,7 +1636,7 @@ def derive_manual_review_items(
         # Intentional skips (pattern matches and already-processed markers) are
         # working as designed -- they don't belong in manual review.
         # "already manually applied" is handled via the status:manual_applied category below.
-        if reason.startswith("matched skip pattern:") or reason in {"already processed", "already manually applied"}:
+        if reason.startswith("matched skip pattern:") or reason in {"already processed", "already manually applied", "already searched (not applied)"}:
             continue
         # Map verbose skip reasons to concise UI labels.
         if reason.startswith("duplicate Audible ASIN") or "asin conflict" in reason.lower():

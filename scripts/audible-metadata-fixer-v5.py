@@ -1818,20 +1818,11 @@ def should_skip_due_to_marker(
     if not marker:
         return False, ""
 
-    if aggressive_run:
-        if marker.get("aggressive") is True:
-            return True, "already aggressively processed"
-        return False, ""
-
     if marker.get("applied") is True:
-        try:
-            marker_score = float(marker.get("score"))
-        except (TypeError, ValueError):
-            marker_score = None
-
-        if marker_score is not None and marker_score < minimum_score:
-            return False, ""
         return True, "already processed"
+
+    if marker.get("processed_at") and not marker.get("restored_at"):
+        return True, "already searched (not applied)"
 
     return False, ""
 
@@ -2068,7 +2059,8 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     sidecar's marker.audible.asin). Only writes NOREALASIN when no real ASIN
     is known anywhere, so the Start Here scanner can skip mutagen on books
     with no ASIN while keeping the correct value for books that do have one.
-    Does not set applied=True so the fixer will re-process on the next run.
+    Does not set applied=True, but records the completed attempt so a later
+    run only re-searches this book when --force is supplied.
     """
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
@@ -2099,6 +2091,7 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
             "asin": asin_to_write,
         },
     }
+    payload["marker"].pop("restored_at", None)
     _write_libraforge(lf_path, payload)
 
 def is_single_file_mp3(source: Path, clues: dict | None = None) -> bool:
@@ -3640,6 +3633,12 @@ def search_item(
         )
         recovering_from_marker = False
         if skip_due_to_marker:
+            if not existing_marker.get("applied"):
+                log.append(f"  SKIP: {marker_reason}")
+                log.append("")
+                result.status = "skipped"
+                result.skip_reason = marker_reason
+                return result
             _rec_alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
             _rec_meta_target = resolve_recovery_meta_target(file_path, _rec_alone, multi_part_group_map)
             if marker_skip_is_clean(file_path, existing_marker, _rec_alone, _rec_meta_target):
@@ -5601,7 +5600,7 @@ def main():
     parser.add_argument(
         "--aggressive",
         action="store_true",
-        help="Process files that were previously non-aggressively processed. Skip files already aggressively processed.",
+        help="Use aggressive matching for new books. Previously searched books still require --force to reprocess.",
     )
 
     parser.add_argument(
