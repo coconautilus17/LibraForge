@@ -514,7 +514,6 @@ DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
 SUMMARY_RE = re.compile(r"^\s*(Matched|Skipped|Failed|Smart-skipped):\s+(\d+)\s*$")
 FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+(\d+)\s*$")
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
-WRITE_SKIP_RE = re.compile(r"^\s+Write-(?:skip|error):\s+")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
 # The plan header names the source ("AUDIBLE MATCH:", "GOODREADS MATCH:",
 # "GRAPHICAUDIO MATCH:", ...). Match any provider header so non-Audible matches
@@ -1700,12 +1699,12 @@ def add_category(state: RunState, kind: str, value: str, path: str, title: str =
 
 
 def _fixer_percent(state: RunState) -> float:
-    """Overall percent from 3 phases: scan 5%, match 70%, write 25%."""
+    """Reserve the last five percent for report preparation and persistence."""
     if not state.total:
         return 0.0
     scan = 5.0
     match = state.current / state.total * 70
-    write = state.write_current / state.total * 25
+    write = state.write_current / state.total * 20
     return round(scan + match + write, 2)
 
 
@@ -1742,6 +1741,18 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             action = str(update.get("write_action", "") or "")
             if path and action:
                 add_category(state, "write", action, path, str(update.get("write_note", "") or ""))
+                counted = state.parser_state.setdefault("write_action_paths", set())
+                if path not in counted and state.total:
+                    counted.add(path)
+                    state.write_current = min(state.write_current + 1, state.total)
+                    state.percent = _fixer_percent(state)
+                    if state.in_write_phase:
+                        set_run_phase(
+                            state,
+                            "writing" if "--apply" in state.command else "planning",
+                            "Writing metadata" if "--apply" in state.command else "Planning changes",
+                            f"Completed {state.write_current} of {state.total}",
+                        )
         except Exception:
             pass
         return
@@ -1749,19 +1760,8 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     detected_phase = fixer_phase_for_line(line, state.current_file)
     if detected_phase:
         set_run_phase(state, *detected_phase)
-        phase_id = detected_phase[0]
-        if phase_id == "recording" and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
-        elif phase_id == "summarizing":
-            state.percent = max(state.percent, 98.0)
-
-    # NO-OP and Smart-skip: tags already matched, no write needed. They only
-    # appear in Pass 2 output, so always count them toward write_current.
-    stripped = line.strip()
-    if stripped.startswith("NO-OP") or stripped.startswith("Smart-skip"):
-        state.write_current += 1
-        state.percent = _fixer_percent(state)
+        if detected_phase[0] == "summarizing":
+            state.percent = max(state.percent, 96.0)
 
     # Once the end-of-run summary/report region begins, no further lines belong to
     # a processed item. Clear current_file so per-item reason lines re-printed in
@@ -1775,6 +1775,7 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     if m:
         state.total = int(m.group(1))
         state.stats["found"] = int(m.group(1))
+        state.stats["scan_complete"] = True
         state.percent = 5.0  # scan phase complete
         set_run_phase(
             state,
@@ -1834,20 +1835,13 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.in_write_phase = True
         state.current_file = m.group(3).strip()
         state.percent = _fixer_percent(state)
+        applying = "--apply" in state.command
         set_run_phase(
             state,
-            "writing",
-            "Writing metadata",
-            f"Writing {state.write_current + 1} of {state.total}",
+            "writing" if applying else "planning",
+            "Writing metadata" if applying else "Planning changes",
+            f"Item {state.write_current + 1} of {state.total}",
         )
-        return
-
-    # Pass 2 completion for books that were skipped or failed during Pass 1.
-    # Their skip/error reasons were already counted in Pass 1; here we only
-    # advance write_current so the write bar stays accurate.
-    if WRITE_SKIP_RE.match(line) and state.in_write_phase and state.total:
-        state.write_current += 1
-        state.percent = _fixer_percent(state)
         return
 
     restore = re.match(r"^\[(\d+)/(\d+)\]\s+Restoring:\s+(.+)$", line)
@@ -1916,19 +1910,12 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "status", "skipped", state.current_file, reason)
         if reason == "already manually applied":
             add_category(state, "status", "manual_applied", state.current_file)
-        # In write phase, a skip means this item is done (no write needed).
-        if state.in_write_phase and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
         return
 
     m = ERROR_RE.match(line)
     if m and state.current_file:
         state.stats["error_count"] += 1
         add_category(state, "status", "error", state.current_file, m.group(1).strip())
-        if state.in_write_phase and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
         return
 
     if state.current_file and MATCH_RE.match(line):
@@ -2054,29 +2041,41 @@ def redact_command(cmd: list[str]) -> list[str]:
     return redacted
 
 
-def write_final_report(state: RunState) -> None:
+def write_final_report(state: RunState, final_status: str | None = None) -> None:
     items, categories = build_report_items(state.files_by_category)
     manual_review_items = derive_manual_review_items(state.stats, state.files_by_category)
+    phase, phase_label, phase_detail = (
+        terminal_phase(final_status, state.error)
+        if final_status else (state.phase, state.phase_label, state.phase_detail)
+    )
+    report_stats = dict(state.stats)
+    report_stats.update(phase=phase, phase_label=phase_label, phase_detail=phase_detail)
     report = {
         "schema_version": 2,
         "id": state.id,
-        "status": state.status,
-        "phase": state.phase,
-        "phase_label": state.phase_label,
-        "phase_detail": state.phase_detail,
+        "status": final_status or state.status,
+        "phase": phase,
+        "phase_label": phase_label,
+        "phase_detail": phase_detail,
         "started_at": state.started_at,
         "finished_at": state.finished_at,
         "returncode": state.returncode,
         "command": redact_command(state.command),
-        "stats": state.stats,
+        "run_type": state.run_type,
+        "current": state.current,
+        "total": state.total,
+        "write_current": state.write_current,
+        "percent": 100.0 if final_status == "completed" else state.percent,
+        "stats": report_stats,
         "items": items,
         "categories": categories,
         "manual_review_items": manual_review_items,
         "report_items": state.report_items,
         "log_file": state.log_path.name if state.log_path else None,
     }
-    state.report_path = REPORTS_DIR / f"{state.id}.report.json"
-    state.report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    report_path = REPORTS_DIR / f"{state.id}.report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    state.report_path = report_path
     _prune_reports()
 
 
@@ -4198,19 +4197,35 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         state.status = "running"
         stream_process_output(state, cmd, threshold=threshold)
         if state.status != "cancelled":
+            state.current_file = ""
+            state.percent = max(state.percent, 97.0)
+            set_run_phase(state, "checking-ebooks", "Checking ebooks for match report", req.target_path)
             try:
                 state.report_items.extend(scan_ebook_units_for_report(
                     Path(req.target_path),
                     goodreads=req.enable_goodreads_fallback,
                     open_library=req.enable_openlibrary_fallback,
+                    progress=lambda done, total, path: set_run_phase(
+                        state, "checking-ebooks", "Checking ebooks for match report",
+                        f"Checked {done} of {total}: {path.name}",
+                    ),
                 ))
             except Exception as exc:
                 print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
         if state.status != "cancelled":
-            state.status = "completed" if state.returncode == 0 else "failed"
-        set_terminal_phase(state)
-        write_final_report(state)
+            final_status = "completed" if state.returncode == 0 else "failed"
+            state.percent = max(state.percent, 99.0)
+            set_run_phase(state, "saving-report", "Saving match report")
+            write_final_report(state, final_status=final_status)
+            state.status = final_status
+            if final_status == "completed":
+                state.percent = 100.0
+        else:
+            set_terminal_phase(state)
+            write_final_report(state)
+        if state.status != "cancelled":
+            set_terminal_phase(state)
     except Exception as exc:
         state.error = str(exc)
         state.finished_at = time.time()
@@ -7053,6 +7068,7 @@ def match_ebook_unit(
 
 def scan_ebook_units_for_report(
     root: Path, *, goodreads: bool = False, open_library: bool = False,
+    progress: Callable[[int, int, Path], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Score every discovered ebook unit against a fresh provider search.
 
@@ -7070,7 +7086,8 @@ def scan_ebook_units_for_report(
     """
     fixer_module = load_fixer_module(default_fixer_script())
     items: list[dict[str, Any]] = []
-    for unit in library_index.build_ebook_index(root):
+    units = library_index.build_ebook_index(root)
+    for index, unit in enumerate(units, start=1):
         local = fixer_module.read_book_sidecar(unit.path) or {}
         if goodreads or open_library:
             found = match_ebook_unit(
@@ -7105,6 +7122,8 @@ def scan_ebook_units_for_report(
             "media_type": "ebook",
             "formats": sorted(unit.formats.keys()),
         })
+        if progress:
+            progress(index, len(units), unit.path)
     return items
 
 

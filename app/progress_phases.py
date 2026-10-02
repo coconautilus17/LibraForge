@@ -38,7 +38,7 @@ def fixer_phase_for_line(line: str, current_file: str = "") -> Phase | None:
         "Duration breakdown:",
         "File type breakdown:",
     } or stripped.startswith(("DURATION REVIEW REPORT", "ASIN VERIFICATION REPORT")):
-        return ("summarizing", "Calculating summary", stripped.rstrip(":"))
+        return ("summarizing", "Compiling review reports", stripped.rstrip(":"))
     return None
 
 

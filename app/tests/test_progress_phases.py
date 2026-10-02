@@ -33,6 +33,10 @@ class ProgressPhaseTests(unittest.TestCase):
             ),
             ("writing", "Writing metadata", "/library/book.m4b"),
         )
+        self.assertEqual(
+            fixer_phase_for_line("Summary:"),
+            ("summarizing", "Compiling review reports", "Summary"),
+        )
 
     def test_organizer_distinguishes_cache_scan_preview_and_apply(self):
         self.assertEqual(

@@ -346,7 +346,10 @@ async function render(state) {
 function renderPhaseCounters(state) {
   const el = $('phaseCounters');
   if (!el) return;
-  if (state.run_type !== 'fixer') { el.style.display = 'none'; return; }
+  if (state.run_type !== 'fixer' || (state.command || []).includes('--restore-metadata')) {
+    el.style.display = 'none';
+    return;
+  }
   el.style.display = '';
 
   const total = state.total || 0;
@@ -354,7 +357,8 @@ function renderPhaseCounters(state) {
   const writeCurrent = state.write_current || 0;
   const isRunning = state.status === 'running';
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(state.status);
-  const scanDone = total > 0;
+  const scanDone = Boolean(state.stats?.scan_complete);
+  $('writeLabel').textContent = (state.command || []).includes('--apply') ? 'Writing' : 'Planning';
 
   // Scan bar: indeterminate while scanning, solid green when found
   const scanFill = $('scanFill');
@@ -370,19 +374,19 @@ function renderPhaseCounters(state) {
   // Match bar -- also mark done when we're in the write phase (current locked at total)
   const matchPct = total ? (matchCurrent / total * 100) : 0;
   const inWritePhase = ['writing', 'recording'].includes(state.phase);
-  const matchDone = total > 0 && (matchCurrent >= total || inWritePhase);
+  const matchDone = scanDone && (total === 0 ? isTerminal : matchCurrent >= total || inWritePhase);
   const matchFill = $('matchFill');
   matchFill.className = 'phase-fill' + (matchDone ? ' complete' : '');
   if (!matchDone) matchFill.style.width = `${matchPct}%`;
-  $('matchCount').textContent = total ? `${matchDone ? total : matchCurrent} / ${total}` : '-';
+  $('matchCount').textContent = scanDone ? `${matchDone ? total : matchCurrent} / ${total}` : '-';
 
   // Write bar
   const writePct = total ? Math.min(100, writeCurrent / total * 100) : 0;
-  const writeDone = isTerminal && writeCurrent > 0 && writePct >= 99.9;
+  const writeDone = isTerminal && scanDone && (total === 0 || writePct >= 99.9);
   const writeFill = $('writeFill');
   writeFill.className = 'phase-fill' + (writeDone ? ' complete' : '');
   if (!writeDone) writeFill.style.width = `${writePct}%`;
-  $('writeCount').textContent = total ? `${writeCurrent} / ${total}` : '-';
+  $('writeCount').textContent = scanDone ? `${writeCurrent} / ${total}` : '-';
 }
 
 function formatElapsed(startedAt, finishedAt) {

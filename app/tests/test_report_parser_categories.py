@@ -157,6 +157,43 @@ class ReportParserCategoryTests(unittest.TestCase):
         state = run_lines(lines)
         self.assertNotIn("provider:graphicaudio", state.files_by_category)
 
+    def test_dry_run_plan_and_skip_complete_write_progress_once(self):
+        state = run_lines([
+            "Found 2 supported files.",
+            "PASS 1 PROGRESS: completed 2/2",
+            "[1/2] Writing: /lib/First.m4b",
+            "  PLAN: would write tags",
+            'WRITE_ACTION_JSON: {"path": "/lib/First.m4b", "write_action": "would_write"}',
+            "[2/2] Writing: /lib/Second.m4b",
+            "  Write-skip: already processed",
+            'WRITE_ACTION_JSON: {"path": "/lib/Second.m4b", "write_action": "write_skipped"}',
+            'WRITE_ACTION_JSON: {"path": "/lib/Second.m4b", "write_action": "write_skipped"}',
+            "Summary:",
+        ])
+        self.assertTrue(state.stats["scan_complete"])
+        self.assertEqual((state.current, state.write_current, state.total), (2, 2, 2))
+        self.assertEqual(state.percent, 96.0)
+        self.assertEqual(state.phase_label, "Compiling review reports")
+        self.assertEqual(self._paths(state, "write:would_write"), ["/lib/First.m4b"])
+
+    def test_direct_write_during_matching_is_not_counted_twice(self):
+        state = run_lines([
+            "Found 1 supported files.",
+            "PASS 1 PROGRESS: completed 1/1",
+            "[1/1] Processing: /lib/Book.m4b",
+            "  APPLIED (normal, metadata_json=book)",
+            'WRITE_ACTION_JSON: {"path": "/lib/Book.m4b", "write_action": "written"}',
+            "[1/1] Writing: /lib/Book.m4b",
+            "  APPLIED (normal, metadata_json=book)",
+        ])
+        self.assertEqual(state.write_current, 1)
+        self.assertEqual(state.percent, 95.0)
+
+    def test_empty_scan_is_marked_complete(self):
+        state = run_lines(["Found 0 supported files."])
+        self.assertTrue(state.stats["scan_complete"])
+        self.assertEqual(state.total, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

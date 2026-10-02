@@ -6289,6 +6289,14 @@ def main():
 
                 if result.asin_conflict:
                     w_skipped += 1
+                    out.append(
+                        "WRITE_ACTION_JSON: "
+                        + json.dumps({
+                            "path": str(file_path),
+                            "write_action": "write_skipped",
+                            "write_note": "duplicate Audible ASIN",
+                        })
+                    )
                 elif not result.write_done:
                     aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
                     _write_kind = "aggressive" if aggressive_edit else "normal"

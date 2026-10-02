@@ -120,6 +120,16 @@ class ScanEbookUnitsForReportTests(unittest.TestCase):
         self.assertEqual(items[0]["status"], "unmatched")
         self.assertIn("Goodreads and Open Library are both off", items[0]["skip_reason"])
 
+    def test_progress_reports_each_completed_ebook(self):
+        self._touch("Linux/EPUB/Book One.epub")
+        self._touch("Science/EPUB/Book Two.epub")
+        progress = []
+        items = scan_ebook_units_for_report(
+            self.root, progress=lambda done, total, path: progress.append((done, total, path.name)),
+        )
+        self.assertEqual(len(items), 2)
+        self.assertEqual([entry[:2] for entry in progress], [(1, 2), (2, 2)])
+
     def test_never_writes_to_the_sidecar(self):
         epub_path = self._touch("Linux/EPUB/Kubernetes Up and Running.epub")
         candidate = ol_product("Kubernetes Up and Running", "Kelsey Hightower", "", "", cover="", summary="")
