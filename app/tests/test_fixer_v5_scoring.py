@@ -4,6 +4,8 @@ import types
 import unittest
 from pathlib import Path
 
+from app.fixer.scoring import metadata_from_product
+
 
 ROOT = Path(__file__).parents[2]
 
@@ -723,6 +725,75 @@ class RecurringSubtitleSequenceConflictTests(unittest.TestCase):
             sequence="2", authors=("Will Wight",), narrators=("Nar",), minutes=601,
         )
         self.assertFalse(FIXER.has_sequence_conflict(clues, par, 600.0))
+
+
+class CrossSeriesFolderNumberTests(unittest.TestCase):
+    def setUp(self):
+        self.clues = {
+            "title": "06 - Brass Man",
+            "raw_title": "06 - Brass Man",
+            "series": "Polity Universe",
+            "author": "Neal Asher",
+            "narrator": "Local Reader",
+            "book_number": "6",
+            "book_number_source": "path",
+        }
+        self.match = product(
+            title="Brass Man", series="Agent Cormac", sequence="3",
+            authors=("Neal Asher",), narrators=("Ric Jerrom",), minutes=1263,
+        )
+
+    def test_distinct_series_numbering_allows_exact_book_with_other_narrator(self):
+        self.assertTrue(FIXER.has_number_identity_conflict(self.clues, self.match))
+        self.assertFalse(FIXER.has_sequence_conflict(self.clues, self.match, 1263.44))
+        self.assertGreaterEqual(
+            FIXER.score_product_for_metadata(self.clues, self.match, 1263.44), 0.70
+        )
+        metadata = metadata_from_product(
+            self.match, {**self.clues, "local_duration_minutes": 1263.44}, 1.0
+        )
+        self.assertEqual(metadata["edit_mode"], "full")
+        self.assertEqual(metadata["narrator"], "Local Reader")
+        self.assertEqual(metadata["different_edition"]["match_narrator"], "Ric Jerrom")
+
+    def test_wrong_primary_title_is_still_rejected_even_if_subtitle_matches(self):
+        wrong = product(
+            title="Another Novel", subtitle="Brass Man",
+            series="Another Series", sequence="12", authors=("Neal Asher",),
+            minutes=1263,
+        )
+        self.assertTrue(FIXER.has_sequence_conflict(self.clues, wrong, 1263.44))
+        self.assertEqual(FIXER.score_product_for_metadata(self.clues, wrong, 1263.44), 0)
+
+    def test_same_series_number_conflict_remains_hard_reject(self):
+        same_series = product(
+            title="Brass Man", series="Polity Universe", sequence="3",
+            authors=("Neal Asher",), minutes=1263,
+        )
+        self.assertTrue(FIXER.has_sequence_conflict(self.clues, same_series, 1263.44))
+        self.assertEqual(FIXER.score_product_for_metadata(self.clues, same_series, 1263.44), 0)
+
+    def test_explicit_title_number_cannot_use_folder_exception(self):
+        numbered = dict(self.clues, title="Brass Man 6")
+        candidate = product(
+            title="Brass Man 6", series="Agent Cormac", sequence="3",
+            authors=("Neal Asher",), minutes=1263,
+        )
+        self.assertTrue(FIXER.has_sequence_conflict(numbered, candidate, 1263.44))
+
+    def test_conflicting_title_prefix_cannot_use_folder_exception(self):
+        numbered = dict(self.clues, title="09 - Brass Man")
+        self.assertTrue(FIXER.has_sequence_conflict(numbered, self.match, 1263.44))
+        self.assertEqual(FIXER.score_product_for_metadata(numbered, self.match, 1263.44), 0)
+
+    def test_requires_author_and_perfect_duration(self):
+        other_author = product(
+            title="Brass Man", series="Agent Cormac", sequence="3",
+            authors=("Other Writer",), minutes=1263,
+        )
+        self.assertEqual(FIXER.score_product_for_metadata(self.clues, other_author, 1263.44), 0)
+        self.assertTrue(FIXER.has_sequence_conflict(self.clues, self.match, 1500))
+        self.assertEqual(FIXER.score_product_for_metadata(self.clues, self.match, 1500), 0)
 
 
 class SubstringSeriesCoincidentalMatchTests(unittest.TestCase):

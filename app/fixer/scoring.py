@@ -561,6 +561,44 @@ def has_number_identity_conflict(clues: dict, product: dict) -> bool:
     return not bool(set(local_numbers) & set(audible_numbers))
 
 
+def has_cross_series_folder_identity(
+    clues: dict,
+    product: dict,
+    local_duration_minutes: float | None,
+) -> bool:
+    """Confirm a book whose folder index and catalog subseries use different scales."""
+    if clues.get("book_number_source") != "path":
+        return False
+    local_series = normalize_for_match(clues.get("series", ""))
+    audible_series, _ = get_primary_series(product)
+    audible_series = normalize_for_match(audible_series)
+    if not local_series or not audible_series or local_series == audible_series:
+        return False
+
+    local_title = strip_title_search_noise(clues.get("title", ""), clues.get("author", ""))
+    if not local_title:
+        return False
+    title_number = extract_title_identity_number(local_title)
+    if title_number and title_number != normalize_book_number(clues.get("book_number", "")):
+        return False
+    local_title = strip_leading_sequence_from_title(local_title)
+    audible_title = product.get("title", "") or ""
+    if not literal_text(local_title) or literal_text(local_title) != literal_text(audible_title):
+        return False
+    if extract_title_identity_number(local_title) or extract_book_number_from_text(local_title):
+        return False
+    if extract_title_identity_number(audible_title) or extract_book_number_from_text(audible_title):
+        return False
+
+    if _authors_compatible(
+        clues.get("author", ""), " ".join(get_people(product, "authors"))
+    ) is not True:
+        return False
+    return compare_duration(
+        local_duration_minutes, get_audible_duration_minutes(product)
+    )["status"] == "perfect"
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def strong_identity_overrides_number_conflict(
     clues: dict,
@@ -575,6 +613,8 @@ def strong_identity_overrides_number_conflict(
     and the Audible title explicitly encode different numbers -- in that case the
     numbers are the identity of two different books in the same series.
     """
+    if has_cross_series_folder_identity(clues, product, local_duration_minutes):
+        return True
     if title_evidence_score(clues, product) < 0.85:
         return False
 
@@ -710,6 +750,9 @@ def has_sequence_conflict(
 
     # Track numbers are weak metadata.
     if number_source == "track":
+        return False
+
+    if has_cross_series_folder_identity(clues, product, local_duration_minutes):
         return False
 
     # When both the local title and the Audible title carry explicit, differing
