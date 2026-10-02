@@ -58,29 +58,29 @@
       <div class="guide-section">
         <h3>Edit modes</h3>
         <ul>
-          <li><span class="match-mode-badge">Full metadata</span> writes everything the match provided: title, author, series, sequence, narrator, year, genre, ASIN.</li>
-          <li><span class="match-mode-badge">Series only</span> writes only the series name, not the sequence number, and leaves title and other fields untouched. Used when the match confirms series and author confidently but title identity is uncertain, so a possibly-correct local title is never clobbered, and the sequence number is left alone since this mode exists precisely for cases where that number isn't trustworthy yet.</li>
+          <li><span class="match-mode-badge">Full metadata</span> writes the planned title, author, series, sequence, year, genre, and ASIN. If local credits identify a different recording, the book's own narrator is kept instead of the match's narrator.</li>
+          <li><span class="match-mode-badge">Series only</span> uses the match for series grouping while keeping the local title and narrator. It can clean up the author, and does not take a sequence number from the match. Blank sequence and year values may be cleared when writing tags.</li>
         </ul>
       </div>
 
       <div class="guide-section">
         <h3>Write modes</h3>
         <ul>
-          <li><strong>Smart</strong>: only writes if the current embedded tags differ from the match.</li>
+          <li><strong>Smart</strong>: only writes if the current embedded tags differ from the planned metadata.</li>
           <li><strong>Fill missing fields only</strong>: never touches a field that already has a value, only fills blanks.</li>
-          <li><strong>Overwrite</strong>: always writes every matched field, unconditionally.</li>
+          <li><strong>Overwrite</strong>: always writes the planned metadata, even when current tags already match.</li>
         </ul>
 
         <details class="guide-smart-detail">
           <summary>How does Smart mode decide what counts as "already matching"?</summary>
-          <p>Smart mode compares each field the match would write against what's already embedded in the file: title, author, series, genre, and ASIN, plus sequence, narrator, and year when the edit mode is Full. It only marks the book <span class="match-status-badge status-smart-skipped">Smart-skipped</span> (nothing written) when every one of those checked fields already matches. If even one differs, the file is written normally.</p>
+          <p>Smart mode compares planned metadata against embedded tags: title and author, plus series, subtitle, genre, and ASIN for most providers. In Full mode it also checks sequence, narrator, and year. Goodreads checks fewer fields because it does not reliably supply audiobook metadata. The narrator is chosen before this comparison, so Smart does not resolve a narrator conflict by itself. It marks the book <span class="match-status-badge status-smart-skipped">Smart-skipped</span> only when every checked field already matches; otherwise the file is written.</p>
         </details>
 
         <p class="guide-force-note"><strong>Force reprocess</strong> only bypasses the "already processed" check, so the book is re-searched and re-matched from scratch. It does not override what the write mode decides once a fresh match is found:</p>
         <ul>
           <li><strong>Smart + Force</strong>: re-matches from scratch, but if the fresh match's fields are identical to what's already embedded, the book still shows <span class="match-status-badge status-smart-skipped">Smart-skipped</span>. Force restarts the search, not the write.</li>
           <li><strong>Fill missing + Force</strong>: still only fills currently-blank fields either way, a no-op if nothing's blank.</li>
-          <li><strong>Overwrite + Force</strong>: the only combination that reliably rewrites everything, since Overwrite always writes the full fresh match regardless of what's already there.</li>
+          <li><strong>Overwrite + Force</strong>: rewrites the planned metadata from a fresh match regardless of what's already there.</li>
         </ul>
       </div>
 
@@ -135,7 +135,7 @@
             </tr>
             <tr>
               <td><span class="match-score-badge">87%</span></td>
-              <td>Match confidence.</td>
+              <td>Match score. Even 100% can pair the right book with another recording's narrator; check the narrator badge below.</td>
             </tr>
             <tr>
               <td><span class="match-mode-badge">Full metadata</span></td>
@@ -143,25 +143,45 @@
             </tr>
             <tr>
               <td><span class="match-provider-badge">Audible</span></td>
-              <td>Which source produced the match: Audible, ABS, abs-agg (LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???), GraphicAudio, Soundbooth Theater, Goodreads, or Kindle.</td>
+              <td>Which source produced the match, such as Audible, Audiobookshelf, abs-agg, GraphicAudio, SoundBooth Theater, Goodreads, Pocket FM, Hardcover, or Kindle.</td>
             </tr>
             <tr>
               <td><span class="match-gr-limited-badge">GR LIMITED</span></td>
               <td>Goodreads (abs-tract) was tried for this book but the circuit breaker was open (Goodreads was rate-limiting us), so the lookup was skipped rather than counted as a genuine no-match. A warning explains this and suggests a lower search-worker count when a run trips the breaker.</td>
             </tr>
             <tr>
+              <td><span class="match-initials-badge">Initials Fixed</span></td>
+              <td>The author-name scheme changed only the form of the author's initials.</td>
+            </tr>
+            <tr>
+              <td><span class="match-edition-badge">Different edition</span></td>
+              <td>The match is another recording of the same book. Its details are used, but the local narrator is kept. The card shows both narrator names.</td>
+            </tr>
+            <tr>
+              <td><span class="match-edition-badge">100% &middot; Narrator kept</span></td>
+              <td>A Full match scored 100%, but local credits indicate a different narrator. The book's own narrator is kept even in Smart or Overwrite write mode. This replaces the Different edition badge for that case.</td>
+            </tr>
+            <tr>
               <td><span class="match-write-badge">written</span></td>
-              <td>What actually happened on disk: written, smart-skipped, no-op, skipped, or error.</td>
+              <td>Write action for this run, such as written, would write (dry run), or no op. Smart-skipped is shown as the status badge instead.</td>
             </tr>
             <tr>
               <td><span class="match-grouped-badge">Multi-file</span></td>
               <td>This book spans multiple audio files that were grouped and treated as one item for matching and writing.</td>
+            </tr>
+            <tr>
+              <td><span class="match-ebook-badge">EPUB+PDF</span></td>
+              <td>Formats present for an ebook match; shown only for ebooks.</td>
             </tr>
 
             <tr class="guide-badge-section"><td colspan="2">Manual Review reason tags</td></tr>
             <tr>
               <td><span class="reason-badge danger">no match</span></td>
               <td>Skipped because no usable match was found (the <strong>Skipped</strong> status above). Other red reason tags: asin conflict, low score, missing metadata, unsafe match, no metadata, status:skipped, mode:none, or an N% duration-diff tag.</td>
+            </tr>
+            <tr>
+              <td><span class="reason-badge">grouped book</span></td>
+              <td>The review target is a group of audio files treated as one book. Other neutral reason tags name why it needs review.</td>
             </tr>
 
             <tr class="guide-badge-section"><td colspan="2">Suspect Report</td></tr>

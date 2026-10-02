@@ -24,6 +24,17 @@ SPIRAL_CLUES = {
     "title": "Spiral", "author": "Roderick Gordon", "narrator": "", "series": "Tunnels", "book_number": "5",
     "credit_names": ["Roderick Gordon/Brian Williams/Steven Crossley"], "local_duration_minutes": 727.7,
 }
+GUNS = {
+    "asin": "B002V5CUFK", "title": "The Guns of August",
+    "authors": [{"name": "Barbara W. Tuchman"}],
+    "narrators": [{"name": "Wanda McCaddon"}],
+    "runtime_length_min": 1149,
+}
+GUNS_CLUES = {
+    "title": "The Guns of August", "author": "Barbara W. Tuchman",
+    "narrator": "John Lee", "credit_names": ["Barbara W. Tuchman", "John Lee"],
+    "local_duration_minutes": 1139.1965,
+}
 
 
 class DifferentEditionTests(unittest.TestCase):
@@ -44,12 +55,32 @@ class DifferentEditionTests(unittest.TestCase):
         clues = {**SPIRAL_CLUES, "narrator": "Steven Crossley", "credit_names": ["Roderick Gordon"]}
         self.assertEqual(metadata_from_product(SPIRAL, clues, 1.0)["narrator"], "Steven Crossley")
 
+    def test_perfect_duration_with_another_narrator_keeps_local_tag(self):
+        metadata = metadata_from_product(GUNS, GUNS_CLUES, 1.0)
+        self.assertEqual(metadata["edit_mode"], "full")
+        self.assertEqual(metadata["narrator"], "John Lee")
+        self.assertEqual(metadata["duration"]["status"], "perfect")
+        self.assertEqual(metadata["different_edition"]["match_narrator"], "Wanda McCaddon")
+
     def test_same_recording_is_not_flagged(self):
-        # Lengths within 3%: the match's narrator is written as before.
-        clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0}
+        clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0,
+                 "credit_names": ["Roderick Gordon", "Paul Chequer"]}
         metadata = metadata_from_product(SPIRAL, clues, 1.0)
         self.assertEqual(metadata["narrator"], "Paul Chequer")
         self.assertNotIn("different_edition", metadata)
+
+    def test_author_narrated_book_keeps_its_narrator_tag(self):
+        clues = {**SPIRAL_CLUES, "narrator": "Roderick Gordon",
+                 "credit_names": ["Roderick Gordon"], "local_duration_minutes": 684.0}
+        metadata = metadata_from_product(SPIRAL, clues, 1.0)
+        self.assertEqual(metadata["narrator"], "Roderick Gordon")
+        self.assertEqual(metadata["different_edition"]["match_narrator"], "Paul Chequer")
+
+    def test_author_in_narrator_tag_uses_other_local_reader(self):
+        clues = {**SPIRAL_CLUES, "narrator": "Roderick Gordon",
+                 "local_duration_minutes": 684.0}
+        metadata = metadata_from_product(SPIRAL, clues, 1.0)
+        self.assertEqual(metadata["narrator"], "Steven Crossley")
 
     def test_match_narrator_among_the_books_credits_is_the_same_edition(self):
         # Tanya rips: uploader in album_artist, narrator in artist, author in
@@ -94,8 +125,14 @@ class DifferentEditionReportTests(unittest.TestCase):
         self.assertEqual(item["different_edition"]["match_narrator"], "Paul Chequer")
         self.assertEqual(item["match"]["narrator"], "Steven Crossley")
 
+    def test_report_item_flags_perfect_duration_different_narrator(self):
+        item = self._item(metadata_from_product(GUNS, GUNS_CLUES, 1.0))
+        self.assertEqual(item["different_edition"]["local_narrator"], "John Lee")
+        self.assertEqual(item["match"]["narrator"], "John Lee")
+
     def test_report_item_without_the_flag(self):
-        clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0}
+        clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0,
+                 "credit_names": ["Roderick Gordon", "Paul Chequer"]}
         self.assertNotIn("different_edition", self._item(metadata_from_product(SPIRAL, clues, 1.0)))
 
 

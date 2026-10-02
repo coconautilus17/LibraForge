@@ -402,6 +402,7 @@ function renderStats(stats, startedAt, finishedAt) {
   const elapsed = formatElapsed(startedAt, finishedAt);
   const fill = stats.fill_breakdown;
   const manualAppliedCount = (latestState?.files_by_category?.['status:manual_applied'] || []).length;
+  const perfectNarratorCount = matchReportItems.filter((i) => i.different_edition && i.mode === 'full' && i.score != null && Math.round(i.score * 100) === 100).length;
   $('stats').innerHTML = [
     elapsed ? stat('Run duration', elapsed, 'Total elapsed time for this run.') : '',
     stat('Found', stats.found, 'Supported files discovered before filtering.'),
@@ -421,7 +422,8 @@ function renderStats(stats, startedAt, finishedAt) {
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
     stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads (abs-tract) circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
     matchReportItems.some((i) => i.author_initials_fixed) ? stat('Author initials fixed', matchReportItems.filter((i) => i.author_initials_fixed).length, 'Author names whose initials were unified by the author-name scheme (Settings, Author names). Filter the match report by Author Initials Fixed to list them.') : '',
-    matchReportItems.some((i) => i.different_edition) ? stat('Different edition', matchReportItems.filter((i) => i.different_edition).length, 'Matched to another recording of the same book (different narrator and length). The match\'s title, series and details were used, but the book\'s own narrator was kept. Filter the match report by Different edition to list them.') : '',
+    perfectNarratorCount ? stat('100%: narrator kept', perfectNarratorCount, 'Full matches scored 100%, but local narrator evidence differs from the selected recording. The book\'s own narrator was kept. Filter by Different edition to see these books.') : '',
+    matchReportItems.some((i) => i.different_edition) ? stat('Different edition', matchReportItems.filter((i) => i.different_edition).length, 'Matched to another recording of the same book with a different narrator. The match\'s title, series and details were used, but the book\'s own narrator was kept. Filter the match report by Different edition to list them.') : '',
     stat('Duration > threshold', (stats.large_duration_items || []).length, `Runtime difference above ${threshold}%.`),
     stat('Duration: perfect', duration.perfect, 'Runtime difference <= 3%.'),
     stat('Duration: strong', duration.strong, 'Runtime difference <= 10%.'),
@@ -1472,10 +1474,10 @@ async function loadLastReport() {
     const report = await res.json();
     latestState = report;
     currentReportId = report.id || null;
-    renderStats(report.stats || {}, report.started_at, report.finished_at);
     renderCategories(report.files_by_category || {});
     renderManualReview(report.manual_review_items || []);
     await renderMatchReport(report.report_items || []);
+    renderStats(report.stats || {}, report.started_at, report.finished_at);
     $('runStatus').textContent = `Last report loaded (${report.status || 'unknown'})`;
     $('currentFile').textContent = report.id || '';
   } finally {
@@ -1700,9 +1702,10 @@ function buildMatchCard(item) {
 
   // Matched another recording of the book: its narrator was not written.
   const edition = item.different_edition;
+  const perfectNarratorMismatch = !!edition && mode === 'full' && scorePct === 100;
   const editionMinutes = (v) => (v != null ? `${Math.round(v)} min` : 'unknown length');
   const editionNote = edition
-    ? `Different edition: this book is read by ${edition.local_narrator} (${editionMinutes(edition.local_minutes)}), the match is read by ${edition.match_narrator} (${editionMinutes(edition.match_minutes)}). The match's details are used, but the narrator stays ${edition.local_narrator}.`
+    ? `${perfectNarratorMismatch ? '100% full match, different narrator' : 'Different edition'}: this book is read by ${edition.local_narrator} (${editionMinutes(edition.local_minutes)}), the match is read by ${edition.match_narrator} (${editionMinutes(edition.match_minutes)}). The match's details are used, but the narrator stays ${edition.local_narrator}.`
     : '';
   const summary = document.createElement('summary');
   summary.className = 'mrep-head';
@@ -1717,7 +1720,7 @@ function buildMatchCard(item) {
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${item.author_initials_fixed ? `<span class="match-initials-badge" title="${escapeHtml(`The author initials were unified by the author-name scheme: ${local.author || ''} to ${m.author || ''}`)}">Initials Fixed</span>` : ''}
-      ${edition ? `<span class="match-edition-badge" title="${escapeHtml(editionNote)}">Different edition</span>` : ''}
+      ${edition ? `<span class="match-edition-badge" title="${escapeHtml(editionNote)}">${perfectNarratorMismatch ? '100% · Narrator kept' : 'Different edition'}</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}
       ${ebookBadge}
     </div>
