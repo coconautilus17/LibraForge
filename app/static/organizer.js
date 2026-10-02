@@ -750,6 +750,7 @@ syncNamingSchemeToggle();
 
 $('startBtn').addEventListener('click', () => startRun());
 $('cancelBtn').addEventListener('click', cancelRun);
+$('viewLastRunLogBtn').addEventListener('click', () => window.UiCommon.showRunLog('organizer'));
 $('cleanupBtn').addEventListener('click', runCleanup);
 $('advancedRunToggle')?.addEventListener('click', () => {
   const open = !isAdvancedRunSettingsOpen();

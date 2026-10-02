@@ -3145,6 +3145,85 @@ summary:focus-visible {
   backdrop-filter: blur(0.15rem);
 }
 
+.run-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.run-report-actions button {
+  font-size: var(--font-xs);
+}
+
+.run-log-dialog {
+  width: min(860px, calc(100vw - 24px));
+  max-height: min(88vh, 900px);
+  overflow: auto;
+}
+
+.run-log-heading,
+.run-log-outcome {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+
+.run-log-heading .manual-apply-title { margin-bottom: 3px; }
+.run-log-id { margin: 0 0 var(--space-md); }
+.run-log-close { padding: 0; width: 36px; min-width: 36px; font-size: 24px; line-height: 1; }
+
+.run-log-outcome {
+  flex-wrap: wrap;
+  padding: var(--space-md);
+  border-left: 3px solid currentColor;
+  background: var(--surface-soft);
+  font-size: var(--font-sm);
+}
+
+.run-log-outcome.success { color: var(--success); }
+.run-log-outcome.warning { color: var(--warning); }
+.run-log-outcome.error { color: var(--danger); }
+.run-log-outcome span { color: var(--text-soft); }
+
+.run-log-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.run-log-metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  color: var(--text-soft);
+}
+
+.run-log-metric strong { color: var(--text); font-size: var(--font-lg); }
+.run-log-section h4 { margin: 0 0 var(--space-sm); font-size: var(--font-sm); }
+.run-log-section h4 span { color: var(--muted); font-weight: 500; }
+.run-log-issues { margin: 0; padding: 0; list-style: none; max-height: 240px; overflow: auto; }
+.run-log-issue { padding: var(--space-sm); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; font-size: var(--font-xs); }
+.run-log-issue.error { color: var(--danger); }
+.run-log-issue.warning { color: var(--warning); }
+.run-log-empty { margin: 0; color: var(--text-soft); font-size: var(--font-sm); }
+.run-log-raw { margin: var(--space-md) 0; border-top: 1px solid var(--border); padding-top: var(--space-sm); }
+.run-log-raw summary { cursor: pointer; font-size: var(--font-sm); }
+.run-log-raw pre { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-xs); }
+.run-log-download { align-self: center; color: var(--accent); font-size: var(--font-sm); }
+
+@media (max-width: 620px) {
+  .run-log-dialog { padding: var(--space-md); }
+  .run-log-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .run-log-outcome { flex-direction: column; gap: var(--space-xs); }
+}
+
 .manual-apply-title {
   margin: 0 0 14px;
   font-size: var(--font-md);

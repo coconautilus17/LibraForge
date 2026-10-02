@@ -9396,21 +9396,120 @@ def download(run_id: str, kind: str) -> FileResponse:
 
 @app.get("/api/reports/latest")
 def get_latest_report() -> dict[str, Any]:
+    return report_for_api(_latest_tool_report("fixer"))
+
+
+def _latest_tool_report(tool: str) -> dict[str, Any]:
     report_files = sorted(REPORTS_DIR.glob("*.report.json"), reverse=True)
     for path in report_files:
         try:
             report = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        # command[0] is always the interpreter ("python"/"python3") for every
-        # script, fixer or organizer -- checking it here always matched, so
-        # this never actually filtered out organizer reports. Check the
-        # script path itself instead, using the same naming convention
-        # is_fixer_script_name() uses elsewhere (startswith "audible-metadata-fixer").
         command = report.get("command") or []
-        if any(Path(part).name.startswith("audible-metadata-fixer") for part in command):
-            return report_for_api(report)
-    raise HTTPException(status_code=404, detail="No fixer reports found")
+        matches = is_fixer_script if tool == "fixer" else is_organizer_script
+        if any(matches(Path(part).name) for part in command):
+            return report
+    raise HTTPException(status_code=404, detail=f"No {tool} reports found")
+
+
+@app.get("/api/run-logs/latest")
+def get_latest_run_log(tool: str) -> dict[str, Any]:
+    if tool not in {"fixer", "organizer"}:
+        raise HTTPException(status_code=400, detail="Invalid tool")
+    report = _latest_tool_report(tool)
+    run_id = str(report["id"])
+    log_path = safe_child(REPORTS_DIR, f"{run_id}.log.txt")
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="Run log not found")
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    stats = report.get("stats") or {}
+    command = report.get("command") or []
+    apply_mode = "--apply" in command or (tool == "organizer" and stats.get("mode") == "APPLY")
+    counts: dict[str, int] = {}
+    issues: list[dict[str, str]] = []
+    traceback_line = ""
+    in_traceback = False
+    move_summary_finalized = False
+    logged_move_failures = 0
+    for line in log_text.splitlines():
+        if tool == "fixer" and line.startswith(WRITE_ACTION_PREFIX):
+            try:
+                action = json.loads(line[len(WRITE_ACTION_PREFIX):]).get("write_action", "")
+            except json.JSONDecodeError:
+                continue
+            if action:
+                counts[action] = counts.get(action, 0) + 1
+        stripped = line.strip()
+        if tool == "organizer":
+            if stripped.startswith("Moves succeeded:"):
+                move_summary_finalized = True
+            if stripped.startswith("FAILED:"):
+                logged_move_failures += 1
+                if not stats.get("failed_move_items"):
+                    issues.append({"severity": "error", "text": stripped})
+        if stripped.startswith("Traceback (most recent call last):"):
+            in_traceback = True
+        elif in_traceback and stripped and not line.startswith((" ", "File ")):
+            traceback_line = stripped
+        if stripped.startswith("WARNING: mutagen writer failed"):
+            issues.append({"severity": "warning", "text": stripped})
+        elif stripped.startswith("ERROR:"):
+            issues.append({"severity": "error", "text": stripped})
+    if traceback_line:
+        issues.append({"severity": "error", "text": traceback_line})
+
+    metrics: list[dict[str, Any]] = []
+    if tool == "fixer":
+        metrics.append({"label": "Books found", "value": stats.get("found", 0)})
+        if apply_mode:
+            recorded = sum(counts.values())
+            metrics.extend([
+                {"label": "Writes recorded", "value": counts.get("written", 0)},
+                {"label": "Skipped / no-op", "value": recorded - counts.get("written", 0)},
+                {"label": "No write result", "value": max(0, stats.get("found", 0) - recorded)},
+            ])
+        else:
+            metrics.append({"label": "Matches", "value": stats.get("matched", 0)})
+    else:
+        metrics.extend([
+            {"label": "Items found", "value": stats.get("found_items", 0)},
+            {"label": "Moves planned", "value": stats.get("planned_moves", 0)},
+        ])
+        if apply_mode:
+            metrics.extend([
+                {"label": "Moves succeeded", "value": stats.get("moves_succeeded", 0)},
+                {"label": "Moves failed", "value": stats.get("moves_failed", 0)},
+            ])
+            if not move_summary_finalized:
+                metrics[-2]["value"] = "Not finalized"
+                metrics[-1] = {"label": "Failures logged", "value": logged_move_failures}
+        for move in stats.get("failed_move_items") or []:
+            issues.append({
+                "severity": "error",
+                "text": f"{move.get('title') or move.get('source') or 'Move'}: {move.get('error') or 'Move failed'}",
+            })
+
+    if report.get("status") == "failed" and not any(issue["severity"] == "error" for issue in issues):
+        issues.append({"severity": "error", "text": report.get("phase_detail") or "Run stopped with an error"})
+    if tool == "organizer" and stats.get("moves_failed", 0) and not issues:
+        issues.append({"severity": "error", "text": f"{stats['moves_failed']} move(s) failed; see full output"})
+    error_count = sum(issue["severity"] == "error" for issue in issues)
+    if tool == "fixer" and apply_mode:
+        metrics.append({"label": "Run errors", "value": error_count})
+    return {
+        "id": run_id,
+        "status": report.get("status", "unknown"),
+        "mode": "Index only" if tool == "organizer" and stats.get("mode") == "INDEX ONLY" else "Apply" if apply_mode else "Preview",
+        "started_at": report.get("started_at"),
+        "finished_at": report.get("finished_at"),
+        "metrics": metrics,
+        "issues": issues[-50:],
+        "issue_count": len(issues),
+        "error_count": error_count,
+        "log": log_text,
+        "download": f"/api/runs/{run_id}/download/log",
+    }
 
 
 def _suspect_review_path(report_id: str) -> Path:
