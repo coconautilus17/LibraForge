@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import audible
 
@@ -4735,28 +4735,46 @@ def write_tags(
     ffmpeg_write_tags(source, metadata, backup=backup)
     return "ffmpeg"
 
-def find_audio_files(root: Path) -> list[Path]:
+def find_audio_files(
+    root: Path,
+    progress: Callable[[int, int, float, Path], None] | None = None,
+) -> list[Path]:
     files = []
+    entries = 0
+    last_check = last_update = time.monotonic()
+    slowest_check_ms = 0.0
 
     for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
+        is_file = file_path.is_file()
+        now = time.monotonic()
+        slowest_check_ms = max(slowest_check_ms, (now - last_check) * 1000)
+        last_check = now
+        entries += 1
+        if is_file and is_supported_audio_file(file_path):
+            files.append(file_path)
+        if progress and (entries == 1 or now - last_update >= 0.5):
+            progress(entries, len(files), slowest_check_ms, file_path.parent)
+            slowest_check_ms = 0.0
+            last_update = now
 
-        if not is_supported_audio_file(file_path):
-            continue
-
-        files.append(file_path)
+    if progress:
+        progress(entries, len(files), slowest_check_ms, root)
 
     return sorted(files)
 
-def collect_audio_files(root: Path) -> list[Path]:
+def collect_audio_files(
+    root: Path,
+    progress: Callable[[int, int, float, Path], None] | None = None,
+) -> list[Path]:
     if root.is_file():
         if not is_supported_audio_file(root):
             return []
 
+        if progress:
+            progress(1, 1, 0.0, root.parent)
         return [root]
 
-    return find_audio_files(root)
+    return find_audio_files(root, progress)
 
 def _build_report_item(result: "ItemResult") -> dict:
     clues = result.clues or {}
@@ -6289,6 +6307,14 @@ def main():
 
                 if result.asin_conflict:
                     w_skipped += 1
+                    out.append(
+                        "WRITE_ACTION_JSON: "
+                        + json.dumps({
+                            "path": str(file_path),
+                            "write_action": "write_skipped",
+                            "write_note": "duplicate Audible ASIN",
+                        })
+                    )
                 elif not result.write_done:
                     aggressive_edit = args.aggressive or score >= AGGRESSIVE_SCORE_THRESHOLD
                     _write_kind = "aggressive" if aggressive_edit else "normal"

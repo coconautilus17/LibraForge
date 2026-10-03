@@ -6,6 +6,7 @@ import importlib.util
 import json
 import math
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -29,7 +30,7 @@ from typing import Any, Callable
 
 import audible
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
 from pydantic import BaseModel, Field
@@ -514,7 +515,6 @@ DIFF_RE = re.compile(r"^\s+Diff:\s+([0-9.]+)%")
 SUMMARY_RE = re.compile(r"^\s*(Matched|Skipped|Failed|Smart-skipped):\s+(\d+)\s*$")
 FILL_STATS_RE = re.compile(r"^\s*(Books filled|Already complete|ASIN filled):\s+(\d+)\s*$")
 SKIP_RE = re.compile(r"^\s+SKIP:\s+(.+)$")
-WRITE_SKIP_RE = re.compile(r"^\s+Write-(?:skip|error):\s+")
 ERROR_RE = re.compile(r"^\s+ERROR:\s+(.+)$")
 # The plan header names the source ("AUDIBLE MATCH:", "GOODREADS MATCH:",
 # "GRAPHICAUDIO MATCH:", ...). Match any provider header so non-Audible matches
@@ -1700,12 +1700,12 @@ def add_category(state: RunState, kind: str, value: str, path: str, title: str =
 
 
 def _fixer_percent(state: RunState) -> float:
-    """Overall percent from 3 phases: scan 5%, match 70%, write 25%."""
+    """Reserve the last five percent for report preparation and persistence."""
     if not state.total:
         return 0.0
     scan = 5.0
     match = state.current / state.total * 70
-    write = state.write_current / state.total * 25
+    write = state.write_current / state.total * 20
     return round(scan + match + write, 2)
 
 
@@ -1742,6 +1742,18 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
             action = str(update.get("write_action", "") or "")
             if path and action:
                 add_category(state, "write", action, path, str(update.get("write_note", "") or ""))
+                counted = state.parser_state.setdefault("write_action_paths", set())
+                if path not in counted and state.total:
+                    counted.add(path)
+                    state.write_current = min(state.write_current + 1, state.total)
+                    state.percent = _fixer_percent(state)
+                    if state.in_write_phase:
+                        set_run_phase(
+                            state,
+                            "writing" if "--apply" in state.command else "planning",
+                            "Writing metadata" if "--apply" in state.command else "Planning changes",
+                            f"Completed {state.write_current} of {state.total}",
+                        )
         except Exception:
             pass
         return
@@ -1749,19 +1761,8 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     detected_phase = fixer_phase_for_line(line, state.current_file)
     if detected_phase:
         set_run_phase(state, *detected_phase)
-        phase_id = detected_phase[0]
-        if phase_id == "recording" and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
-        elif phase_id == "summarizing":
-            state.percent = max(state.percent, 98.0)
-
-    # NO-OP and Smart-skip: tags already matched, no write needed. They only
-    # appear in Pass 2 output, so always count them toward write_current.
-    stripped = line.strip()
-    if stripped.startswith("NO-OP") or stripped.startswith("Smart-skip"):
-        state.write_current += 1
-        state.percent = _fixer_percent(state)
+        if detected_phase[0] == "summarizing":
+            state.percent = max(state.percent, 96.0)
 
     # Once the end-of-run summary/report region begins, no further lines belong to
     # a processed item. Clear current_file so per-item reason lines re-printed in
@@ -1775,6 +1776,7 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
     if m:
         state.total = int(m.group(1))
         state.stats["found"] = int(m.group(1))
+        state.stats["scan_complete"] = True
         state.percent = 5.0  # scan phase complete
         set_run_phase(
             state,
@@ -1834,20 +1836,13 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         state.in_write_phase = True
         state.current_file = m.group(3).strip()
         state.percent = _fixer_percent(state)
+        applying = "--apply" in state.command
         set_run_phase(
             state,
-            "writing",
-            "Writing metadata",
-            f"Writing {state.write_current + 1} of {state.total}",
+            "writing" if applying else "planning",
+            "Writing metadata" if applying else "Planning changes",
+            f"Item {state.write_current + 1} of {state.total}",
         )
-        return
-
-    # Pass 2 completion for books that were skipped or failed during Pass 1.
-    # Their skip/error reasons were already counted in Pass 1; here we only
-    # advance write_current so the write bar stays accurate.
-    if WRITE_SKIP_RE.match(line) and state.in_write_phase and state.total:
-        state.write_current += 1
-        state.percent = _fixer_percent(state)
         return
 
     restore = re.match(r"^\[(\d+)/(\d+)\]\s+Restoring:\s+(.+)$", line)
@@ -1916,19 +1911,12 @@ def parse_line(state: RunState, line: str, threshold: float) -> None:
         add_category(state, "status", "skipped", state.current_file, reason)
         if reason == "already manually applied":
             add_category(state, "status", "manual_applied", state.current_file)
-        # In write phase, a skip means this item is done (no write needed).
-        if state.in_write_phase and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
         return
 
     m = ERROR_RE.match(line)
     if m and state.current_file:
         state.stats["error_count"] += 1
         add_category(state, "status", "error", state.current_file, m.group(1).strip())
-        if state.in_write_phase and state.total:
-            state.write_current += 1
-            state.percent = _fixer_percent(state)
         return
 
     if state.current_file and MATCH_RE.match(line):
@@ -2054,29 +2042,41 @@ def redact_command(cmd: list[str]) -> list[str]:
     return redacted
 
 
-def write_final_report(state: RunState) -> None:
+def write_final_report(state: RunState, final_status: str | None = None) -> None:
     items, categories = build_report_items(state.files_by_category)
     manual_review_items = derive_manual_review_items(state.stats, state.files_by_category)
+    phase, phase_label, phase_detail = (
+        terminal_phase(final_status, state.error)
+        if final_status else (state.phase, state.phase_label, state.phase_detail)
+    )
+    report_stats = dict(state.stats)
+    report_stats.update(phase=phase, phase_label=phase_label, phase_detail=phase_detail)
     report = {
         "schema_version": 2,
         "id": state.id,
-        "status": state.status,
-        "phase": state.phase,
-        "phase_label": state.phase_label,
-        "phase_detail": state.phase_detail,
+        "status": final_status or state.status,
+        "phase": phase,
+        "phase_label": phase_label,
+        "phase_detail": phase_detail,
         "started_at": state.started_at,
         "finished_at": state.finished_at,
         "returncode": state.returncode,
         "command": redact_command(state.command),
-        "stats": state.stats,
+        "run_type": state.run_type,
+        "current": state.current,
+        "total": state.total,
+        "write_current": state.write_current,
+        "percent": 100.0 if final_status == "completed" else state.percent,
+        "stats": report_stats,
         "items": items,
         "categories": categories,
         "manual_review_items": manual_review_items,
         "report_items": state.report_items,
         "log_file": state.log_path.name if state.log_path else None,
     }
-    state.report_path = REPORTS_DIR / f"{state.id}.report.json"
-    state.report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    report_path = REPORTS_DIR / f"{state.id}.report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    state.report_path = report_path
     _prune_reports()
 
 
@@ -4198,19 +4198,35 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
         state.status = "running"
         stream_process_output(state, cmd, threshold=threshold)
         if state.status != "cancelled":
+            state.current_file = ""
+            state.percent = max(state.percent, 97.0)
+            set_run_phase(state, "checking-ebooks", "Checking ebooks for match report", req.target_path)
             try:
                 state.report_items.extend(scan_ebook_units_for_report(
                     Path(req.target_path),
                     goodreads=req.enable_goodreads_fallback,
                     open_library=req.enable_openlibrary_fallback,
+                    progress=lambda done, total, path: set_run_phase(
+                        state, "checking-ebooks", "Checking ebooks for match report",
+                        f"Checked {done} of {total}: {path.name}",
+                    ),
                 ))
             except Exception as exc:
                 print(f"scan_ebook_units_for_report failed, continuing without ebook items: {exc}", file=sys.stderr)
         state.finished_at = time.time()
         if state.status != "cancelled":
-            state.status = "completed" if state.returncode == 0 else "failed"
-        set_terminal_phase(state)
-        write_final_report(state)
+            final_status = "completed" if state.returncode == 0 else "failed"
+            state.percent = max(state.percent, 99.0)
+            set_run_phase(state, "saving-report", "Saving match report")
+            write_final_report(state, final_status=final_status)
+            state.status = final_status
+            if final_status == "completed":
+                state.percent = 100.0
+        else:
+            set_terminal_phase(state)
+            write_final_report(state)
+        if state.status != "cancelled":
+            set_terminal_phase(state)
     except Exception as exc:
         state.error = str(exc)
         state.finished_at = time.time()
@@ -5475,7 +5491,9 @@ def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
+def _scan_book_units(
+    p: Path, progress: Callable[[dict[str, Any]], None] | None = None,
+) -> list[tuple[Path, list[Path], Path]]:
     """Book units under ``p``, counted exactly like a real fixer run.
 
     Returns ``(ref, audio_files, book_dir)`` where ``ref`` is the containing folder for
@@ -5487,7 +5505,20 @@ def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     """
     try:
         fixer = load_fixer_module(default_fixer_script())
-        files = fixer.collect_audio_files(p)
+        files = fixer.collect_audio_files(
+            p,
+            progress=(
+                lambda entries, audio_files, response_ms, folder: progress({
+                    "phase": "discovering",
+                    "entries": entries,
+                    "audio_files": audio_files,
+                    "response_ms": round(response_ms),
+                    "folder": str(folder),
+                })
+            ) if progress else None,
+        )
+        if progress:
+            progress({"phase": "grouping", "audio_files": len(files)})
         group_map = fixer.build_multi_part_group_map(files)
         units = fixer.build_processing_items(files, group_map)
     except Exception:
@@ -5604,7 +5635,8 @@ def _has_cover_fast(folder: Path) -> bool:
 
 
 def _categorized_book_units(
-    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState"
+    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState",
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[tuple[Path, Path, str]], bool]:
     """Return (book_results, all_from_cache) for scan root p.
 
@@ -5652,9 +5684,12 @@ def _categorized_book_units(
         cached_scan = cache["scans"].get(cache_key, {})
     cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "units": {ref_str: category}}}
 
-    units = _filter_ignored_units(_scan_book_units(p), p, ignored_folders)
+    units = _filter_ignored_units(_scan_book_units(p, progress), p, ignored_folders)
+    if progress:
+        progress({"phase": "categorizing", "completed": 0, "total": len(units)})
 
-    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool]:
+    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool, int]:
+        started = time.monotonic()
         ref, audio, book_dir = unit
         folder_key = str(book_dir if book_dir.is_dir() else book_dir.parent)
         unit_key = str(ref)
@@ -5667,17 +5702,35 @@ def _categorized_book_units(
         ):
             cached_units = cached_folder.get("units", {})
             if unit_key in cached_units:
-                return folder_key, unit_key, cached_units[unit_key], True
+                return folder_key, unit_key, cached_units[unit_key], True, round((time.monotonic() - started) * 1000)
         try:
             category = _categorise_book_unit(audio, book_dir, p)
         except PermissionError:
             category = "skip"
-        return folder_key, unit_key, category, False
+        return folder_key, unit_key, category, False, round((time.monotonic() - started) * 1000)
 
-    resolved: list[tuple[str, str, str, bool]] = []
+    resolved: list[tuple[str, str, str, bool, int]] = []
     with ThreadPoolExecutor(max_workers=10) as pool:
-        for outcome in pool.map(resolve, units):
-            resolved.append(outcome)
+        if progress:
+            ordered: list[tuple[str, str, str, bool, int] | None] = [None] * len(units)
+            futures = {pool.submit(resolve, unit): index for index, unit in enumerate(units)}
+            last_update = time.monotonic()
+            for completed, future in enumerate(as_completed(futures), start=1):
+                index = futures[future]
+                ordered[index] = future.result()
+                now = time.monotonic()
+                if completed == len(units) or now - last_update >= 0.5:
+                    progress({
+                        "phase": "categorizing",
+                        "completed": completed,
+                        "total": len(units),
+                        "book_ms": ordered[index][4],
+                        "cached": ordered[index][3],
+                    })
+                    last_update = now
+            resolved = [outcome for outcome in ordered if outcome is not None]
+        else:
+            resolved = list(pool.map(resolve, units))
 
     # Re-fetch the shared state rather than reusing the `shared` snapshot the
     # caller passed in: ensure_library_index_fresh only kicks a background
@@ -5724,7 +5777,7 @@ def _categorized_book_units(
         folder_key: {"signature": data.get("signature", ""), "units": dict(data.get("units", {}))}
         for folder_key, data in cached_folders.items()
     }
-    touched_folder_keys = {folder_key for folder_key, _, _, _ in resolved}
+    touched_folder_keys = {folder_key for folder_key, _, _, _, _ in resolved}
     for folder_key in touched_folder_keys:
         fresh_signature = fresh_shared.signatures.get(folder_key, "")
         existing = updated_folders.get(folder_key)
@@ -5734,32 +5787,37 @@ def _categorized_book_units(
         else:
             existing["signature"] = fresh_signature
 
-    for folder_key, unit_key, category, was_cached in resolved:
+    for folder_key, unit_key, category, was_cached, _ in resolved:
         if not was_cached:
             updated_folders[folder_key]["units"][unit_key] = category
 
     with FOLDER_SCAN_CACHE_LOCK:
+        if progress:
+            progress({"phase": "saving", "total": len(units)})
         cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
         cache["scans"][cache_key] = {"folders": updated_folders}
         save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
 
     book_results = [
-        (unit[0], unit[2], category) for unit, (_, _, category, _) in zip(units, resolved)
+        (unit[0], unit[2], category) for unit, (_, _, category, _, _) in zip(units, resolved)
     ]
-    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached in resolved)
+    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached, _ in resolved)
     return book_results, all_from_cache
 
 
-@app.post("/api/scan")
-def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+def _scan_folder(
+    req: ScanRequest, progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     p = Path(req.path)
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
 
+    if progress:
+        progress({"phase": "checking", "path": str(p)})
     library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
     shared = library_index.get_state()
-    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared)
+    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared, progress)
 
     needs_metadata = sum(1 for _, _, c in book_results if c == "needs_metadata")
     needs_conversion = sum(1 for _, _, c in book_results if c == "needs_conversion")
@@ -5777,6 +5835,46 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         "scan_ms": round((time.monotonic() - t0) * 1000),
         "from_cache": from_cache,
     }
+
+
+@app.post("/api/scan")
+def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+    return _scan_folder(req)
+
+
+_scan_stream_slots = threading.BoundedSemaphore(2)
+
+
+@app.post("/api/scan/stream")
+def scan_folder_stream_route(req: ScanRequest) -> StreamingResponse:
+    if not _scan_stream_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Two scans are already running. Try again after one finishes.")
+    updates: queue.Queue[dict[str, Any]] = queue.Queue()
+
+    def run_scan() -> None:
+        try:
+            result = _scan_folder(req, lambda update: updates.put({"kind": "progress", **update}))
+            updates.put({"kind": "result", "result": result})
+        except HTTPException as exc:
+            updates.put({"kind": "error", "error": str(exc.detail)})
+        except Exception as exc:
+            updates.put({"kind": "error", "error": str(exc)})
+        finally:
+            _scan_stream_slots.release()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+    def events():
+        while True:
+            try:
+                update = updates.get(timeout=1)
+            except queue.Empty:
+                update = {"kind": "heartbeat"}
+            yield f"data: {json.dumps(update)}\n\n"
+            if update["kind"] in {"result", "error"}:
+                break
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 def _book_author(folder: Path, scan_root: Path) -> str:
@@ -7053,6 +7151,7 @@ def match_ebook_unit(
 
 def scan_ebook_units_for_report(
     root: Path, *, goodreads: bool = False, open_library: bool = False,
+    progress: Callable[[int, int, Path], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Score every discovered ebook unit against a fresh provider search.
 
@@ -7070,7 +7169,8 @@ def scan_ebook_units_for_report(
     """
     fixer_module = load_fixer_module(default_fixer_script())
     items: list[dict[str, Any]] = []
-    for unit in library_index.build_ebook_index(root):
+    units = library_index.build_ebook_index(root)
+    for index, unit in enumerate(units, start=1):
         local = fixer_module.read_book_sidecar(unit.path) or {}
         if goodreads or open_library:
             found = match_ebook_unit(
@@ -7105,6 +7205,8 @@ def scan_ebook_units_for_report(
             "media_type": "ebook",
             "formats": sorted(unit.formats.keys()),
         })
+        if progress:
+            progress(index, len(units), unit.path)
     return items
 
 

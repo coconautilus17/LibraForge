@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Metadata Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20261001-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20261003-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -127,6 +127,13 @@
           <span id="targetFbCurrentLabel" class="fb-current-path"></span>
           <button id="targetFbSelect" type="button">Select this folder</button>
         </div>
+      </div>
+
+      <div id="fixerScanProgress" class="scan-progress" hidden>
+        <div class="phase-track" role="progressbar" aria-label="Target scan progress" aria-valuemin="0" aria-valuemax="100">
+          <div id="fixerScanFill" class="phase-fill indeterminate"></div>
+        </div>
+        <p id="fixerScanProgressText" class="note" aria-live="polite"></p>
       </div>
 
       <!-- Scan summary -->
@@ -266,7 +273,7 @@
           <span class="phase-count" id="matchCount">-</span>
         </div>
         <div class="phase-row">
-          <span class="phase-label">Writing</span>
+          <span class="phase-label" id="writeLabel">Writing</span>
           <div class="phase-track"><div class="phase-fill" id="writeFill"></div></div>
           <span class="phase-count" id="writeCount">-</span>
         </div>
@@ -446,7 +453,7 @@
    </div>
   </main>
   <script src="/static/ui-common.js?v=20261001-1"></script>
-  <script src="/static/app.js?v=20261001-1"></script>
+  <script src="/static/app.js?v=20261003-1"></script>
   <script src="/static/manual-review-edit.js?v=20260707-1"></script>
   <script src="/static/fix-series.js?v=20260929-1"></script>
 </body>
