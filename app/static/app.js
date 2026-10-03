@@ -1874,6 +1874,29 @@ fetch('/api/runs/draining').then(r => r.json()).then(d => { if (d.draining) show
   }
 })();
 
+async function readScanEvents(response, onEvent) {
+  if (!response.body) throw new Error('Scan progress stream is unavailable.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  let finished = false;
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const events = pending.split('\n\n');
+    pending = events.pop();
+    for (const event of events) {
+      const data = event.split('\n').find(line => line.startsWith('data: '));
+      if (!data) continue;
+      const update = JSON.parse(data.slice(6));
+      onEvent(update);
+      if (update.kind === 'result') finished = true;
+    }
+    if (done) break;
+  }
+  if (!finished) throw new Error('Scan ended before returning results.');
+}
+
 // Target path scan
 if ($('targetScanBtn')) {
   $('targetScanBtn').addEventListener('click', async () => {
@@ -1883,19 +1906,68 @@ if ($('targetScanBtn')) {
     const results = $('fixerScanResults');
     const meta = $('fixerScanMeta');
     const err = $('fixerScanError');
+    const progress = $('fixerScanProgress');
+    const fill = $('fixerScanFill');
+    const track = fill.parentElement;
+    const progressText = $('fixerScanProgressText');
+    const startedAt = Date.now();
+    let lastUpdateAt = startedAt;
+    let lastDetail = 'Checking scan path';
+    let scanData = null;
+    const updateProgressText = () => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      const idle = Math.floor((Date.now() - lastUpdateAt) / 1000);
+      progressText.textContent = `${lastDetail} · ${elapsed}s elapsed${idle >= 5 ? ` · no new scan update for ${idle}s` : ''}`;
+    };
     btn.disabled = true;
     btn.textContent = 'Scanning…';
     results.hidden = true;
     err.hidden = true;
+    progress.hidden = false;
+    fill.className = 'phase-fill indeterminate';
+    track.removeAttribute('aria-valuenow');
+    updateProgressText();
+    const progressTimer = setInterval(updateProgressText, 1000);
     try {
       const scanPrefs = window.LibraForgePrefs?.get() || {};
-      const res = await fetch('/api/scan', {
+      const res = await fetch('/api/scan/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, ignored_folders: (scanPrefs.ignoredFolders || []) }),
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Scan failed'); }
-      const data = await res.json();
+      await readScanEvents(res, update => {
+        if (update.kind === 'error') throw new Error(update.error || 'Scan failed');
+        if (update.kind === 'result') {
+          scanData = update.result;
+          return;
+        }
+        if (update.kind !== 'progress') return;
+        lastUpdateAt = Date.now();
+        if (update.phase === 'discovering') {
+          const latency = update.response_ms ? ` · slowest recent filesystem response ${update.response_ms}ms` : '';
+          lastDetail = `Checking ${update.entries} entries · ${update.audio_files} audio files found${latency}`;
+          fill.className = 'phase-fill indeterminate';
+          track.removeAttribute('aria-valuenow');
+        } else if (update.phase === 'grouping') {
+          lastDetail = `Grouping ${update.audio_files} audio files`;
+        } else if (update.phase === 'categorizing') {
+          const latency = update.book_ms == null ? '' : ` · last book check ${update.book_ms}ms${update.cached ? ' (cached)' : ''}`;
+          lastDetail = `Checked ${update.completed} of ${update.total} books${latency}`;
+          const pct = update.total ? Math.round(update.completed / update.total * 95) : 95;
+          fill.className = 'phase-fill';
+          fill.style.width = `${pct}%`;
+          track.setAttribute('aria-valuenow', String(pct));
+        } else if (update.phase === 'saving') {
+          lastDetail = 'Saving scan results';
+          fill.className = 'phase-fill';
+          fill.style.width = '98%';
+          track.setAttribute('aria-valuenow', '98');
+        }
+        updateProgressText();
+      });
+      if (!scanData) throw new Error('Scan finished without results.');
+      const data = scanData;
       $('fixerCountMetadata').textContent = data.needs_metadata;
       $('fixerCountProcessed').textContent = (data.organized ?? 0) + (data.ready_to_organize ?? 0);
       $('fixerCountConversion').textContent = data.needs_conversion;
@@ -1907,6 +1979,8 @@ if ($('targetScanBtn')) {
       err.textContent = e.message || 'Scan failed.';
       err.hidden = false;
     } finally {
+      clearInterval(progressTimer);
+      progress.hidden = true;
       btn.disabled = false;
       btn.textContent = 'Scan';
     }

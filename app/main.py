@@ -6,6 +6,7 @@ import importlib.util
 import json
 import math
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -29,7 +30,7 @@ from typing import Any, Callable
 
 import audible
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
 from pydantic import BaseModel, Field
@@ -5490,7 +5491,9 @@ def _ensure_manual_review_search_index_fresh(ignored_folders: list[str]) -> None
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
+def _scan_book_units(
+    p: Path, progress: Callable[[dict[str, Any]], None] | None = None,
+) -> list[tuple[Path, list[Path], Path]]:
     """Book units under ``p``, counted exactly like a real fixer run.
 
     Returns ``(ref, audio_files, book_dir)`` where ``ref`` is the containing folder for
@@ -5502,7 +5505,20 @@ def _scan_book_units(p: Path) -> list[tuple[Path, list[Path], Path]]:
     """
     try:
         fixer = load_fixer_module(default_fixer_script())
-        files = fixer.collect_audio_files(p)
+        files = fixer.collect_audio_files(
+            p,
+            progress=(
+                lambda entries, audio_files, response_ms, folder: progress({
+                    "phase": "discovering",
+                    "entries": entries,
+                    "audio_files": audio_files,
+                    "response_ms": round(response_ms),
+                    "folder": str(folder),
+                })
+            ) if progress else None,
+        )
+        if progress:
+            progress({"phase": "grouping", "audio_files": len(files)})
         group_map = fixer.build_multi_part_group_map(files)
         units = fixer.build_processing_items(files, group_map)
     except Exception:
@@ -5619,7 +5635,8 @@ def _has_cover_fast(folder: Path) -> bool:
 
 
 def _categorized_book_units(
-    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState"
+    p: Path, ignored_folders: list[str], shared: "library_index.LibraryIndexState",
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[tuple[Path, Path, str]], bool]:
     """Return (book_results, all_from_cache) for scan root p.
 
@@ -5667,9 +5684,12 @@ def _categorized_book_units(
         cached_scan = cache["scans"].get(cache_key, {})
     cached_folders = cached_scan.get("folders", {})  # {path_str: {"signature": str, "units": {ref_str: category}}}
 
-    units = _filter_ignored_units(_scan_book_units(p), p, ignored_folders)
+    units = _filter_ignored_units(_scan_book_units(p, progress), p, ignored_folders)
+    if progress:
+        progress({"phase": "categorizing", "completed": 0, "total": len(units)})
 
-    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool]:
+    def resolve(unit: tuple[Path, list[Path], Path]) -> tuple[str, str, str, bool, int]:
+        started = time.monotonic()
         ref, audio, book_dir = unit
         folder_key = str(book_dir if book_dir.is_dir() else book_dir.parent)
         unit_key = str(ref)
@@ -5682,17 +5702,35 @@ def _categorized_book_units(
         ):
             cached_units = cached_folder.get("units", {})
             if unit_key in cached_units:
-                return folder_key, unit_key, cached_units[unit_key], True
+                return folder_key, unit_key, cached_units[unit_key], True, round((time.monotonic() - started) * 1000)
         try:
             category = _categorise_book_unit(audio, book_dir, p)
         except PermissionError:
             category = "skip"
-        return folder_key, unit_key, category, False
+        return folder_key, unit_key, category, False, round((time.monotonic() - started) * 1000)
 
-    resolved: list[tuple[str, str, str, bool]] = []
+    resolved: list[tuple[str, str, str, bool, int]] = []
     with ThreadPoolExecutor(max_workers=10) as pool:
-        for outcome in pool.map(resolve, units):
-            resolved.append(outcome)
+        if progress:
+            ordered: list[tuple[str, str, str, bool, int] | None] = [None] * len(units)
+            futures = {pool.submit(resolve, unit): index for index, unit in enumerate(units)}
+            last_update = time.monotonic()
+            for completed, future in enumerate(as_completed(futures), start=1):
+                index = futures[future]
+                ordered[index] = future.result()
+                now = time.monotonic()
+                if completed == len(units) or now - last_update >= 0.5:
+                    progress({
+                        "phase": "categorizing",
+                        "completed": completed,
+                        "total": len(units),
+                        "book_ms": ordered[index][4],
+                        "cached": ordered[index][3],
+                    })
+                    last_update = now
+            resolved = [outcome for outcome in ordered if outcome is not None]
+        else:
+            resolved = list(pool.map(resolve, units))
 
     # Re-fetch the shared state rather than reusing the `shared` snapshot the
     # caller passed in: ensure_library_index_fresh only kicks a background
@@ -5739,7 +5777,7 @@ def _categorized_book_units(
         folder_key: {"signature": data.get("signature", ""), "units": dict(data.get("units", {}))}
         for folder_key, data in cached_folders.items()
     }
-    touched_folder_keys = {folder_key for folder_key, _, _, _ in resolved}
+    touched_folder_keys = {folder_key for folder_key, _, _, _, _ in resolved}
     for folder_key in touched_folder_keys:
         fresh_signature = fresh_shared.signatures.get(folder_key, "")
         existing = updated_folders.get(folder_key)
@@ -5749,32 +5787,37 @@ def _categorized_book_units(
         else:
             existing["signature"] = fresh_signature
 
-    for folder_key, unit_key, category, was_cached in resolved:
+    for folder_key, unit_key, category, was_cached, _ in resolved:
         if not was_cached:
             updated_folders[folder_key]["units"][unit_key] = category
 
     with FOLDER_SCAN_CACHE_LOCK:
+        if progress:
+            progress({"phase": "saving", "total": len(units)})
         cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
         cache["scans"][cache_key] = {"folders": updated_folders}
         save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
 
     book_results = [
-        (unit[0], unit[2], category) for unit, (_, _, category, _) in zip(units, resolved)
+        (unit[0], unit[2], category) for unit, (_, _, category, _, _) in zip(units, resolved)
     ]
-    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached in resolved)
+    all_from_cache = bool(resolved) and all(was_cached for _, _, _, was_cached, _ in resolved)
     return book_results, all_from_cache
 
 
-@app.post("/api/scan")
-def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+def _scan_folder(
+    req: ScanRequest, progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     p = Path(req.path)
     if not p.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.path}")
     t0 = time.monotonic()
 
+    if progress:
+        progress({"phase": "checking", "path": str(p)})
     library_index.ensure_library_index_fresh(AUDIOBOOKS_ROOT)
     shared = library_index.get_state()
-    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared)
+    book_results, from_cache = _categorized_book_units(p, req.ignored_folders, shared, progress)
 
     needs_metadata = sum(1 for _, _, c in book_results if c == "needs_metadata")
     needs_conversion = sum(1 for _, _, c in book_results if c == "needs_conversion")
@@ -5792,6 +5835,46 @@ def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
         "scan_ms": round((time.monotonic() - t0) * 1000),
         "from_cache": from_cache,
     }
+
+
+@app.post("/api/scan")
+def scan_folder_route(req: ScanRequest) -> dict[str, Any]:
+    return _scan_folder(req)
+
+
+_scan_stream_slots = threading.BoundedSemaphore(2)
+
+
+@app.post("/api/scan/stream")
+def scan_folder_stream_route(req: ScanRequest) -> StreamingResponse:
+    if not _scan_stream_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Two scans are already running. Try again after one finishes.")
+    updates: queue.Queue[dict[str, Any]] = queue.Queue()
+
+    def run_scan() -> None:
+        try:
+            result = _scan_folder(req, lambda update: updates.put({"kind": "progress", **update}))
+            updates.put({"kind": "result", "result": result})
+        except HTTPException as exc:
+            updates.put({"kind": "error", "error": str(exc.detail)})
+        except Exception as exc:
+            updates.put({"kind": "error", "error": str(exc)})
+        finally:
+            _scan_stream_slots.release()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+    def events():
+        while True:
+            try:
+                update = updates.get(timeout=1)
+            except queue.Empty:
+                update = {"kind": "heartbeat"}
+            yield f"data: {json.dumps(update)}\n\n"
+            if update["kind"] in {"result", "error"}:
+                break
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 def _book_author(folder: Path, scan_root: Path) -> str:

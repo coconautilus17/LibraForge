@@ -1477,6 +1477,19 @@ summary:focus-visible {
   gap: var(--space-sm);
 }
 
+.scan-progress {
+  margin: 12px 0 4px;
+}
+
+.scan-progress .phase-track {
+  height: 7px;
+}
+
+.scan-progress p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
 .phase-row {
   display: grid;
   grid-template-columns: 62px 1fr 52px;
