@@ -6,6 +6,37 @@ onward is tracked here going forward.
 
 ---
 
+## v0.2.6 (2026-10-04)
+
+- Metadata Forge: a full-score match no longer replaces the local narrator when
+  the book is the same but the recording is not. Explicit narrator tags and other
+  local credits are checked against the match, even when runtimes are nearly
+  identical; the match report shows when the local narrator was kept, and the
+  badge legend explains the result.
+- Metadata Forge: cross-series folder numbers no longer block a match when title,
+  author, and runtime independently confirm the book. The title check also accepts
+  a single article difference, while explicit conflicting title numbers remain a
+  hard stop.
+- Metadata Forge: tightened multi-file grouping so substantial standalone works
+  with distinct title tags are not batched as chapters, and a continuous
+  volume-chapter sequence with one album and track order stays one book instead
+  of being mistaken for duplicate chapter sets.
+- Metadata Forge: normal runs retry previously searched books that were not
+  written, while already-applied books remain skipped unless Force reprocess is
+  selected. Manually applied books stay protected from batch runs.
+- Metadata Forge and Folder Forge: **View last run log** opens the latest run's
+  outcome, with success/failure counts and relevant errors, alongside the existing
+  match-report workflow.
+- Metadata Forge: run progress is clearer. The target scan streams live progress
+  (entries checked, audio files found, elapsed time, and a note when no update has
+  arrived for a while); the last phase reads **Planning** on a dry run and
+  **Writing** on an apply run; phases complete correctly when nothing needs
+  matching; and a book skipped for a duplicate Audible ASIN is reported as skipped.
+- Manual Review: Pocket FM's **Cast** credits can supply the narrator when the
+  page does not label one separately.
+
+---
+
 ## v0.2.5 (2026-09-29)
 
 - Author names: a production/broadcaster credit (`BBC - Andrew Marshall & John Lloyd`)
