@@ -44,7 +44,13 @@ try:
         is_title_noise,
         remove_trailing_title_noise,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
+    from app.abs_client import (
+        _is_real_asin,
+        abs_get_json,
+        build_item_index,
+        lookup_item_in_index,
+        normalize_abs_media_to_internal,
+    )
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -53,7 +59,13 @@ except ModuleNotFoundError:
         is_title_noise,
         remove_trailing_title_noise,
     )
-    from app.abs_client import abs_get_json, build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
+    from app.abs_client import (
+        _is_real_asin,
+        abs_get_json,
+        build_item_index,
+        lookup_item_in_index,
+        normalize_abs_media_to_internal,
+    )
     from app.enrichment import fetch_all_abs_book_items
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
@@ -302,9 +314,21 @@ def is_generic_structure_name(value: str) -> bool:
     return False
 
 
+_BRACKET_TAGS_ONLY_RE = re.compile(r"(?:\s*[\[({][^\])}]*[\])}]\s*)+")
+
+
+def title_is_only_bracket_tags(value: str) -> bool:
+    """True for a "title" made only of bracketed groups, e.g. "[PZG]" or
+    "[Yen Press] {LuCaZ}" -- release tags left over after the real title and
+    series text were stripped away."""
+    return bool(_BRACKET_TAGS_ONLY_RE.fullmatch(clean_text(value)))
+
+
 def title_is_bad_after_cleanup(value: str) -> bool:
     value = sanitize_path_name(value, "")
     if not value:
+        return True
+    if title_is_only_bracket_tags(value):
         return True
     release_stripped = strip_release_bracket_tokens(value)
     release_stripped = strip_edition_descriptors(release_stripped)
@@ -326,6 +350,11 @@ def title_is_bad_after_cleanup(value: str) -> bool:
     if is_marketing_descriptor(value):
         return True
     if re.fullmatch(r"(?:book|volume|vol\.?|v)\s*\d{1,4}(?:\.\d+)?", release_stripped, flags=re.IGNORECASE):
+        return True
+    without_tags = re.sub(r"\s*[\[({][^\])}]*[\])}]", "", release_stripped).strip()
+    if without_tags != release_stripped and re.fullmatch(
+        r"(?:book|volume|vol\.?|v)\s*\d{1,4}(?:\.\d+)?", without_tags, flags=re.IGNORECASE
+    ):
         return True
     return False
 
@@ -1084,6 +1113,22 @@ def roman_numeral_value(text: str) -> str:
     return str(total)
 
 
+_LABEL_ROMAN_RE = re.compile(
+    r"^(?:book|volume|vol\.?|novel|side\s*story)\s+([ivxlcdm]+)$", re.IGNORECASE
+)
+
+
+def label_roman_number(text: str) -> str:
+    """Arabic value of a "<label> <roman numeral>" phrase such as "Book III"
+    or "Vol. IV", or "" when `text` is not exactly that shape. The arabic
+    forms of these phrases ("Book 3") are already recognized as restating the
+    sequence; the roman form is the same information, so a title that is only
+    this phrase carries nothing beyond the sequence prefix.
+    """
+    match = _LABEL_ROMAN_RE.match(clean_text(text))
+    return roman_numeral_value(match.group(1)) if match else ""
+
+
 def detect_number_from_text(value: str) -> str:
     value = clean_text(value)
     if not value:
@@ -1323,6 +1368,42 @@ def strip_redundant_series_sequence_title(title: str, series: str, book_number: 
 
     series_re = re.escape(series)
     label_re = r"(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)"
+
+    def collapses_to_series(candidate: str) -> bool:
+        # Exact/near-exact "series + sequence" forms.
+        pattern = rf"^\s*(?:the\s+)?{series_re}\s*(?:[-_:,]\s*|\s+)?{label_re}\s*{num_pat}\s*$"
+        if re.match(pattern, candidate, flags=re.IGNORECASE):
+            return True
+        # Same, but allow a comma before Vol./Volume.
+        pattern = rf"^\s*(?:the\s+)?{series_re}\s*,\s*{label_re}\s*{num_pat}\s*$"
+        if re.match(pattern, candidate, flags=re.IGNORECASE):
+            return True
+        # Punctuation-insensitive variant for titles like:
+        #   "Reborn as a Space Mercenary I Woke Up..., Vol. 14 Light Novel"
+        # where the canonical series uses a dash but the release title does not.
+        title_key = normalize_for_compare(candidate)
+        series_key = normalize_for_compare(series)
+        if series_key and title_key.startswith(series_key):
+            tail = title_key[len(series_key):]
+            num_key = normalize_for_compare(display_book_number(book_number))
+            if num_key:
+                allowed_tail = re.compile(
+                    rf"^(?:book|books|vol|volume|volumes|v)?0*{re.escape(num_key)}(?:lightnovel|novel|audiobook)?$",
+                    re.IGNORECASE,
+                )
+                if allowed_tail.fullmatch(tail):
+                    return True
+        return False
+
+    # A bracketed release tag ("[PZG]") after the sequence does not make the
+    # title anything more than "<Series> Vol. N".
+    tagless = re.sub(r"\s*[\[({][^\])}]*[\])}]", "", title).strip()
+    if collapses_to_series(title) or (tagless and collapses_to_series(tagless)):
+        return sanitize_path_name(series, title)
+    return title
+
+    series_re = re.escape(series)
+    label_re = r"(?:books?|vol(?:ume)?s?\.?|v|side\s*story|novels?|#)"
     # Exact/near-exact "series + sequence" forms.
     pattern = rf"^\s*(?:the\s+)?{series_re}\s*(?:[-_:,]\s*|\s+)?{label_re}\s*{num_pat}\s*$"
     if re.match(pattern, title, flags=re.IGNORECASE):
@@ -1459,8 +1540,17 @@ def strip_trailing_series_from_title(title: str, series: str) -> str:
         return title
     if normalize_for_compare(title) == normalize_for_compare(series):
         return title
-    pattern = re.compile(rf"(?:\s*[-_:,]\s*|\s+){re.escape(series)}\s*$", re.IGNORECASE)
-    candidate = pattern.sub("", title).strip(" -_:,.")
+    separator_pattern = re.compile(rf"\s*[-_:,]\s*{re.escape(series)}\s*$", re.IGNORECASE)
+    candidate = separator_pattern.sub("", title).strip(" -_:,.")
+    if candidate == title:
+        # Attached by whitespace alone ("The New Market Wizards"): the series
+        # name is the end of the title's own wording, unless a separator or a
+        # volume marker ("... IV The Phantom Pinas Caverns and Creatures")
+        # shows it was appended as a series tag.
+        whitespace_pattern = re.compile(rf"\s+{re.escape(series)}\s*$", re.IGNORECASE)
+        candidate = whitespace_pattern.sub("", title).strip(" -_:,.")
+        if candidate != title and not re.search(r"[-:,]|\b\d+\b|\b[IVXLCDM]{2,4}\b", candidate):
+            return title
     if (
         candidate
         and not title_is_bad_after_cleanup(candidate)
@@ -1468,6 +1558,16 @@ def strip_trailing_series_from_title(title: str, series: str) -> str:
     ):
         return sanitize_path_name(candidate, title)
     return title
+
+
+# Words that continue a sentence rather than start a subtitle. When a series name
+# is followed directly by one of these ("Shortest History" + "of Reality"), the
+# series name is part of the title itself, so stripping it leaves a fragment.
+# Articles are deliberately absent: "Series A New Voyage" is a real subtitle.
+TITLE_CONNECTIVE_WORDS = frozenset({
+    "of", "and", "or", "in", "on", "at", "to", "for", "from",
+    "by", "with", "into", "as", "is", "are", "was", "were",
+})
 
 
 def strip_series_prefix(title: str, series: str) -> str:
@@ -1504,8 +1604,45 @@ def strip_series_prefix(title: str, series: str) -> str:
     # word after stripping (e.g. "The Bright Lord" → "Lord") means the series
     # name is part of the title itself, not a redundant prefix decoration.
     if candidate and not title_is_bad_after_cleanup(candidate) and " " in candidate:
+        if candidate.split(None, 1)[0].lower() in TITLE_CONNECTIVE_WORDS:
+            return title
+        # "The Bright" + "Lord: An Epic Sci Fi Litrpg": one bare word before the
+        # subtitle means the series name is the start of the title ("The Bright Lord").
+        head = re.split(r"\s*[:\u2013\u2014-]\s+", candidate, maxsplit=1)
+        if len(head) > 1 and " " not in head[0].strip():
+            return title
         return candidate
     return title
+
+
+def strip_leading_sequence_label(title: str, book_number: str) -> str:
+    """Drop a leading "Book N -" / "Vol. N:" label from a title when N is this
+    book's own number: the sequence prefix already says it, so keeping it makes
+    "Book 1 - Book 1 - Title". Requires the label word, so a title that merely
+    starts with a number ("1984", "7 Habits") is never touched."""
+    number = normalize_book_number(book_number)
+    if not number:
+        return title
+    match = re.match(
+        r"^\s*(?:book|books|vol(?:ume)?\.?|part|#)\s*(\d{1,4}(?:\.\d+)?)\s*[-\u2013\u2014:.]\s*(\S.*)$",
+        title,
+        flags=re.IGNORECASE,
+    )
+    if match and normalize_book_number(match.group(1)) == number:
+        return match.group(2).strip()
+    return title
+
+
+_SERIES_DESCRIPTOR_PAREN_RE = re.compile(r"\s*\([^()]*\bseries\b[^()]*\)\s*$", re.IGNORECASE)
+
+
+def strip_series_descriptor_parenthetical(title: str) -> str:
+    """Remove a trailing parenthetical that describes the series, such as
+    "(A LitRPG series, Book 7)" or "(The Dark Sorcerer's series)". The series
+    and number are carried by their own metadata fields. Only fires when the
+    parenthetical contains the word "series" and something real is left."""
+    candidate = _SERIES_DESCRIPTOR_PAREN_RE.sub("", title).strip(" -_.,:")
+    return candidate if candidate and candidate != title else title
 
 
 def clean_book_title(title: str, series: str, book_number: str, fallback: str = "Unknown Title", trusted: bool = False) -> str:
@@ -1534,6 +1671,12 @@ def clean_book_title(title: str, series: str, book_number: str, fallback: str = 
         paren_stripped = strip_series_sequence_parenthetical(cleaned, series_clean, book_number)
         if paren_stripped and paren_stripped != cleaned and not title_is_bad_after_cleanup(paren_stripped):
             cleaned = paren_stripped
+        descriptor_stripped = strip_series_descriptor_parenthetical(cleaned)
+        if descriptor_stripped != cleaned and not title_is_bad_after_cleanup(descriptor_stripped):
+            cleaned = descriptor_stripped
+        leading_stripped = strip_leading_sequence_label(cleaned, book_number)
+        if leading_stripped != cleaned and not title_is_bad_after_cleanup(leading_stripped):
+            cleaned = leading_stripped
         # Strip a bare trailing "(Book N)"/"(Vol. N)" annotation even when it
         # doesn't repeat the series name, e.g. "The Subtle Knife (Book 2)"
         # -> "The Subtle Knife". strip_series_sequence_parenthetical() only
@@ -1739,6 +1882,9 @@ def has_distinct_book_title(title: str, series: str, book_number: str) -> bool:
             )
         ):
             return False
+        roman_label = label_roman_number(remainder)
+        if roman_label and normalize_book_number(roman_label) == number:
+            return False
 
     return not title_is_bad_after_cleanup(remainder)
 
@@ -1898,6 +2044,16 @@ def parse_standalone_book_folder_name(name: str) -> dict[str, str]:
 
     if len(parts) == 2:
         left, right = parts
+        # "Title - Subtitle by First Last, First Last": the credit after "by" is the
+        # author and the left side is the title, even though a Title Case title
+        # ("A Brief History of Thought") looks like a person's name.
+        by_credit = re.search(
+            r"\s+by\s+((?:[A-Z][\w.'\u2019-]*)(?:\s+[A-Z][\w.'\u2019-]*){1,3}"
+            r"(?:\s*,\s*[A-Z][\w.'\u2019-]*(?:\s+[A-Z][\w.'\u2019-]*){0,3})*)\s*$",
+            right,
+        )
+        if by_credit and normalize_for_compare(by_credit.group(1)) != normalize_for_compare(left):
+            return {"title": left, "author": by_credit.group(1)}
         # Treat "Name - Title" as author/title only when the left side looks like a person/credit,
         # not when it looks like a numbered series/title container.
         if not re.search(r"\d", left) and ("," in left or re.search(r"\b[A-Z][a-z]+\s+[A-Z]", left) or re.search(r"\b[A-Z]\.\s*[A-Z]", left)):
@@ -3288,8 +3444,8 @@ def title_conflict_should_trigger_review(
     if not has_distinct_book_title(path_clean, series, book_number):
         return False
 
-    metadata_key = normalize_for_compare(metadata_clean)
-    path_key = normalize_for_compare(path_clean)
+    metadata_key = title_key_ignoring_article(metadata_clean)
+    path_key = title_key_ignoring_article(path_clean)
     if not metadata_key or not path_key or metadata_key == path_key:
         return False
 
@@ -3331,7 +3487,14 @@ def infer_metadata(
     series = tag_meta.get("series") or clues.get("series", "")
     tag_book_number = tag_meta.get("book_number") or ""
     book_number = tag_book_number
-    narrator = tag_meta.get("narrator") or clues.get("narrator", "")
+    clue_narrator = clues.get("narrator", "")
+    if clue_narrator and normalize_for_compare(clue_narrator) in {
+        normalize_for_compare(series), normalize_for_compare(metadata_title), normalize_for_compare(clues.get("title", "")),
+    } - {""}:
+        # "Author - Series 01 - Title" read as "Title - Author - Narrator" makes the
+        # real title the narrator, which then strips it back out of the title.
+        clue_narrator = ""
+    narrator = tag_meta.get("narrator") or clue_narrator
     trusted_metadata = metadata_source_is_trusted(tag_meta.get("source", ""))
 
     # Prefer the sequence label from fixer/sidecar metadata. Path labels are
@@ -3453,7 +3616,16 @@ def infer_metadata(
                 add_review_reason("title differs between metadata and path")
         elif (
             normalize_for_compare(title) == normalize_for_compare(series)
-            and has_distinct_book_title(path_title, series, book_number)
+            and has_distinct_book_title(
+                # Author/narrator credits, ASIN tokens and release tags in the
+                # folder name are not a distinct title: "Idle Village Hero - Leon
+                # West [B0G362ZYYK]" is just the series name again.
+                clean_book_title(
+                    strip_author_narrator_noise_from_title(path_title, author, narrator),
+                    series, book_number,
+                ),
+                series, book_number,
+            )
             and not is_marketing_descriptor(path_title)
         ):
             # title == series: no distinct book title in metadata; collapse to
@@ -3511,8 +3683,8 @@ def infer_metadata(
             elif not author or author == "Unknown Author":
                 add_review_reason("author inferred from path")
             author = candidate_author
-    if clues.get("narrator") and (prefer_path_structure or not narrator):
-        narrator = clues["narrator"]
+    if clue_narrator and (prefer_path_structure or not narrator):
+        narrator = clue_narrator
 
     # A path hint must not collapse a known title to the author name. Keep the
     # sidecar/ffprobe title when it differs; valid eponymous titles remain
@@ -3596,8 +3768,11 @@ def infer_metadata(
     title = strip_author_narrator_noise_from_title(title, author_full, narrator, trusted=trusted_metadata)
     sequence_label = prefer_series_title_volume_label(sequence_label, title, clean_series, book_number)
     clean_title = clean_book_title(title, clean_series, book_number, trusted=trusted_metadata)
+    # The alternative candidate must have its author/narrator credit stripped
+    # too, or "Roderick Gordon - Tunnels 01 - Tunnels" (series "Tunnels")
+    # cleans to "Roderick Gordon - Tunnels 01" and displaces the real title.
     metadata_clean_title = clean_book_title(
-        metadata_title,
+        strip_author_narrator_noise_from_title(metadata_title, author_full, narrator, trusted=trusted_metadata),
         clean_series,
         book_number,
         trusted=trusted_metadata,
@@ -3778,7 +3953,7 @@ def title_is_redundant_with_sequence(title: str, series: str, sequence_label: st
     # Magic" + book 5 with title "Dao of Magic V" (V == 5). Guarded by exact
     # equality with the numeric sequence, so a real word using roman letters
     # never collapses unless it also happens to equal this book's number.
-    roman_value = roman_numeral_value(series_remainder)
+    roman_value = roman_numeral_value(series_remainder) or label_roman_number(series_remainder)
     if roman_value and normalize_book_number(roman_value) == normalize_book_number(number):
         return True
     return False
@@ -4816,6 +4991,19 @@ def title_matches_author_name(title: str, author: str) -> bool:
     return any(title_key == key for key in people_keys(author))
 
 
+def title_key_ignoring_article(value: str) -> str:
+    """normalize_for_compare() of `value` with a leading "the"/"a"/"an" dropped,
+    so "The Ghoul on the Hill" and "Ghoul on the Hill" compare equal."""
+    return normalize_for_compare(re.sub(r"^\s*(?:the|an?)\s+", "", clean_text(value), flags=re.IGNORECASE))
+
+
+def _same_name_ignoring_article(left: str, right: str) -> bool:
+    """True when two names are equal after normalizing and dropping a leading
+    article ("The Iliad" == "Iliad")."""
+    key = title_key_ignoring_article
+    return bool(key(left)) and key(left) == key(right)
+
+
 def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, Any]:
     """Final target-title cleanup after author/series have stabilized."""
     metadata = dict(metadata)
@@ -4837,11 +5025,15 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
             or is_marketing_descriptor(cleaned_title)
             or title_matches_author_name(cleaned_title, author)
         )
-        and not trusted
+        and (not trusted or title_is_only_bracket_tags(cleaned_title))
     ):
         cleaned_title = clean_book_title(series, series, number)
 
     metadata["title"] = sanitize_path_name(cleaned_title, "Unknown Title")
+    if series and not number and _same_name_ignoring_article(metadata["title"], series):
+        # A "series" that is just the book's own title, with no sequence number,
+        # would nest the book inside a folder of the same name (Sapiens/Sapiens).
+        series = ""
     metadata["series"] = series
     metadata["author"] = clean_author_credits(author)
     metadata["author_primary"] = primary_author(metadata["author"])
@@ -4992,6 +5184,25 @@ def apply_overrides_to_metadata(metadata: dict[str, Any], overrides: dict[str, A
     return metadata
 
 
+EBOOK_BOOK_EXTENSIONS = frozenset({".epub", ".pdf"})
+
+
+def existing_book_files(target_dir: Path, media_type: str = "audiobook") -> list[Path]:
+    """Book files of the same kind already sitting in `target_dir`.
+
+    A folder that merely holds a cover, sidecars or notes is not occupied, but
+    one that already holds an audio file (or an ebook, for an ebook item) is
+    that book's folder: dropping another file in beside it, even under a
+    uniquified "-2" name, would leave two copies of the book in one folder.
+    """
+    extensions = EBOOK_BOOK_EXTENSIONS if media_type == "ebook" else AUDIO_EXTENSIONS
+    try:
+        entries = sorted(target_dir.iterdir(), key=lambda entry: entry.name.casefold())
+    except OSError:
+        return []
+    return [entry for entry in entries if entry.is_file() and entry.suffix.lower() in extensions]
+
+
 def unique_target_path(target_dir: Path, filename: str, reserved_targets: set[Path] | None = None) -> Path:
     reserved_targets = reserved_targets or set()
     target_path = target_dir / filename
@@ -5101,6 +5312,7 @@ def plan_loose_file_move(
     reserved_target_dirs: set[Path] | None = None,
     template_filename: str | None = None,
     metadata: dict[str, Any] | None = None,
+    merge_existing: bool = False,
 ) -> tuple[bool, Path | None, str]:
     """Choose the loose file's target filename.
 
@@ -5137,6 +5349,12 @@ def plan_loose_file_move(
         # name and nesting it alongside would silently mix two representations
         # of what is likely the same book -- flag it instead.
         return False, None, "target folder already used by another book this run"
+    if not merge_existing and existing_book_files(target_dir, item.media_type):
+        # Same rule plan_folder_move applies to a folder item: a destination
+        # that is already a book's folder is a duplicate or a different
+        # edition, not somewhere to append a "-2" copy. --merge-existing-targets
+        # opts back into merging.
+        return False, None, "target folder already exists"
     target_path = unique_target_path(target_dir, filename, reserved_targets)
     return True, target_path, ""
 
@@ -5360,10 +5578,17 @@ def add_metadata_review_detail(metadata: dict[str, Any], label: str, value: str)
 POSSIBLE_DUPLICATE_REASON = "possible duplicate: a merged file sits alongside its own chapter files"
 
 
-def conflict_review_details(target_dir: Path, claimed_by: Path | None) -> list[dict[str, str]]:
+def conflict_review_details(
+    target_dir: Path, claimed_by: Path | None, existing_files: list[Path] | None = None
+) -> list[dict[str, str]]:
     """The paths behind a conflict, for the report card: what already claimed
-    the destination, and where this item would have landed."""
+    the destination (another book this run, or files already on disk there),
+    and where this item would have landed."""
     details = [{"label": "Would land in", "value": str(target_dir)}]
+    if existing_files:
+        names = [path.name for path in existing_files]
+        shown = "; ".join(names[:5]) + (f"; and {len(names) - 5} more" if len(names) > 5 else "")
+        details.insert(0, {"label": "Already in that folder", "value": shown})
     if claimed_by:
         details.insert(0, {"label": "Already claimed by", "value": str(claimed_by)})
     return details
@@ -5409,6 +5634,111 @@ def annotate_possible_duplicates(
             move["structure"] = "skipped_possible_duplicate"
             skipped_reviews.append(move)
     return matched
+
+
+# Fixed sentences for the checks annotate_run_consistency() adds (one string per rule,
+# paths and values go in review_details, as with POSSIBLE_DUPLICATE_REASON).
+DANGLING_TITLE_REASON = "title looks cut off at the end"
+REPEATED_FOLDER_REASON = "book folder name repeats the series folder above it"
+SERIES_VARIANT_REASON = "series name is a longer variant of another series by the same author in this run"
+AUTHOR_VARIANT_REASON = "author name varies across books in this run"
+LABEL_VARIANT_REASON = "sequence label differs from the rest of this series in this run"
+DUPLICATE_ASIN_REASON = "possible duplicate: same ASIN as another book in this run"
+NUMBER_WITHOUT_SERIES_REASON = "has a book number but no series"
+
+
+def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
+    """Flag planned moves whose result looks wrong when compared with the rest
+    of the same run. None of these block a move; they put a concrete reason
+    and the values behind it on the book's review card. Returns how many
+    moves were flagged by at least one rule."""
+    flagged: set[int] = set()
+
+    def flag(move: dict[str, Any], reason: str, details: list[tuple[str, str]]) -> None:
+        move["metadata"] = add_metadata_review_reason(move["metadata"], reason)
+        for label, value in details:
+            move["metadata"] = add_metadata_review_detail(move["metadata"], label, value)
+        flagged.add(id(move))
+
+    by_author_series: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    by_author_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_asin: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    series_by_author: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+
+    for move in planned_moves:
+        metadata = move["metadata"]
+        title = str(metadata.get("title") or "")
+        if title and (title_fragment_is_incomplete(title) or title.count("(") > title.count(")")):
+            flag(move, DANGLING_TITLE_REASON, [("Title", title)])
+
+        number = str(metadata.get("book_number") or "")
+        if number and not metadata.get("series") and "-" not in number:
+            flag(move, NUMBER_WITHOUT_SERIES_REASON, [("Book number", number), ("Title", title)])
+
+        folder = Path(str(move["target"]))
+        if folder.suffix:
+            folder = folder.parent
+        if folder.parent.name and folder.name and normalize_for_compare(folder.name) == normalize_for_compare(folder.parent.name):
+            flag(move, REPEATED_FOLDER_REASON, [("Folder", str(folder))])
+
+        media = str(metadata.get("media_type") or "audiobook")
+        author_raw = str(metadata.get("author_primary") or metadata.get("author") or "")
+        author_key = normalize_for_compare(re.sub(r"\s*\([^)]*\)", "", author_raw))
+        series = str(metadata.get("series") or "")
+        series_key = normalize_series_key(series)
+        if author_key:
+            by_author_name[author_key].append(move)
+            if series_key:
+                series_by_author[author_key][series_key].add(series)
+                by_author_series[(author_key, series_key, media)].append(move)
+        asin = str(metadata.get("asin") or "").strip().upper()
+        if _is_real_asin(asin):
+            by_asin[(asin, media)].append(move)
+
+    # The same author written two ways ("Seth Ring" / "Seth Ring (Titan)").
+    for moves in by_author_name.values():
+        spellings = Counter(str(m["metadata"].get("author_primary") or m["metadata"].get("author") or "") for m in moves)
+        if len(spellings) > 1:
+            common = spellings.most_common(1)[0][0]
+            for move in moves:
+                own = str(move["metadata"].get("author_primary") or move["metadata"].get("author") or "")
+                if own != common:
+                    flag(move, AUTHOR_VARIANT_REASON, [("This book", own), ("Other books use", common)])
+
+    # One series spelled as a longer variant of another ("Polity" / "Polity
+    # Universe (chronological)", "The Titan" / "Nova Terra - Catalyst - The Titan Series").
+    for author_key, keyed in series_by_author.items():
+        for long_key, long_names in keyed.items():
+            shorter = [k for k in keyed if k != long_key and len(k) >= 4 and k in long_key]
+            if not shorter:
+                continue
+            other = sorted(next(iter(sorted(keyed[k]))) for k in shorter)
+            for move in by_author_name[author_key]:
+                if normalize_series_key(str(move["metadata"].get("series") or "")) == long_key:
+                    flag(move, SERIES_VARIANT_REASON, [
+                        ("This book's series", str(move["metadata"].get("series") or "")),
+                        ("Other series by this author", "; ".join(other)),
+                    ])
+
+    # Book / Vol. / Volume mixed inside one series.
+    for (_author, _series, _media), moves in by_author_series.items():
+        labelled = [m for m in moves if m["metadata"].get("book_number")]
+        labels = Counter(normalize_sequence_label(str(m["metadata"].get("sequence_label") or "")) or "Book" for m in labelled)
+        if len(labels) > 1:
+            common = labels.most_common(1)[0][0]
+            for move in labelled:
+                own = normalize_sequence_label(str(move["metadata"].get("sequence_label") or "")) or "Book"
+                if own != common:
+                    flag(move, LABEL_VARIANT_REASON, [("This book uses", own), ("Most books in the series use", common)])
+
+    # Two items that are the same Audible product.
+    for (asin, _media), moves in by_asin.items():
+        if len(moves) > 1:
+            for move in moves:
+                others = "; ".join(str(m["source"]) for m in moves if m is not move)
+                flag(move, DUPLICATE_ASIN_REASON, [("ASIN", asin), ("Same ASIN as", others)])
+
+    return len(flagged)
 
 
 def make_skipped_review_move(
@@ -5796,7 +6126,10 @@ def main() -> None:
                         target=target_dir,
                         reason=f"skipped conflict: {reason}",
                         structure="skipped_conflict",
-                        review_details=conflict_review_details(target_dir, target_dir_owner.get(target_dir)),
+                        review_details=conflict_review_details(
+                            target_dir, target_dir_owner.get(target_dir),
+                            existing_book_files(target_dir, item.media_type) if reason == "target folder already exists" else None,
+                        ),
                     ))
                 print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
                 continue
@@ -5831,6 +6164,7 @@ def main() -> None:
         can_move, target_path, reason = plan_loose_file_move(
             item, target_dir, reserved_targets, reserved_target_dirs=reserved_target_dirs,
             template_filename=resolution.filename, metadata=metadata,
+            merge_existing=args.merge_existing_targets,
         )
         if not can_move:
             if reason == "already in target folder":
@@ -5843,7 +6177,10 @@ def main() -> None:
                     target=target_dir,
                     reason=f"skipped conflict: {reason}",
                     structure="skipped_conflict",
-                    review_details=conflict_review_details(target_dir, target_dir_owner.get(target_dir)),
+                    review_details=conflict_review_details(
+                        target_dir, target_dir_owner.get(target_dir),
+                        existing_book_files(target_dir, item.media_type) if reason == "target folder already exists" else None,
+                    ),
                 ))
             print(f"SKIP: {reason} | {item.source_path} -> {target_dir}", file=sys.stderr)
             continue
@@ -5882,8 +6219,10 @@ def main() -> None:
     print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
     possible_duplicates = annotate_possible_duplicates(planned_moves, skipped_reviews)
+    run_consistency_flags = annotate_run_consistency(planned_moves)
     print(f"Skipped conflicts: {skipped_conflicts}")
     print(f"Possible duplicates flagged: {possible_duplicates}")
+    print(f"Flagged by run consistency checks: {run_consistency_flags}")
     print(f"Flagged by generic marketing cleanup: {flagged_marketing_cleanup}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")
     print(f"Matched existing structure: {matched_existing_structure}")

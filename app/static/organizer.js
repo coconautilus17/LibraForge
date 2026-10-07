@@ -17,18 +17,6 @@ function isExcludedByPattern(item) {
   return patterns.some((p) => source.includes(p));
 }
 
-// Strip the trailing filename from a path so only the directory is shown.
-// Paths ending in a known audio extension are treated as files; others as dirs.
-function pathDir(p) {
-  if (!p) return p;
-  const audioExts = /\.(m4b|m4a|mp3|ogg|opus|flac|aac|wma)$/i;
-  if (audioExts.test(p)) {
-    const idx = p.lastIndexOf('/');
-    return idx > 0 ? p.slice(0, idx) : p;
-  }
-  return p;
-}
-
 const $ = (id) => document.getElementById(id);
 const { escapeHtml, renderDownloadLinks, statCard: stat, saveActiveRun, clearActiveRun, loadActiveRun } = window.UiCommon;
 const RUN_KEY = 'organizer';
@@ -367,8 +355,32 @@ function renderApplyResult(stats) {
   `).join('');
 }
 
+// Reasons that only say how a value was derived, not that anything is wrong with
+// the book (the same tier the suspicion report treats as info-only). They show as
+// a muted note on the card and do not make it a review item. Every other reason
+// is an alert. The strings must match what the organizer script emits.
+const NOTE_ONLY_REASONS = new Set([
+  "title matches series name; using sequence only",
+  "title inferred from path",
+  "series inferred from path",
+]);
+
+function reviewReasonsOf(item) {
+  return (item.review_reasons || []).filter((reason) => !NOTE_ONLY_REASONS.has(reason));
+}
+
+function noteReasonsOf(item) {
+  return (item.review_reasons || []).filter((reason) => NOTE_ONLY_REASONS.has(reason));
+}
+
+// A skipped item (conflict, unknown author, ...) is listed with the planned moves
+// but will not be moved.
+function isBlockedMove(item) {
+  return String(item.structure || "").startsWith("skipped");
+}
+
 function isReviewMove(item) {
-  return (item.review_reasons || []).length > 0
+  return reviewReasonsOf(item).length > 0
     || !item.author
     || item.author === "Unknown Author"
     || !item.title
@@ -378,7 +390,7 @@ function isReviewMove(item) {
     || item.structure === "ambiguous";
 }
 function renderRisks(items) {
-  const reviewItems = items.filter((item) => (item.review_reasons || []).length > 0).length;
+  const reviewItems = items.filter((item) => reviewReasonsOf(item).length > 0).length;
   const unknownAuthors = items.filter((item) => !item.author || item.author === "Unknown Author").length;
   const ambiguousStructures = items.filter((item) => item.structure === "ambiguous").length;
   // Duplicate source only matters for folder moves — multiple loose files
@@ -427,7 +439,9 @@ function renderMoves(items) {
       .some((value) => String(value || "").toLowerCase().includes(query));
   });
 
-  $("moveCount").textContent = `Showing ${filtered.length} of ${items.length} planned moves`;
+  const blockedCount = items.filter(isBlockedMove).length;
+  $("moveCount").textContent = `Showing ${filtered.length} of ${items.length} items`
+    + (blockedCount ? ` (${items.length - blockedCount} will move, ${blockedCount} blocked)` : "");
   $("moveItems").innerHTML = filtered.length
     ? filtered.map((item) => {
       const excluded = isExcludedByPattern(item);
@@ -439,6 +453,7 @@ function renderMoves(items) {
             <p>${escapeHtml(item.author || "Unknown Author")}</p>
           </div>
           <div class="score-badge">${escapeHtml(String(item.files || 1))} file${Number(item.files || 1) === 1 ? "" : "s"}</div>
+          ${isBlockedMove(item) ? '<div class="score-badge">Blocked: will not move</div>' : ""}
           <span>Structure: ${escapeHtml(item.structure || "new")}</span>
         </div>
         <div class="actions">
@@ -453,9 +468,12 @@ function renderMoves(items) {
           <span>Number: ${escapeHtml(item.number || "-")}</span>
           <span>Companions: ${Math.floor((item.companions || []).length / 2)}</span>
         </div>
-        ${(item.review_reasons || []).length ? `
+        ${noteReasonsOf(item).length ? `
+        <p class="note"><strong>Note:</strong> ${noteReasonsOf(item).map((r) => escapeHtml(reviewReasonLabel(r))).join("; ")}.</p>
+        ` : ""}
+        ${reviewReasonsOf(item).length ? `
         <div class="review-alert danger">
-          <strong>Review:</strong> ${(item.review_reasons || []).map((r) => escapeHtml(reviewReasonLabel(r))).join("; ")}.
+          <strong>Review:</strong> ${reviewReasonsOf(item).map((r) => escapeHtml(reviewReasonLabel(r))).join("; ")}.
           ${(item.review_details || []).length ? `
             <div class="file-list review-detail-list">
               ${item.review_details.map((d) => `<div class="file-item"><strong>${escapeHtml(d.label)}</strong><br>${escapeHtml(d.value)}</div>`).join("")}
@@ -466,8 +484,8 @@ function renderMoves(items) {
         <details class="move-details">
           <summary>Show source, destination, and companion files</summary>
           <div class="file-list">
-            <div class="file-item"><strong>From</strong><br>${escapeHtml(pathDir(item.source) || "-")}</div>
-            <div class="file-item"><strong>To</strong><br>${escapeHtml(pathDir(item.target) || "-")}</div>
+            <div class="file-item"><strong>From</strong><br>${escapeHtml(item.source || "-")}</div>
+            <div class="file-item"><strong>To</strong><br>${escapeHtml(item.target || "-")}${isBlockedMove(item) ? " (where it would have landed)" : ""}</div>
             ${(item.companions || []).length ? `<div class="file-item"><strong>Companions</strong><br>${(item.companions || []).map((entry) => escapeHtml(entry)).join("<br>")}</div>` : ""}
           </div>
         </details>
