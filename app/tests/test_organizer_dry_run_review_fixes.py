@@ -365,6 +365,21 @@ class RunConsistencyChecksTests(unittest.TestCase):
         self.assertIn(ORGANIZER.AUTHOR_VARIANT_REASON, self.reasons(odd))
         self.assertNotIn(ORGANIZER.AUTHOR_VARIANT_REASON, self.reasons(main1))
 
+    def test_near_identical_author_names_in_one_series_flag_the_less_common(self):
+        kwargs = dict(series="I Like Villains, So I Reincarnated as One")
+        a = _move("/in/1.m4b", "/lib/Kei Tadano/S/1.m4b", author_primary="Kei Tadano", **kwargs)
+        b = _move("/in/2.m4b", "/lib/Kei Takano/S/2.m4b", author_primary="Kei Takano", **kwargs)
+        c = _move("/in/3.m4b", "/lib/Kei Tadano/S/3.m4b", author_primary="Kei Tadano", **kwargs)
+        ORGANIZER.annotate_run_consistency([a, b, c])
+        self.assertIn(ORGANIZER.AUTHOR_VARIANT_REASON, self.reasons(b))
+        self.assertNotIn(ORGANIZER.AUTHOR_VARIANT_REASON, self.reasons(a))
+
+    def test_different_authors_in_one_series_are_not_treated_as_typos(self):
+        kwargs = dict(series="Knowledge in a Nutshell")
+        a = _move("/in/1.m4b", "/lib/Sten Odenwald/S/1.m4b", author_primary="Sten Odenwald", **kwargs)
+        b = _move("/in/2.m4b", "/lib/Alan Porter/S/2.m4b", author_primary="Alan Porter", **kwargs)
+        self.assertEqual(ORGANIZER.annotate_run_consistency([a, b]), 0)
+
     def test_mixed_book_and_volume_labels_in_one_series_flag_the_odd_one(self):
         kwargs = dict(author_primary="Leon West", series="Idle Village Hero")
         a = _move("/in/1.m4b", "/lib/L/I/Book 1/1.m4b", book_number="1", sequence_label="Book", **kwargs)

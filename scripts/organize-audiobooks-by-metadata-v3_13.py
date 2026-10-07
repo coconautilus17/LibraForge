@@ -5705,6 +5705,24 @@ def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
                 if own != common:
                     flag(move, AUTHOR_VARIANT_REASON, [("This book", own), ("Other books use", common)])
 
+    # The same series credited to near-identical author names ("Kei Tadano" /
+    # "Kei Takano"): one of the volumes carries a typo.
+    authors_in_series: dict[str, Counter] = defaultdict(Counter)
+    for author_key, series_keys in series_by_author.items():
+        for move in by_author_name[author_key]:
+            series_key = normalize_series_key(str(move["metadata"].get("series") or ""))
+            if series_key:
+                authors_in_series[series_key][str(move["metadata"].get("author_primary") or move["metadata"].get("author") or "")] += 1
+    for series_key, spellings in authors_in_series.items():
+        for left in spellings:
+            for right in spellings:
+                if left < right and SequenceMatcher(None, normalize_for_compare(left), normalize_for_compare(right)).ratio() >= 0.85:
+                    typo, common = (left, right) if spellings[left] <= spellings[right] else (right, left)
+                    for move in planned_moves:
+                        own = str(move["metadata"].get("author_primary") or move["metadata"].get("author") or "")
+                        if own == typo and normalize_series_key(str(move["metadata"].get("series") or "")) == series_key:
+                            flag(move, AUTHOR_VARIANT_REASON, [("This book", own), ("Same series elsewhere", common)])
+
     # One series spelled as a longer variant of another ("Polity" / "Polity
     # Universe (chronological)", "The Titan" / "Nova Terra - Catalyst - The Titan Series").
     for author_key, keyed in series_by_author.items():
