@@ -67,6 +67,46 @@ class FolderSidecarOwnershipTests(unittest.TestCase):
             got = ORGANIZER.metadata_from_sidecar(loose(folder / "Renamed.m4b"))
             self.assertEqual(got["title"], "The Real Title")
 
+    def _audiobook_folder(self, folder: Path, title: str, author: str, ebooks):
+        (folder / f"{title}.m4b").touch()
+        for name in ebooks:
+            (folder / name).touch()
+        (folder / "libraforge.json").write_text(json.dumps({
+            "marker": {"source_file": f"{title}.m4b",
+                       "audible": {"title": title, "author": author}},
+        }))
+
+    def test_ebook_named_for_the_audiobooks_title_shares_its_record(self):
+        # Regression (#358): the same work in another format beside the audiobook.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "Postwar", "Tony Judt", [
+                "Postwar A History of Europe Since 1945 By Tony Judt.epub",
+                "Postwar.pdf",
+            ])
+            for name in ("Postwar A History of Europe Since 1945 By Tony Judt.epub", "Postwar.pdf"):
+                got = ORGANIZER.metadata_from_sidecar(loose(folder / name, "ebook"))
+                self.assertEqual(got["author"], "Tony Judt", name)
+
+    def test_study_guide_by_another_author_does_not_share_the_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "Finnegans Wake", "James Joyce", [
+                "Clive Hart - Structure and motif in Finnegans wake.pdf",
+                "Joyce, James - Finnegans Wake.epub",
+            ])
+            self.assertIsNone(ORGANIZER.metadata_from_sidecar(
+                loose(folder / "Clive Hart - Structure and motif in Finnegans wake.pdf", "ebook")))
+            got = ORGANIZER.metadata_from_sidecar(loose(folder / "Joyce, James - Finnegans Wake.epub", "ebook"))
+            self.assertEqual(got["author"], "James Joyce")
+
+    def test_an_unrelated_ebook_does_not_share_the_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "Postwar", "Tony Judt", ["Some Other Book.pdf"])
+            self.assertIsNone(ORGANIZER.metadata_from_sidecar(loose(folder / "Some Other Book.pdf", "ebook")))
+
+
 
 if __name__ == "__main__":
     unittest.main()

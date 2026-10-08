@@ -3145,7 +3145,38 @@ def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
         return True
     if len(book_files) <= 1:
         return True
-    return folder_sidecar_file_belongs_to(folder_lf, source)
+    if folder_sidecar_file_belongs_to(folder_lf, source):
+        return True
+    return is_ebook_file(source) and ebook_is_companion_of_sidecar(folder_lf, source)
+
+
+def ebook_is_companion_of_sidecar(folder_lf: Path, source: Path) -> bool:
+    """Whether an ebook beside an audiobook is that audiobook's own work.
+
+    True when the ebook's name contains the sidecar's title and is not led by a
+    different author's name ("Postwar ... By Tony Judt.epub", "Joyce, James -
+    Finnegans Wake.epub"). A study guide such as "Clive Hart - Structure and
+    motif in Finnegans wake.pdf" names the title but is another book.
+    """
+    try:
+        payload = json.loads(folder_lf.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    audible = ((payload.get("marker") or {}).get("audible")) or {}
+    book = ((payload.get("sidecar") or {}).get("book")) or {}
+    title = book.get("title") or audible.get("chosen_title") or audible.get("title") or ""
+    author = book.get("author") or audible.get("author") or ""
+    title_key = normalize_for_compare(title)
+    if not title_key or title_key not in normalize_for_compare(source.stem):
+        return False
+    lead = re.split(r"\s+-\s+", source.stem, maxsplit=1)
+    if len(lead) == 1:
+        return True
+    lead_key = normalize_for_compare(lead[0])
+    if title_key in lead_key:
+        return True
+    surnames = [normalize_for_compare(name.split()[-1]) for name in re.split(r",|&| and ", author) if name.split()]
+    return any(surname and surname in lead_key for surname in surnames)
 
 
 def metadata_from_sidecar(item: BookItem, abs_candidate: dict[str, Any] | None = None) -> dict[str, Any] | None:
