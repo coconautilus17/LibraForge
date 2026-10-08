@@ -56,8 +56,9 @@ def build_ebook_index(
     folder-per-book). Every other ebook file is its own single-format unit.
 
     Deliberately narrow: pairing only fires for the exact bucket-folder-name
-    pattern scoped to one grandparent, so it can't misfire by matching
-    unrelated same-stem files elsewhere in the library.
+    pattern scoped to one grandparent, or for files sharing one folder and one
+    stem, so it can't misfire by matching unrelated same-stem files elsewhere
+    in the library.
     """
     # bucket_files[grandparent][stem_lower][ext] = path
     bucket_files: dict[Path, dict[str, dict[str, Path]]] = {}
@@ -78,9 +79,14 @@ def build_ebook_index(
                     ext = f.suffix.lower().lstrip(".")
                     bucket.setdefault(f.stem.lower(), {})[ext] = f
             else:
+                # Formats of one book sitting together (same folder, same stem)
+                # are one unit, like the bucket-folder layout above.
+                by_stem: dict[str, dict[str, Path]] = {}
                 for f in ebook_files:
-                    ext = f.suffix.lower().lstrip(".")
-                    standalone.append(EbookUnit(path=f, formats={ext: f}))
+                    by_stem.setdefault(f.stem.lower(), {})[f.suffix.lower().lstrip(".")] = f
+                for formats in by_stem.values():
+                    canonical = formats.get("epub") or formats.get("pdf") or next(iter(formats.values()))
+                    standalone.append(EbookUnit(path=canonical, formats=formats))
     except PermissionError:
         pass
 

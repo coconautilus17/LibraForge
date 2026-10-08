@@ -389,6 +389,23 @@ class BuildEbookIndexTests(unittest.TestCase):
         for unit in units:
             self.assertEqual(len(unit.formats), 1)
 
+    def test_epub_and_pdf_with_one_stem_in_the_same_folder_are_one_book(self):
+        # Two formats of one book sitting together are not two books; unpaired
+        # they claim the same destination and block each other in Folder Forge.
+        self._touch("Philosophy/Some Book/Kimberly Blessing - Movies.epub")
+        self._touch("Philosophy/Some Book/Kimberly Blessing - Movies.pdf")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 1)
+        folder = self.root / "Philosophy" / "Some Book"
+        self.assertEqual(units[0].path, folder / "Kimberly Blessing - Movies.epub")
+        self.assertEqual(set(units[0].formats), {"epub", "pdf"})
+
+    def test_different_stems_in_the_same_folder_stay_separate_books(self):
+        self._touch("Finnegans Wake/Clive Hart - Structure and motif.pdf")
+        self._touch("Finnegans Wake/Joyce - Finnegans Wake.epub")
+        units = build_ebook_index(self.root)
+        self.assertEqual(len(units), 2)
+
     def test_non_bucket_sibling_folders_do_not_merge(self):
         self._touch("Series/BookA/book.epub")
         self._touch("Series/BookB/book.pdf")
