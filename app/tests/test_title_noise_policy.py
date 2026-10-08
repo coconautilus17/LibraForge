@@ -45,6 +45,30 @@ class TitleNoisePolicyTests(unittest.TestCase):
                 self.assertEqual(payload["custom_patterns"][0]["id"], "custom-academy")
         title_noise_policy.clear_title_noise_cache()
 
+    def test_descriptor_that_completes_a_title_is_kept(self):
+        # Regression (#352): "a LitRPG Apocalypse" is the object of "of", so
+        # dropping it leaves a sentence fragment.
+        title_noise_policy.clear_title_noise_cache()
+        for title in (
+            "Apocalypse BREAKER 2: Book 2 of a LitRPG Apocalypse",
+            "Apocalypse BREAKER: Book 1 of a LitRPG Apocalypse",
+            "Book 3 of a LitRPG Apocalypse",
+        ):
+            self.assertEqual(title_noise_policy.remove_trailing_title_noise(title), title)
+
+    def test_descriptor_after_a_complete_title_is_still_removed(self):
+        title_noise_policy.clear_title_noise_cache()
+        self.assertEqual(
+            title_noise_policy.remove_trailing_title_noise("Slime Keeper a LitRPG Adventure"),
+            "Slime Keeper",
+        )
+
+    def test_dangling_end_word_detection(self):
+        self.assertTrue(title_noise_policy.ends_with_dangling_word("Book 2 of"))
+        self.assertTrue(title_noise_policy.ends_with_dangling_word("Carter &"))
+        self.assertFalse(title_noise_policy.ends_with_dangling_word("Book 2"))
+        self.assertFalse(title_noise_policy.ends_with_dangling_word(""))
+
 
 if __name__ == "__main__":
     unittest.main()
