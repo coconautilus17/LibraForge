@@ -279,6 +279,28 @@ def contains_title_noise(value: str) -> bool:
     )
 
 
+# A title ending in one of these is a sentence fragment ("Book 2 of"). Shared
+# with Folder Forge, which flags the same shape as "title looks cut off".
+DANGLING_END_WORDS = frozenset({
+    "a", "an", "the",
+    "of", "to", "for", "from", "with", "without",
+    "in", "on", "at", "by", "into", "onto", "over", "under",
+    "and", "or", "but",
+})
+
+
+def ends_with_dangling_word(value: str) -> bool:
+    value = str(value or "").strip(" -_:,.")
+    if not value:
+        return False
+    # A dangling connector symbol ("Carter &") is incomplete even though the
+    # word tokenizer below ignores "&" and would see an unremarkable word.
+    if re.search(r"[&/+]\s*$", value):
+        return True
+    tokens = re.findall(r"[A-Za-z0-9']+", value.lower())
+    return bool(tokens) and tokens[-1] in DANGLING_END_WORDS
+
+
 def remove_trailing_title_noise(value: str) -> str:
     value = re.sub(r"\s+", " ", str(value or "")).strip()
     if not value:
@@ -301,5 +323,9 @@ def remove_trailing_title_noise(value: str) -> str:
         flags=re.IGNORECASE,
     )
     if match and is_title_noise(without_sequence(match.group("descriptor"))):
-        return value[: match.start()].strip(" -_.:,")
+        remainder = value[: match.start()].strip(" -_.:,")
+        # "Book 2 of a LitRPG Apocalypse": the descriptor completes the title.
+        if ends_with_dangling_word(remainder):
+            return value
+        return remainder
     return value
