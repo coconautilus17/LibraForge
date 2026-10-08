@@ -562,31 +562,11 @@ def _libraforge_folder_file_belongs_to(payload: dict, source: Path) -> bool:
     hold several unrelated, independently-processed loose files. If a
     folder-level libraforge.json already names a different file as its
     owner, it must never be read as -- or overwritten with -- `source`'s
-    data. An empty/fresh payload has no conflicting claim yet, so it's
-    treated as available.
+    data. The rule itself lives in app.sidecar_ownership, shared with Folder
+    Forge.
     """
-    if not payload:
-        return True
-    source_str = str(source)
-    for section_key in ("sidecar", "marker", "scan_cache"):
-        src = (payload.get(section_key) or {}).get("source") or {}
-        root_file = src.get("root_file")
-        chapter_files = src.get("chapter_files") or []
-        if root_file or chapter_files:
-            if root_file == source_str or source_str in chapter_files:
-                return True
-            # The recorded paths are where the book lived when it was
-            # processed. A move, copy or conversion changes the directory
-            # but not the file name, and a shared folder's other books still
-            # have different names, so the name keeps the ownership check.
-            recorded_names = {Path(str(p)).name for p in [root_file, *chapter_files] if p}
-            return source.name in recorded_names
-    # Marker and backup record only a bare filename (no full source.* block).
-    for section_key in ("marker", "backup"):
-        named_file = (payload.get(section_key) or {}).get("source_file")
-        if named_file:
-            return named_file == source.name
-    return True
+    from app.sidecar_ownership import folder_sidecar_belongs_to
+    return folder_sidecar_belongs_to(payload, source)
 
 def _load_libraforge_raw(
     source: Path, clues: dict | None = None, alone: bool = False
