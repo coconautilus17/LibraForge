@@ -45,6 +45,7 @@ try:
         is_title_noise,
         remove_trailing_title_noise,
     )
+    from app.sidecar_ownership import folder_sidecar_file_belongs_to
     from app.abs_client import (
         _is_real_asin,
         abs_get_json,
@@ -61,6 +62,7 @@ except ModuleNotFoundError:
         is_title_noise,
         remove_trailing_title_noise,
     )
+    from app.sidecar_ownership import folder_sidecar_file_belongs_to
     from app.abs_client import (
         _is_real_asin,
         abs_get_json,
@@ -3125,6 +3127,27 @@ def abs_metadata_as_sidecar_candidate(media: dict[str, Any], library_item_id: st
     }
 
 
+def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
+    """Whether a loose file may read its folder's libraforge.json.
+
+    The only book file in its folder always may (a rename must not orphan its
+    record). In a shared folder -- an audiobook next to its study-guide
+    ebooks, or several loose books -- the file must be the one the sidecar
+    names, or it would inherit another book's title, author and number.
+    """
+    from app.library_index import is_ebook_file
+    try:
+        book_files = [
+            f for f in source.parent.iterdir()
+            if f.is_file() and (is_supported_audio(f) or is_ebook_file(f))
+        ]
+    except OSError:
+        return True
+    if len(book_files) <= 1:
+        return True
+    return folder_sidecar_file_belongs_to(folder_lf, source)
+
+
 def metadata_from_sidecar(item: BookItem, abs_candidate: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if abs_candidate is not None:
         return abs_candidate
@@ -3144,7 +3167,7 @@ def metadata_from_sidecar(item: BookItem, abs_candidate: dict[str, Any] | None =
     else:
         # Loose file alone in its folder may have a folder-level libraforge.json.
         folder_lf = item.source_path.parent / "libraforge.json"
-        if folder_lf.is_file():
+        if folder_lf.is_file() and loose_file_owns_folder_sidecar(folder_lf, item.source_path):
             paths.append(folder_lf)
         paths.append(item.source_path.with_name(item.source_path.name + ".m4b-tool-metadata.json"))
         paths.append(item.source_path.with_name(item.source_path.name + ".libraforge.json"))

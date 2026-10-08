@@ -562,24 +562,11 @@ def _libraforge_folder_file_belongs_to(payload: dict, source: Path) -> bool:
     hold several unrelated, independently-processed loose files. If a
     folder-level libraforge.json already names a different file as its
     owner, it must never be read as -- or overwritten with -- `source`'s
-    data. An empty/fresh payload has no conflicting claim yet, so it's
-    treated as available.
+    data. The rule itself lives in app.sidecar_ownership, shared with Folder
+    Forge.
     """
-    if not payload:
-        return True
-    source_str = str(source)
-    for section_key in ("sidecar", "marker", "scan_cache"):
-        src = (payload.get(section_key) or {}).get("source") or {}
-        root_file = src.get("root_file")
-        chapter_files = src.get("chapter_files") or []
-        if root_file or chapter_files:
-            return root_file == source_str or source_str in chapter_files
-    # Marker and backup record only a bare filename (no full source.* block).
-    for section_key in ("marker", "backup"):
-        named_file = (payload.get(section_key) or {}).get("source_file")
-        if named_file:
-            return named_file == source.name
-    return True
+    from app.sidecar_ownership import folder_sidecar_belongs_to
+    return folder_sidecar_belongs_to(payload, source)
 
 def _load_libraforge_raw(
     source: Path, clues: dict | None = None, alone: bool = False
@@ -1997,6 +1984,20 @@ def write_marker(
             "duration_minutes": current.get("duration_minutes"),
         },
     }
+    # A converted multi-file book keeps its old sidecar.book, which
+    # read_book_sidecar() prefers over marker.audible. Keep it in step with
+    # what was just resolved, or the edit never shows. (A grouped write
+    # rebuilds it in write_m4b_tool_metadata_sidecar.)
+    book_block = (payload.get("sidecar") or {}).get("book")
+    if isinstance(book_block, dict) and output_kind != "json_sidecar":
+        resolved = payload["marker"]["audible"]
+        for field, marker_key in (
+            ("title", "chosen_title"), ("subtitle", "subtitle"), ("author", "author"),
+            ("narrator", "narrator"), ("series", "series"), ("sequence", "sequence"),
+            ("year", "year"), ("genre", "genre"), ("isbn", "isbn"),
+        ):
+            if str(resolved.get(marker_key) or "").strip():
+                book_block[field] = resolved[marker_key]
     _write_libraforge(lf_path, payload)
 
 def write_ebook_sidecar(
