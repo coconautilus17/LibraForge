@@ -41,6 +41,7 @@ from typing import Any
 try:
     from app.title_noise_policy import (
         contains_title_noise,
+        ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
     )
@@ -50,6 +51,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import (
         contains_title_noise,
+        ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
     )
@@ -1427,22 +1429,9 @@ def title_fragment_is_incomplete(value: str) -> bool:
     value = clean_text(value).strip(" -_:,.")
     if not value:
         return True
-    # A dangling connector symbol ("Carter &") is incomplete even though the
-    # word tokenizer below ignores "&" entirely and would otherwise see a
-    # single, unremarkable trailing word.
-    if re.search(r"[&/+]\s*$", value):
+    if not re.findall(r"[A-Za-z0-9']+", value):
         return True
-    tokens = re.findall(r"[A-Za-z0-9']+", value.lower())
-    if not tokens:
-        return True
-    if len(tokens) <= 2 and tokens[-1] in {"a", "an", "the"}:
-        return True
-    return tokens[-1] in {
-        "a", "an", "the",
-        "of", "to", "for", "from", "with", "without",
-        "in", "on", "at", "by", "into", "onto", "over", "under",
-        "and", "or", "but",
-    }
+    return ends_with_dangling_word(value)
 
 
 def strip_trailing_series_from_title(title: str, series: str) -> str:
