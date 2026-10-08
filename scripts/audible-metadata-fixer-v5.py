@@ -573,7 +573,14 @@ def _libraforge_folder_file_belongs_to(payload: dict, source: Path) -> bool:
         root_file = src.get("root_file")
         chapter_files = src.get("chapter_files") or []
         if root_file or chapter_files:
-            return root_file == source_str or source_str in chapter_files
+            if root_file == source_str or source_str in chapter_files:
+                return True
+            # The recorded paths are where the book lived when it was
+            # processed. A move, copy or conversion changes the directory
+            # but not the file name, and a shared folder's other books still
+            # have different names, so the name keeps the ownership check.
+            recorded_names = {Path(str(p)).name for p in [root_file, *chapter_files] if p}
+            return source.name in recorded_names
     # Marker and backup record only a bare filename (no full source.* block).
     for section_key in ("marker", "backup"):
         named_file = (payload.get(section_key) or {}).get("source_file")

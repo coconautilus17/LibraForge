@@ -154,6 +154,45 @@ class LibraforgeFolderOwnershipTests(unittest.TestCase):
             self.assertEqual(lf_path, folder / "libraforge.json")
             self.assertIn("sidecar", payload)
 
+    def test_moved_book_still_owns_its_folder_level_sidecar(self):
+        # Regression (#351): the sidecar records the path the book had when it
+        # was processed (a staging folder). After the folder is moved or
+        # copied, the recorded directory differs but the file name is the
+        # same, so the sidecar must still be read and written for that book.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            book = folder / "Late Period, Volume 1.m4b"
+            book.touch()
+            old = "/mnt/storage/Audibook Downloads/Plato/Late Period, Volume 1"
+            (folder / "libraforge.json").write_text(json.dumps({
+                "sidecar": {"source": {
+                    "root_file": f"{old}/01. Introduction.mp3",
+                    "chapter_files": [f"{old}/Late Period, Volume 1.m4b"],
+                }},
+            }))
+
+            lf_path, payload = FIXER._load_libraforge_raw(book, alone=True)
+
+            self.assertEqual(lf_path, folder / "libraforge.json")
+            self.assertIn("sidecar", payload)
+
+    def test_moved_folder_sidecar_is_still_refused_for_another_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            other = folder / "Other Book.m4b"
+            other.touch()
+            (folder / "libraforge.json").write_text(json.dumps({
+                "sidecar": {"source": {
+                    "root_file": "/old/place/Late Period, Volume 1.m4b",
+                    "chapter_files": ["/old/place/Late Period, Volume 1.m4b"],
+                }},
+            }))
+
+            lf_path, payload = FIXER._load_libraforge_raw(other, alone=False)
+
+            self.assertNotEqual(lf_path, folder / "libraforge.json")
+            self.assertEqual(payload, {})
+
 
 if __name__ == "__main__":
     unittest.main()
