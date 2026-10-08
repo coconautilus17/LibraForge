@@ -2004,6 +2004,20 @@ def write_marker(
             "duration_minutes": current.get("duration_minutes"),
         },
     }
+    # A converted multi-file book keeps its old sidecar.book, which
+    # read_book_sidecar() prefers over marker.audible. Keep it in step with
+    # what was just resolved, or the edit never shows. (A grouped write
+    # rebuilds it in write_m4b_tool_metadata_sidecar.)
+    book_block = (payload.get("sidecar") or {}).get("book")
+    if isinstance(book_block, dict) and output_kind != "json_sidecar":
+        resolved = payload["marker"]["audible"]
+        for field, marker_key in (
+            ("title", "chosen_title"), ("subtitle", "subtitle"), ("author", "author"),
+            ("narrator", "narrator"), ("series", "series"), ("sequence", "sequence"),
+            ("year", "year"), ("genre", "genre"), ("isbn", "isbn"),
+        ):
+            if str(resolved.get(marker_key) or "").strip():
+                book_block[field] = resolved[marker_key]
     _write_libraforge(lf_path, payload)
 
 def write_ebook_sidecar(

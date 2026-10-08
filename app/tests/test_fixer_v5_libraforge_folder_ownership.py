@@ -193,6 +193,38 @@ class LibraforgeFolderOwnershipTests(unittest.TestCase):
             self.assertNotEqual(lf_path, folder / "libraforge.json")
             self.assertEqual(payload, {})
 
+    def test_manual_apply_keeps_a_leftover_book_block_in_step(self):
+        # Regression (#351): a converted multi-file book keeps the old
+        # sidecar.book, and readers prefer it over marker.audible. A later
+        # edit has to update it, or the edit looks like it did nothing.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            book = folder / "Middle Period, Volume 2.m4b"
+            book.touch()
+            (folder / "libraforge.json").write_text(json.dumps({
+                "sidecar": {
+                    "source": {"root_file": str(book), "chapter_files": [str(book)]},
+                    "book": {"title": "The Socratic Dialogues: Middle Period", "author": "Benjamin Jowett, Plato",
+                             "series": "The Socratic Dialogues", "sequence": "3", "narrator": "A Reader"},
+                },
+            }))
+
+            FIXER.write_marker(
+                source=book,
+                metadata={"author": "Plato", "sequence": "4", "edit_mode": "full"},
+                clues={"current": {"title": "The Socratic Dialogues: Middle Period",
+                                   "author": "Benjamin Jowett, Plato", "sequence": "3"}},
+                score=1.0, mode="manual_edit", aggressive=False,
+                alone=True, written_fields=["author", "sequence"], field_policy="fill",
+            )
+
+            saved = json.loads((folder / "libraforge.json").read_text())["sidecar"]["book"]
+            self.assertEqual(saved["author"], "Plato")
+            self.assertEqual(saved["sequence"], "4")
+            # fields the edit did not supply are left as they were
+            self.assertEqual(saved["narrator"], "A Reader")
+            self.assertEqual(saved["title"], "The Socratic Dialogues: Middle Period")
+
 
 if __name__ == "__main__":
     unittest.main()
