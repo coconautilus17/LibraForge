@@ -171,5 +171,95 @@ class TagTests(unittest.TestCase):
             self.assertEqual(str(ID3(track)["TPE1"].text[0]), "V A Lewis")
 
 
+
+class AbsAuthorPlanTests(unittest.TestCase):
+    """--abs-authors: ABS keeps authors in its DB / central metadata.json, which a
+    rescan re-applies over already-corrected files."""
+
+    def plan(self, authors, details, items):
+        return MIGRATE.plan_abs_author_changes(authors, lambda i: details.get(i, {}), lambda i: items[i])
+
+    def test_book_with_off_scheme_author_is_patched_to_scheme_spelling(self):
+        authors = [{"id": "a1", "name": "DB King"}, {"id": "a2", "name": "D.B. King"}]
+        details = {"a1": {"libraryItems": [{"id": "i1"}]}}
+        items = {"i1": {"path": "/x", "media": {"metadata": {"authors": [{"name": "DB King"}]}}}}
+        changes = self.plan(authors, details, items)
+        self.assertEqual([(c["phase"], c["old"], c["new"]) for c in changes], [("abs-item", ["DB King"], ["D.B. King"])])
+
+    def test_multi_author_list_is_fixed_per_name_and_deduplicated(self):
+        authors = [{"id": "a1", "name": "T C Liyanage"}]
+        details = {"a1": {"libraryItems": [{"id": "i1"}]}}
+        items = {"i1": {"path": "/x", "media": {"metadata": {"authors": [{"name": "Extra26"}, {"name": "T C Liyanage"}, {"name": "T.C. Liyanage"}]}}}}
+        self.assertEqual(self.plan(authors, details, items)[0]["new"], ["Extra26", "T.C. Liyanage"])
+
+    def test_empty_author_is_deleted_when_scheme_spelling_exists_else_renamed(self):
+        authors = [{"id": "a1", "name": "VK Slatter"}, {"id": "a2", "name": "V.K. Slatter"}, {"id": "a3", "name": "JD Kirk"}]
+        details = {"a1": {"libraryItems": []}, "a3": {"libraryItems": []}}
+        changes = {c["old"]: c for c in self.plan(authors, details, {})}
+        self.assertEqual(changes["VK Slatter"]["phase"], "abs-author-delete")
+        self.assertEqual((changes["JD Kirk"]["phase"], changes["JD Kirk"]["new"]), ("abs-author-rename", "J.D. Kirk"))
+
+    def test_empty_author_with_data_adopts_a_data_less_twin_instead_of_being_deleted(self):
+        authors = [{"id": "a1", "name": "VK Slatter"}, {"id": "a2", "name": "V.K. Slatter"}]
+        details = {"a1": {"libraryItems": [], "imagePath": "/metadata/authors/a1.jpg", "asin": "B0"}, "a2": {"libraryItems": [{"id": "i"}]}}
+        items = {"i": {"path": "/x", "media": {"metadata": {"authors": [{"name": "V.K. Slatter"}]}}}}
+        change = self.plan(authors, details, items)[0]
+        self.assertEqual((change["phase"], change["twin_id"], change["keeps"]), ("abs-author-adopt", "a2", ["imagePath", "asin"]))
+
+    def test_empty_author_is_deleted_when_the_twin_already_has_data(self):
+        authors = [{"id": "a1", "name": "VK Slatter"}, {"id": "a2", "name": "V.K. Slatter"}]
+        details = {"a1": {"libraryItems": [], "asin": "B0"}, "a2": {"libraryItems": [], "asin": "B1"}}
+        self.assertEqual(self.plan(authors, details, {})[0]["phase"], "abs-author-delete")
+
+    def test_adopt_parks_the_twin_renames_the_orphan_then_merges_the_twin(self):
+        change = {"phase": "abs-author-adopt", "author_id": "aaaaaaaa1", "twin_id": "bbbbbbbb2", "old": "VK Slatter", "new": "V.K. Slatter", "status": "CLEAN"}
+        with mock.patch.object(MIGRATE, "abs_get_json", return_value={"libraryItems": []}), \
+             mock.patch.object(MIGRATE, "abs_patch_json") as patch:
+            self.assertEqual(MIGRATE.apply_abs_changes([change], "u", "k"), [change])
+            self.assertEqual([(c.args[0], c.args[1]["name"]) for c in patch.call_args_list], [
+                ("/api/authors/bbbbbbbb2", "V.K. Slatter (merging bbbbbbbb)"),
+                ("/api/authors/aaaaaaaa1", "V.K. Slatter"),
+                ("/api/authors/bbbbbbbb2", "V.K. Slatter"),
+            ])
+
+    def test_adopt_restores_the_twin_if_the_rename_fails(self):
+        change = {"phase": "abs-author-adopt", "author_id": "aaaaaaaa1", "twin_id": "bbbbbbbb2", "old": "VK", "new": "V.K.", "status": "CLEAN"}
+        calls = []
+        def fake_patch(path, body, *_):
+            calls.append((path, body["name"]))
+            if path.endswith("aaaaaaaa1"):
+                raise RuntimeError("boom")
+        with mock.patch.object(MIGRATE, "abs_get_json", return_value={"libraryItems": []}), \
+             mock.patch.object(MIGRATE, "abs_patch_json", side_effect=fake_patch):
+            with self.assertRaises(RuntimeError):
+                MIGRATE.apply_abs_changes([change], "u", "k")
+        self.assertEqual(calls[-1], ("/api/authors/bbbbbbbb2", "V.K."))
+
+    def test_apply_patches_books_first_skips_uncertain_and_rechecks_deletes(self):
+        changes = [
+            {"phase": "abs-author-delete", "author_id": "a1", "old": "VK Slatter", "new": "V.K. Slatter", "status": "CLEAN"},
+            {"phase": "abs-author-delete", "author_id": "a9", "old": "X", "new": "Y", "status": "UNCERTAIN"},
+            {"phase": "abs-item", "item_id": "i1", "path": "", "old": ["DB King"], "new": ["D.B. King"], "status": "CLEAN"},
+        ]
+        with mock.patch.object(MIGRATE, "abs_patch_json") as patch, \
+             mock.patch.object(MIGRATE, "abs_get_json", return_value={"libraryItems": []}), \
+             mock.patch.object(MIGRATE, "abs_delete_json") as delete:
+            applied = MIGRATE.apply_abs_changes(changes, "http://abs", "k")
+            patch.assert_called_once_with("/api/items/i1/media", {"metadata": {"authors": [{"name": "D.B. King"}]}}, "http://abs", "k")
+            delete.assert_called_once_with("/api/authors/a1", "http://abs", "k")
+            self.assertEqual([c["phase"] for c in applied], ["abs-item", "abs-author-delete"])
+            patch.reset_mock(); delete.reset_mock()
+            MIGRATE.apply_abs_changes(applied, "http://abs", "k", reverse=True)
+            self.assertEqual(patch.call_args.args[1]["metadata"]["authors"], [{"name": "DB King"}])
+            delete.assert_not_called()
+
+    def test_delete_is_skipped_if_the_author_regained_a_book(self):
+        change = {"phase": "abs-author-delete", "author_id": "a1", "old": "VK", "new": "V.K.", "status": "CLEAN"}
+        with mock.patch.object(MIGRATE, "abs_get_json", return_value={"libraryItems": [{"id": "i"}]}), \
+             mock.patch.object(MIGRATE, "abs_delete_json") as delete:
+            self.assertEqual(MIGRATE.apply_abs_changes([change], "u", "k"), [])
+            delete.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
