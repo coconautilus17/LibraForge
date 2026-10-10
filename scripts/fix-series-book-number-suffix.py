@@ -44,6 +44,16 @@ Two patterns:
      series looks like, so it can never earn CLEAN_ONLY/FILL_SEQUENCE/
      SAME_TEXT_DIFFERENT_BOOKS on its own.
 
+ABS itself (--abs-series, needs ABS credentials): Audiobookshelf stores the
+series in its own database and, per the library's metadataPrecedence, re-reads
+its central metadata.json (/metadata/items/<itemId>/, keyed by item id, not
+stored next to the book) over the embedded tags on every rescan of a changed
+file. Cleaning only the tags / libraforge.json therefore never sticks: the dirty
+"Name, Book #N" series comes straight back after a rescan (seen after the Opus
+replace changed every file). This mode patches ABS's own series entries through
+PATCH /api/items/{id}/media; ABS rewrites its metadata.json from that. Same
+rules as above, applied per ABS series entry (name + separate sequence).
+
 Every match lands in one of four buckets:
   CLEAN_ONLY      -- existing sequence already agrees with the captured number.
   FILL_SEQUENCE   -- existing sequence is empty; fills it from the captured number.
@@ -67,9 +77,11 @@ import re
 import sys
 import time
 from collections import defaultdict
+from typing import Callable
 from pathlib import Path
 
 try:
+    from app.abs_client import abs_get_json, abs_patch_json, merge_series_entries
     from app.fixer.scoring import (
         SERIES_TRAILING_BARE_MARKER_RE,
         SERIES_TRAILING_NUMBER_RE,
@@ -78,6 +90,7 @@ try:
     from app.fixer.tagging import id3_set_txxx, mp4_set_freeform
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.abs_client import abs_get_json, abs_patch_json, merge_series_entries
     from app.fixer.scoring import (
         SERIES_TRAILING_BARE_MARKER_RE,
         SERIES_TRAILING_NUMBER_RE,
@@ -614,6 +627,99 @@ def _apply_metadata_json(path: Path, series: str, sequence: str | None) -> None:
     os.replace(tmp, path)
 
 
+def _classify_abs_series_entry(name: str, sequence: str, known_names: set[str]) -> dict | None:
+    """One ABS series entry (name + separate sequence) -> {"new_name",
+    "new_sequence", "status"} or None when the name is clean.
+
+    Pattern A / the bare "Book #" marker are unambiguous. ABS keeps the
+    sequence in its own field, so a disagreeing captured number ("Book #3"
+    on a book whose sequence is 5) is the stale one and is discarded, exactly
+    like clean_metadata_json_series_text() treats "Name, Book #3 #5".
+    Pattern B (a bare "#N" / ",N" / "-N") needs corroboration: the entry's own
+    sequence equals N, or the number-free base is itself a series in ABS.
+    A range ("Book #1-5") never matches."""
+    name = name.strip()
+    sequence = str(sequence or "").strip()
+    book_match = SERIES_TRAILING_NUMBER_RE.search(name)
+    if book_match:
+        new_sequence = sequence or book_match.group("num")
+        return {"new_name": SERIES_TRAILING_NUMBER_RE.sub("", name).strip(), "new_sequence": new_sequence,
+                "status": "FILL_SEQUENCE" if not sequence else "CLEAN_ONLY"}
+    if SERIES_TRAILING_BARE_MARKER_RE.search(name):
+        return {"new_name": SERIES_TRAILING_BARE_MARKER_RE.sub("", name).strip(), "new_sequence": sequence,
+                "status": "CLEAN_ONLY"}
+    bare = _bare_number_split(name)
+    if not bare:
+        return None
+    base, num = bare
+    if (sequence and _num_matches(sequence, num)) or base.strip().lower() in known_names:
+        return {"new_name": base, "new_sequence": sequence or num,
+                "status": "FILL_SEQUENCE" if not sequence else "CLEAN_ONLY"}
+    return {"new_name": base, "new_sequence": None, "status": "UNCERTAIN"}
+
+
+def plan_abs_series_changes(series_rows: list[dict], get_item: Callable[[str], dict]) -> list[dict]:
+    """Plan ABS-side series cleanups from a /api/libraries/{id}/series listing.
+    Only series whose name looks dirty are fetched per book (get_item returns
+    the expanded /api/items/{id} record, whose media.metadata.series is the
+    full structured list the PATCH must send back)."""
+    known_names = {str(r.get("name") or "").strip().lower() for r in series_rows}
+    changes = []
+    for row in series_rows:
+        row_name = str(row.get("name") or "")
+        if _classify_abs_series_entry(row_name, "", known_names) is None:
+            continue
+        for book in row.get("books") or []:
+            item = get_item(book["id"])
+            entries = [
+                {"name": str(e.get("name") or ""), "sequence": str(e.get("sequence") or "")}
+                for e in (item.get("media") or {}).get("metadata", {}).get("series") or []
+            ]
+            new_entries, status, kinds = [], "CLEAN_ONLY", set()
+            for entry in entries:
+                verdict = _classify_abs_series_entry(entry["name"], entry["sequence"], known_names) \
+                    if entry["name"] == row_name else None
+                if verdict is None:
+                    new_entries.append(entry)
+                    continue
+                kinds.add(verdict["status"])
+                if verdict["status"] == "UNCERTAIN":
+                    new_entries.append(entry)
+                    continue
+                new_entries = merge_series_entries(
+                    new_entries + [{"name": verdict["new_name"], "sequence": verdict["new_sequence"]}],
+                    verdict["new_name"], verdict["new_sequence"],
+                )
+            if "UNCERTAIN" in kinds:
+                status = "UNCERTAIN"
+            elif "FILL_SEQUENCE" in kinds:
+                status = "FILL_SEQUENCE"
+            changes.append({
+                "path": str(item.get("path") or ""), "kind": "abs_item", "item_id": book["id"],
+                "old_series": row_name, "new_series": new_entries[0]["name"] if new_entries else "",
+                "old_sequence": next((e["sequence"] for e in entries if e["name"] == row_name), ""),
+                "new_sequence": None, "old_entries": entries, "new_entries": new_entries, "status": status,
+            })
+    return changes
+
+
+def apply_abs_change(change: dict, abs_url: str, abs_api_key: str, *, revert_to_old: bool = False) -> None:
+    entries = change["old_entries"] if revert_to_old else change["new_entries"]
+    abs_patch_json(f"/api/items/{change['item_id']}/media", {"metadata": {"series": entries}}, abs_url, abs_api_key)
+
+
+def plan_abs_changes(abs_url: str, abs_api_key: str) -> list[dict]:
+    def request(path: str, params: dict[str, str]):
+        return abs_get_json(path, params, abs_url, abs_api_key)
+
+    libs = request("/api/libraries", {})
+    libraries = libs.get("libraries", []) if isinstance(libs, dict) else (libs or [])
+    rows: list[dict] = []
+    for lib in [l for l in libraries if l.get("mediaType") == "book"]:
+        rows += request(f"/api/libraries/{lib['id']}/series", {"limit": "1000", "sort": "name"}).get("results", [])
+    return plan_abs_series_changes(rows, lambda item_id: request(f"/api/items/{item_id}", {"expanded": "1"}))
+
+
 _APPLY_BY_KIND = {"json": _apply_json, "mp4": _apply_mp4, "id3": _apply_id3, "metadata_json": _apply_metadata_json}
 
 
@@ -628,9 +734,12 @@ def apply_change(change: dict) -> None:
         sync_metadata_json_series(path.parent)
 
 
-def revert(log_path: Path) -> None:
+def revert(log_path: Path, abs_url: str = "", abs_api_key: str = "") -> None:
     entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     for entry in reversed(entries):
+        if entry["kind"] == "abs_item":
+            apply_abs_change(entry, abs_url, abs_api_key, revert_to_old=True)
+            continue
         old_sequence = entry["old_sequence"] if entry["new_sequence"] is not None else None
         path = Path(entry["path"])
         _APPLY_BY_KIND[entry["kind"]](path, entry["old_series"], old_sequence)
@@ -645,7 +754,7 @@ def revert(log_path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("root", type=Path, help="Library root, e.g. /audiobooks")
+    parser.add_argument("root", type=Path, nargs="?", default=Path("/audiobooks"), help="Library root, e.g. /audiobooks")
     parser.add_argument("--tags", action="store_true", help="Also scan/fix the embedded series tag, not just libraforge.json")
     parser.add_argument("--apply", action="store_true", help="Make the changes (default: dry run)")
     parser.add_argument("--log", type=Path, help="JSONL change log (default: reports/series-booknum-fix-<time>.jsonl)")
@@ -663,24 +772,33 @@ def main() -> int:
              "instead of taking the key as a --abs-api-key argument or env var. Prefer this: it never "
              "puts the key on the command line or in an env var another process/log could see.",
     )
+    parser.add_argument(
+        "--abs-series", action="store_true",
+        help="Clean the series stored in Audiobookshelf itself (its database + central metadata.json) through "
+             "PATCH /api/items/{id}/media; see the module docstring. ABS-only mode: root is ignored. Needs "
+             "credentials like --via-abs-api (prefer --abs-config-file).",
+    )
     parser.add_argument("--abs-url", default=os.environ.get("ABS_URL", ""), help="Audiobookshelf base URL, only used with --via-abs-api")
     parser.add_argument("--abs-api-key", default=os.environ.get("ABS_API_KEY", ""), help="Audiobookshelf API key, only used with --via-abs-api")
     args = parser.parse_args()
 
+    abs_url, abs_api_key = args.abs_url, args.abs_api_key
+    if args.abs_config_file:
+        abs_config = json.loads(args.abs_config_file.read_text(encoding="utf-8"))
+        abs_url = abs_config.get("url") or abs_url
+        abs_api_key = abs_config.get("api_key") or abs_api_key
+
     if args.revert:
-        revert(args.revert)
+        revert(args.revert, abs_url, abs_api_key)
         print(f"Reverted changes from {args.revert}")
         return 0
 
-    if args.via_abs_api:
-        abs_url, abs_api_key = args.abs_url, args.abs_api_key
-        if args.abs_config_file:
-            abs_config = json.loads(args.abs_config_file.read_text(encoding="utf-8"))
-            abs_url = abs_config.get("url") or abs_url
-            abs_api_key = abs_config.get("api_key") or abs_api_key
-        if not abs_api_key:
-            print("--via-abs-api needs --abs-config-file, --abs-api-key, or the ABS_API_KEY env var")
-            return 1
+    if (args.via_abs_api or args.abs_series) and not abs_api_key:
+        print("--via-abs-api / --abs-series need --abs-config-file, --abs-api-key, or the ABS_API_KEY env var")
+        return 1
+    if args.abs_series:
+        changes = plan_abs_changes(abs_url, abs_api_key)
+    elif args.via_abs_api:
         changes = plan_all_changes_via_abs(args.root, abs_url, abs_api_key, include_tags=args.tags)
     else:
         # One shared walk for both the marker/tag classify pass and the
@@ -714,7 +832,10 @@ def main() -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
         for change in safe:
-            apply_change(change)
+            if change["kind"] == "abs_item":
+                apply_abs_change(change, abs_url, abs_api_key)
+            else:
+                apply_change(change)
             log.write(json.dumps(change, ensure_ascii=False) + "\n")
     print(f"\nDone. {len(safe)} entries fixed. Change log: {log_path}")
     return 0

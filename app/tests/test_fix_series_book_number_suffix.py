@@ -673,5 +673,58 @@ class EmbeddedTagScanTests(unittest.TestCase):
         self.assertEqual(changes, [])
 
 
+class AbsSeriesCleanupTests(unittest.TestCase):
+    """--abs-series: the dirty series lives in ABS's database / central
+    metadata.json, which a rescan of a changed file re-applies over the tags."""
+
+    def entry(self, name, seq, known=()):
+        return FIX._classify_abs_series_entry(name, seq, {k.lower() for k in known})
+
+    def test_book_marker_is_stripped_and_abs_sequence_kept(self):
+        self.assertEqual(self.entry("A Hercule Poirot Mystery, Book #10", "10"),
+                         {"new_name": "A Hercule Poirot Mystery", "new_sequence": "10", "status": "CLEAN_ONLY"})
+        # stale captured number ("Book #6") is discarded, ABS's own sequence (4) is the real one
+        self.assertEqual(self.entry("A Jack Ryan Novel (chronological order), Book #6", "4")["new_sequence"], "4")
+
+    def test_empty_sequence_is_filled_from_captured_number(self):
+        verdict = self.entry("Loopbreaker, Book #1", "")
+        self.assertEqual((verdict["new_name"], verdict["new_sequence"], verdict["status"]),
+                         ("Loopbreaker", "1", "FILL_SEQUENCE"))
+
+    def test_bare_number_needs_corroboration(self):
+        self.assertEqual(self.entry("Azarinth Healer #4", "4")["new_name"], "Azarinth Healer")
+        self.assertEqual(self.entry("Dragon Heart #18", "19")["status"], "UNCERTAIN")
+        self.assertEqual(self.entry("Dragon Heart #18", "19", known=["Dragon Heart"])["new_name"], "Dragon Heart")
+
+    def test_clean_names_ranges_and_space_numbers_are_untouched(self):
+        for name in ("A Hercule Poirot Mystery", "Beacon 23, Book #1-5", "Ultimate Level 1", "A Jack Ryan Novel (publication order)"):
+            self.assertIsNone(self.entry(name, "2"), name)
+
+    def test_plan_keeps_other_series_and_apply_patches_full_list(self):
+        rows = [{"name": "Stephanie Plum, Book #10", "books": [{"id": "b1"}]},
+                {"name": "Fine Series", "books": [{"id": "b2"}]}]
+        items = {"b1": {"path": "/x", "media": {"metadata": {"series": [
+            {"name": "Stephanie Plum, Book #10", "sequence": "10"}, {"name": "Other", "sequence": "3"}]}}}}
+        fetched = []
+        changes = FIX.plan_abs_series_changes(rows, lambda i: fetched.append(i) or items[i])
+        self.assertEqual(fetched, ["b1"])  # clean series are never fetched
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["new_entries"],
+                         [{"name": "Stephanie Plum", "sequence": "10"}, {"name": "Other", "sequence": "3"}])
+        with patch.object(FIX, "abs_patch_json") as patch_json:
+            FIX.apply_abs_change(changes[0], "http://abs", "key")
+            patch_json.assert_called_once_with("/api/items/b1/media", {"metadata": {"series": changes[0]["new_entries"]}}, "http://abs", "key")
+            patch_json.reset_mock()
+            FIX.apply_abs_change(changes[0], "http://abs", "key", revert_to_old=True)
+            self.assertEqual(patch_json.call_args.args[1]["metadata"]["series"], changes[0]["old_entries"])
+
+    def test_duplicate_after_cleaning_collapses_into_one_entry(self):
+        rows = [{"name": "Foo, Book #2", "books": [{"id": "b"}]}]
+        item = {"path": "/x", "media": {"metadata": {"series": [
+            {"name": "Foo", "sequence": "2"}, {"name": "Foo, Book #2", "sequence": "2"}]}}}
+        change = FIX.plan_abs_series_changes(rows, lambda _i: item)[0]
+        self.assertEqual(change["new_entries"], [{"name": "Foo", "sequence": "2"}])
+
+
 if __name__ == "__main__":
     unittest.main()
