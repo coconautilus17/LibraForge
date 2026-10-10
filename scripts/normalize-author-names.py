@@ -246,7 +246,8 @@ def _adopt_author(change: dict, abs_url: str, abs_api_key: str) -> bool:
     return True
 
 
-def apply_abs_changes(changes: list[dict], abs_url: str, abs_api_key: str, reverse: bool = False) -> list[dict]:
+def apply_abs_changes(changes: list[dict], abs_url: str, abs_api_key: str, reverse: bool = False,
+                      on_applied: Callable[[dict], None] | None = None) -> list[dict]:
     """Books first, then author records (re-checked: ABS may already have dropped
     an author once its last book moved). Returns the entries actually applied;
     a delete cannot be reverted, so it is applied and logged but skipped on reverse."""
@@ -277,6 +278,8 @@ def apply_abs_changes(changes: list[dict], abs_url: str, abs_api_key: str, rever
                 continue
             abs_delete_json(f"/api/authors/{change['author_id']}", abs_url, abs_api_key)
         applied.append(change)
+        if on_applied is not None:
+            on_applied(change)
     return applied
 
 
@@ -320,10 +323,11 @@ def run_abs_authors(args, abs_url: str, abs_api_key: str) -> int:
         return 0
     log_path = args.log or Path("reports") / f"author-normalize-abs-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    applied = apply_abs_changes(changes, abs_url, abs_api_key)
     with log_path.open("a", encoding="utf-8") as log:
-        for entry in applied:
+        def record(entry: dict) -> None:
             log.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            log.flush()  # a crash mid-run must not lose the record of what already changed
+        applied = apply_abs_changes(changes, abs_url, abs_api_key, on_applied=record)
     print(f"Done. {len(applied)} ABS changes applied. Change log: {log_path}")
     return 0
 

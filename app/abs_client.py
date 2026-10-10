@@ -81,7 +81,10 @@ def abs_post_json(path: str, body: dict[str, Any], abs_url: str, abs_api_key: st
 
 def abs_delete_json(path: str, abs_url: str, abs_api_key: str, timeout: int = 15) -> Any:
     """Authenticated DELETE against the ABS API. Raises on failure."""
-    return _abs_send_json("DELETE", path, {}, abs_url, abs_api_key, timeout)
+    try:
+        return _abs_send_json("DELETE", path, {}, abs_url, abs_api_key, timeout)
+    except json.JSONDecodeError:
+        return {}  # ABS answers some DELETEs with a plain-text "OK"; the request itself succeeded
 
 
 def _abs_send_json(method: str, path: str, body: dict[str, Any], abs_url: str, abs_api_key: str, timeout: int) -> Any:

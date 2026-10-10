@@ -253,6 +253,18 @@ class AbsAuthorPlanTests(unittest.TestCase):
             self.assertEqual(patch.call_args.args[1]["metadata"]["authors"], [{"name": "DB King"}])
             delete.assert_not_called()
 
+    def test_each_applied_change_is_reported_as_it_happens(self):
+        seen = []
+        changes = [{"phase": "abs-author-rename", "author_id": "a", "old": "A. L. F", "new": "A.L. F", "status": "CLEAN"}]
+        with mock.patch.object(MIGRATE, "abs_patch_json"):
+            MIGRATE.apply_abs_changes(changes, "u", "k", on_applied=seen.append)
+        self.assertEqual(seen, changes)
+
+    def test_delete_tolerates_abs_plain_text_ok_reply(self):
+        import app.abs_client as client
+        with mock.patch.object(client, "_abs_send_json", side_effect=json.JSONDecodeError("x", "OK", 0)):
+            self.assertEqual(client.abs_delete_json("/api/authors/a", "u", "k"), {})
+
     def test_delete_is_skipped_if_the_author_regained_a_book(self):
         change = {"phase": "abs-author-delete", "author_id": "a1", "old": "VK", "new": "V.K.", "status": "CLEAN"}
         with mock.patch.object(MIGRATE, "abs_get_json", return_value={"libraryItems": [{"id": "i"}]}), \
