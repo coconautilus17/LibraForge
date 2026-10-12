@@ -72,3 +72,20 @@ class TitleNoisePolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloseDanglingBracketTests(unittest.TestCase):
+    def test_closes_a_bracket_group_that_was_opened_and_never_closed(self):
+        close = title_noise_policy.close_dangling_bracket
+        self.assertEqual(close("Critias (Atlantis"), "Critias (Atlantis)")
+        self.assertEqual(close("Last Day Of Socrates \u00a6 Crito (Justice"), "Last Day Of Socrates \u00a6 Crito (Justice)")
+        self.assertEqual(close("Foo [Part 2"), "Foo [Part 2]")
+        self.assertEqual(close("Foo (Part 1) (Bar"), "Foo (Part 1) (Bar)")
+
+    def test_leaves_balanced_and_unrelated_titles_alone(self):
+        close = title_noise_policy.close_dangling_bracket
+        for title in ("Gorgias (Rhetoric)", "Plain Title", "Foo [Bar] (Baz)", "Smile :) later", ""):
+            self.assertEqual(close(title), title)
+
+    def test_drops_an_opening_bracket_with_nothing_after_it(self):
+        self.assertEqual(title_noise_policy.close_dangling_bracket("Ion ("), "Ion")

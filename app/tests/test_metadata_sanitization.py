@@ -1166,5 +1166,16 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertNotEqual(recovered["title"].strip().lower(), "unorganized")
 
 
+class DanglingTitleBracketTests(unittest.TestCase):
+    def test_fixer_sanitizer_closes_a_bracket_lost_upstream(self):
+        self.assertEqual(FIXER.sanitize_book_title("Critias (Atlantis"), "Critias (Atlantis)")
+        self.assertEqual(FIXER.sanitize_book_title("Gorgias (Rhetoric)"), "Gorgias (Rhetoric)")
+
+    def test_organizer_target_title_closes_it_too(self):
+        metadata = {"title": "Euthyphro (Piety", "series": "", "book_number": "",
+                    "author": "Plato", "author_primary": "Plato", "metadata_source": "marker:x.libraforge.json"}
+        self.assertEqual(ORGANIZER.normalize_metadata_title_for_target(metadata)["title"], "Euthyphro (Piety)")
+
+
 if __name__ == "__main__":
     unittest.main()
