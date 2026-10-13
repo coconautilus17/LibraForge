@@ -5291,6 +5291,51 @@ def unique_target_path(target_dir: Path, filename: str, reserved_targets: set[Pa
         counter += 1
 
 
+_EDITION_STOP_WORDS = frozenset({"the", "a", "an", "by", "and", "of", "epub", "pdf", "ebook"})
+
+
+def ebook_edition_label(stem: str, title: str, author: str) -> str:
+    """What sets this ebook file apart from another of the same work: the notes
+    in brackets or parentheses in its name, else the words it adds beyond the
+    title and author ("James Joyce - The Restored Finnegans Wake" -> "Restored").
+    Empty when its name says nothing more than the title and author do."""
+    notes = [note.strip() for note in re.findall(r"[\[(]\s*([^\])]+?)\s*[\])]", stem) if note.strip()]
+    if notes:
+        return ", ".join(notes)
+    known = set(re.findall(r"[a-z0-9]+", f"{title} {author}".lower())) | _EDITION_STOP_WORDS
+    words = [w for w in re.findall(r"[A-Za-z0-9][\w'.]*", stem) if w.lower().strip(".'") not in known]
+    return " ".join(words) if 0 < len(words) <= 6 else ""
+
+
+def disambiguate_ebook_target_dir(
+    target_dir: Path,
+    stem: str,
+    title: str,
+    author: str,
+    reserved_target_dirs: set[Path],
+    media_by_dir: dict[Path, str],
+    stem_by_dir: dict[Path, str] | None = None,
+) -> Path:
+    """Give an ebook whose folder another ebook of a different name already
+    claimed its own edition folder ("Finnegans Wake - EBOOK [Restored]"), the way
+    imprint tags ride on a book folder. A folder claimed by an audiobook, or by
+    a file of the same name (a duplicate), is left as is and still reported."""
+    if target_dir not in reserved_target_dirs or media_by_dir.get(target_dir) != "ebook":
+        return target_dir
+    if stem_by_dir and stem_by_dir.get(target_dir) == stem:
+        return target_dir
+    label = ebook_edition_label(stem, title, author)
+    number = 2
+    while True:
+        candidate = target_dir.with_name(
+            sanitize_path_name(f"{target_dir.name} [{label or f'Edition {number}'}]", target_dir.name)
+        )
+        if candidate not in reserved_target_dirs:
+            return candidate
+        label = ""
+        number += 1
+
+
 def plan_folder_move(
     item: BookItem,
     target_dir: Path,
@@ -6086,6 +6131,8 @@ def main() -> None:
     # though their exact file paths never collide.
     reserved_target_dirs: set[Path] = set()
     target_dir_owner: dict[Path, Path] = {}
+    target_dir_media: dict[Path, str] = {}
+    target_dir_stem: dict[Path, str] = {}
 
     skipped_unknown_author = 0
     skipped_already_target = 0
@@ -6199,6 +6246,13 @@ def main() -> None:
             existing_folder_name = item.source_path.name if item.kind == "folder" else item.source_path.parent.name
             target_dir = target_dir.parent / existing_folder_name
 
+        if item.media_type == "ebook":
+            target_dir = disambiguate_ebook_target_dir(
+                target_dir, item.source_path.stem, str(metadata.get("title") or ""),
+                str(metadata.get("author_primary") or metadata.get("author") or ""),
+                reserved_target_dirs, target_dir_media, target_dir_stem,
+            )
+
         if item.kind == "folder":
             can_move, reason = plan_folder_move(
                 item, target_dir, reserved_targets,
@@ -6226,6 +6280,8 @@ def main() -> None:
             reserved_targets.add(target_dir)
             reserved_target_dirs.add(target_dir)
             target_dir_owner.setdefault(target_dir, item.source_path)
+            target_dir_media.setdefault(target_dir, item.media_type)
+            target_dir_stem.setdefault(target_dir, item.source_path.stem)
             folder_companions: list[Path] = []
             if not args.no_companions:
                 meta_sidecar = item.representative.with_name(
@@ -6287,6 +6343,8 @@ def main() -> None:
         reserved_targets.add(target_path)
         reserved_target_dirs.add(target_dir)
         target_dir_owner.setdefault(target_dir, item.source_path)
+        target_dir_media.setdefault(target_dir, item.media_type)
+        target_dir_stem.setdefault(target_dir, item.source_path.stem)
         planned_moves.append({
             "kind": item.kind,
             "source": item.source_path,
