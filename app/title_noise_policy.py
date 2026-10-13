@@ -301,6 +301,29 @@ def ends_with_dangling_word(value: str) -> bool:
     return bool(tokens) and tokens[-1] in DANGLING_END_WORDS
 
 
+_BRACKET_PAIRS = {"(": ")", "[": "]"}
+
+
+def close_dangling_bracket(value: str) -> str:
+    """Close a bracket group that was opened and never closed ("Critias (Atlantis"
+    -> "Critias (Atlantis)"), which is what a title cut off upstream looks like. An
+    opening bracket with nothing after it is dropped instead. Balanced titles and
+    stray closing brackets are left alone."""
+    value = str(value or "")
+    stack: list[tuple[str, int]] = []
+    for index, char in enumerate(value):
+        if char in _BRACKET_PAIRS:
+            stack.append((char, index))
+        elif char in _BRACKET_PAIRS.values() and stack and _BRACKET_PAIRS[stack[-1][0]] == char:
+            stack.pop()
+    for opener, index in reversed(stack):
+        if value[index + 1:].strip():
+            value = value.rstrip() + _BRACKET_PAIRS[opener]
+        else:
+            value = value[:index].rstrip()
+    return value
+
+
 def remove_trailing_title_noise(value: str) -> str:
     value = re.sub(r"\s+", " ", str(value or "")).strip()
     if not value:

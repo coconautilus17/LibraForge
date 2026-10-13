@@ -20,7 +20,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
+from app.title_noise_policy import close_dangling_bracket, is_title_noise, remove_trailing_title_noise
 from app.publisher_policy import (
     SPECIAL_PROVIDERS,
     match_canonical_publisher,
@@ -146,7 +146,7 @@ def sanitize_book_title(value: str) -> str:
 
     value = remove_trailing_title_noise(value)
     value = re.sub(r"\s+", " ", value)
-    return value.strip(" -_.:,")
+    return close_dangling_bracket(value.strip(" -_.:,"))
 
 
 @trace(ALTER, capture=["value"])

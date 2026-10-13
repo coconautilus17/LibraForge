@@ -40,6 +40,7 @@ from typing import Any
 
 try:
     from app.title_noise_policy import (
+        close_dangling_bracket,
         contains_title_noise,
         ends_with_dangling_word,
         is_title_noise,
@@ -57,6 +58,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.title_noise_policy import (
+        close_dangling_bracket,
         contains_title_noise,
         ends_with_dangling_word,
         is_title_noise,
@@ -5072,7 +5074,7 @@ def normalize_metadata_title_for_target(metadata: dict[str, Any]) -> dict[str, A
     ):
         cleaned_title = clean_book_title(series, series, number)
 
-    metadata["title"] = sanitize_path_name(cleaned_title, "Unknown Title")
+    metadata["title"] = sanitize_path_name(close_dangling_bracket(cleaned_title), "Unknown Title")
     if series and not number and _same_name_ignoring_article(metadata["title"], series):
         # A "series" that is just the book's own title, with no sequence number,
         # would nest the book inside a folder of the same name (Sapiens/Sapiens).
