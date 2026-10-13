@@ -106,6 +106,42 @@ class FolderSidecarOwnershipTests(unittest.TestCase):
             self._audiobook_folder(folder, "Postwar", "Tony Judt", ["Some Other Book.pdf"])
             self.assertIsNone(ORGANIZER.metadata_from_sidecar(loose(folder / "Some Other Book.pdf", "ebook")))
 
+    def test_ebook_with_a_volume_written_differently_is_still_the_same_work(self):
+        # Sidecar says "Vol. 5", the epub says "Volume 05" (the Saga of Tanya the Evil folders).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "The Saga of Tanya the Evil, Vol. 5", "Carlo Zen", [
+                "The Saga of Tanya the Evil - Volume 05 [Yen Press] [LuCaZ].epub",
+            ])
+            got = ORGANIZER.metadata_from_sidecar(
+                loose(folder / "The Saga of Tanya the Evil - Volume 05 [Yen Press] [LuCaZ].epub", "ebook"))
+            self.assertEqual(got["author"], "Carlo Zen")
+
+    def test_another_volume_of_the_series_is_not_the_same_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "The Saga of Tanya the Evil, Vol. 5", "Carlo Zen", [
+                "The Saga of Tanya the Evil - Volume 09 [Yen Press].epub",
+            ])
+            self.assertIsNone(ORGANIZER.metadata_from_sidecar(
+                loose(folder / "The Saga of Tanya the Evil - Volume 09 [Yen Press].epub", "ebook")))
+
+    def test_ebook_with_a_subtitle_between_the_title_and_its_edition_note_matches(self):
+        # Sidecar "1177 B.C. (Revised and Updated)", pdf "1177 B C The Year Civilization Collapsed (Revised and Updated)".
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "1177 B.C. (Revised and Updated)", "Eric H. Cline", [
+                "1177 B C The Year Civilization Collapsed (Revised and Updated).pdf",
+            ])
+            got = ORGANIZER.metadata_from_sidecar(
+                loose(folder / "1177 B C The Year Civilization Collapsed (Revised and Updated).pdf", "ebook"))
+            self.assertEqual(got["author"], "Eric H. Cline")
+
+    def test_volume_one_is_not_volume_ten(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            self._audiobook_folder(folder, "Some Saga, Vol. 1", "Some Author", ["Some Saga - Volume 10.epub"])
+            self.assertIsNone(ORGANIZER.metadata_from_sidecar(loose(folder / "Some Saga - Volume 10.epub", "ebook")))
 
 
 if __name__ == "__main__":

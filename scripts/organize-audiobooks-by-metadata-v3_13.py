@@ -3152,6 +3152,13 @@ def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
     return is_ebook_file(source) and ebook_is_companion_of_sidecar(folder_lf, source)
 
 
+def _companion_key(value: str) -> str:
+    """normalize_for_compare, with "Vol. 5" / "Volume 05" / "Book 5" reading the same,
+    so a differently written volume still matches and another volume still does not."""
+    value = re.sub(r"\b(?:vol(?:ume)?|book)\.?\s*0*(\d+)\b", r"vol\1x", clean_text(value), flags=re.IGNORECASE)
+    return normalize_for_compare(value)
+
+
 def ebook_is_companion_of_sidecar(folder_lf: Path, source: Path) -> bool:
     """Whether an ebook beside an audiobook is that audiobook's own work.
 
@@ -3168,14 +3175,22 @@ def ebook_is_companion_of_sidecar(folder_lf: Path, source: Path) -> bool:
     book = ((payload.get("sidecar") or {}).get("book")) or {}
     title = book.get("title") or audible.get("chosen_title") or audible.get("title") or ""
     author = book.get("author") or audible.get("author") or ""
-    title_key = normalize_for_compare(title)
-    if not title_key or title_key not in normalize_for_compare(source.stem):
+    stem_key = _companion_key(source.stem)
+    # The full title first, then the title without a trailing "(Revised and Updated)"
+    # style note, which an ebook often puts after a subtitle the audiobook lacks.
+    title_keys = [key for key in (
+        _companion_key(title),
+        _companion_key(re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", title)),
+    ) if key]
+    title_key = next((key for key in title_keys if key in stem_key), "")
+    if not title_key:
         return False
     lead = re.split(r"\s+-\s+", source.stem, maxsplit=1)
     if len(lead) == 1:
         return True
-    lead_key = normalize_for_compare(lead[0])
-    if title_key in lead_key:
+    lead_key = _companion_key(lead[0])
+    # "The Saga of Tanya the Evil - Volume 05": the lead is the start of the title itself.
+    if title_key in lead_key or (lead_key and any(key.startswith(lead_key) for key in title_keys)):
         return True
     surnames = [normalize_for_compare(name.split()[-1]) for name in re.split(r",|&| and ", author) if name.split()]
     return any(surname and surname in lead_key for surname in surnames)
