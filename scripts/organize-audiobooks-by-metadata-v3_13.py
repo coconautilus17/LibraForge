@@ -43,6 +43,7 @@ try:
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
+        DANGLING_END_WORDS,
         ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
@@ -62,6 +63,7 @@ except ModuleNotFoundError:
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
+        DANGLING_END_WORDS,
         ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
@@ -5291,7 +5293,8 @@ def unique_target_path(target_dir: Path, filename: str, reserved_targets: set[Pa
         counter += 1
 
 
-_EDITION_STOP_WORDS = frozenset({"the", "a", "an", "by", "and", "of", "epub", "pdf", "ebook"})
+# The connector words the title-fragment check already lists, plus the format words.
+_EDITION_STOP_WORDS = DANGLING_END_WORDS | {"epub", "pdf", "ebook"}
 
 
 def ebook_edition_label(stem: str, title: str, author: str) -> str:
