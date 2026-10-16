@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from app.epub_metadata import extract_epub_metadata
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -57,6 +58,7 @@ try:
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.epub_metadata import extract_epub_metadata
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -3333,6 +3335,16 @@ def metadata_from_tags(item: BookItem) -> dict[str, Any]:
     if item.kind == "folder" and is_generic_track_title(title):
         title = source_name
 
+    source = "ffprobe"
+    if item.representative.suffix.lower() == ".epub" and (author == "Unknown Author" or title == filename_title):
+        # ffprobe reads nothing from an epub; its OPF carries the publisher's own
+        # title and author. Tags that did name something still win.
+        epub_title, epub_author = extract_epub_metadata(item.representative)
+        if epub_author and author == "Unknown Author":
+            author, source = epub_author, "epub"
+        if epub_title and title == filename_title:
+            title, source = epub_title, "epub"
+
     return {
         "title": title,
         "author": author,
@@ -3341,7 +3353,7 @@ def metadata_from_tags(item: BookItem) -> dict[str, Any]:
         "sequence_label": choose_sequence_label(title, source_name, filename_title, sequence),
         "narrator": narrator,
         "subtitle": subtitle,
-        "source": "ffprobe",
+        "source": source,
         "tags": tags,
     }
 

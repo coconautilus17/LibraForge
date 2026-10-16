@@ -18,8 +18,6 @@ import threading
 import time
 import urllib.request
 import uuid
-import xml.etree.ElementTree as ET
-import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import contextlib
 from contextlib import asynccontextmanager
@@ -35,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4FreeForm
 from pydantic import BaseModel, Field
 
+from app.epub_metadata import extract_epub_metadata as _extract_epub_metadata
 from app.conversion_cache import (
     CachedAudioProbeReader,
     CachedChapterCountReader,
@@ -7208,40 +7207,6 @@ def scan_ebook_units_for_report(
         if progress:
             progress(index, len(units), unit.path)
     return items
-
-
-def _extract_epub_metadata(path: Path) -> tuple[str, str]:
-    """Read (title, author) from an epub's embedded OPF metadata.
-
-    An epub is a zip archive; META-INF/container.xml points at the actual
-    package (.opf) file, which carries the publisher's own Dublin Core
-    <dc:title>/<dc:creator> fields -- not a guess derived from the
-    filename. Verified live against real books whose filenames have no
-    word separators at all (e.g. "efficientlinuxatthecommandline.epub"):
-    the embedded title/author were correct in every case checked.
-
-    Returns ("", "") on any failure (corrupt zip, missing container/opf,
-    no dc:title) -- never raises, so a malformed epub just falls back to
-    the filename-stem heuristic in the caller.
-    """
-    dc_ns = "{http://purl.org/dc/elements/1.1/}"
-    try:
-        with zipfile.ZipFile(path) as zf:
-            container = ET.fromstring(zf.read("META-INF/container.xml"))
-            rootfile = container.find(
-                ".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile"
-            )
-            opf_path = rootfile.get("full-path") if rootfile is not None else None
-            if not opf_path:
-                return "", ""
-            opf = ET.fromstring(zf.read(opf_path))
-            title_el = opf.find(f".//{dc_ns}title")
-            creator_el = opf.find(f".//{dc_ns}creator")
-            title = (title_el.text or "").strip() if title_el is not None else ""
-            author = (creator_el.text or "").strip() if creator_el is not None else ""
-            return title, author
-    except (KeyError, zipfile.BadZipFile, ET.ParseError, OSError):
-        return "", ""
 
 
 def _ebook_query_from_stem(stem: str) -> str:
