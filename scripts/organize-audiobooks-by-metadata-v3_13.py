@@ -40,9 +40,11 @@ from typing import Any
 
 try:
     from app.epub_metadata import extract_epub_metadata
+    from app.fixer.parsing import remove_parenthetical
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
+        DANGLING_END_WORDS,
         ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
@@ -59,9 +61,11 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.epub_metadata import extract_epub_metadata
+    from app.fixer.parsing import remove_parenthetical
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
+        DANGLING_END_WORDS,
         ends_with_dangling_word,
         is_title_noise,
         remove_trailing_title_noise,
@@ -3154,13 +3158,6 @@ def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
     return is_ebook_file(source) and ebook_is_companion_of_sidecar(folder_lf, source)
 
 
-def _companion_key(value: str) -> str:
-    """normalize_for_compare, with "Vol. 5" / "Volume 05" / "Book 5" reading the same,
-    so a differently written volume still matches and another volume still does not."""
-    value = re.sub(r"\b(?:vol(?:ume)?|book)\.?\s*0*(\d+)\b", r"vol\1x", clean_text(value), flags=re.IGNORECASE)
-    return normalize_for_compare(value)
-
-
 def ebook_is_companion_of_sidecar(folder_lf: Path, source: Path) -> bool:
     """Whether an ebook beside an audiobook is that audiobook's own work.
 
@@ -3177,20 +3174,26 @@ def ebook_is_companion_of_sidecar(folder_lf: Path, source: Path) -> bool:
     book = ((payload.get("sidecar") or {}).get("book")) or {}
     title = book.get("title") or audible.get("chosen_title") or audible.get("title") or ""
     author = book.get("author") or audible.get("author") or ""
-    stem_key = _companion_key(source.stem)
-    # The full title first, then the title without a trailing "(Revised and Updated)"
-    # style note, which an ebook often puts after a subtitle the audiobook lacks.
-    title_keys = [key for key in (
-        _companion_key(title),
-        _companion_key(re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", title)),
+    # "Vol. 5" and "Volume 05" are the same volume, "Vol. 1" and "Volume 10" are not.
+    title_number = detect_number_from_text(title)
+    stem_number = detect_number_from_text(source.stem)
+    if title_number and stem_number and title_number != stem_number:
+        return False
+    # The full title first, then the title without its volume label and without an
+    # edition note such as "(Revised and Updated)", which an ebook often moves after
+    # a subtitle the audiobook lacks.
+    bare_title = strip_trailing_sequence_from_title(title, title_number) if title_number else title
+    title_keys = [key for key in dict.fromkeys(
+        normalize_for_compare(text) for text in (title, bare_title, remove_parenthetical(bare_title))
     ) if key]
+    stem_key = normalize_for_compare(source.stem)
     title_key = next((key for key in title_keys if key in stem_key), "")
     if not title_key:
         return False
     lead = re.split(r"\s+-\s+", source.stem, maxsplit=1)
     if len(lead) == 1:
         return True
-    lead_key = _companion_key(lead[0])
+    lead_key = normalize_for_compare(lead[0])
     # "The Saga of Tanya the Evil - Volume 05": the lead is the start of the title itself.
     if title_key in lead_key or (lead_key and any(key.startswith(lead_key) for key in title_keys)):
         return True
@@ -5291,6 +5294,52 @@ def unique_target_path(target_dir: Path, filename: str, reserved_targets: set[Pa
         counter += 1
 
 
+# The connector words the title-fragment check already lists, plus the format words.
+_EDITION_STOP_WORDS = DANGLING_END_WORDS | {"epub", "pdf", "ebook"}
+
+
+def ebook_edition_label(stem: str, title: str, author: str) -> str:
+    """What sets this ebook file apart from another of the same work: the notes
+    in brackets or parentheses in its name, else the words it adds beyond the
+    title and author ("James Joyce - The Restored Finnegans Wake" -> "Restored").
+    Empty when its name says nothing more than the title and author do."""
+    notes = [note.strip() for note in re.findall(r"[\[(]\s*([^\])]+?)\s*[\])]", stem) if note.strip()]
+    if notes:
+        return ", ".join(notes)
+    known = set(re.findall(r"[a-z0-9]+", f"{title} {author}".lower())) | _EDITION_STOP_WORDS
+    words = [w for w in re.findall(r"[A-Za-z0-9][\w'.]*", stem) if w.lower().strip(".'") not in known]
+    return " ".join(words) if 0 < len(words) <= 6 else ""
+
+
+def disambiguate_ebook_target_dir(
+    target_dir: Path,
+    stem: str,
+    title: str,
+    author: str,
+    reserved_target_dirs: set[Path],
+    media_by_dir: dict[Path, str],
+    stem_by_dir: dict[Path, str] | None = None,
+) -> Path:
+    """Give an ebook whose folder another ebook of a different name already
+    claimed its own edition folder ("Finnegans Wake - EBOOK [Restored]"), the way
+    imprint tags ride on a book folder. A folder claimed by an audiobook, or by
+    a file of the same name (a duplicate), is left as is and still reported."""
+    if target_dir not in reserved_target_dirs or media_by_dir.get(target_dir) != "ebook":
+        return target_dir
+    if stem_by_dir and stem_by_dir.get(target_dir) == stem:
+        return target_dir
+    label = ebook_edition_label(stem, title, author)
+    number = 2
+    while True:
+        candidate = target_dir.with_name(
+            sanitize_path_name(f"{target_dir.name} [{label or f'Edition {number}'}]", target_dir.name)
+        )
+        if candidate not in reserved_target_dirs:
+            return candidate
+        label = ""
+        number += 1
+
+
 def plan_folder_move(
     item: BookItem,
     target_dir: Path,
@@ -6086,6 +6135,8 @@ def main() -> None:
     # though their exact file paths never collide.
     reserved_target_dirs: set[Path] = set()
     target_dir_owner: dict[Path, Path] = {}
+    target_dir_media: dict[Path, str] = {}
+    target_dir_stem: dict[Path, str] = {}
 
     skipped_unknown_author = 0
     skipped_already_target = 0
@@ -6199,6 +6250,13 @@ def main() -> None:
             existing_folder_name = item.source_path.name if item.kind == "folder" else item.source_path.parent.name
             target_dir = target_dir.parent / existing_folder_name
 
+        if item.media_type == "ebook":
+            target_dir = disambiguate_ebook_target_dir(
+                target_dir, item.source_path.stem, str(metadata.get("title") or ""),
+                str(metadata.get("author_primary") or metadata.get("author") or ""),
+                reserved_target_dirs, target_dir_media, target_dir_stem,
+            )
+
         if item.kind == "folder":
             can_move, reason = plan_folder_move(
                 item, target_dir, reserved_targets,
@@ -6226,6 +6284,8 @@ def main() -> None:
             reserved_targets.add(target_dir)
             reserved_target_dirs.add(target_dir)
             target_dir_owner.setdefault(target_dir, item.source_path)
+            target_dir_media.setdefault(target_dir, item.media_type)
+            target_dir_stem.setdefault(target_dir, item.source_path.stem)
             folder_companions: list[Path] = []
             if not args.no_companions:
                 meta_sidecar = item.representative.with_name(
@@ -6287,6 +6347,8 @@ def main() -> None:
         reserved_targets.add(target_path)
         reserved_target_dirs.add(target_dir)
         target_dir_owner.setdefault(target_dir, item.source_path)
+        target_dir_media.setdefault(target_dir, item.media_type)
+        target_dir_stem.setdefault(target_dir, item.source_path.stem)
         planned_moves.append({
             "kind": item.kind,
             "source": item.source_path,
