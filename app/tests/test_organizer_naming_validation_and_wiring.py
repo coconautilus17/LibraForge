@@ -64,7 +64,7 @@ class ValidateNamingTemplateTests(unittest.TestCase):
         # With the default scheme now behind an explicit toggle, an empty
         # template field is a user error, not a silent "use the default".
         problems = ORGANIZER.validate_naming_template("")
-        self.assertTrue(problems)
+        self.assertEqual(problems, ["Template is empty -- enter a template, or turn on the default scheme."])
 
 
 class BuildTargetDirForTemplateTests(unittest.TestCase):

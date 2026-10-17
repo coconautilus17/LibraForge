@@ -43,9 +43,13 @@ class FolderScanCacheFileTests(unittest.TestCase):
         save_scan_cache_file(self.cache_path, cache)
         self.assertEqual(load_scan_cache_file(self.cache_path), cache)
 
-    def test_cache_key_is_stable_for_same_inputs(self):
-        p = Path("/audiobooks")
-        self.assertEqual(scan_cache_key(p, ["a", "b"]), scan_cache_key(p, ["a", "b"]))
+    def test_cache_key_is_a_known_digest_so_it_only_changes_when_the_scheme_does(self):
+        # Pinned: a silent change of the key recipe would orphan every user's cache file.
+        import hashlib
+        import json as _json
+        expected = hashlib.sha256(_json.dumps({"ignored_folders": ["a", "b"], "path": "/audiobooks"},
+                                              sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(scan_cache_key(Path("/audiobooks"), ["b", "A"]), expected)
 
     def test_cache_key_ignores_order_of_ignored_folders(self):
         p = Path("/audiobooks")

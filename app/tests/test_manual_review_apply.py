@@ -436,8 +436,10 @@ class WritePolicyTests(unittest.TestCase):
     def test_invalid_write_policy_is_rejected(self):
         req = self._request("fill", {})
         req.write_policy = "delete_everything"
-        with self.assertRaises(Exception):
+        with self.assertRaises(main.HTTPException) as caught:
             main.apply_manual_review_result(req)
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("write_policy", caught.exception.detail)
 
 
 class AbsDirectSyncTests(unittest.TestCase):
