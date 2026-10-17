@@ -234,7 +234,7 @@ class StripAuthorNarratorNoiseTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_a_co_author_prefix_should_be_removed_as_the_docstring_promises(self):
-        # KNOWN BUG (see docs/test-audit-2026-10-16.md): the docstring lists
+        # KNOWN BUG, issue #376: the docstring lists
         # "Dan Raxor, Jace Cannon - Supers of Vault 12" as handled, but the leading
         # segment is compared with each author separately, so a two-author prefix
         # (ratio ~0.44 against either) never matches and the title keeps it.

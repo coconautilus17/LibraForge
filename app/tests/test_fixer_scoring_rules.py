@@ -67,7 +67,7 @@ class OmnibusTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_hyphen_and_ampersand_ranges_in_the_title_should_mark_an_omnibus(self):
-        # KNOWN BUG (see docs/test-audit-2026-10-16.md): is_omnibus_product runs its
+        # KNOWN BUG, issue #373: is_omnibus_product runs its
         # range regex on normalize_for_match() output, which has already turned "1-3"
         # into "1 3" and dropped "&", so only "to"/"through" ranges are recognised.
         # Remove the decorator when the function reads the raw text.
@@ -129,7 +129,7 @@ class SeriesNumberTitleTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_series_plus_book_n_should_be_generic_too(self):
-        # KNOWN BUG (see docs/test-audit-2026-10-16.md): the docstring example
+        # KNOWN BUG, issue #374: the docstring example
         # "All the Skills - Book 003" never matches, because normalize_for_match()
         # strips "Book N" from the title before the "<series> book N" pattern runs,
         # leaving only the series name. Only the "<series> N" pattern can ever fire.

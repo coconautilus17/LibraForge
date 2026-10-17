@@ -269,7 +269,7 @@ class BookFolderNameParserTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_a_series_first_folder_should_not_invent_an_author_and_a_series_called_book(self):
-        # KNOWN BUG (see docs/test-audit-2026-10-16.md): "Destiny Cycle - Book 004 - Threads
+        # KNOWN BUG, issue #377: "Destiny Cycle - Book 004 - Threads
         # of Destiny Vol 1" is the very example finish() documents as series-first, but
         # parse_explicit_identity_folder_name reads the first segment as an AUTHOR and
         # "Book" as the SERIES (loose_middle_series), so the real series is lost.

@@ -40,7 +40,7 @@ class NormalizeBookNumberTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_a_whole_number_written_with_a_zero_decimal_should_not_keep_a_dangling_dot(self):
-        # KNOWN BUG (see docs/test-audit-2026-10-16.md): "1.0" becomes "001." because
+        # KNOWN BUG, issue #375: "1.0" becomes "001." because
         # ".0".rstrip("0") is "." (truthy), so the `or ".0"` fallback never applies.
         self.assertFalse(ORG.normalize_book_number("1.0").endswith("."))
 
