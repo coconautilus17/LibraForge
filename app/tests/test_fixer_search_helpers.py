@@ -283,5 +283,133 @@ class ThreadClientTests(unittest.TestCase):
         search._thread_local.__dict__.pop("client", None)
 
 
+class AbsSearchTests(unittest.TestCase):
+    def search(self, payload, **kw):
+        urls = []
+        def fake(req, timeout=None):
+            urls.append((req.full_url, req.get_header("Authorization"), timeout))
+            if isinstance(payload, Exception):
+                raise payload
+            return _Resp(json.dumps(payload).encode())
+        with mock.patch("urllib.request.urlopen", fake), mock.patch("builtins.print"):
+            out = search.abs_search(kw.get("title", "Unsouled"), kw.get("author", "Will Wight"), kw.get("provider", "audible"),
+                                    "http://abs:80/", "KEY", kw.get("limit", 3))
+        return out, urls
+
+    def test_the_request_is_an_authenticated_search_with_title_provider_and_author(self):
+        _, urls = self.search([])
+        self.assertEqual(urls, [("http://abs:80/api/search/books?title=Unsouled&provider=audible&author=Will+Wight", "Bearer KEY", 15)])
+
+    def test_a_blank_author_is_left_out_of_the_query(self):
+        _, urls = self.search([], author="")
+        self.assertNotIn("author=", urls[0][0])
+
+    def test_results_become_audible_shaped_products_with_runtime_in_minutes_and_seconds(self):
+        out, _ = self.search([{"asin": "B0X", "title": "Unsouled", "subtitle": "S", "author": "Will Wight", "narrator": "Travis",
+                               "series": [{"series": "Cradle", "sequence": 1}], "description": "d", "cover": "c", "duration": 600.5,
+                               "publishedYear": 2016, "isbn": "978", "genres": ["Fantasy"]}], provider="audible")
+        product = out[0]
+        self.assertEqual((product["asin"], product["title"], product["subtitle"]), ("B0X", "Unsouled", "S"))
+        self.assertEqual((product["authors"], product["narrators"]), ([{"name": "Will Wight"}], [{"name": "Travis"}]))
+        self.assertEqual(product["series"], [{"title": "Cradle", "sequence": "1"}])
+        self.assertEqual((product["runtime_length_min"], product["runtime_length_sec"]), (600.5, 36030))
+        self.assertEqual((product["release_date"], product["_abs_provider"], product["_abs_isbn"]), ("2016", "audible", "978"))
+        self.assertEqual(product["product_images"], {"500": "c"})
+
+    def test_a_string_series_has_no_sequence_and_a_missing_one_gives_none(self):
+        out, _ = self.search([{"title": "A", "series": "Cradle"}, {"title": "B"}])
+        self.assertEqual(out[0]["series"], [{"title": "Cradle", "sequence": ""}])
+        self.assertEqual(out[1]["series"], [])
+
+    def test_a_missing_duration_gives_none_for_both_runtimes(self):
+        out, _ = self.search([{"title": "A"}])
+        self.assertEqual((out[0]["runtime_length_min"], out[0]["runtime_length_sec"]), (None, None))
+
+    def test_only_the_first_limit_results_are_kept(self):
+        out, _ = self.search([{"title": str(i)} for i in range(10)], limit=3)
+        self.assertEqual([p["title"] for p in out], ["0", "1", "2"])
+
+    def test_a_network_error_or_a_non_list_answer_gives_no_results(self):
+        self.assertEqual(self.search(urllib.error.URLError("down"))[0], [])
+        self.assertEqual(self.search(OSError("x"))[0], [])
+        self.assertEqual(self.search({"matches": []})[0], [])
+
+
+class AbsAggSearchTests(unittest.TestCase):
+    def run_search(self, payload, **kw):
+        urls = []
+        def fake(req, timeout=None):
+            urls.append((req.full_url, timeout))
+            if isinstance(payload, Exception):
+                raise payload
+            return _Resp(json.dumps(payload).encode())
+        with mock.patch("urllib.request.urlopen", fake):
+            out = search.abs_agg_search(kw.get("title", "Dragon Emperor"), kw.get("author", "Eric Vall"), "graphicaudio",
+                                        "http://agg:3000/", kw.get("limit", 2), kw.get("existing_asin", ""))
+        return out, urls
+
+    def test_the_url_carries_title_limit_and_author_for_the_provider(self):
+        _, urls = self.run_search({"matches": []})
+        self.assertEqual(urls, [("http://agg:3000/graphicaudio/search?title=Dragon+Emperor&limit=2&author=Eric+Vall", 15)])
+        _, urls = self.run_search({"matches": []}, author="")
+        self.assertNotIn("author=", urls[0][0])
+
+    def test_matches_are_normalised_and_limited(self):
+        out, _ = self.run_search({"matches": [{"title": "A", "asin": "B0A"}, {"title": "B"}, {"title": "C"}]})
+        self.assertEqual([p["title"] for p in out], ["A", "B"])
+        self.assertEqual(out[0]["_abs_provider"], "graphicaudio")
+
+    def test_the_embedded_asin_is_kept_when_a_match_has_none(self):
+        out, _ = self.run_search({"matches": [{"title": "A"}, {"title": "B", "asin": "B0OWN"}]}, existing_asin="B0OLD")
+        self.assertEqual([p["asin"] for p in out], ["B0OLD", "B0OWN"])
+
+    def test_errors_and_garbage_give_no_results(self):
+        self.assertEqual(self.run_search(urllib.error.URLError("x"))[0], [])
+        self.assertEqual(self.run_search(ValueError("x"))[0], [])
+        self.assertEqual(self.run_search({"matches": None})[0], [])
+
+
+class CachedAudibleSearchTests(unittest.TestCase):
+    def call(self, cache=None, delay=0, results=None, error=None, query="Unsouled", limit=5):
+        import threading
+        cache = {} if cache is None else cache
+        in_flight = {}
+        def fake(client, q, lim):
+            if error:
+                raise error
+            return results
+        with mock.patch.object(search, "audible_search", side_effect=fake) as searched, mock.patch.object(search.time, "sleep") as sleeper:
+            out = search.cached_audible_search(object(), query, limit, delay, cache, threading.Lock(), in_flight)
+        return out, cache, in_flight, searched, sleeper
+
+    def test_a_miss_searches_once_and_caches_under_the_lower_cased_query_and_limit(self):
+        out, cache, in_flight, searched, _ = self.call(results=[{"asin": "A"}])
+        self.assertEqual(out, [{"asin": "A"}])
+        self.assertEqual(cache, {("unsouled", 5): [{"asin": "A"}]})
+        self.assertEqual(in_flight, {})
+        searched.assert_called_once()
+
+    def test_a_hit_does_not_search_again(self):
+        out, _, _, searched, sleeper = self.call(cache={("unsouled", 5): [{"asin": "CACHED"}]}, delay=500)
+        self.assertEqual(out, [{"asin": "CACHED"}])
+        searched.assert_not_called()
+        sleeper.assert_not_called()
+
+    def test_a_different_limit_is_a_different_entry(self):
+        out, _, _, searched, _ = self.call(cache={("unsouled", 10): [{"asin": "OTHER"}]}, results=[{"asin": "NEW"}])
+        self.assertEqual(out, [{"asin": "NEW"}])
+        searched.assert_called_once()
+
+    def test_the_api_delay_is_slept_in_seconds_only_after_a_real_search_and_only_when_positive(self):
+        _, _, _, _, sleeper = self.call(results=[], delay=250)
+        sleeper.assert_called_once_with(0.25)
+        _, _, _, _, sleeper = self.call(results=[], delay=0)
+        sleeper.assert_not_called()
+
+    def test_a_failing_search_caches_an_empty_result_and_releases_waiters(self):
+        out, cache, in_flight, _, _ = self.call(error=RuntimeError("boom"))
+        self.assertEqual((out, cache, in_flight), ([], {("unsouled", 5): []}, {}))
+
+
 if __name__ == "__main__":
     unittest.main()
