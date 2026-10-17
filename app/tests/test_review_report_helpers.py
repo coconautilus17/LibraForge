@@ -164,5 +164,142 @@ class ReportKindTests(unittest.TestCase):
         self.assertEqual(REVIEW.infer_report_kind({}), "unknown")
 
 
+import copy
+
+
+class ReviewMetadataItemReasonTests(unittest.TestCase):
+    """One scenario per reason code: the severity it carries and, as importantly,
+    the conditions under which it must NOT appear."""
+
+    BASE = {"status": "matched", "write_action": "would_write", "mode": "full", "duration_status": "perfect", "score": 0.95,
+            "local": {"title": "Metal Mage 15", "author": "Eric Vall", "series": "Metal Mage", "sequence": "15"},
+            "match": {"title": "Metal Mage 15", "author": "Eric Vall", "series": "Metal Mage", "sequence": "15"}}
+
+    def review(self, **over):
+        item = copy.deepcopy(self.BASE)
+        for key, value in over.items():
+            if key in ("local", "match") and isinstance(value, dict):
+                item[key].update(value)
+            else:
+                item[key] = value
+        return REVIEW.review_metadata_item(item, REVIEW.parse_args(["x.json"]))
+
+    def reasons(self, **over):
+        result = self.review(**over)
+        return {} if result is None else {r["code"]: r["severity"] for r in result["reasons"]}
+
+    def test_a_clean_confirmed_match_raises_nothing(self):
+        self.assertIsNone(self.review())
+
+    def test_a_low_score_is_high_severity_for_audible_and_uses_the_audible_threshold(self):
+        self.assertEqual(self.reasons(score=0.84), {"low_score": "high"})
+        self.assertEqual(self.reasons(score=0.85), {})
+        self.assertEqual(self.reasons(score="not a number"), {})
+        self.assertEqual(self.reasons(score=None), {})
+
+    def test_goodreads_and_kindle_use_their_own_lower_threshold_and_a_medium_severity(self):
+        for provider in ("goodreads", "kindle"):
+            with self.subTest(provider=provider):
+                self.assertEqual(self.reasons(score=0.05, provider=provider), {"low_score": "medium"})
+                self.assertEqual(self.reasons(score=0.5, provider=provider), {})
+
+    def test_the_low_score_reason_reports_score_threshold_and_provider(self):
+        evidence = self.review(score=0.5)["reasons"][0]["evidence"]
+        self.assertEqual(evidence, {"score": 0.5, "threshold": 0.85, "provider": "audible"})
+
+    def test_unsafe_modes_are_high_and_series_only_is_medium(self):
+        self.assertEqual(self.reasons(mode="none"), {"unsafe_match": "high"})
+        self.assertEqual(self.reasons(mode="unknown"), {"unsafe_match": "high"})
+        self.assertEqual(self.reasons(mode="series_only"), {"series_only_mode": "medium"})
+
+    def test_only_a_real_duration_mismatch_is_flagged(self):
+        self.assertEqual(self.reasons(duration_status="mismatch"), {"duration_mismatch": "high"})
+        for status in ("unknown", "acceptable", "strong", "perfect"):
+            self.assertEqual(self.reasons(duration_status=status), {})
+
+    def test_disagreeing_sequences_conflict_and_equal_ones_do_not(self):
+        self.assertEqual(self.reasons(match={"sequence": "3"}), {"sequence_conflict": "high"})
+        self.assertEqual(self.reasons(match={"sequence": "15.0"}), {})
+
+    def test_a_sequence_conflict_inside_an_omnibus_folder_says_so(self):
+        reason = self.review(match={"sequence": "3"}, path="/lib/Metal Mage (Books 1-3)/x.m4b")["reasons"][0]
+        self.assertIn("omnibus_context", reason["evidence"])
+        plain = self.review(match={"sequence": "3"}, path="/lib/Metal Mage/x.m4b")["reasons"][0]
+        self.assertNotIn("omnibus_context", plain["evidence"])
+
+    def test_a_missing_provider_sequence_is_flagged_only_for_full_mode_audible_matches_with_a_series(self):
+        self.assertEqual(self.reasons(match={"sequence": ""}), {"provider_missing_sequence": "medium"})
+        self.assertEqual(self.reasons(match={"sequence": ""}, provider="goodreads"), {})
+        self.assertEqual(self.reasons(match={"sequence": ""}, mode="series_only"), {"series_only_mode": "medium"})
+        self.assertEqual(self.reasons(match={"sequence": "", "series": ""}, local={"series": ""}), {"missing_series": "high"})
+
+    def test_a_missing_provider_sequence_is_not_flagged_for_omnibus_products(self):
+        self.assertEqual(self.reasons(match={"sequence": "", "title": "Metal Mage Omnibus"},
+                                      local={"title": "Metal Mage Omnibus"}), {})
+
+    def test_a_visible_number_that_disagrees_with_the_local_sequence_is_high(self):
+        got = self.review(local={"title": "Metal Mage 14"})
+        self.assertEqual({r["code"]: r["severity"] for r in got["reasons"]}, {"visible_number_conflict": "high"})
+
+    def test_a_visible_number_matching_the_provider_says_the_local_sequence_was_misread(self):
+        got = self.review(local={"sequence": "14", "title": "Metal Mage 15"})
+        codes = {r["code"] for r in got["reasons"]}
+        self.assertIn("sequence_conflict", codes)
+        conflict = [r for r in got["reasons"] if r["code"] == "visible_number_conflict"][0]
+        self.assertIn("likely extracted incorrectly", conflict["message"])
+        self.assertEqual(conflict["evidence"]["corroborates_match_sequence"], "15")
+
+    def test_without_a_local_sequence_a_visible_number_is_checked_against_the_provider_at_medium(self):
+        got = self.review(local={"sequence": "", "title": "Metal Mage 14"}, match={"sequence": "15", "title": "Metal Mage 14"})
+        reasons = {r["code"]: r["severity"] for r in got["reasons"]}
+        self.assertEqual(reasons.get("visible_number_conflict"), "medium")
+
+    def test_a_dissimilar_title_is_medium_and_the_subtitle_can_rescue_it(self):
+        self.assertEqual(self.reasons(match={"title": "Zzzzzz Qqqqq"}), {"title_mismatch": "medium"})
+        rescued = self.reasons(match={"title": "Zzzzzz Qqqqq", "subtitle": "Metal Mage 15"})
+        self.assertNotIn("title_mismatch", rescued)
+
+    def test_a_dissimilar_series_is_high_but_a_folder_like_local_series_is_ignored(self):
+        self.assertEqual(self.reasons(match={"series": "Totally Else"}), {"series_mismatch": "high"})
+        self.assertEqual(self.reasons(local={"series": "Book 3"}, match={"series": "Totally Else"}), {})
+
+    def test_a_dissimilar_author_is_high_but_containment_is_fine(self):
+        self.assertEqual(self.reasons(match={"author": "Zed Quill"}), {"author_mismatch": "high"})
+        self.assertEqual(self.reasons(match={"author": "Eric Vall, Zed Quill"}), {})
+        self.assertEqual(self.reasons(local={"author": "Eric Vall, Zed Quill"}), {})
+
+    def test_the_write_risk_checks_only_run_for_items_that_will_be_written(self):
+        for action in ("smart_skipped", "write_skipped", "skipped", ""):
+            with self.subTest(action=action):
+                self.assertEqual(self.reasons(write_action=action, score=0.1, mode="none", duration_status="mismatch",
+                                              match={"sequence": "3", "title": "Zzzzzz Qqqqq"}), {})
+
+    def test_completeness_reasons_do_not_depend_on_the_write_action(self):
+        self.assertEqual(self.reasons(write_action="smart_skipped", match={"series": ""}, local={"series": ""}),
+                         {"missing_series": "high"})
+
+    def test_missing_title_and_author_only_apply_to_matched_items(self):
+        blank = {"title": "", "author": ""}
+        self.assertEqual(self.reasons(match=blank, local=blank), {"missing_title": "high", "missing_author": "high"})
+        self.assertEqual(self.reasons(status="failed", match=blank, local=blank), {})
+
+    def test_title_and_author_fall_back_to_the_local_values(self):
+        self.assertEqual(self.reasons(match={"title": "", "author": ""}).get("missing_title"), None)
+        self.assertNotIn("missing_author", self.reasons(match={"author": ""}))
+
+    def test_missing_series_applies_to_unmatched_items_too_and_falls_back_to_the_local_series(self):
+        self.assertEqual(self.reasons(status="failed", match={"series": ""}, local={"series": ""}), {"missing_series": "high"})
+        self.assertEqual(self.reasons(match={"series": ""}), {})
+
+    def test_the_result_carries_identity_severity_and_recommendation(self):
+        result = self.review(id="i7", path="/lib/x.m4b", match={"sequence": "3"}, used_query="q")
+        self.assertEqual((result["id"], result["path"], result["tool"], result["severity"]), ("i7", "/lib/x.m4b", "metadata_fixer", "high"))
+        self.assertEqual(result["recommendation"], "verify_sequence_before_apply")
+        self.assertEqual((result["used_query"], result["score"], result["mode"]), ("q", 0.95, "full"))
+
+    def test_the_path_falls_back_to_the_source_field(self):
+        self.assertEqual(self.review(source="/lib/s.m4b", mode="none")["path"], "/lib/s.m4b")
+
+
 if __name__ == "__main__":
     unittest.main()
