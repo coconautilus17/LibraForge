@@ -113,5 +113,81 @@ class ConversionCacheTests(unittest.TestCase):
             self.assertEqual(second.probed, 0)
 
 
+class ConversionCacheDetailTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_timestamp_is_utc_iso8601_to_the_second(self):
+        import re
+        from app.conversion_cache import utc_timestamp
+        self.assertRegex(utc_timestamp(), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+
+    def test_saved_cache_is_readable_utf8_ends_with_a_newline_and_leaves_no_temp_file(self):
+        target = self.dir / "sub" / "cache.json"
+        save_discovery_cache(target, {"version": CACHE_VERSION, "searches": {"k": {"title": "Böse"}}})
+        text = target.read_text(encoding="utf-8")
+        self.assertIn("Böse", text)
+        self.assertTrue(text.endswith("\n"))
+        self.assertEqual([p.name for p in target.parent.iterdir()], ["cache.json"])
+
+    def _file(self, size=10):
+        path = self.dir / "a.mp3"
+        path.write_bytes(b"x" * size)
+        return path
+
+    def test_chapter_reader_reuses_an_entry_only_when_size_and_mtime_both_match(self):
+        from app.conversion_cache import file_signature
+        path = self._file()
+        sig = file_signature(path)
+        calls = []
+        def probe(p):
+            calls.append(p)
+            return 7
+        for entry, expect_probe in (
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"], "chapter_count": 3}, False),
+            ({"size": sig["size"] + 1, "mtime_ns": sig["mtime_ns"], "chapter_count": 3}, True),
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"] + 1, "chapter_count": 3}, True),
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"]}, True),
+        ):
+            calls.clear()
+            reader = CachedChapterCountReader(probe=probe, entries={str(path): dict(entry)})
+            result = reader(path)
+            self.assertEqual(bool(calls), expect_probe, entry)
+            self.assertEqual(result, 7 if expect_probe else 3)
+            self.assertEqual((reader.reused, reader.probed), (0, 1) if expect_probe else (1, 0))
+
+    def test_audio_reader_reuses_an_entry_only_when_size_and_mtime_both_match(self):
+        from app.conversion_cache import file_signature
+        path = self._file()
+        sig = file_signature(path)
+        calls = []
+        def probe(p):
+            calls.append(p)
+            return {"codec": "fresh"}
+        for entry, expect_probe in (
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"], "audio": {"codec": "cached"}}, False),
+            ({"size": sig["size"] + 1, "mtime_ns": sig["mtime_ns"], "audio": {"codec": "cached"}}, True),
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"] + 1, "audio": {"codec": "cached"}}, True),
+            ({"size": sig["size"], "mtime_ns": sig["mtime_ns"], "audio": "not-a-dict"}, True),
+        ):
+            calls.clear()
+            reader = CachedAudioProbeReader(probe=probe, entries={str(path): dict(entry)})
+            result = reader(path)
+            self.assertEqual(bool(calls), expect_probe, entry)
+            self.assertEqual(result["codec"], "fresh" if expect_probe else "cached")
+
+    def test_pruned_entries_keep_only_files_seen_this_run_in_path_order(self):
+        reader = CachedChapterCountReader(probe=lambda p: 1, entries={
+            "/z.mp3": {"chapter_count": 1}, "/a.mp3": {"chapter_count": 2}, "/gone.mp3": {"chapter_count": 3}})
+        reader.seen.update({"/z.mp3", "/a.mp3", "/new.mp3"})
+        pruned = reader.pruned_entries()
+        self.assertEqual(list(pruned), ["/a.mp3", "/z.mp3"])
+        self.assertNotIn("/gone.mp3", pruned)
+
+
 if __name__ == "__main__":
     unittest.main()

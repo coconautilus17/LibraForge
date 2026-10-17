@@ -538,6 +538,114 @@ class ReconcileBootstrapRegistryTests(unittest.TestCase):
         self.assertIn(str(self.metadata_json), abs_client.load_bootstrap_registry(self.reports_dir))
 
 
+class AbsGetJsonQueryTests(unittest.TestCase):
+    def _call(self, params):
+        import io
+        seen = {}
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def fake_urlopen(req, timeout=None):
+            seen["url"], seen["auth"], seen["timeout"] = req.full_url, req.get_header("Authorization"), timeout
+            return Resp(b'{"ok": true}')
+        with patch("urllib.request.urlopen", fake_urlopen):
+            out = abs_client.abs_get_json("/api/items", params, "http://abs:80/", "KEY", timeout=9)
+        return out, seen
+
+    def test_params_become_a_query_string(self):
+        out, seen = self._call({"limit": "5", "q": "a b"})
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(seen["url"], "http://abs:80/api/items?limit=5&q=a+b")
+        self.assertEqual((seen["auth"], seen["timeout"]), ("Bearer KEY", 9))
+
+    def test_no_params_means_no_question_mark(self):
+        for params in ({}, None):
+            _, seen = self._call(params)
+            self.assertEqual(seen["url"], "http://abs:80/api/items")
+
+
+class MediaPatchPayloadBlankFieldTests(unittest.TestCase):
+    def test_blank_year_isbn_and_asin_are_empty_year_and_null_ids(self):
+        payload = abs_client.build_media_patch_payload({"title": "T", "year": "", "isbn": "", "asin": ""})
+        meta = payload["metadata"]
+        self.assertEqual(meta["publishedYear"], "")
+        self.assertIsNone(meta["isbn"])
+        self.assertIsNone(meta["asin"])
+
+    def test_populated_year_isbn_and_asin_are_sent_as_given(self):
+        meta = abs_client.build_media_patch_payload({"title": "T", "year": 2019, "isbn": "978", "asin": "B0X"})["metadata"]
+        self.assertEqual((meta["publishedYear"], meta["isbn"], meta["asin"]), ("2019", "978", "B0X"))
+
+    def test_none_year_is_empty_not_the_string_none(self):
+        meta = abs_client.build_media_patch_payload({"title": "T", "year": None})["metadata"]
+        self.assertEqual(meta["publishedYear"], "")
+
+
+class GenreHelperTests(unittest.TestCase):
+    def test_real_genres_ignores_blank_and_blocklisted_labels_and_lowercases(self):
+        self.assertEqual(abs_client._real_genres(["  Fantasy ", "", "   ", "Audiobook", "Sci-Fi"]), {"fantasy", "sci-fi"})
+
+    def test_has_real_genres_is_true_for_a_known_genre_and_false_for_noise(self):
+        self.assertTrue(abs_client.has_real_genres(["Audiobook", "Fantasy"]))
+        self.assertFalse(abs_client.has_real_genres(["Audiobook"]))
+        self.assertFalse(abs_client.has_real_genres(["Fantasía"]))
+        self.assertFalse(abs_client.has_real_genres([]))
+        self.assertTrue(abs_client.has_real_genres("Science Fiction & Fantasy"))
+
+
+class LegacyMetadataDecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+        (self.folder / "metadata.json").write_text('{"title": "File Title"}')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _item(self, updated_at, title="ABS Title"):
+        return {"path": str(self.folder), "updatedAt": updated_at, "media": {"metadata": {"title": title}}}
+
+    def test_a_file_newer_than_the_abs_record_is_consolidated(self):
+        # file mtime is seconds, ABS updatedAt is milliseconds
+        decision, diff = abs_client._decide_legacy_metadata_json(str(self.folder), self._item(9_000), lambda p: 10.0)
+        self.assertEqual((decision, diff), ("consolidate_then_delete", {"title": "File Title"}))
+
+    def test_a_file_older_than_the_abs_record_loses_to_abs(self):
+        decision, _ = abs_client._decide_legacy_metadata_json(str(self.folder), self._item(11_000), lambda p: 10.0)
+        self.assertEqual(decision, "delete_abs_newer")
+
+    def test_a_record_without_updated_at_counts_as_older_than_any_file(self):
+        decision, _ = abs_client._decide_legacy_metadata_json(str(self.folder), self._item(None), lambda p: 0.001)
+        self.assertEqual(decision, "consolidate_then_delete")
+
+    def test_seconds_are_converted_to_milliseconds_before_comparing(self):
+        # 1.5 s == 1500 ms: newer than 1499 ms, not newer than 1501 ms
+        self.assertEqual(abs_client._decide_legacy_metadata_json(str(self.folder), self._item(1499), lambda p: 1.5)[0],
+                         "consolidate_then_delete")
+        self.assertEqual(abs_client._decide_legacy_metadata_json(str(self.folder), self._item(1501), lambda p: 1.5)[0],
+                         "delete_abs_newer")
+
+    def test_an_identical_file_is_deleted_without_a_diff(self):
+        decision, diff = abs_client._decide_legacy_metadata_json(str(self.folder), self._item(1, title="File Title"), lambda p: 5)
+        self.assertEqual((decision, diff), ("delete_identical", {}))
+
+    def test_series_entries_without_a_name_are_ignored_by_the_diff(self):
+        diff = abs_client.metadata_json_diff({"series": ["#3"]}, {"series": []})
+        self.assertNotIn("series", diff)
+
+
+class LegacyMigrationProgressTests(unittest.TestCase):
+    def test_progress_is_reported_one_based_over_the_total(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [{"action": "keep_unreadable", "id": "a", "path": tmp}, {"action": "keep_unreadable", "id": "b", "path": tmp}]
+            seen = []
+            outcome = abs_client.apply_legacy_metadata_json_migration(
+                rows, get_item=lambda i: {}, reconcile=lambda p, i: {"action": "x"}, backup_dir=Path(tmp) / "bk",
+                on_progress=lambda n, total: seen.append((n, total)))
+        self.assertEqual(seen, [(1, 2), (2, 2)])
+        self.assertEqual(outcome, {"kept_unreadable": 2})
+
+
 if __name__ == "__main__":
     unittest.main()
 
