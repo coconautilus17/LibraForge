@@ -261,5 +261,55 @@ class ConversionCandidateAudioSummaryTests(unittest.TestCase):
         self.assertEqual(self._candidate(audio_summary=None)["audio_summary"], {})
 
 
+class FixerCopyParityTests(unittest.TestCase):
+    """The Metadata Fixer script carries its own copy of the probe summary
+    (summarize_audio_stream_properties). It must keep answering exactly like the
+    shared app.conversion_discovery.summarize_audio_probes."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        import sys
+        import types
+        try:
+            import audible  # noqa: F401
+        except ModuleNotFoundError:
+            stub = types.ModuleType("audible")
+            stub.Client = type("Client", (), {})
+            stub.Authenticator = type("Authenticator", (), {})
+            sys.modules["audible"] = stub
+        path = Path(__file__).parents[2] / "scripts" / "audible-metadata-fixer-v5.py"
+        spec = importlib.util.spec_from_file_location("fixer_summary_parity", path)
+        cls.fixer = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.fixer
+        spec.loader.exec_module(cls.fixer)
+
+    SCENARIOS = {
+        "no files": ([], []),
+        "nothing probed": (2, [{"probed": False}, {"probed": False}]),
+        "one unprobed": (2, [_probe(), {"probed": False}]),
+        "missing channels": (2, [_probe(), _probe(channels=None)]),
+        "mp3": (1, [_probe(codec="mp3", codec_label="MP3")]),
+        "mp3 and aac": (2, [_probe(), _probe(codec="mp3", codec_label="MP3")]),
+        "mixed rates": (2, [_probe(sample_rate_hz=44100), _probe(sample_rate_hz=48000)]),
+        "mixed layouts": (2, [_probe(channels=1), _probe(channels=2)]),
+        "mixed both": (2, [_probe(channels=1, sample_rate_hz=44100), _probe(channels=2, sample_rate_hz=48000)]),
+        "matching": (2, [_probe(), _probe()]),
+        "bitrates vary": (2, [_probe(bitrate_kbps=64), _probe(bitrate_kbps=128)]),
+    }
+
+    def test_every_scenario_gets_the_same_summary_from_both_implementations(self):
+        from unittest import mock
+        for name, (count, probes) in self.SCENARIOS.items():
+            with self.subTest(name):
+                files = [Path(f"/lib/{i}.m4a") for i in range(count if isinstance(count, int) else len(probes))]
+                if not probes:
+                    files = []
+                expected = summarize_audio_probes(files, probes)
+                with mock.patch.object(self.fixer, "probe_audio_stream_properties", side_effect=list(probes)):
+                    got = self.fixer.summarize_audio_stream_properties(files)
+                self.assertEqual(got, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
