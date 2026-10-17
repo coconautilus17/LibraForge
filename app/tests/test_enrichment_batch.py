@@ -152,3 +152,227 @@ class DegradedAndConcurrencyTests(unittest.TestCase):
 
         eb.run_batch(self.store, UNITS, compile_fn, should_stop=lambda: False)
         self.assertEqual(self.store.load()["units"]["a"]["state"], "applied")
+
+
+class SlimResultTests(unittest.TestCase):
+    def test_every_field_is_carried_over_when_present(self):
+        out = eb.slim_result(compiled("a") | {"pinned_genres": ["Zed"], "genre_evidence": {"Fantasy": {"audible": 1}},
+                                              "series_evidence": ["pf"], "explicit_summary": {"x": 1}, "agreement": "none"})
+        self.assertEqual(out["main_genres"], ["Fantasy"])
+        self.assertEqual(out["sub_genres"], ["Epic Fantasy"])
+        self.assertEqual(out["pinned_genres"], ["Zed"])
+        self.assertEqual(out["genre_evidence"], {"Fantasy": {"audible": 1}})
+        self.assertEqual(out["series_evidence"], ["pf"])
+        self.assertEqual(out["explicit_summary"], {"x": 1})
+        self.assertEqual(out["agreement"], "none")
+
+    def test_missing_or_none_fields_become_empty_containers_and_agreement_defaults_ok(self):
+        out = eb.slim_result({"main_genres": None, "sub_genres": None, "pinned_genres": None, "genre_evidence": None,
+                              "series_evidence": None, "explicit_summary": None, "source_status": None, "books": None})
+        self.assertEqual((out["main_genres"], out["sub_genres"], out["pinned_genres"]), ([], [], []))
+        self.assertEqual((out["genre_evidence"], out["series_evidence"], out["explicit_summary"]), ({}, [], {}))
+        self.assertEqual((out["agreement"], out["coverage"], out["degraded"], out["books"]), ("ok", 0, [], []))
+
+    def test_coverage_counts_sources_that_found_something(self):
+        out = eb.slim_result({"source_status": {"a": {"found": 3}, "b": {"found": 0}, "c": None, "d": {"found": "2"}, "e": {}}})
+        self.assertEqual(out["coverage"], 2)
+
+    def test_degraded_lists_paused_skipped_or_failed_sources_sorted(self):
+        out = eb.slim_result({"source_status": {
+            "z": {"rate_limited": True}, "m": {"skipped": 2}, "a": {"state": "failed"},
+            "ok": {"found": 1}, "zero": {"skipped": 0}, "none": None}})
+        self.assertEqual(out["degraded"], ["a", "m", "z"])
+
+    def test_books_keep_only_the_review_fields(self):
+        out = eb.slim_result(compiled("a"))
+        self.assertEqual(set(out["books"][0]), {"id", "path", "is_file", "title", "has_audio", "existing_genres", "explicit"})
+        self.assertEqual(out["books"][0]["id"], "a1")
+        self.assertNotIn("sources", out["books"][0])
+
+
+class StoreAndStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = eb.BatchStore(Path(self.tmp.name) / "deep" / "batch.json")
+
+    def test_a_missing_file_loads_as_idle_and_empty(self):
+        self.assertEqual(self.store.load(), {"status": "idle", "units": {}, "order": []})
+
+    def test_a_corrupt_file_loads_as_idle_and_empty(self):
+        self.store.path.parent.mkdir(parents=True)
+        self.store.path.write_text("{nope")
+        self.assertEqual(self.store.load(), {"status": "idle", "units": {}, "order": []})
+
+    def test_a_file_missing_units_or_order_gets_them_added(self):
+        self.store.path.parent.mkdir(parents=True)
+        self.store.path.write_text('{"status": "done"}')
+        data = self.store.load()
+        self.assertEqual((data["status"], data["units"], data["order"]), ("done", {}, []))
+
+    def test_save_creates_folders_stamps_the_time_and_leaves_no_temp_file(self):
+        self.store.save({"status": "idle", "units": {}, "order": []})
+        self.assertEqual([p.name for p in self.store.path.parent.iterdir()], ["batch.json"])
+        self.assertGreater(self.store.load()["updated_at"], 0)
+
+    def test_save_keeps_non_ascii_names_readable(self):
+        self.store.save({"units": {"k": {"name": "Böse"}}, "order": []})
+        self.assertIn("Böse", self.store.path.read_text(encoding="utf-8"))
+
+    def test_effective_status_for_a_dead_thread_follows_the_file_except_for_interrupted_runs(self):
+        for saved, expected in (("running", "stopped"), ("stopping", "stopped"), ("done", "done"),
+                                ("idle", "idle"), ("stopped", "stopped")):
+            self.assertEqual(eb.effective_status({"status": saved}, thread_alive=False), expected)
+        self.assertEqual(eb.effective_status({}, thread_alive=False), "idle")
+
+
+class RunBatchDetailTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = eb.BatchStore(Path(self.tmp.name) / "batch.json")
+
+    def test_progress_is_reported_one_based_with_the_unit_name(self):
+        seen = []
+        eb.run_batch(self.store, UNITS, lambda k, n: compiled(k), should_stop=lambda: False,
+                     on_progress=lambda n, total, name: seen.append((n, total, name)))
+        self.assertEqual(seen, [(1, 3, "A"), (2, 3, "B"), (3, 3, "C")])
+
+    def test_unit_names_standalone_flag_and_counts_are_recorded(self):
+        units = [{"key": "s", "name": "Solo", "standalone": True, "book_count": 4}, {"key": "t", "name": "Two"}]
+        eb.run_batch(self.store, units, lambda k, n: compiled(k), should_stop=lambda: True)
+        data = self.store.load()
+        self.assertEqual((data["units"]["s"]["name"], data["units"]["s"]["standalone"], data["units"]["s"]["book_count"]),
+                         ("Solo", True, 4))
+        self.assertEqual((data["units"]["t"]["standalone"], data["units"]["t"]["book_count"]), (False, 0))
+        self.assertEqual(data["order"], ["s", "t"])
+
+    def test_a_stop_request_before_the_first_unit_compiles_nothing_and_clears_current(self):
+        called = []
+        eb.run_batch(self.store, UNITS, lambda k, n: called.append(k) or compiled(k), should_stop=lambda: True)
+        data = self.store.load()
+        self.assertEqual((called, data["status"]), ([], "stopped"))
+        self.assertNotIn("current", data)
+
+    def test_an_error_without_a_message_records_the_exception_type(self):
+        def boom(k, n):
+            raise KeyError()
+        eb.run_batch(self.store, UNITS[:1], boom, should_stop=lambda: False)
+        self.assertEqual(self.store.load()["units"]["a"]["error"], "KeyError")
+
+    def test_a_retry_that_succeeds_clears_the_old_error(self):
+        state = {"fail": True}
+        def flaky(k, n):
+            if state["fail"]:
+                raise RuntimeError("down")
+            return compiled(k)
+        eb.run_batch(self.store, UNITS[:1], flaky, should_stop=lambda: False)
+        state["fail"] = False
+        eb.run_batch(self.store, UNITS[:1], flaky, should_stop=lambda: False)
+        entry = self.store.load()["units"]["a"]
+        self.assertEqual(entry["state"], "compiled")
+        self.assertNotIn("error", entry)
+
+    def test_a_unit_applied_while_the_run_was_compiling_it_is_left_alone(self):
+        def compile_and_apply_meanwhile(key, name):
+            eb._update(self.store, lambda d: d["units"][key].update({"state": "applied", "applied_genres": ["X"]}))
+            return compiled(key)
+        eb.run_batch(self.store, UNITS[:1], compile_and_apply_meanwhile, should_stop=lambda: False)
+        entry = self.store.load()["units"]["a"]
+        self.assertEqual((entry["state"], entry["applied_genres"]), ("applied", ["X"]))
+        self.assertNotIn("result", entry)
+
+    def test_an_apply_failed_unit_is_not_recompiled_but_a_failed_one_is(self):
+        self.store.save({"status": "done", "order": ["a", "b"], "units": {
+            "a": {"state": "apply_failed", "name": "A"}, "b": {"state": "failed", "name": "B"}}})
+        calls = []
+        eb.run_batch(self.store, UNITS[:2], lambda k, n: calls.append(k) or compiled(k), should_stop=lambda: False)
+        self.assertEqual(calls, ["b"])
+
+    def test_restart_drops_old_units_not_in_the_new_list(self):
+        eb.run_batch(self.store, UNITS, lambda k, n: compiled(k), should_stop=lambda: False)
+        eb.run_batch(self.store, UNITS[:1], lambda k, n: compiled(k), should_stop=lambda: False, restart=True)
+        data = self.store.load()
+        self.assertEqual(list(data["units"]), ["a"])
+        self.assertEqual(data["order"], ["a"])
+
+
+class ApplyBatchDetailTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = eb.BatchStore(Path(self.tmp.name) / "batch.json")
+        eb.run_batch(self.store, UNITS, lambda k, n: compiled(k), should_stop=lambda: False)
+
+    def test_placeholder_books_are_never_written_and_real_ones_get_the_genres(self):
+        written = []
+        out = eb.apply_batch(self.store, [{"key": "a", "genres": ["Fantasy"]}], lambda b, g, e: written.append((b["id"], g, e)))
+        self.assertEqual(written, [("a1", ["Fantasy"], None)])
+        self.assertEqual((out["units"], out["books"], out["failed"], out["skipped"]), (1, 1, [], []))
+
+    def test_a_book_defaults_to_having_audio_when_the_field_is_missing(self):
+        entry = self.store.load()["units"]["a"]
+        entry["result"]["books"] = [{"id": "x", "title": "no flag"}]
+        data = self.store.load(); data["units"]["a"] = entry; self.store.save(data)
+        written = []
+        eb.apply_batch(self.store, [{"key": "a", "genres": []}], lambda b, g, e: written.append(b["id"]))
+        self.assertEqual(written, ["x"])
+
+    def test_explicit_is_true_or_false_from_the_suggestion_only_when_authoritative_and_asked(self):
+        def run(strength, suggestion, ask):
+            data = self.store.load()
+            data["units"]["a"]["state"] = "compiled"
+            data["units"]["a"]["result"]["books"] = [{"id": "x", "has_audio": True,
+                                                      "explicit": {"strength": strength, "suggestion": suggestion}}]
+            self.store.save(data)
+            got = []
+            eb.apply_batch(self.store, [{"key": "a", "genres": [], "apply_explicit": ask}], lambda b, g, e: got.append(e))
+            return got[0]
+        self.assertIs(run("authoritative", "explicit", True), True)
+        self.assertIs(run("authoritative", "not_explicit", True), False)
+        self.assertIsNone(run("supporting", "explicit", True))
+        self.assertIsNone(run("authoritative", "explicit", False))
+
+    def test_failures_are_listed_with_unit_title_and_error_and_the_unit_can_be_retried(self):
+        def boom(b, g, e):
+            raise RuntimeError("disk full")
+        out = eb.apply_batch(self.store, [{"key": "a", "genres": ["G"]}], boom)
+        self.assertEqual(out["failed"], [{"unit": "A", "title": "a", "error": "disk full"}])
+        self.assertEqual(self.store.load()["units"]["a"]["state"], "apply_failed")
+        again = eb.apply_batch(self.store, [{"key": "a", "genres": ["G"]}], lambda b, g, e: None)
+        self.assertEqual((again["units"], again["skipped"]), (1, []))
+        self.assertEqual(self.store.load()["units"]["a"]["state"], "applied")
+
+    def test_applied_genres_and_time_are_recorded(self):
+        eb.apply_batch(self.store, [{"key": "a", "genres": ["G1", "G2"]}], lambda b, g, e: None)
+        entry = self.store.load()["units"]["a"]
+        self.assertEqual((entry["applied_genres"], entry["failures"]), (["G1", "G2"], []))
+        self.assertGreater(entry["applied_at"], 0)
+
+    def test_an_applied_unit_is_skipped_unless_forced_and_unknown_or_pending_units_are_skipped(self):
+        eb.apply_batch(self.store, [{"key": "a", "genres": []}], lambda b, g, e: None)
+        out = eb.apply_batch(self.store, [{"key": "a", "genres": []}, {"key": "nope", "genres": []}], lambda b, g, e: None)
+        self.assertEqual((out["units"], out["skipped"]), (0, ["a", "nope"]))
+        forced = eb.apply_batch(self.store, [{"key": "a", "genres": []}], lambda b, g, e: None, force=True)
+        self.assertEqual(forced["units"], 1)
+
+
+class MarkAppliedTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = eb.BatchStore(Path(self.tmp.name) / "batch.json")
+        eb.run_batch(self.store, UNITS, lambda k, n: compiled(k), should_stop=lambda: False)
+
+    def test_a_compiled_unit_becomes_applied_via_the_series_page(self):
+        self.assertIs(eb.mark_applied(self.store, "a", ["G"]), True)
+        entry = self.store.load()["units"]["a"]
+        self.assertEqual((entry["state"], entry["applied_genres"], entry["applied_via"], entry["failures"]),
+                         ("applied", ["G"], "series page", []))
+
+    def test_every_unfinished_state_can_be_marked(self):
+        for state in ("compiled", "apply_failed", "failed", "pending"):
+            data = self.store.load(); data["units"]["b"]["state"] = state; self.store.save(data)
+            self.assertIs(eb.mark_applied(self.store, "b", []), True, state)
+
+    def test_an_already_applied_or_unknown_unit_is_not_changed(self):
+        eb.mark_applied(self.store, "a", ["first"])
+        self.assertIs(eb.mark_applied(self.store, "a", ["second"]), False)
+        self.assertEqual(self.store.load()["units"]["a"]["applied_genres"], ["first"])
+        self.assertIs(eb.mark_applied(self.store, "ghost", []), False)
