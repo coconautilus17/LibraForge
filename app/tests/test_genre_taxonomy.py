@@ -143,3 +143,103 @@ class DragonKeywordTests(unittest.TestCase):
         self.assertNotIn("dragons", t.labels_from_text("the Dragon Reborn will break the world"))
         self.assertNotIn("dragons", t.labels_from_text("Perfect for fans of Dungeons and Dragons, The Murderbot Diaries"))
         self.assertNotIn("dragons", t.labels_from_text("Beneath the Dragoneye Moons"))
+
+
+class ClassifyThresholdTests(unittest.TestCase):
+    """A genre needs 25% of the labelled books (at least one)."""
+
+    def test_a_small_group_needs_only_one_supporting_book(self):
+        mains, _ = t.classify([["fantasy"], ["romance"], ["romance"]])
+        self.assertEqual(mains, ["Fantasy", "Romance"])
+
+    def test_a_large_group_needs_a_quarter_of_its_books(self):
+        books = [["romance"]] * 7 + [["fantasy"]]
+        self.assertEqual(t.classify(books)[0], ["Romance"])
+        books = [["romance"]] * 6 + [["fantasy"]] * 2
+        self.assertEqual(t.classify(books)[0], ["Fantasy", "Romance"])
+
+    def test_the_quarter_rounds_up(self):
+        # 5 labelled books -> ceil(1.25) = 2 supporters needed
+        one = [["romance"]] * 4 + [["fantasy"]]
+        two = [["romance"]] * 3 + [["fantasy"]] * 2
+        self.assertEqual(t.classify(one)[0], ["Romance"])
+        self.assertEqual(t.classify(two)[0], ["Fantasy", "Romance"])
+
+    def test_books_without_labels_do_not_raise_the_bar(self):
+        books = [["fantasy"]] + [[]] * 9
+        self.assertEqual(t.classify(books)[0], ["Fantasy"])
+
+    def test_no_labels_at_all_gives_no_genres(self):
+        self.assertEqual(t.classify([[], []]), ([], []))
+        self.assertEqual(t.classify([]), ([], []))
+
+    def test_series_level_labels_count_as_full_support_even_in_a_large_group(self):
+        books = [["romance"]] * 8
+        mains, _ = t.classify(books, extra_labels=["fantasy"])
+        self.assertEqual(mains, ["Fantasy", "Romance"])
+
+    def test_extra_labels_that_are_unknown_are_ignored(self):
+        self.assertEqual(t.classify([["fantasy"]], extra_labels=["not-a-genre"])[0], ["Fantasy"])
+
+
+class ClassifyAmbiguousSubgenreTests(unittest.TestCase):
+    def test_epic_alone_resolves_to_fantasy_when_nothing_else_names_a_main(self):
+        mains, subs = t.classify([["epic"]])
+        self.assertEqual(mains, ["Fantasy"])
+
+    def test_epic_does_not_add_fantasy_when_science_fiction_is_already_main(self):
+        mains, _ = t.classify([["science fiction"], ["epic"]])
+        self.assertNotIn("Fantasy", mains)
+        self.assertIn("Sci-Fi", mains)
+
+    def test_epic_with_fantasy_already_main_becomes_the_epic_fantasy_subgenre(self):
+        mains, subs = t.classify([["fantasy"], ["epic"]])
+        self.assertEqual(mains, ["Fantasy"])
+        self.assertIn("Epic Fantasy", subs)
+        self.assertNotIn("Epic Fantasy?", subs)
+
+    def test_paranormal_alone_makes_the_book_fantasy_but_only_when_no_main_exists(self):
+        self.assertEqual(t.classify([["paranormal"]])[0], ["Fantasy"])
+        mains, subs = t.classify([["romance"], ["paranormal"]])
+        self.assertEqual(mains, ["Romance"])
+        self.assertIn("Paranormal", subs)
+
+
+class SplitCompoundGenreTests(unittest.TestCase):
+    def test_an_alias_spelling_of_a_compound_genre_becomes_the_compound_name(self):
+        self.assertEqual(t.split_compound_genres(["Sword Sorcery"]), ["Sword & Sorcery"])
+
+    def test_a_genre_that_is_itself_compound_is_kept_whole(self):
+        self.assertEqual(t.split_compound_genres(["Sword & Sorcery"]), ["Sword & Sorcery"])
+
+    def test_two_real_genres_joined_are_split_and_canonicalised(self):
+        self.assertEqual(t.split_compound_genres(["Science Fiction & Fantasy"]), ["Sci-Fi", "Fantasy"])
+
+    def test_without_canonical_the_wording_is_kept(self):
+        self.assertEqual(t.split_compound_genres(["Science Fiction, Fantasy"], canonical=False),
+                         ["Science Fiction", "Fantasy"])
+
+    def test_a_lone_alternate_spelling_is_renamed_to_the_controlled_name(self):
+        self.assertEqual(t.split_compound_genres(["scifi"]), ["Sci-Fi"])
+        self.assertEqual(t.split_compound_genres(["Science Fiction"]), ["Sci-Fi"])
+
+    def test_duplicates_after_canonicalising_collapse(self):
+        self.assertEqual(t.split_compound_genres(["Sci-Fi", "Science Fiction", "scifi"]), ["Sci-Fi"])
+
+    def test_the_audible_composite_category_is_not_a_genre(self):
+        self.assertEqual(t.labels_from_genres(["Mystery, Thriller & Suspense"]), [])
+        self.assertEqual(t.labels_from_genres(["Mystery, Thriller & Suspense: Cozy"]), ["cozy"])
+
+
+class OutputNamesTests(unittest.TestCase):
+    def test_question_marked_ambiguous_labels_are_never_output_names(self):
+        names = t._output_names().values()
+        self.assertNotIn("Epic Fantasy?", names)
+        self.assertNotIn("Historical?", names)
+        self.assertIn("Epic Fantasy", names)
+
+    def test_canonical_resolves_known_spellings_to_one_controlled_name(self):
+        self.assertEqual(t._canonical("SciFi"), "Sci-Fi")
+        self.assertEqual(t._canonical("science fiction"), "Sci-Fi")
+        self.assertEqual(t._canonical("Fantasy"), "Fantasy")
+        self.assertIsNone(t._canonical("Totally Unknown Shelf"))
