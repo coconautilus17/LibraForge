@@ -585,6 +585,184 @@ class WriteMetadataJsonPartialTests(unittest.TestCase):
         self.assertEqual(path.read_text(), original_content)
 
 
+class FetchAllAbsItemsTests(unittest.TestCase):
+    def _request(self, libraries, pages):
+        calls = []
+        def request(path, params):
+            calls.append((path, dict(params)))
+            if path == "/api/libraries":
+                return libraries
+            lib = path.split("/")[3]
+            return pages[lib][int(params["page"])]
+        return request, calls
+
+    def test_pages_are_walked_until_the_total_is_reached(self):
+        pages = {"L1": [{"results": [{"id": i} for i in range(1000)], "total": 2500},
+                        {"results": [{"id": i} for i in range(1000, 2000)], "total": 2500},
+                        {"results": [{"id": i} for i in range(2000, 2500)], "total": 2500}]}
+        request, calls = self._request({"libraries": [{"id": "L1", "mediaType": "book"}]}, pages)
+        items = enrichment.fetch_all_abs_book_items(request)
+        self.assertEqual(len(items), 2500)
+        self.assertEqual([c[1]["page"] for c in calls[1:]], ["0", "1", "2"])
+        self.assertTrue(all(c[1]["limit"] == "1000" for c in calls[1:]))
+
+    def test_exactly_one_full_page_stops_without_asking_for_another(self):
+        pages = {"L1": [{"results": [{"id": i} for i in range(1000)], "total": 1000}]}
+        request, calls = self._request({"libraries": [{"id": "L1", "mediaType": "book"}]}, pages)
+        self.assertEqual(len(enrichment.fetch_all_abs_book_items(request)), 1000)
+        self.assertEqual(len(calls), 2)
+
+    def test_an_empty_page_ends_the_walk_even_if_the_total_claims_more(self):
+        pages = {"L1": [{"results": [], "total": 5000}]}
+        request, calls = self._request({"libraries": [{"id": "L1", "mediaType": "book"}]}, pages)
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [])
+        self.assertEqual(len(calls), 2)
+
+    def test_podcast_libraries_are_skipped_when_a_book_library_exists(self):
+        pages = {"B": [{"results": [{"id": "x"}], "total": 1}]}
+        request, calls = self._request({"libraries": [{"id": "P", "mediaType": "podcast"}, {"id": "B", "mediaType": "book"}]}, pages)
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [{"id": "x"}])
+        self.assertNotIn("/api/libraries/P/items", [c[0] for c in calls])
+
+    def test_with_no_book_typed_library_every_library_is_walked(self):
+        pages = {"P": [{"results": [{"id": "y"}], "total": 1}]}
+        request, _ = self._request({"libraries": [{"id": "P", "mediaType": "podcast"}]}, pages)
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [{"id": "y"}])
+
+    def test_a_bare_list_of_libraries_is_accepted_and_an_idless_library_is_skipped(self):
+        pages = {"B": [{"results": [{"id": "z"}], "total": 1}]}
+        request, _ = self._request([{"mediaType": "book"}, {"id": "B", "mediaType": "book"}], pages)
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [{"id": "z"}])
+
+    def test_no_libraries_means_no_items(self):
+        request, _ = self._request(None, {})
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [])
+        request, _ = self._request({"libraries": []}, {})
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [])
+
+    def test_a_non_object_page_ends_the_walk_cleanly(self):
+        request, _ = self._request({"libraries": [{"id": "B", "mediaType": "book"}]}, {"B": ["garbage"]})
+        self.assertEqual(enrichment.fetch_all_abs_book_items(request), [])
+
+
+class SeriesBookRowTests(unittest.TestCase):
+    def _item(self, **over):
+        item = {"id": "i1", "path": "/lib/a", "isFile": False, "media": {
+            "duration": 3600, "tags": ["t"],
+            "metadata": {"title": "T", "seriesName": "Cradle #2", "asin": " b0abc ", "authorName": "Will Wight",
+                         "genres": ["Fantasy"], "narratorName": "Travis", "explicit": True, "description": "d"}}}
+        item.update(over)
+        return item
+
+    def _book(self, item):
+        groups = {"cradle": [item]}
+        return enrichment.get_series_books(groups, "Cradle", _fake_normalize_series)[0]
+
+    def test_a_row_carries_the_fields_the_compile_step_needs(self):
+        book = self._book(self._item())
+        self.assertEqual((book["id"], book["path"], book["is_file"], book["title"]), ("i1", "/lib/a", False, "T"))
+        self.assertEqual((book["asin"], book["author"], book["existing_genres"], book["existing_tags"]),
+                         ("B0ABC", "Will Wight", ["Fantasy"], ["t"]))
+        self.assertEqual((book["series_name"], book["sequence"], book["existing_narrator"], book["description"]),
+                         ("Cradle", "2", "Travis", "d"))
+        self.assertIs(book["existing_explicit"], True)
+
+    def test_duration_is_in_minutes_to_one_decimal_and_zero_becomes_none(self):
+        self.assertEqual(self._book(self._item())["duration_minutes"], 60.0)
+        item = self._item()
+        item["media"]["duration"] = 100
+        self.assertEqual(self._book(item)["duration_minutes"], 1.7)
+        item["media"]["duration"] = 0
+        self.assertIsNone(self._book(item)["duration_minutes"])
+        item["media"]["duration"] = None
+        self.assertIsNone(self._book(item)["duration_minutes"])
+
+    def test_explicit_defaults_to_false_and_is_file_to_false(self):
+        item = self._item()
+        item["media"]["metadata"].pop("explicit")
+        item.pop("isFile")
+        book = self._book(item)
+        self.assertIs(book["existing_explicit"], False)
+        self.assertIs(book["is_file"], False)
+        self.assertIs(self._book(self._item(isFile=True))["is_file"], True)
+
+    def test_a_missing_author_is_blank_not_none(self):
+        item = self._item()
+        item["media"]["metadata"]["authorName"] = None
+        self.assertEqual(self._book(item)["author"], "")
+
+    def test_the_display_name_is_the_most_common_raw_spelling(self):
+        mk = lambda name: {"media": {"metadata": {"seriesName": name}}}
+        self.assertEqual(enrichment._display_series_name([mk("Cradle #1"), mk("CRADLE #2"), mk("Cradle #3")]), "Cradle")
+        self.assertEqual(enrichment._display_series_name([mk(""), mk(None)]), "")
+
+
+class AudioPresenceTests(unittest.TestCase):
+    """Ebooks and placeholders (has_audio False) vote nothing and add no evidence (#301)."""
+
+    def _book(self, **over):
+        book = {"id": "1", "title": "T", "existing_genres": ["Fantasy"], "existing_narrator": "", "existing_explicit": False}
+        book.update(over)
+        return book
+
+    def test_a_book_without_the_flag_is_treated_as_having_audio(self):
+        voters = enrichment.build_book_voters(self._book(), None, None, None, None, None)
+        self.assertIn("abs_existing", voters)
+
+    def test_a_book_flagged_without_audio_votes_nothing(self):
+        self.assertEqual(enrichment.build_book_voters(self._book(has_audio=False), None, None, None, None, None), {})
+
+    def test_a_flagged_book_with_audio_votes(self):
+        voters = enrichment.build_book_voters(self._book(has_audio=True), None, None, None, None, None)
+        self.assertEqual(voters["abs_existing"], ["fantasy"])
+
+    def _compile(self, **over):
+        shelves = {"status": "found", "shelves": [("fantasy", 20), ("erotica", 9)]}
+        return enrichment.compile_series_enrichment(
+            [self._book(**over)], {}, {"1": shelves}, lambda genres: list(genres))
+
+    def test_goodreads_explicit_evidence_counts_only_for_books_with_audio(self):
+        self.assertEqual(self._compile()["explicit_goodreads_count"], 1)
+        self.assertEqual(self._compile(has_audio=True)["explicit_goodreads_count"], 1)
+        self.assertEqual(self._compile(has_audio=False)["explicit_goodreads_count"], 0)
+
+    def test_a_no_audio_book_contributes_no_genres_or_narrators_to_the_series(self):
+        with_audio = self._compile(existing_narrator="X")
+        without = self._compile(has_audio=False, existing_narrator="X")
+        self.assertIn("Fantasy", with_audio["genre_union"])
+        self.assertEqual(without["genre_union"], [])
+        self.assertEqual(without["narrator"], "")
+
+    def test_the_row_reports_is_file_and_defaults_it_to_false(self):
+        self.assertIs(self._compile()["books"][0]["is_file"], False)
+        self.assertIs(self._compile(is_file=True)["books"][0]["is_file"], True)
+
+
+class AbsSearchInputTests(unittest.TestCase):
+    def test_the_book_author_and_provider_are_passed_to_the_search(self):
+        seen = []
+        def search(**kw):
+            seen.append(kw)
+            return {"results": [{"title": "hit"}]}
+        out = enrichment.search_series_abs([{"id": "1", "title": " Unsouled ", "author": "Will Wight"}], search, provider="audible")
+        self.assertEqual(out, {"1": {"title": "hit"}})
+        self.assertEqual(seen, [{"title": "Unsouled", "author": "Will Wight", "provider": "audible", "limit": 3}])
+
+    def test_a_missing_author_is_sent_as_an_empty_string(self):
+        seen = []
+        enrichment.search_series_abs([{"id": "1", "title": "T", "author": None}],
+                                     lambda **kw: seen.append(kw) or {"results": []})
+        self.assertEqual(seen[0]["author"], "")
+
+    def test_untitled_and_no_audio_books_are_not_searched(self):
+        calls = []
+        out = enrichment.search_series_abs(
+            [{"id": "1", "title": "  "}, {"id": "2", "title": "T", "has_audio": False}],
+            lambda **kw: calls.append(kw) or {"results": [{}]})
+        self.assertEqual(out, {"1": None, "2": None})
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -695,6 +873,7 @@ class StandaloneUnitsTests(unittest.TestCase):
         rows = enrichment.list_series_summary(self.groups, "", standalones=standalones)
         self.assertEqual([r["standalone"] for r in rows], [False, True])
         self.assertEqual(rows[1]["name"], "Intensity [Dean Koontz]")
+        self.assertEqual([r["book_count"] for r in rows], [1, 1])
         books = enrichment.get_series_books(self.groups, rows[1]["key"], _fake_normalize_series, by_key=True, items=self.items)
         self.assertEqual([b["id"] for b in books], ["s1"])
 
