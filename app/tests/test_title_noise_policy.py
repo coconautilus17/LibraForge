@@ -70,6 +70,73 @@ class TitleNoisePolicyTests(unittest.TestCase):
         self.assertFalse(title_noise_policy.ends_with_dangling_word(""))
 
 
+class PolicyLoadingAndSavingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.default_file = self.dir / "default.json"
+        self.local_file = self.dir / "local.json"
+        self.patches = [
+            patch.object(title_noise_policy, "DEFAULT_POLICY_FILE", self.default_file),
+            patch.object(title_noise_policy, "LOCAL_POLICY_FILE", self.local_file),
+        ]
+        for p in self.patches:
+            p.start()
+        title_noise_policy.clear_title_noise_cache()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        title_noise_policy.clear_title_noise_cache()
+        self.tmp.cleanup()
+
+    def test_default_entries_without_an_id_or_pattern_or_not_objects_are_dropped(self):
+        self.default_file.write_text(json.dumps({"patterns": [
+            {"id": "ok", "pattern": "foo"}, {"id": "", "pattern": "x"}, {"id": "no-pattern"},
+            {"pattern": "no-id"}, "not-a-dict"]}))
+        loaded = title_noise_policy.load_title_noise_policy()
+        self.assertEqual([p["id"] for p in loaded["patterns"] if p["source"] == "default"], ["ok"])
+
+    def test_custom_entries_without_an_id_or_pattern_or_not_objects_are_dropped(self):
+        self.default_file.write_text(json.dumps({"patterns": []}))
+        self.local_file.write_text(json.dumps({"custom_patterns": [
+            {"id": "custom-ok", "pattern": "foo"}, {"id": "custom-a"}, {"pattern": "p"}, 7]}))
+        loaded = title_noise_policy.load_title_noise_policy()
+        self.assertEqual([p["id"] for p in loaded["custom_patterns"]], ["custom-ok"])
+
+    def test_a_disabled_default_is_marked_disabled_and_the_rest_enabled(self):
+        self.default_file.write_text(json.dumps({"patterns": [
+            {"id": "a", "pattern": "x"}, {"id": "b", "pattern": "y"}]}))
+        self.local_file.write_text(json.dumps({"disabled_defaults": ["a"]}))
+        enabled = {p["id"]: p["enabled"] for p in title_noise_policy.load_title_noise_policy()["patterns"] if p["source"] == "default"}
+        self.assertEqual(enabled, {"a": False, "b": True})
+
+    def test_saved_custom_pattern_label_defaults_to_its_id(self):
+        self.default_file.write_text(json.dumps({"patterns": []}))
+        saved = title_noise_policy.save_title_noise_policy(
+            disabled_defaults=[],
+            custom_patterns=[{"id": "foo", "pattern": "x+", "label": ""}, {"id": "bar", "pattern": "y+", "label": "Bar label"}])
+        labels = {p["id"]: p["label"] for p in saved["custom_patterns"]}
+        self.assertEqual(labels, {"custom-foo": "custom-foo", "custom-bar": "Bar label"})
+
+    def test_saved_policy_file_is_versioned_and_round_trips(self):
+        self.default_file.write_text(json.dumps({"patterns": []}))
+        title_noise_policy.save_title_noise_policy(disabled_defaults=[], custom_patterns=[{"id": "foo", "pattern": "x+"}])
+        payload = json.loads(self.local_file.read_text())
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["custom_patterns"][0]["id"], "custom-foo")
+
+
+class CloseDanglingBracketEdgeTests(unittest.TestCase):
+    def test_opener_followed_only_by_whitespace_is_dropped_not_closed(self):
+        self.assertEqual(title_noise_policy.close_dangling_bracket("Title ("), "Title")
+        self.assertEqual(title_noise_policy.close_dangling_bracket("Title (   "), "Title")
+
+    def test_opener_with_text_after_it_is_closed(self):
+        self.assertEqual(title_noise_policy.close_dangling_bracket("Title (Part"), "Title (Part)")
+        self.assertEqual(title_noise_policy.close_dangling_bracket("Title [a (b"), "Title [a (b)]")
+
+
 if __name__ == "__main__":
     unittest.main()
 
