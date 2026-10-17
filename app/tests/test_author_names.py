@@ -159,5 +159,121 @@ class SchemeSwitchTests(WithTempPolicy):
         self.assertFalse(an.scheme_enabled())
 
 
+class PolicyEntryTests(WithTempPolicy):
+    def _write_default(self, payload):
+        path = Path(self.tmp.name) / "default.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        patcher = mock.patch.object(an, "DEFAULT_POLICY_FILE", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_local(self, payload):
+        an.LOCAL_POLICY_FILE.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_an_entry_needs_both_a_name_and_a_spelling(self):
+        self._write_default({"names": [
+            {"name": "Only Name"}, {"spelling": "Only Spelling"}, {"name": "", "spelling": "X"},
+            {"name": "Full Name", "spelling": "Full Name"}, "junk"]})
+        self.assertEqual([e["name"] for e in an.load_author_policy()["names"]], ["Full Name"])
+
+    def test_label_defaults_to_the_spelling_and_id_to_source_plus_name_key(self):
+        self._write_default({"names": [{"name": "Ann Lee", "spelling": "Ann Lee"}]})
+        entry = an.load_author_policy()["names"][0]
+        self.assertEqual((entry["label"], entry["id"], entry["source"], entry["enabled"], entry["description"]),
+                         ("Ann Lee", "default-" + an.name_key("Ann Lee"), "default", True, ""))
+
+    def test_an_explicit_label_id_and_description_are_kept(self):
+        self._write_default({"names": [{"name": "Ann Lee", "spelling": "Ann Lee", "label": "Ann", "id": "ann",
+                                        "description": " why "}]})
+        entry = an.load_author_policy()["names"][0]
+        self.assertEqual((entry["label"], entry["id"], entry["description"]), ("Ann", "ann", "why"))
+
+    def test_a_default_file_without_a_names_list_falls_back_to_the_built_in_names(self):
+        self._write_default({"names": "not a list"})
+        names = {e["name"] for e in an.load_author_policy()["names"]}
+        self.assertIn("Mashton XX", names)
+        self._write_default({})
+        self.assertIn("Mashton XX", {e["name"] for e in an.load_author_policy()["names"]})
+
+    def test_a_valid_empty_names_list_is_respected_not_replaced_by_the_built_ins(self):
+        self._write_default({"names": []})
+        self.assertEqual(an.load_author_policy()["names"], [])
+
+    def test_disabled_defaults_are_marked_off_and_customs_follow_their_flag(self):
+        self._write_default({"names": [{"name": "Ann Lee", "spelling": "Ann Lee", "id": "ann"}]})
+        self._write_local({"disabled_defaults": ["ann"], "custom_names": [
+            {"name": "Bob Ray", "spelling": "Bob Ray"}, {"name": "Cy Day", "spelling": "Cy Day", "enabled": False}, 5]})
+        names = {e["name"]: e for e in an.load_author_policy()["names"]}
+        self.assertIs(names["Ann Lee"]["enabled"], False)
+        self.assertEqual((names["Bob Ray"]["enabled"], names["Bob Ray"]["source"]), (True, "custom"))
+        self.assertIs(names["Cy Day"]["enabled"], False)
+        self.assertEqual(len(names), 3)
+
+    def test_the_policy_reports_its_schema_version(self):
+        self.assertEqual(an.load_author_policy()["schema_version"], 1)
+
+
+class SavePolicyTests(WithTempPolicy):
+    def test_saving_returns_the_policy_it_just_wrote(self):
+        policy = an.save_author_policy([], [{"name": "Ann Lee", "spelling": "Ann Lee"}])
+        self.assertIn("Ann Lee", [e["name"] for e in policy["names"]])
+        self.assertEqual(policy, an.load_author_policy())
+
+    def test_saved_entries_get_a_derived_id_and_label_and_keep_explicit_ones(self):
+        an.save_author_policy([], [{"name": "Ann Lee", "spelling": "Ann Lee"},
+                                   {"name": "Bob Ray", "spelling": "Bob Ray", "id": "mine", "label": "B", "description": " d "}])
+        saved = {e["name"]: e for e in json.loads(an.LOCAL_POLICY_FILE.read_text())["custom_names"]}
+        self.assertEqual((saved["Ann Lee"]["id"], saved["Ann Lee"]["label"]), ("custom-" + an.name_key("Ann Lee"), "Ann Lee"))
+        self.assertEqual((saved["Bob Ray"]["id"], saved["Bob Ray"]["label"], saved["Bob Ray"]["description"]), ("mine", "B", "d"))
+
+    def test_nameless_or_spellingless_entries_are_rejected(self):
+        for item in ({"name": "", "spelling": "X"}, {"name": "X", "spelling": ""}, {}):
+            with self.subTest(item=item), self.assertRaisesRegex(ValueError, "needs a name"):
+                an.save_author_policy([], [item])
+
+    def test_file_is_versioned_sorted_unique_disabled_defaults_readable_unicode_and_newline_terminated(self):
+        an.save_author_policy(["b", "a", "a"], [{"name": "Zoë Ray", "spelling": "Zoë Ray"}])
+        text = an.LOCAL_POLICY_FILE.read_text(encoding="utf-8")
+        payload = json.loads(text)
+        self.assertEqual((payload["schema_version"], payload["disabled_defaults"]), (1, ["a", "b"]))
+        self.assertIn("Zoë Ray", text)
+        self.assertTrue(text.endswith("\n"))
+        self.assertEqual([p.name for p in an.LOCAL_POLICY_FILE.parent.iterdir() if p.name.endswith(".tmp")], [])
+
+
+class FormatEdgeTests(WithTempPolicy):
+    def test_whitespace_only_names_are_returned_untouched(self):
+        for value in ("   ", "\t"):
+            self.assertEqual(an.format_person_name(value), value)
+        self.assertIsNone(an.format_person_name(None))
+
+    def test_a_single_token_name_is_not_turned_into_initials(self):
+        self.assertEqual(an.format_person_name("Madonna"), "Madonna")
+
+    def test_the_last_word_is_never_treated_as_unspaced_initials(self):
+        self.assertEqual(an.format_person_name("Anna JK"), "Anna JK")
+        self.assertEqual(an.format_person_name("JK Anna"), "J.K. Anna")
+
+    def test_initials_only_change_requires_same_letters_but_different_text(self):
+        self.assertIs(an.initials_only_change("V A Lewis", "V.A. Lewis"), True)
+        self.assertIs(an.initials_only_change("V.A. Lewis", "V.A. Lewis"), False)
+        self.assertIs(an.initials_only_change("V A Lewis", "V A Smith"), False)
+        self.assertIs(an.initials_only_change("", "V.A. Lewis"), False)
+        self.assertIs(an.initials_only_change("V A Lewis", ""), False)
+
+    def test_scheme_enabled_follows_the_state_file_and_is_false_without_one(self):
+        self.assertIs(an.scheme_enabled(), False)
+        an.STATE_FILE.write_text(json.dumps({"author_scheme_enabled": True}))
+        self.assertIs(an.scheme_enabled(), True)
+        an.STATE_FILE.write_text(json.dumps({"author_scheme_enabled": "yes"}))
+        self.assertIs(an.scheme_enabled(), False)
+
+    def test_scheme_enabled_ignores_a_stale_cached_answer_once_the_file_is_gone(self):
+        an.STATE_FILE.write_text(json.dumps({"author_scheme_enabled": True}))
+        self.assertIs(an.scheme_enabled(), True)
+        an.STATE_FILE.unlink()
+        self.assertIs(an.scheme_enabled(), False)
+
+
 if __name__ == "__main__":
     unittest.main()
