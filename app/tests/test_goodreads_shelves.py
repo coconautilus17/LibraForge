@@ -195,3 +195,221 @@ class DragonsShelfTests(unittest.TestCase):
 
     def test_a_stray_dragons_shelving_is_not_enough(self):
         self.assertNotIn("Dragons", shelves_to_genres([("fantasy", 470), ("dragons", 6)]))    # The Primal Hunter
+
+
+class CleanQueryTitleEdgeTests(unittest.TestCase):
+    def test_a_long_title_with_a_colon_subtitle_keeps_only_the_main_title(self):
+        long = "An Exceptionally Long Main Title That Goes On Forever: And Then A Subtitle"
+        self.assertGreater(len(long), 60)
+        self.assertEqual(clean_query_title(long), "An Exceptionally Long Main Title That Goes On Forever")
+
+    def test_a_short_title_keeps_its_subtitle(self):
+        self.assertEqual(clean_query_title("Dune: Messiah"), "Dune: Messiah")
+
+    def test_a_long_title_without_a_colon_is_left_whole(self):
+        long = "An Exceptionally Long Main Title That Goes On Forever And Then Some More Words"
+        self.assertEqual(clean_query_title(long), long)
+
+    def test_a_title_that_cleans_to_nothing_falls_back_to_the_original(self):
+        self.assertEqual(clean_query_title("(Untitled)"), "(Untitled)")
+        self.assertEqual(clean_query_title(""), "")
+        self.assertEqual(clean_query_title(None), "")
+
+
+class PacerEdgeTests(unittest.TestCase):
+    def test_a_wait_only_covers_the_remaining_part_of_the_gap(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.wait_turn()
+        c.t += 0.2
+        p.wait_turn()
+        self.assertAlmostEqual(c.slept[-1], 0.3)
+
+    def test_no_wait_when_the_gap_has_already_passed(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.wait_turn()
+        c.t += 5
+        p.wait_turn()
+        self.assertEqual(c.slept, [])
+
+    def test_a_success_between_failures_resets_the_streak(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.record(False)
+        p.record(True)
+        p.record(False)
+        self.assertFalse(p.is_open)
+        self.assertEqual(p.trips, 0)
+
+    def test_after_tripping_the_failure_streak_starts_again_from_zero(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.record(False)
+        p.record(False)
+        self.assertTrue(p.is_open)
+        c.t += 181
+        self.assertFalse(p.is_open)
+        p.record(False)
+        self.assertFalse(p.is_open)
+        p.record(False)
+        self.assertTrue(p.is_open)
+        self.assertEqual(p.trips, 2)
+
+    def test_the_breaker_reopens_for_exactly_the_cooldown(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.record(False)
+        p.record(False)
+        c.t += 179
+        self.assertTrue(p.is_open)
+        c.t += 2
+        self.assertFalse(p.is_open)
+
+
+class FetchEdgeTests(unittest.TestCase):
+    def _fetch(self, http_get, title="Unsouled", author="Will Wight", pacer=None):
+        c = FakeClock()
+        pacer = pacer or GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        return fetch_book_shelves(title, author, pacer=pacer, http_get=http_get), pacer
+
+    def test_the_request_carries_the_cleaned_title_author_and_public_key(self):
+        seen = {}
+        def get(url, timeout):
+            seen["url"] = url
+            return XML
+        self._fetch(get, title="Cradle - Book 001 - Unsouled", author="Will Wight")
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(seen["url"]).query)
+        self.assertEqual((q["title"], q["author"], q["key"]), (["Unsouled"], ["Will Wight"], [GOODREADS_PUBLIC_API_KEY]))
+
+    def test_a_missing_author_is_sent_blank(self):
+        seen = {}
+        def get(url, timeout):
+            seen["url"] = url
+            return XML
+        self._fetch(get, author=None)
+        self.assertIn("author=&", seen["url"])
+
+    def test_a_successful_lookup_resets_the_breaker_and_a_failure_counts_against_it(self):
+        p = GoodreadsPacer()
+        def boom(url, timeout):
+            raise TimeoutError()
+        self._fetch(boom, pacer=p)
+        self.assertEqual(p._fails, 1)
+        self._fetch(lambda u, t: XML, pacer=p)
+        self.assertEqual(p._fails, 0)
+        self.assertEqual(p.trips, 0)
+        self.assertFalse(p.is_open)
+
+    def test_a_404_is_not_a_failure(self):
+        p = GoodreadsPacer()
+        def missing(url, timeout):
+            raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+        p.record(False)
+        result, _ = self._fetch(missing, pacer=p)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(p._fails, 0)
+
+    def test_a_server_error_is_a_failure(self):
+        p = GoodreadsPacer()
+        def err(url, timeout):
+            raise urllib.error.HTTPError(url, 500, "boom", {}, None)
+        result, _ = self._fetch(err, pacer=p)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(p._fails, 1)
+
+    def test_garbage_xml_is_a_failure(self):
+        p = GoodreadsPacer()
+        result, _ = self._fetch(lambda u, t: b"<not xml", pacer=p)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(p._fails, 1)
+
+    def test_a_response_without_a_book_is_not_found_but_still_counts_as_success(self):
+        p = GoodreadsPacer()
+        p.record(False)
+        result, _ = self._fetch(lambda u, t: b"<GoodreadsResponse/>", pacer=p)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(p._fails, 0)
+        self.assertEqual(p.trips, 0)
+
+    def test_a_different_book_is_not_found_and_reports_the_title_it_got(self):
+        other = XML.replace(b"Unsouled (Cradle, #1)", b"Completely Different Tome").replace(b"Will Wight", b"Someone Else")
+        result, _ = self._fetch(lambda u, t: other)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(result["title"], "Completely Different Tome")
+        self.assertEqual(result["shelves"], [])
+
+    def test_shelf_counts_are_ints_and_a_bad_or_missing_count_is_zero(self):
+        xml = (b'<GoodreadsResponse><book><title>Unsouled</title><authors><author><name>Will Wight</name></author></authors>'
+               b'<popular_shelves><shelf name="Fantasy" count="12"/><shelf name="odd" count="x"/><shelf name="none"/>'
+               b'<shelf name="" count="5"/></popular_shelves></book></GoodreadsResponse>')
+        result, _ = self._fetch(lambda u, t: xml)
+        self.assertEqual(result["shelves"], [("fantasy", 12), ("odd", 0), ("none", 0)])
+
+    def test_an_open_breaker_skips_the_request_entirely(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        p.record(False)
+        p.record(False)
+        called = []
+        result, _ = self._fetch(lambda u, t: called.append(1) or XML, pacer=p)
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(called, [])
+
+
+class BreakerGateTests(unittest.TestCase):
+    def test_wait_turn_reports_true_when_closed_and_exactly_false_when_open(self):
+        c = FakeClock()
+        p = GoodreadsPacer(clock=c.now, sleep=c.sleep)
+        self.assertIs(p.wait_turn(), True)
+        p.record(False)
+        p.record(False)
+        self.assertIs(p.wait_turn(), False)
+
+
+class LongTitleBoundaryTests(unittest.TestCase):
+    def test_the_subtitle_is_cut_only_above_sixty_characters(self):
+        self.assertEqual(len("B" * 58 + ": x"), 61)
+        self.assertEqual(clean_query_title("B" * 58 + ": x"), "B" * 58)  # 61 chars: cut
+        self.assertEqual(len("B" * 57 + ": x"), 60)
+        self.assertEqual(clean_query_title("B" * 57 + ": x"), "B" * 57 + ": x")  # exactly 60: kept
+
+
+class ShelfThresholdTests(unittest.TestCase):
+    def test_niche_shelves_need_three_votes_and_five_percent_of_the_top_broad_shelf(self):
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("litrpg", 5)]), ["Fantasy", "LitRPG"])
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("litrpg", 4)]), ["Fantasy"])
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("litrpg", 2)]), ["Fantasy"])
+
+    def test_audience_shelves_need_ten_percent(self):
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("young-adult", 10)]), ["Fantasy", "Young Adult"])
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("young-adult", 9)]), ["Fantasy"])
+
+    def test_broad_shelves_need_fifteen_percent_of_the_top_one(self):
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("romance", 15)]), ["Fantasy", "Romance"])
+        self.assertEqual(shelves_to_genres([("fantasy", 100), ("romance", 14)]), ["Fantasy"])
+
+    def test_a_genre_reached_by_two_shelves_is_listed_once_in_shelf_order(self):
+        self.assertEqual(shelves_to_genres([("litrpg", 50), ("lit-rpg", 50), ("fantasy", 100)]), ["LitRPG", "Fantasy"])
+
+    def test_no_broad_shelf_uses_a_floor_of_one_vote_for_the_share(self):
+        self.assertEqual(shelves_to_genres([("litrpg", 3)]), ["LitRPG"])
+        self.assertEqual(shelves_to_genres([]), [])
+
+    def test_explicit_evidence_sums_votes_and_reports_a_rounded_share(self):
+        ev = shelves_explicit_evidence([("fantasy", 300), ("erotica", 10), ("smut", 5)])
+        self.assertEqual((ev["votes"], ev["share"], ev["significant"]), (15, 0.05, True))
+
+    def test_explicit_evidence_needs_both_enough_votes_and_enough_share(self):
+        few = shelves_explicit_evidence([("fantasy", 10), ("erotica", 2)])
+        self.assertEqual(few["significant"], False)
+        thin = shelves_explicit_evidence([("fantasy", 1000), ("erotica", 3)])
+        self.assertEqual((thin["votes"], thin["significant"]), (3, False))
+
+    def test_explicit_evidence_without_shelves_is_zero_and_not_significant(self):
+        self.assertEqual(shelves_explicit_evidence([]), {"votes": 0, "share": 0.0, "significant": False})
+
+    def test_the_share_is_rounded_to_three_decimals(self):
+        ev = shelves_explicit_evidence([("fantasy", 3000), ("erotica", 10)])
+        self.assertEqual(ev["share"], 0.003)
