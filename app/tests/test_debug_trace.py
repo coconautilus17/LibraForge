@@ -1,6 +1,10 @@
 import io
 import threading
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from app import debug_trace as dt
 from app.debug_trace import ALTER, CHOOSE, SCORE
@@ -299,3 +303,261 @@ class DebugTraceTest(unittest.TestCase):
             self.assertIn("fn", content)
         finally:
             os.unlink(path)
+
+
+class SummarizeTests(unittest.TestCase):
+    def test_scalars_use_repr(self):
+        for value in (None, True, 3, 2.5):
+            self.assertEqual(dt._summarize(value, 50), repr(value))
+
+    def test_a_string_over_the_limit_is_cut_with_the_overflow_count(self):
+        self.assertEqual(dt._summarize("abcdefghij", 10), "'abcdefghij'")
+        self.assertEqual(dt._summarize("abcdefghijk", 10), "'abcdefghij...(+1)'")
+        self.assertEqual(dt._summarize("x" * 25, 10), "'" + "x" * 10 + "...(+15)'")
+
+    def test_a_dict_shows_at_most_eight_keys_with_a_more_count(self):
+        eight = {i: i for i in range(8)}
+        self.assertNotIn("more", dt._summarize(eight, 100))
+        nine = {i: i for i in range(9)}
+        self.assertTrue(dt._summarize(nine, 100).endswith(", +1 more}"))
+        twelve = {i: i for i in range(12)}
+        out = dt._summarize(twelve, 100)
+        self.assertTrue(out.endswith(", +4 more}"))
+        self.assertIn("7: 7", out)
+        self.assertNotIn("8: 8", out)
+
+    def test_nested_values_get_half_the_length_budget(self):
+        out = dt._summarize({"k": "x" * 30}, 20)
+        self.assertIn("'" + "x" * 10 + "...(+20)'", out)
+
+    def test_a_list_shows_five_items_its_length_and_a_more_count(self):
+        self.assertEqual(dt._summarize([1, 2, 3], 100), "list(len=3)[1, 2, 3]")
+        self.assertEqual(dt._summarize([1, 2, 3, 4, 5], 100), "list(len=5)[1, 2, 3, 4, 5]")
+        self.assertEqual(dt._summarize(list(range(6)), 100), "list(len=6)[0, 1, 2, 3, 4, +1 more]")
+        self.assertEqual(dt._summarize(list(range(9)), 100), "list(len=9)[0, 1, 2, 3, 4, +4 more]")
+        self.assertTrue(dt._summarize((1, 2), 100).startswith("tuple(len=2)"))
+        self.assertTrue(dt._summarize({1}, 100).startswith("set(len=1)"))
+
+    def test_list_items_get_half_the_length_budget(self):
+        self.assertEqual(dt._summarize(["y" * 12], 20), "list(len=1)['" + "y" * 10 + "...(+2)']")
+
+    def test_other_objects_use_a_length_limited_repr(self):
+        class Thing:
+            def __repr__(self):
+                return "T" * 30
+        self.assertEqual(dt._summarize(Thing(), 40), "T" * 30)
+        self.assertEqual(dt._summarize(Thing(), 10), "T" * 10 + "...")
+
+    def test_an_unreprable_object_never_raises(self):
+        class Bad:
+            def __repr__(self):
+                raise RuntimeError("no")
+        self.assertEqual(dt._summarize(Bad(), 40), "<unreprable Bad>")
+
+
+class ConfigureEnvironmentTests(unittest.TestCase):
+    def tearDown(self):
+        dt.configure(enabled=False)
+
+    def _env(self, **env):
+        base = {k: v for k, v in os.environ.items() if not k.startswith("LIBRAFORGE_DEBUG")}
+        base.update(env)
+        return mock.patch.dict(os.environ, base, clear=True)
+
+    def test_off_by_default(self):
+        with self._env():
+            dt.configure()
+            self.assertIs(dt.is_enabled(), False)
+            self.assertIs(dt.is_enabled(SCORE), False)
+
+    def test_the_environment_switch_enables_tracing(self):
+        for value in ("1", "true", "yes", "on"):
+            with self.subTest(value=value), self._env(LIBRAFORGE_DEBUG=value):
+                dt.configure(stream=io.StringIO())
+                self.assertTrue(dt.is_enabled())
+
+    def test_environment_values_meaning_off_do_not_enable(self):
+        for value in ("", "0", "false", "False", "  "):
+            with self.subTest(value=value), self._env(LIBRAFORGE_DEBUG=value):
+                dt.configure(stream=io.StringIO())
+                self.assertFalse(dt.is_enabled())
+
+    def test_an_explicit_enable_wins_over_an_off_environment(self):
+        with self._env(LIBRAFORGE_DEBUG="0"):
+            dt.configure(enabled=True, stream=io.StringIO())
+            self.assertTrue(dt.is_enabled())
+
+    def test_the_categories_environment_variable_filters_when_none_are_passed(self):
+        with self._env(LIBRAFORGE_DEBUG_CATEGORIES=" score , choose ,"):
+            dt.configure(enabled=True, stream=io.StringIO())
+            self.assertTrue(dt.is_enabled(SCORE))
+            self.assertTrue(dt.is_enabled(CHOOSE))
+            self.assertFalse(dt.is_enabled(ALTER))
+
+    def test_passed_categories_beat_the_environment(self):
+        with self._env(LIBRAFORGE_DEBUG_CATEGORIES="score"):
+            dt.configure(enabled=True, stream=io.StringIO(), categories=[ALTER])
+            self.assertTrue(dt.is_enabled(ALTER))
+            self.assertFalse(dt.is_enabled(SCORE))
+
+    def test_no_categories_means_everything_is_enabled(self):
+        with self._env():
+            dt.configure(enabled=True, stream=io.StringIO())
+            self.assertTrue(dt.is_enabled(SCORE))
+            self.assertTrue(dt.is_enabled("anything"))
+            self.assertTrue(dt.is_enabled())
+
+    def test_a_category_filter_still_enables_calls_with_no_category(self):
+        with self._env():
+            dt.configure(enabled=True, stream=io.StringIO(), categories=[SCORE])
+            self.assertTrue(dt.is_enabled(None))
+
+    def test_the_environment_file_receives_the_trace_and_the_header_lists_categories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "trace.log"
+            with self._env(LIBRAFORGE_DEBUG_FILE=str(target)):
+                dt.configure(enabled=True, stream=io.StringIO(), categories=[SCORE, CHOOSE])
+                dt.log(SCORE, "hello")
+                dt.configure(enabled=False)
+            text = target.read_text()
+        self.assertIn("categories=['choose', 'score']", text)
+        self.assertIn("hello", text)
+
+    def test_the_header_says_all_when_unfiltered(self):
+        buf = io.StringIO()
+        with self._env():
+            dt.configure(enabled=True, stream=buf)
+        self.assertIn("categories=all", buf.getvalue())
+
+    def test_reconfiguring_closes_the_previous_file_sink(self):
+        with tempfile.TemporaryDirectory() as tmp, self._env():
+            dt.configure(enabled=True, stream=io.StringIO(), file_path=str(Path(tmp) / "a.log"))
+            first = dt._config.sink._fh
+            dt.configure(enabled=False)
+            self.assertTrue(first.closed)
+            self.assertIsNone(dt._config.sink)
+
+
+class SinkTests(unittest.TestCase):
+    def test_an_unwritable_file_falls_back_to_stderr_only_without_a_stream(self):
+        sink = dt._Sink(stream=None, file_path="/nonexistent-dir/x.log")
+        self.assertIs(sink._stream, __import__("sys").stderr)
+        self.assertIsNone(sink._fh)
+        buf = io.StringIO()
+        sink2 = dt._Sink(stream=buf, file_path="/nonexistent-dir/x.log")
+        self.assertIs(sink2._stream, buf)
+
+    def test_a_file_sink_writes_lines_and_close_releases_it_idempotently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.log"
+            sink = dt._Sink(stream=None, file_path=str(path))
+            sink.write("one")
+            sink.write("two")
+            fh = sink._fh
+            sink.close()
+            sink.close()
+            self.assertTrue(fh.closed)
+            self.assertIsNone(sink._fh)
+            self.assertEqual(path.read_text(), "one\ntwo\n")
+
+    def test_a_broken_stream_never_blocks_the_file_copy(self):
+        class Broken:
+            def write(self, *_): raise OSError("closed")
+            def flush(self): pass
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.log"
+            sink = dt._Sink(stream=Broken(), file_path=str(path))
+            sink.write("still here")
+            sink.close()
+            self.assertEqual(path.read_text(), "still here\n")
+
+
+class TraceOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.buf = io.StringIO()
+        dt.configure(enabled=True, stream=self.buf)
+
+    def tearDown(self):
+        dt.configure(enabled=False)
+        dt.set_subject(None)
+
+    def _lines(self):
+        return [line for line in self.buf.getvalue().splitlines() if not line.startswith("#")]
+
+    def test_elapsed_time_is_reported_in_milliseconds(self):
+        @dt.trace(SCORE)
+        def work():
+            return 1
+        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[10.0, 11.5]):
+            work()
+        self.assertTrue(self._lines()[-1].endswith("= 1  (1500.0ms)"), self._lines()[-1])
+
+    def test_a_raising_function_logs_the_error_with_elapsed_ms_and_reraises(self):
+        @dt.trace(SCORE)
+        def boom():
+            raise ValueError("bad")
+        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[1.0, 1.25]):
+            with self.assertRaises(ValueError):
+                boom()
+        self.assertTrue(self._lines()[-1].endswith("!! boom raised ValueError('bad')  (250.0ms)"), self._lines()[-1])
+
+    def test_show_result_false_logs_done_instead_of_the_value(self):
+        @dt.trace(SCORE, show_result=False)
+        def big():
+            return list(range(1000))
+        big()
+        self.assertIn("<- big done", self._lines()[-1])
+        self.assertNotIn("range", self._lines()[-1])
+
+    def test_a_call_without_a_category_is_labelled_trace(self):
+        @dt.trace()
+        def f():
+            return 0
+        f()
+        self.assertIn("[trace] -> f()", self._lines()[0])
+
+    def test_blocks_report_elapsed_ms_for_success_and_failure(self):
+        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[2.0, 2.5]):
+            with dt.trace_block(CHOOSE, "pick"):
+                pass
+        self.assertTrue(self._lines()[-1].endswith("<- {pick} done  (500.0ms)"), self._lines()[-1])
+        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[2.0, 2.002]):
+            with self.assertRaises(KeyError):
+                with dt.trace_block(CHOOSE, "pick"):
+                    raise KeyError("k")
+        self.assertTrue(self._lines()[-1].endswith("!! {pick} raised KeyError('k')  (2.0ms)"), self._lines()[-1])
+
+    def test_a_block_without_a_category_is_labelled_trace_and_shows_its_fields(self):
+        with dt.trace_block(None, "step", n=3, text="x" * 400):
+            pass
+        first = self._lines()[0]
+        self.assertIn("[trace] -> {step}(n=3, text='", first)
+        self.assertIn("...(+250)'", first)   # 300 default / 2 = 150 budget
+
+    def test_log_lines_carry_the_category_message_and_summarised_fields(self):
+        dt.log(SCORE, "checkpoint", a=1, b="x" * 400)
+        line = self._lines()[-1]
+        self.assertIn("[score] .. checkpoint a=1, b='", line)
+        self.assertIn("...(+250)'", line)
+
+    def test_log_without_fields_has_no_trailing_text(self):
+        dt.log(None, "just a note")
+        self.assertTrue(self._lines()[-1].endswith("[trace] .. just a note"))
+
+    def test_captured_argument_values_share_the_length_budget(self):
+        @dt.trace(ALTER, capture=["value"])
+        def clean(value, other):
+            return value
+        clean("q" * 400, "o")
+        entry = self._lines()[0]
+        self.assertIn("value='", entry)
+        self.assertNotIn("other", entry)
+        self.assertIn("...(+250)'", entry)
+
+    def test_lines_are_prefixed_with_the_thread_and_subject(self):
+        @dt.trace(SCORE)
+        def f():
+            return 0
+        with dt.subject("My Book"):
+            f()
+        self.assertIn("][My Book] [score] -> f()", self._lines()[0])
