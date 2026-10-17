@@ -175,5 +175,114 @@ class CleanBookTitleTests(unittest.TestCase):
         self.assertEqual(self.clean("007 Casino Royale", "Bond", "007", False), "Casino Royale")
 
 
+class PersonSegmentMatchTests(unittest.TestCase):
+    def test_exact_and_slightly_misspelled_names_match(self):
+        self.assertTrue(ORG.person_segment_matches("Will Wight", ["Will Wight"]))
+        self.assertTrue(ORG.person_segment_matches("Andre Rowe", ["Andrew Rowe"]))
+        self.assertTrue(ORG.person_segment_matches("Wil Wight", ["Will Wight"]))
+
+    def test_any_listed_person_can_match(self):
+        self.assertTrue(ORG.person_segment_matches("Bob Roe", ["Will Wight", "Bob Roe"]))
+
+    def test_a_partial_name_or_a_long_title_containing_a_name_does_not(self):
+        for segment in ("Will", "Wight", "A Long Title Segment Containing Will Wight Inside", "Totally Different", ""):
+            with self.subTest(segment=segment):
+                self.assertFalse(ORG.person_segment_matches(segment, ["Will Wight"]))
+
+    def test_blank_or_missing_people_never_match(self):
+        self.assertFalse(ORG.person_segment_matches("abc", [""]))
+        self.assertFalse(ORG.person_segment_matches("abc", []))
+
+
+class StripAuthorNarratorNoiseTests(unittest.TestCase):
+    def strip(self, title, author, narrator="", trusted=False):
+        return ORG.strip_author_narrator_noise_from_title(title, author, narrator, trusted)
+
+    def test_a_leading_author_dash_is_removed(self):
+        self.assertEqual(self.strip("Ryan Eisenhower - Starship Tigress", "Ryan Eisenhower"), "Starship Tigress")
+
+    def test_a_trailing_author_or_author_and_narrator_dash_is_removed_even_with_a_typo(self):
+        self.assertEqual(self.strip("Starship Tigress - Ryan Eisenhower", "Ryan Eisenhower"), "Starship Tigress")
+        self.assertEqual(self.strip("How to Defeat - Andre Rowe - Narrator", "Andrew Rowe", "Narrator"), "How to Defeat")
+
+    def test_a_trailing_parenthetical_credit_is_removed_for_known_people_or_person_shaped_text(self):
+        self.assertEqual(self.strip("The Grinding (Jeff Hays, Annie Ellicott)", "Someone", "Jeff Hays, Annie Ellicott"), "The Grinding")
+        self.assertEqual(self.strip("Title (Some Reader)", "Someone"), "Title")
+
+    def test_a_parenthetical_with_a_number_or_a_non_name_is_kept(self):
+        self.assertEqual(self.strip("Title (Book 2)", "Someone"), "Title (Book 2)")
+        self.assertEqual(self.strip("Title (Part 3 Special)", "Someone"), "Title (Part 3 Special)")
+        self.assertEqual(self.strip("Title (special edition)", "Someone"), "Title (special edition)")
+
+    def test_a_trailing_by_clause_is_removed_only_for_a_known_author(self):
+        self.assertEqual(self.strip("Title by Will Wight", "Will Wight"), "Title")
+        self.assertEqual(self.strip("Title by Someone Else", "Will Wight"), "Title by Someone Else")
+
+    def test_an_author_name_stuck_to_the_end_is_removed_when_a_real_title_remains(self):
+        self.assertEqual(self.strip("Feedback Dennis E. Taylor", "Dennis E. Taylor"), "Feedback")
+
+    def test_nothing_is_removed_when_that_would_leave_no_title(self):
+        self.assertEqual(self.strip("Dennis E. Taylor", "Dennis E. Taylor"), "Dennis E. Taylor")
+        self.assertEqual(self.strip("Will Wight - Will Wight", "Will Wight"), "Will Wight")
+
+    def test_without_known_people_or_a_title_there_is_nothing_to_do(self):
+        self.assertEqual(self.strip("Title", ""), "Title")
+        self.assertEqual(self.strip("", "Will Wight"), "")
+
+    def test_trusted_titles_keep_genre_words_that_cleanup_would_wipe(self):
+        self.assertEqual(self.strip("The Fifth Law of Cultivation", "Will Wight", trusted=True), "The Fifth Law of Cultivation")
+
+    @unittest.expectedFailure
+    def test_a_co_author_prefix_should_be_removed_as_the_docstring_promises(self):
+        # KNOWN BUG (see docs/test-audit-2026-10-16.md): the docstring lists
+        # "Dan Raxor, Jace Cannon - Supers of Vault 12" as handled, but the leading
+        # segment is compared with each author separately, so a two-author prefix
+        # (ratio ~0.44 against either) never matches and the title keeps it.
+        self.assertEqual(self.strip("Dan Raxor, Jace Cannon - Supers of Vault 12", "Dan Raxor, Jace Cannon"), "Supers of Vault 12")
+
+
+class SeriesSuffixNumberTests(unittest.TestCase):
+    def test_a_bare_one_to_four_digit_suffix_after_the_series_is_the_number(self):
+        self.assertEqual(ORG.metadata_series_suffix_number("Cradle 03", "Cradle"), "003")
+        self.assertEqual(ORG.metadata_series_suffix_number("Cradle 3.5", "Cradle"), "003.5")
+
+    def test_years_other_series_and_bare_titles_have_no_suffix_number(self):
+        for title, series in (("Cradle 2016", "Cradle"), ("Cradle", "Cradle"), ("Other 03", "Cradle"), ("Cradle 12345", "Cradle"),
+                              ("", "Cradle"), ("Cradle 3", "")):
+            with self.subTest(title=title, series=series):
+                self.assertEqual(ORG.metadata_series_suffix_number(title, series), "")
+
+    def test_the_small_variant_only_accepts_one_or_two_digits(self):
+        self.assertEqual(ORG.small_series_suffix_number_from_text("Cradle 2", "Cradle"), "002")
+        self.assertEqual(ORG.small_series_suffix_number_from_text("Cradle 12", "Cradle"), "012")
+        self.assertEqual(ORG.small_series_suffix_number_from_text("Cradle 2.5", "Cradle"), "002.5")
+
+    def test_the_small_variant_ignores_course_numbers_years_and_other_series(self):
+        for value, series in (("Cradle 204", "Cradle"), ("Cradle 2016", "Cradle"), ("", "Cradle"), ("Cradle 2", ""), ("Other 2", "Cradle")):
+            with self.subTest(value=value, series=series):
+                self.assertEqual(ORG.small_series_suffix_number_from_text(value, series), "")
+
+
+class DistinctBookTitleTests(unittest.TestCase):
+    def test_a_title_with_content_beyond_the_series_and_number_is_distinct(self):
+        self.assertTrue(ORG.has_distinct_book_title("Unsouled", "Cradle", "001"))
+        self.assertTrue(ORG.has_distinct_book_title("Cradle - Unsouled", "Cradle", "001"))
+        self.assertTrue(ORG.has_distinct_book_title("Unsouled", "", "001"))
+
+    def test_restating_the_series_or_the_number_is_not_distinct(self):
+        for title in ("Cradle", "Book 1", "1", "Cradle Book 1", "Book One", "Volume 1"):
+            with self.subTest(title=title):
+                self.assertFalse(ORG.has_distinct_book_title(title, "Cradle", "001"), title)
+
+    def test_a_roman_numeral_label_for_this_number_is_not_distinct(self):
+        self.assertFalse(ORG.has_distinct_book_title("Book III", "Cradle", "003"))
+
+    def test_a_label_for_another_number_is_still_a_bare_label(self):
+        self.assertFalse(ORG.has_distinct_book_title("Book 2", "Cradle", "001"))
+
+    def test_an_empty_title_is_not_distinct(self):
+        self.assertFalse(ORG.has_distinct_book_title("", "Cradle", "001"))
+
+
 if __name__ == "__main__":
     unittest.main()
