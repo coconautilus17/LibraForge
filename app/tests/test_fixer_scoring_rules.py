@@ -558,5 +558,201 @@ class SkuAndPublisherMatchTests(unittest.TestCase):
         self.assertIs(s._publisher_matches({"publisher": "Tantor Audio"}, {}), False)
 
 
+class CoverUrlTests(unittest.TestCase):
+    def test_the_largest_known_size_wins(self):
+        images = {"300": "u300", "500": "u500", "2400": "u2400", "1215": "u1215"}
+        self.assertEqual(s.get_cover_url({"product_images": images}), "u2400")
+        self.assertEqual(s.get_cover_url({"product_images": {"300": "u300", "500": "u500"}}), "u500")
+        self.assertEqual(s.get_cover_url({"product_images": {"408": "u408", "300": "u300"}}), "u408")
+
+    def test_each_preferred_size_is_used_when_it_is_the_only_one(self):
+        for key in ("2400", "1215", "1200", "500", "408", "300"):
+            self.assertEqual(s.get_cover_url({"product_images": {key: f"u{key}"}}), f"u{key}")
+
+    def test_an_empty_preferred_size_is_skipped(self):
+        self.assertEqual(s.get_cover_url({"product_images": {"2400": "", "500": "u500"}}), "u500")
+
+    def test_an_unknown_size_is_used_as_a_last_resort_and_empty_ones_are_ignored(self):
+        self.assertEqual(s.get_cover_url({"product_images": {"64": "", "96": "u96"}}), "u96")
+        self.assertEqual(s.get_cover_url({"product_images": {"64": ""}}), "")
+
+    def test_missing_or_malformed_images_give_an_empty_string(self):
+        for product in ({}, {"product_images": None}, {"product_images": []}, {"product_images": "x"}):
+            self.assertEqual(s.get_cover_url(product), "")
+
+
+class ChooseBestTitleTests(unittest.TestCase):
+    def test_audible_title_wins_by_default(self):
+        self.assertEqual(s.choose_best_title("Unsouled", "Cradle", "unsouled (unabridged)"), "Unsouled")
+
+    def test_a_missing_local_title_uses_audibles_and_a_missing_audible_title_uses_the_local_one(self):
+        self.assertEqual(s.choose_best_title("Unsouled", "Cradle", ""), "Unsouled")
+        self.assertEqual(s.choose_best_title("", "Cradle", "Local Title"), "Local Title")
+        self.assertEqual(s.choose_best_title("", "", ""), "")
+
+    def test_when_audible_titles_the_book_with_the_series_name_the_more_specific_local_title_wins(self):
+        self.assertEqual(s.choose_best_title("Cradle", "Cradle", "Unsouled"), "Unsouled")
+
+    def test_but_a_local_title_that_is_also_the_series_name_gives_audibles(self):
+        self.assertEqual(s.choose_best_title("Cradle", "Cradle", "Cradle"), "Cradle")
+
+    def test_without_a_series_audibles_title_is_kept(self):
+        self.assertEqual(s.choose_best_title("Cradle", "", "Unsouled"), "Cradle")
+
+
+class MetadataFromProductTests(unittest.TestCase):
+    def meta(self, clues=None, product=None, minutes=None):
+        product = product or {"asin": "B0X", "title": "Unsouled", "authors": [{"name": "Will Wight"}],
+                              "narrators": [{"name": "Travis Baldree"}], "runtime_length_min": 600,
+                              "series": [{"title": "Cradle", "sequence": "1"}], "release_date": "2016-04-01",
+                              "product_images": {"500": "cover500"}}
+        clues = {"title": "Unsouled", "author": "Will Wight", "narrator": "Travis Baldree", "series": "Cradle",
+                 "book_number": "1", **(clues or {})}
+        return s.metadata_from_product(product, clues, 0.9, "full")
+
+    def test_identity_fields_come_from_the_product(self):
+        meta = self.meta()
+        self.assertEqual((meta["asin"], meta["title"], meta["author"], meta["narrator"]),
+                         ("B0X", "Unsouled", "Will Wight", "Travis Baldree"))
+        self.assertEqual((meta["series"], meta["sequence"], meta["year"]), ("Cradle", "1", "2016"))
+        self.assertEqual((meta["cover_url"], meta["audible_duration_minutes"]), ("cover500", 600))
+
+    def test_a_product_without_authors_keeps_the_local_author(self):
+        product = {"asin": "B0X", "title": "Unsouled", "authors": [], "series": []}
+        meta = s.metadata_from_product(product, {"title": "Unsouled", "author": "Local Author"}, 0.9, "full")
+        self.assertEqual(meta["author"], "Local Author")
+
+    def test_a_special_provider_is_always_the_publisher(self):
+        product = {"asin": "B0X", "title": "Unsouled", "authors": [{"name": "Will Wight"}], "_abs_provider": "graphicaudio"}
+        meta = s.metadata_from_product(product, {"title": "Unsouled", "author": "Will Wight", "publisher": "Other House"}, 0.9, "full")
+        self.assertEqual(meta["publisher"], s.SPECIAL_PROVIDERS["graphicaudio"])
+
+    def test_an_ordinary_match_keeps_the_local_publisher(self):
+        meta = self.meta({"publisher": "Tantor Audio"})
+        self.assertEqual(meta["publisher"], "Tantor Audio")
+
+
+def edit_prod(**over):
+    base = {"title": "Unsouled", "series": [{"title": "Cradle", "sequence": "1"}], "authors": [{"name": "Will Wight"}],
+            "narrators": [{"name": "Travis Baldree"}], "runtime_length_min": 600}
+    base.update(over)
+    return base
+
+
+EDIT_CLUES = {"title": "Unsouled", "author": "Will Wight", "series": "Cradle", "book_number": "1"}
+
+
+class DetermineEditModeTests(unittest.TestCase):
+    def mode(self, product=None, clues=None, score=0.9, duration="perfect"):
+        return s.determine_edit_mode(product or edit_prod(), {**EDIT_CLUES, **(clues or {})}, score, {"status": duration})
+
+    def test_a_confident_match_with_everything_agreeing_is_a_full_edit(self):
+        self.assertEqual(self.mode(), "full")
+
+    def test_below_the_score_threshold_nothing_is_written(self):
+        self.assertEqual(self.mode(score=0.699), "none")
+        self.assertEqual(self.mode(score=0.70), "full")
+
+    def test_a_duration_mismatch_only_allows_series_grouping_when_author_and_series_agree(self):
+        self.assertEqual(self.mode(duration="mismatch"), "series_only")
+        self.assertEqual(self.mode(edit_prod(series=[]), duration="mismatch"), "none")
+        self.assertEqual(self.mode(clues={"author": "Zed Q"}, duration="mismatch"), "none")
+        self.assertEqual(self.mode(clues={"series": "Other Saga"}, duration="mismatch"), "none")
+
+    def test_reordered_title_words_are_never_written(self):
+        self.assertEqual(self.mode(edit_prod(title="Alpha Beta"), {"title": "Beta Alpha"}), "none")
+
+    def test_a_title_that_does_not_match_only_allows_series_grouping(self):
+        self.assertEqual(self.mode(edit_prod(title="Totally Other")), "series_only")
+
+    def test_a_series_named_product_title_is_a_full_edit_only_with_a_clean_sequence_and_good_duration(self):
+        stand_in = edit_prod(title="Cradle")
+        self.assertEqual(self.mode(stand_in, {"title": "Unsouled"}), "full")
+        self.assertEqual(self.mode(stand_in, {"title": "Unsouled"}, duration="acceptable"), "full")
+        self.assertEqual(self.mode(stand_in, {"title": "Unsouled"}, duration="unknown"), "series_only")
+        ranged = edit_prod(title="Cradle", series=[{"title": "Cradle", "sequence": "1-2"}])
+        self.assertEqual(self.mode(ranged, {"title": "Unsouled"}, duration="acceptable"), "series_only")
+
+    def test_a_book_titled_exactly_like_its_series_needs_a_strong_duration(self):
+        product = edit_prod(title="Sapiens", series=[{"title": "Sapiens", "sequence": ""}])
+        clues = {"title": "Sapiens", "series": "Sapiens", "book_number": ""}
+        self.assertEqual(self.mode(product, clues, duration="perfect"), "full")
+        self.assertEqual(self.mode(product, clues, duration="strong"), "full")
+        self.assertEqual(self.mode(product, clues, duration="acceptable"), "series_only")
+
+    def test_a_good_duration_with_a_plausible_title_or_a_clean_sequence_is_full(self):
+        for duration in ("perfect", "strong", "acceptable"):
+            self.assertEqual(self.mode(duration=duration), "full")
+
+    def test_unknown_duration_still_allows_a_full_edit_with_a_title_and_clean_sequence(self):
+        self.assertEqual(self.mode(duration="unknown"), "full")
+
+    def test_without_a_clean_sequence_unknown_duration_only_groups_the_series(self):
+        product = edit_prod(series=[{"title": "Cradle", "sequence": ""}])
+        self.assertEqual(self.mode(product, duration="unknown"), "series_only")
+
+    def test_series_only_needs_a_series_a_matching_author_and_a_matching_series_name(self):
+        self.assertEqual(self.mode(edit_prod(title="Totally Other", series=[]), duration="mismatch"), "none")
+        self.assertEqual(self.mode(edit_prod(title="Totally Other"), {"author": "Zed Q"}), "none")
+        self.assertEqual(self.mode(edit_prod(title="Totally Other"), {"series": "Unrelated Saga"}), "none")
+
+
+class SparseProviderEditModeTests(unittest.TestCase):
+    def goodreads(self, product_over=None, clues=None, provider="goodreads"):
+        product = {"title": "Unsouled", "authors": [{"name": "Will Wight"}], "_abs_provider": provider, "series": []}
+        product.update(product_over or {})
+        c = {"title": "Unsouled", "author": "Will Wight", "series": "", "book_number": ""}
+        c.update(clues or {})
+        return s.determine_edit_mode(product, c, 0.1, None)
+
+    def test_an_exact_title_and_author_is_a_full_edit_despite_the_low_score(self):
+        self.assertEqual(self.goodreads(), "full")
+        self.assertEqual(self.goodreads(provider="openlibrary"), "full")
+
+    def test_a_different_title_or_author_is_rejected(self):
+        self.assertEqual(self.goodreads({"title": "Other Book"}), "none")
+        self.assertEqual(self.goodreads({"authors": [{"name": "Zed Q"}]}), "none")
+
+    def test_a_separated_subtitle_counts_but_run_on_text_does_not(self):
+        self.assertEqual(self.goodreads({"title": "Unsouled: A Cradle Novel"}), "full")
+        self.assertEqual(self.goodreads({"title": "Unsouled Notebook Edition"}), "none")
+
+    def test_a_book_label_difference_is_ignored(self):
+        self.assertEqual(self.goodreads({"title": "Cradle Book 1 Unsouled"}, {"title": "Cradle Unsouled"}), "full")
+
+    def test_series_and_number_identity_stands_in_for_the_title(self):
+        product = {"title": "Cradle 1", "series": [{"title": "Cradle", "sequence": "1"}]}
+        clues = {"title": "The Real Name", "series": "Cradle", "book_number": "1"}
+        self.assertEqual(self.goodreads(product, clues), "full")
+        product["series"] = [{"title": "Cradle", "sequence": "2"}]
+        self.assertEqual(self.goodreads(product, clues), "none")
+
+    def test_an_unknown_local_author_is_accepted_only_on_an_exact_title(self):
+        self.assertEqual(self.goodreads(clues={"author": ""}), "full")
+        self.assertEqual(self.goodreads({"title": "Unsouled: A Cradle Novel"}, {"author": ""}), "none")
+
+
+class SpecialProviderEditModeTests(unittest.TestCase):
+    def mode(self, tags, title="Dragon Emperor", author="Eric Vall", provider="graphicaudio"):
+        product = {"title": title, "authors": [{"name": author}], "_abs_provider": provider, "series": []}
+        clues = {"title": "Dragon Emperor", "author": "Eric Vall", "_raw_tags": tags}
+        return s.determine_edit_mode(product, clues, 0.1, None)
+
+    def test_a_confirmed_production_company_in_the_composer_tag_allows_a_full_edit(self):
+        self.assertEqual(self.mode({"composer": "GraphicAudio Productions"}), "full")
+        self.assertEqual(self.mode({"composer": "Soundbooth Theater"}, provider="soundbooththeater"), "full")
+
+    def test_the_mp4_composer_atom_is_read_as_bytes_or_text(self):
+        self.assertEqual(self.mode({"\xa9wrt": [b"GraphicAudio"]}), "full")
+        self.assertEqual(self.mode({"\xa9wrt": ["graphicaudio"]}), "full")
+
+    def test_an_unconfirmed_or_wrong_company_title_or_author_is_rejected(self):
+        self.assertEqual(self.mode({"composer": "Someone"}), "none")
+        self.assertEqual(self.mode({}), "none")
+        self.assertEqual(self.mode({"composer": "GraphicAudio"}, provider="soundbooththeater"), "none")
+        self.assertEqual(self.mode({"composer": "graphicaudio"}, title="Totally Different Title"), "none")
+        self.assertEqual(self.mode({"composer": "graphicaudio"}, author="Zed Q"), "none")
+
+
 if __name__ == "__main__":
     unittest.main()
