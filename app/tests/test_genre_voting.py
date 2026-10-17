@@ -1,6 +1,7 @@
 """Per-book and per-series genre voting across sources (Enrichment Forge v2)."""
 import unittest
 
+from app import genre_voting as gv
 from app.genre_voting import book_vote, vote_unit
 
 
@@ -204,3 +205,209 @@ class AudioSiloIsCrowdTests(unittest.TestCase):
 
     def test_audiosilo_with_another_crowd_source_is(self):
         self.assertIn("Humor", book_vote({"audiosilo": ["humor"], "goodreads": ["humor"]})["main"])
+
+
+def _vote(**voters):
+    return gv.book_vote({k.replace("_", ""): v for k, v in voters.items()})
+
+
+def _unit(books, **kw):
+    kw.setdefault("series_labels", [])
+    kw.setdefault("series_evidence", [])
+    kw.setdefault("pf_progression", False)
+    kw.setdefault("standalone", False)
+    return gv.vote_unit(books, **kw)
+
+
+class BookVoteWeightTests(unittest.TestCase):
+    def test_an_editorial_source_weighs_two_and_passes_alone(self):
+        for source in ("audible", "file_tags", "keywords"):
+            with self.subTest(source=source):
+                self.assertEqual(gv.book_vote({source: ["fantasy"]})["main"], {"Fantasy"})
+
+    def test_a_crowd_source_alone_goes_through_the_fallback_with_its_evidence(self):
+        vote = gv.book_vote({"goodreads": ["romance"]})
+        self.assertEqual(vote["main"], {"Romance"})
+        self.assertEqual(vote["evidence"], {"Romance": {"goodreads"}})
+
+    def test_two_crowd_sources_agreeing_pass_by_weight(self):
+        vote = gv.book_vote({"goodreads": ["fantasy"], "openlibrary": ["fantasy"]})
+        self.assertEqual(vote["main"], {"Fantasy"})
+        self.assertEqual(vote["evidence"]["Fantasy"], {"goodreads", "openlibrary"})
+
+    def test_an_unknown_source_counts_as_crowd_weight_one(self):
+        vote = gv.book_vote({"mystery-source": ["fantasy"], "goodreads": ["fantasy"]})
+        self.assertEqual(vote["main"], {"Fantasy"})
+
+    def test_a_main_above_the_bar_makes_the_fallback_unnecessary(self):
+        vote = gv.book_vote({"audible": ["fantasy"], "goodreads": ["romance"]})
+        self.assertEqual(vote["main"], {"Fantasy"})
+        self.assertEqual(vote["other"], {"Romance"})
+
+    def test_disagreeing_crowd_sources_keep_at_most_two_in_taxonomy_order(self):
+        vote = gv.book_vote({"goodreads": ["romance"], "openlibrary": ["science fiction"], "audiosilo": ["fantasy"]})
+        self.assertEqual(vote["main"], {"Fantasy", "Sci-Fi"})
+        self.assertEqual(vote["other"], {"Romance"})
+
+    def test_the_fallback_prefers_the_best_supported_genre(self):
+        vote = gv.book_vote({"goodreads": ["thriller"], "openlibrary": ["thriller"], "audiosilo": ["horror"],
+                             "abs_existing": ["romance"]})
+        self.assertEqual(vote["main"], {"Thriller"})
+
+    def test_a_strong_genre_never_wins_on_crowd_shelving_alone(self):
+        self.assertEqual(gv.book_vote({"goodreads": ["litrpg"]})["main"], set())
+        self.assertEqual(gv.book_vote({"goodreads": ["litrpg"], "openlibrary": ["romance"]})["main"], {"Romance"})
+
+    def test_subgenres_are_counted_per_source_with_their_evidence(self):
+        vote = gv.book_vote({"audible": ["space opera"], "goodreads": ["space opera"]})
+        self.assertEqual(vote["sub"]["Space Opera"], 2)
+        self.assertEqual(vote["sub_evidence"]["Space Opera"], {"audible", "goodreads"})
+
+
+class PlacePinnedTests(unittest.TestCase):
+    def test_a_known_genre_lands_on_its_controlled_main_and_sub(self):
+        self.assertEqual(gv.place_pinned("History"), (["Non-Fiction"], ["History"]))
+
+    def test_an_ambiguous_question_marked_subgenre_is_not_pinned_as_such(self):
+        mains, subs = gv.place_pinned("Epic")
+        self.assertEqual(mains, [])
+        self.assertTrue(all(not s.endswith("?") for s in subs))
+
+    def test_an_unknown_name_keeps_the_users_wording_trimmed_as_a_subgenre(self):
+        self.assertEqual(gv.place_pinned("  Zxqwv Unknown Whatever "), ([], ["Zxqwv Unknown Whatever"]))
+
+
+class VoteUnitRuleTests(unittest.TestCase):
+    def _books(self, **counts):
+        """counts: genre label -> number of books (each an editorial vote)."""
+        books = []
+        for label, n in counts.items():
+            books += [gv.book_vote({"audible": [label.replace("_", " ")]}) for _ in range(n)]
+        return books
+
+    def test_a_small_series_needs_one_book_a_big_one_a_quarter(self):
+        self.assertEqual(_unit(self._books(fantasy=3, romance=1))["main"], ["Fantasy", "Romance"])
+        self.assertEqual(_unit(self._books(fantasy=7, romance=1))["main"], ["Fantasy"])
+        self.assertEqual(_unit(self._books(fantasy=6, romance=2))["main"], ["Fantasy", "Romance"])
+
+    def test_fantasy_and_scifi_both_stay_only_when_neither_is_under_half_the_other(self):
+        self.assertEqual(_unit(self._books(fantasy=4, science_fiction=2))["main"], ["Fantasy", "Sci-Fi"])
+        self.assertEqual(_unit(self._books(fantasy=5, science_fiction=2))["main"], ["Fantasy"])
+        self.assertEqual(_unit(self._books(fantasy=2, science_fiction=5))["main"], ["Sci-Fi"])
+
+    def test_non_fiction_wins_only_when_it_outvotes_every_fiction_genre(self):
+        self.assertEqual(_unit(self._books(history=3, fantasy=1))["main"], ["Non-Fiction"])
+        self.assertEqual(_unit(self._books(history=1, fantasy=3))["main"], ["Fantasy"])
+        self.assertEqual(_unit(self._books(history=2, fantasy=2))["main"], ["Fantasy"])
+
+    def test_classics_needs_half_of_the_voting_books(self):
+        self.assertEqual(_unit(self._books(classics=1, fantasy=3))["main"], ["Fantasy"])
+        self.assertIn("Classics", _unit(self._books(classics=2, fantasy=2))["main"])
+        self.assertIn("Classics", _unit(self._books(classics=1))["main"])
+
+    def test_litrpg_filed_under_cyberpunk_is_not_science_fiction_without_a_real_sf_subgenre(self):
+        books = [gv.book_vote({"audible": ["litrpg", "cyberpunk"]}) for _ in range(3)]
+        result = _unit(books)
+        self.assertIn("LitRPG", result["main"])
+        self.assertNotIn("Sci-Fi", result["main"])
+        self.assertNotIn("Cyberpunk", result["sub"])
+
+    def test_a_real_sf_subgenre_keeps_science_fiction_next_to_litrpg(self):
+        books = [gv.book_vote({"audible": ["litrpg", "cyberpunk", "space opera"]}) for _ in range(3)]
+        result = _unit(books)
+        self.assertIn("LitRPG", result["main"])
+        self.assertIn("Sci-Fi", result["main"])
+
+    def test_non_fiction_units_keep_only_non_fiction_subgenres(self):
+        books = [gv.book_vote({"audible": ["history"]}) for _ in range(3)]
+        books.append(gv.book_vote({"audible": ["history", "dragons"]}))
+        result = _unit(books)
+        self.assertEqual(result["main"], ["Non-Fiction"])
+        self.assertIn("History", result["sub"])
+        self.assertNotIn("Dragons", result["sub"])
+
+    def test_fiction_units_drop_non_fiction_subgenres(self):
+        books = [gv.book_vote({"audible": ["fantasy", "history"]}) for _ in range(2)]
+        result = _unit(books)
+        self.assertIn("Fantasy", result["main"])
+        self.assertNotIn("History", result["sub"])
+
+    def test_subgenres_are_sorted_by_votes_then_name_and_capped(self):
+        books = [gv.book_vote({"audible": ["fantasy", "dragons"]}) for _ in range(2)]
+        books += [gv.book_vote({"audible": ["fantasy"]})]
+        result = _unit(books)
+        self.assertEqual(result["sub"][0], "Dragons")
+        self.assertLessEqual(len(result["sub"]), gv.MAX_SUBS)
+
+    def test_pinned_main_is_added_pinned_sub_goes_first_and_both_carry_pinned_evidence(self):
+        books = self._books(fantasy=2)
+        result = _unit(books, pinned={"Romance": 4, "Zxqwv Unknown": 2})
+        self.assertIn("Romance", result["main"])
+        self.assertEqual(result["sub"][0], "Zxqwv Unknown")
+        self.assertEqual(result["evidence"]["Romance"][gv.PINNED_SOURCE], 4)
+        self.assertEqual(result["evidence"]["Zxqwv Unknown"][gv.PINNED_SOURCE], 2)
+        self.assertEqual(result["pinned"], ["Romance", "Zxqwv Unknown"])
+
+    def test_a_pinned_sub_that_is_already_a_main_is_not_duplicated(self):
+        result = _unit(self._books(fantasy=2), pinned={"Fantasy": 1})
+        self.assertEqual(result["main"].count("Fantasy"), 1)
+        self.assertNotIn("Fantasy", result["sub"])
+
+    def test_candidates_are_mentioned_genres_that_missed_out_and_exclude_pinned_names(self):
+        books = self._books(fantasy=8) + [gv.book_vote({"audible": ["romance"]})]
+        unit = _unit(books)
+        self.assertIn("Romance", unit["candidates"])
+        pinned = _unit(books, pinned={"Romance": 1})
+        self.assertNotIn("Romance", pinned["candidates"])
+
+    def test_non_fiction_subgenres_are_candidates_only_for_non_fiction_units(self):
+        fiction = _unit(self._books(fantasy=8) + [gv.book_vote({"audible": ["history"]})])
+        self.assertNotIn("History", fiction["candidates"])
+
+    def test_progression_series_listing_adds_progression_and_counts_as_evidence(self):
+        books = self._books(fantasy=2)
+        unit = _unit(books, pf_progression=True, series_evidence=["pf"])
+        self.assertIn("Progression Fantasy", unit["main"])
+        self.assertEqual(unit["series_evidence"], ["pf"])
+        self.assertEqual(unit["evidence"]["Progression Fantasy"][gv.SERIES_SOURCE], 1)
+
+    def test_standalone_ignores_series_level_sources_and_evidence(self):
+        unit = _unit(self._books(fantasy=1), pf_progression=True, series_evidence=["pf"], standalone=True,
+                     series_labels=["romance"])
+        self.assertEqual(unit["main"], ["Fantasy"])
+        self.assertEqual(unit["series_evidence"], [])
+
+    def test_series_labels_count_as_full_support(self):
+        unit = _unit(self._books(fantasy=8), series_labels=["romance"])
+        self.assertIn("Romance", unit["main"])
+        self.assertEqual(unit["evidence"]["Romance"][gv.SERIES_SOURCE], 1)
+
+    def test_progression_listing_is_distrusted_when_a_mainstream_genre_conflicts_uncorroborated(self):
+        books = self._books(mystery=3)
+        unit = _unit(books, pf_progression=True)
+        self.assertNotIn("Progression Fantasy", unit["main"])
+        self.assertIn("Mystery", unit["main"])
+
+    def test_progression_listing_is_trusted_when_corroborated_by_a_book_mention(self):
+        books = self._books(mystery=3) + [gv.book_vote({"audible": ["progression fantasy"]})]
+        unit = _unit(books, pf_progression=True)
+        self.assertIn("Progression Fantasy", unit["main"] + unit["sub"])
+
+
+class VoteUnitCornerTests(unittest.TestCase):
+    def test_science_fiction_with_cyberpunk_is_kept_when_litrpg_is_not_a_main(self):
+        books = [gv.book_vote({"audible": ["science fiction", "cyberpunk"]}) for _ in range(3)]
+        result = _unit(books)
+        self.assertEqual(result["main"], ["Sci-Fi"])
+        self.assertIn("Cyberpunk", result["sub"])
+
+    def test_a_progression_listing_is_corroborated_by_a_mere_mention_in_a_book(self):
+        books = [gv.book_vote({"audible": ["mystery"]}) for _ in range(3)]
+        books.append(gv.book_vote({"audible": ["mystery"], "goodreads": ["progression fantasy"]}))
+        unit = _unit(books, pf_progression=True)
+        self.assertIn("Progression Fantasy", unit["main"])
+
+    def test_a_pinned_subgenre_that_the_vote_already_found_is_not_listed_twice(self):
+        books = [gv.book_vote({"audible": ["fantasy", "dragons"]}) for _ in range(2)]
+        result = _unit(books, pinned={"Dragons": 1})
+        self.assertEqual(result["sub"].count("Dragons"), 1)
