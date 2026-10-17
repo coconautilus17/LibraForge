@@ -301,5 +301,100 @@ class ReviewMetadataItemReasonTests(unittest.TestCase):
         self.assertEqual(self.review(source="/lib/s.m4b", mode="none")["path"], "/lib/s.m4b")
 
 
+class ReviewOrganizerItemTests(unittest.TestCase):
+    BASE = {"id": "o1", "source": "/lib/_unorganized/Cradle 1/a.m4b", "target": "/lib/Will Wight/Cradle/Book 1 - Unsouled",
+            "title": "Unsouled", "author": "Will Wight", "series": "Cradle", "number": "1"}
+
+    def review(self, **over):
+        item = {**self.BASE, **over}
+        return REVIEW.review_organizer_item(item, REVIEW.parse_args(["x.json"]))
+
+    def reasons(self, **over):
+        result = self.review(**over)
+        return {} if result is None else {r["code"]: r["severity"] for r in result["reasons"]}
+
+    def test_a_complete_consistent_item_is_not_a_suspect(self):
+        self.assertIsNone(self.review())
+
+    def test_unknown_or_blank_authors_are_high_and_unknown_or_blank_titles_medium(self):
+        for author in ("", "Unknown Author", "unknown"):
+            self.assertEqual(self.reasons(author=author).get("unknown_author"), "high", author)
+        for title in ("", "Unknown Title", "UNKNOWN"):
+            self.assertEqual(self.reasons(title=title).get("unknown_title"), "medium", title)
+        self.assertNotIn("unknown_author", self.reasons(author="Ann Unknownson"))
+        self.assertNotIn("unknown_title", self.reasons(title="The Unknown Soldier"))
+
+    def test_review_reasons_become_medium_unless_they_only_describe_how_a_value_was_derived(self):
+        reasons = self.review(review_reasons=["possible duplicate", "title inferred from path", "series inferred from path",
+                                              "author inferred from path", "title matches series name; using sequence only"])["reasons"]
+        self.assertEqual({r["evidence"]["review_reason"]: r["severity"] for r in reasons}, {
+            "possible duplicate": "medium", "title inferred from path": "info", "series inferred from path": "info",
+            "author inferred from path": "info", "title matches series name; using sequence only": "info"})
+        self.assertTrue(all(r["code"] == "existing_review_reason" for r in reasons))
+
+    def test_an_item_whose_only_reasons_are_informational_is_not_a_suspect(self):
+        self.assertIsNone(self.review(review_reasons=["title inferred from path"]))
+
+    def test_a_number_without_a_series_is_flagged_only_when_nothing_else_explains_it(self):
+        self.assertEqual(self.reasons(series=""), {"missing_series": "high"})
+        self.assertEqual(self.reasons(series="", number=""), {})
+        self.assertNotIn("missing_series", self.reasons(series="", review_reasons=["possible duplicate"]))
+        self.assertNotIn("missing_series", self.reasons(series="", author=""))
+
+    def test_a_differing_number_in_the_source_or_target_path_is_a_conflict(self):
+        self.assertEqual(self.reasons(source="/lib/_unorganized/Cradle Book 2/a.m4b"), {"organizer_source_number_conflict": "high"})
+        self.assertEqual(self.reasons(target="/lib/Will Wight/Cradle/Book 2 - Unsouled"), {"organizer_target_number_conflict": "critical"})
+        self.assertEqual(self.reasons(source="/lib/_unorganized/Cradle Book 1/a.m4b"), {})
+
+    def test_conflict_evidence_names_both_numbers(self):
+        reason = self.review(target="/lib/x/Book 2 - Unsouled")["reasons"][0]
+        self.assertEqual(reason["evidence"], {"selected_number": "1", "visible_target_number": "2"})
+
+    def test_a_bitrate_annotation_in_the_title_is_high(self):
+        self.assertEqual(self.reasons(title="Unsouled 64k"), {"bitrate_in_title": "high"})
+        for rate in ("64k", "96k", "128K", "192k", "256k", "320k"):
+            self.assertEqual(self.reasons(title=f"Unsouled {rate}").get("bitrate_in_title"), "high", rate)
+        self.assertNotIn("bitrate_in_title", self.reasons(title="Unsouled 100k"))
+        self.assertNotIn("bitrate_in_title", self.reasons(title="Unsouled 1280k"))
+
+    def test_an_abs_bracket_artifact_is_high_only_when_both_halves_are_alike(self):
+        self.assertEqual(self.reasons(title="[Unsouled (Unabridged)] - Unsouled (Unabridged)"), {"title_bracket_artifact": "high"})
+        self.assertEqual(self.reasons(title="[Alpha Beta Gamma] - Zzzz Qqqq Xxxx"), {})
+
+    def test_the_unorganized_root_with_thin_metadata_is_medium(self):
+        thin_series = self.reasons(source="/lib/_unorganized", series="")
+        self.assertEqual(thin_series.get("source_is_unorganized_root"), "medium")
+        got = self.reasons(source="/lib/_unorganized", title="")
+        self.assertEqual(got.get("source_is_unorganized_root"), "medium")
+        self.assertNotIn("source_is_unorganized_root", self.reasons(source="/lib/_unorganized"))
+        self.assertNotIn("source_is_unorganized_root", self.reasons(source="/lib/other", series=""))
+
+    def test_a_series_prefix_in_the_title_is_low_for_series_names_over_ten_characters(self):
+        long = {"series": "Towers of Heaven", "title": "Towers of Heaven - Book 1"}
+        self.assertEqual(self.reasons(**long), {"title_has_redundant_series_prefix": "low"})
+        self.assertEqual(self.reasons(series="Towers of Heaven", title="Towers of Heaven, Book 1").get("title_has_redundant_series_prefix"), "low")
+        self.assertEqual(self.reasons(series="Towers of Heaven", title="Towers of Heaven: Book 1").get("title_has_redundant_series_prefix"), "low")
+        self.assertNotIn("title_has_redundant_series_prefix", self.reasons(series="Cradle", title="Cradle - Book 1"))
+
+    def test_a_series_of_exactly_ten_characters_is_too_short_to_flag(self):
+        self.assertEqual(len("Ten Chars!!"), 11)
+        self.assertEqual(len("Tenchars10"), 10)
+        self.assertNotIn("title_has_redundant_series_prefix", self.reasons(series="Tenchars10", title="Tenchars10 - Book 1"))
+        self.assertIn("title_has_redundant_series_prefix", self.reasons(series="Tenchars-11", title="Tenchars-11 - Book 1"))
+
+    def test_a_generic_omnibus_title_is_low(self):
+        self.assertEqual(self.reasons(title="Omnibus, Books 1-3").get("generic_omnibus_title"), "low")
+
+    def test_the_result_has_identity_status_and_the_organizer_fields_under_local(self):
+        result = self.review(author="", status="planned_move", metadata_source="sidecar")
+        self.assertEqual((result["id"], result["path"], result["tool"], result["status"]), ("o1", self.BASE["source"], "organizer", "planned_move"))
+        self.assertEqual(result["severity"], "high")
+        self.assertEqual(result["local"], {"title": "Unsouled", "author": "", "series": "Cradle", "sequence": "1",
+                                          "target": self.BASE["target"], "metadata_source": "sidecar"})
+
+    def test_the_status_defaults_to_planned_move(self):
+        self.assertEqual(self.review(author="")["status"], "planned_move")
+
+
 if __name__ == "__main__":
     unittest.main()
