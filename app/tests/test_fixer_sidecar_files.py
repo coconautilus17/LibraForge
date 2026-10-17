@@ -304,5 +304,30 @@ class DuplicateAsinGuardTests(unittest.TestCase):
             self.assertIs(FIXER.needs_duplicate_asin_check([self.result()]), False)
 
 
+class SkipDueToMarkerTests(SidecarFixture):
+    def decide(self, marker=None, force=False, aggressive=False):
+        if marker is not None:
+            self.write(self.file_lf, {"marker": marker})
+        return FIXER.should_skip_due_to_marker(self.source, aggressive, force)
+
+    def test_a_book_without_a_marker_is_processed(self):
+        self.assertEqual(self.decide(), (False, ""))
+
+    def test_an_applied_marker_skips_the_book(self):
+        self.assertEqual(self.decide({"applied": True}), (True, "already processed"))
+
+    def test_an_unapplied_marker_does_not(self):
+        self.assertEqual(self.decide({"applied": False}), (False, ""))
+        self.assertEqual(self.decide({"applied": "yes"}), (False, ""))      # only a real True counts
+
+    def test_force_reprocesses_an_applied_book(self):
+        self.assertEqual(self.decide({"applied": True}, force=True), (False, ""))
+
+    def test_a_manually_applied_book_is_never_touched_even_with_force_or_aggressive(self):
+        for kwargs in ({}, {"force": True}, {"aggressive": True}, {"force": True, "aggressive": True}):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.decide({"manually_applied": True, "applied": False}, **kwargs), (True, "already manually applied"))
+
+
 if __name__ == "__main__":
     unittest.main()
