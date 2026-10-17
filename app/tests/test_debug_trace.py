@@ -521,11 +521,11 @@ class TraceOutputTests(unittest.TestCase):
             with dt.trace_block(CHOOSE, "pick"):
                 pass
         self.assertTrue(self._lines()[-1].endswith("<- {pick} done  (500.0ms)"), self._lines()[-1])
-        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[2.0, 2.002]):
+        with mock.patch("app.debug_trace.time.perf_counter", side_effect=[2.0, 2.25]):
             with self.assertRaises(KeyError):
                 with dt.trace_block(CHOOSE, "pick"):
                     raise KeyError("k")
-        self.assertTrue(self._lines()[-1].endswith("!! {pick} raised KeyError('k')  (2.0ms)"), self._lines()[-1])
+        self.assertTrue(self._lines()[-1].endswith("!! {pick} raised KeyError('k')  (250.0ms)"), self._lines()[-1])
 
     def test_a_block_without_a_category_is_labelled_trace_and_shows_its_fields(self):
         with dt.trace_block(None, "step", n=3, text="x" * 400):
