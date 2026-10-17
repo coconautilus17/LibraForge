@@ -5,6 +5,8 @@ is exercised separately. Empty .m4b files stand in for audio: _probe returns all
 fields False for them, which is the documented graceful fallback.
 """
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -345,3 +347,70 @@ class ScanStalenessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build the audio fixtures")
+class ProbeRealTagsTests(unittest.TestCase):
+    """_probe_book_metadata on actual tagged files (mutagen reads them back)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _silent(self, name, codec_args):
+        path = self.root / name
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-t", "1", *codec_args, str(path), "-y"],
+                       check=True)
+        return path
+
+    def _m4b(self, tags):
+        from mutagen.mp4 import MP4, MP4FreeForm
+        path = self._silent("book.m4b", ["-c:a", "aac"])
+        audio = MP4(str(path))
+        for key, value in tags.items():
+            audio[key] = [MP4FreeForm(value.encode()) if key.startswith("----") else value]
+        audio.save()
+        return path
+
+    def test_an_m4b_with_all_core_tags_and_an_asin_reports_each_as_present(self):
+        path = self._m4b({"\xa9nam": "Title", "\xa9ART": "Author", "\xa9wrt": "Narrator", "----:com.apple.iTunes:ASIN": "B0ABC12345"})
+        got = _probe_book_metadata(path)
+        self.assertEqual(got["asin"], "B0ABC12345")
+        self.assertEqual(got["fields"], {"title": True, "author": True, "narrator": True})
+
+    def test_the_album_artist_atom_also_counts_as_the_author(self):
+        path = self._m4b({"\xa9nam": "Title", "aART": "Author"})
+        self.assertEqual(_probe_book_metadata(path)["fields"], {"title": True, "author": True, "narrator": False})
+
+    def test_blank_tags_do_not_count_and_a_missing_asin_is_empty(self):
+        path = self._m4b({"\xa9nam": "   ", "\xa9ART": "Author"})
+        got = _probe_book_metadata(path)
+        self.assertEqual(got["asin"], "")
+        self.assertEqual(got["fields"], {"title": False, "author": True, "narrator": False})
+
+    def test_an_mp3_reports_id3_frames_and_any_asin_frame_as_a_marker_value(self):
+        from mutagen.id3 import ID3, TCOM, TIT2, TPE1, TXXX
+        path = self._silent("book.mp3", ["-c:a", "libmp3lame"])
+        tags = ID3()
+        tags.add(TIT2(encoding=3, text=["Title"]))
+        tags.add(TPE1(encoding=3, text=["Author"]))
+        tags.add(TCOM(encoding=3, text=["Narrator"]))
+        tags.add(TXXX(encoding=3, desc="ASIN", text=["B0ABC12345"]))
+        tags.save(str(path))
+        got = _probe_book_metadata(path)
+        self.assertEqual(got["asin"], "HAS_ASIN")
+        self.assertEqual(got["fields"], {"title": True, "author": True, "narrator": True})
+
+    def test_an_mp3_without_an_asin_frame_has_no_asin(self):
+        from mutagen.id3 import ID3, TIT2
+        path = self._silent("book.mp3", ["-c:a", "libmp3lame"])
+        tags = ID3()
+        tags.add(TIT2(encoding=3, text=["Title"]))
+        tags.save(str(path))
+        self.assertEqual(_probe_book_metadata(path), {"asin": "", "fields": {"title": True, "author": False, "narrator": False}})
+
+    def test_other_file_types_are_not_inspected(self):
+        path = self.root / "book.flac"
+        path.write_bytes(b"x")
+        self.assertEqual(_probe_book_metadata(path), {"asin": "", "fields": {"title": False, "author": False, "narrator": False}})
