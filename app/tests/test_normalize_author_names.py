@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -271,6 +273,142 @@ class AbsAuthorPlanTests(unittest.TestCase):
              mock.patch.object(MIGRATE, "abs_delete_json") as delete:
             self.assertEqual(MIGRATE.apply_abs_changes([change], "u", "k"), [])
             delete.assert_not_called()
+
+
+class SidecarAuthorEditPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, rel, payload):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_metadata_json_authors_are_fixed_one_by_one_with_their_index(self):
+        path = self.write("A/metadata.json", {"authors": ["V A Lewis", "Brian McClellan", "J R R Tolkien", 7]})
+        edits = MIGRATE._json_author_edits(path)
+        self.assertEqual([(e["field"], e["old"], e["new"]) for e in edits],
+                         [("authors[0]", "V A Lewis", "V.A. Lewis"), ("authors[2]", "J R R Tolkien", "J.R.R. Tolkien")])
+        self.assertTrue(all(e["phase"] == "sidecar" and e["path"] == str(path) for e in edits))
+
+    def test_only_files_named_metadata_json_have_their_authors_list_read(self):
+        path = self.write("A/libraforge.json", {"authors": ["V A Lewis"]})
+        self.assertEqual(MIGRATE._json_author_edits(path), [])
+
+    def test_a_non_list_authors_value_is_ignored(self):
+        path = self.write("A/metadata.json", {"authors": "V A Lewis"})
+        self.assertEqual(MIGRATE._json_author_edits(path), [])
+
+    def test_the_marker_audible_author_credit_is_fixed_as_a_whole_credit(self):
+        path = self.write("A/libraforge.json", {"marker": {"audible": {"author": "V A Lewis, Kevin J Anderson"}}})
+        edits = MIGRATE._json_author_edits(path)
+        self.assertEqual([(e["field"], e["new"]) for e in edits], [("marker.audible.author", "V.A. Lewis, Kevin J. Anderson")])
+
+    def test_already_correct_blank_or_malformed_sidecars_plan_nothing(self):
+        self.assertEqual(MIGRATE._json_author_edits(self.write("A/libraforge.json", {"marker": {"audible": {"author": "V.A. Lewis"}}})), [])
+        self.assertEqual(MIGRATE._json_author_edits(self.write("B/libraforge.json", {"marker": "x"})), [])
+        bad = self.root / "C" / "metadata.json"
+        bad.parent.mkdir()
+        bad.write_text("{not json")
+        self.assertEqual(MIGRATE._json_author_edits(bad), [])
+        self.assertEqual(MIGRATE._json_author_edits(self.root / "missing.json"), [])
+
+    def test_the_planner_walks_the_tree_skipping_service_folders_and_other_file_names(self):
+        self.write("A/metadata.json", {"authors": ["V A Lewis"]})
+        self.write("#recycle/metadata.json", {"authors": ["V A Lewis"]})
+        self.write(".hidden/libraforge.json", {"marker": {"audible": {"author": "V A Lewis"}}})
+        self.write("A/notes.json", {"authors": ["V A Lewis"]})
+        edits = MIGRATE.plan_sidecar_changes(self.root)
+        self.assertEqual([Path(e["path"]).parent.name for e in edits], ["A"])
+
+
+class AbsAuthorPlanEdgeTests(unittest.TestCase):
+    def test_a_book_shared_by_two_off_scheme_authors_is_planned_once(self):
+        authors = [{"id": "a1", "name": "V A Lewis"}, {"id": "a2", "name": "K J Anderson"}]
+        details = {"a1": {"libraryItems": [{"id": "i1"}]}, "a2": {"libraryItems": [{"id": "i1"}]}}
+        items = {"i1": {"path": "/x", "media": {"metadata": {"authors": [{"name": "V A Lewis"}, {"name": "K J Anderson"}]}}}}
+        changes = MIGRATE.plan_abs_author_changes(authors, lambda i: details[i], lambda i: items[i])
+        self.assertEqual(len(changes), 1)
+        self.assertEqual((changes[0]["item_id"], changes[0]["path"], changes[0]["status"]),
+                         ("i1", "/x", "CLEAN"))
+        self.assertEqual(changes[0]["new"], ["V.A. Lewis", "K.J. Anderson"])
+
+    def test_a_book_whose_credits_are_already_on_scheme_is_not_changed(self):
+        authors = [{"id": "a1", "name": "V A Lewis"}]
+        details = {"a1": {"libraryItems": [{"id": "i1"}]}}
+        items = {"i1": {"path": "/x", "media": {"metadata": {"authors": [{"name": "V.A. Lewis"}]}}}}
+        self.assertEqual(MIGRATE.plan_abs_author_changes(authors, lambda i: details[i], lambda i: items[i]), [])
+
+    def test_authors_already_on_scheme_are_not_even_fetched(self):
+        fetched = []
+        MIGRATE.plan_abs_author_changes([{"id": "a1", "name": "V.A. Lewis"}], lambda i: fetched.append(i) or {}, lambda i: {})
+        self.assertEqual(fetched, [])
+
+
+class MainExitCodeAndOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "lib"
+        self.root.mkdir()
+        (self.root / "V A Lewis").mkdir()
+        (self.root / "V.A. Lewis").mkdir()
+        (self.root / "Brian McClellan").mkdir()
+        self.log = Path(self.tmp.name) / "deep" / "log.jsonl"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, *args):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["x", str(self.root), *args]), contextlib.redirect_stdout(out):
+            code = MIGRATE.main()
+        return code, out.getvalue()
+
+    def test_a_dry_run_reports_counts_including_merges_and_changes_nothing(self):
+        code, out = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertIn("Author folders to change: 1 (1 merges)", out)
+        self.assertIn("Sidecar author fields to change: 0", out)
+        self.assertIn("Embedded tag fields to change: 0 (not scanned, pass --tags)", out)
+        self.assertIn("Dry run only", out)
+        self.assertTrue((self.root / "V A Lewis").exists())
+
+    def test_the_tag_scan_message_changes_when_tags_are_requested(self):
+        _, out = self.run_main("--tags")
+        self.assertIn("Embedded tag fields to change: 0\n", out)
+        self.assertNotIn("not scanned", out)
+
+    def test_apply_returns_zero_creates_the_log_folder_and_records_the_folder_changes(self):
+        code, out = self.run_main("--apply", "--log", str(self.log))
+        self.assertEqual(code, 0)
+        self.assertIn(f"Done. Change log: {self.log}", out)
+        entries = [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([e["phase"] for e in entries][-1], "folder")
+        self.assertFalse((self.root / "V A Lewis").exists())
+
+    def test_with_the_scheme_off_nothing_runs_and_the_exit_code_is_two(self):
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "legacy"}):
+            code, out = self.run_main()
+        self.assertEqual(code, 2)
+        self.assertIn("switched off", out)
+
+    def test_even_if_disabled_overrides_the_off_switch(self):
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "legacy"}):
+            code, out = self.run_main("--even-if-disabled")
+        self.assertEqual(code, 0)
+        self.assertIn("Author folders to change", out)
+
+    def test_revert_undoes_a_logged_apply_and_exits_zero(self):
+        self.run_main("--apply", "--log", str(self.log))
+        code, out = self.run_main("--revert", str(self.log))
+        self.assertEqual(code, 0)
+        self.assertIn("Reverted changes", out)
+        self.assertTrue((self.root / "V A Lewis").exists())
 
 
 if __name__ == "__main__":

@@ -726,5 +726,113 @@ class AbsSeriesCleanupTests(unittest.TestCase):
         self.assertEqual(change["new_entries"], [{"name": "Foo", "sequence": "2"}])
 
 
+class BareNumberSplitTests(unittest.TestCase):
+    def test_a_separated_trailing_number_is_split_off(self):
+        for raw, expected in (("Cradle-3", ("Cradle", "3")), ("Cradle #3", ("Cradle", "3")), ("Cradle, 12", ("Cradle", "12")),
+                              ("The Lost Bloodline , 3", ("The Lost Bloodline", "3"))):
+            with self.subTest(raw=raw):
+                self.assertEqual(FIX._bare_number_split(raw), expected)
+
+    def test_ranges_years_bare_spaces_and_tiny_or_wordless_bases_are_never_split(self):
+        for raw in ("Book #1-5", "Foundation 1965", "Cradle 3", "Ab #3", "A1 #3", "123 #4", "Cradle", ""):
+            with self.subTest(raw=raw):
+                self.assertIsNone(FIX._bare_number_split(raw))
+
+    def test_a_three_letter_base_is_enough(self):
+        self.assertEqual(FIX._bare_number_split("Zed #3"), ("Zed", "3"))
+
+
+class ClassifyAbsSeriesEntryTests(unittest.TestCase):
+    KNOWN = {"cradle", "the lost bloodline"}
+
+    def classify(self, name, sequence=""):
+        return FIX._classify_abs_series_entry(name, sequence, self.KNOWN)
+
+    def test_a_book_marker_is_removed_and_its_number_fills_a_blank_sequence(self):
+        self.assertEqual(self.classify("Cradle, Book #3", ""),
+                         {"new_name": "Cradle", "new_sequence": "3", "status": "FILL_SEQUENCE"})
+
+    def test_a_book_marker_never_overrides_an_existing_sequence(self):
+        self.assertEqual(self.classify("Cradle, Book #3", "5"),
+                         {"new_name": "Cradle", "new_sequence": "5", "status": "CLEAN_ONLY"})
+
+    def test_a_dangling_marker_is_cleaned_and_keeps_the_sequence(self):
+        for name in ("Cradle Book #", "Cradle, Book #"):
+            got = self.classify(name, "2")
+            if got is not None:
+                self.assertEqual((got["new_name"], got["new_sequence"], got["status"]), ("Cradle", "2", "CLEAN_ONLY"))
+
+    def test_a_bare_number_is_corroborated_by_the_sequence_or_a_known_base(self):
+        self.assertEqual(self.classify("Zedboy #3", "3"), {"new_name": "Zedboy", "new_sequence": "3", "status": "CLEAN_ONLY"})
+        self.assertEqual(self.classify("Cradle #3", ""), {"new_name": "Cradle", "new_sequence": "3", "status": "FILL_SEQUENCE"})
+        self.assertEqual(self.classify("The Lost Bloodline, 3", ""),
+                         {"new_name": "The Lost Bloodline", "new_sequence": "3", "status": "FILL_SEQUENCE"})
+
+    def test_a_known_base_keeps_its_own_sequence_when_it_disagrees_with_the_number(self):
+        self.assertEqual(self.classify("Cradle #3", "4"), {"new_name": "Cradle", "new_sequence": "4", "status": "CLEAN_ONLY"})
+
+    def test_an_uncorroborated_bare_number_is_uncertain_and_proposes_no_sequence(self):
+        self.assertEqual(self.classify("Zedboy #3", ""), {"new_name": "Zedboy", "new_sequence": None, "status": "UNCERTAIN"})
+        self.assertEqual(self.classify("Zedboy #3", "9"), {"new_name": "Zedboy", "new_sequence": None, "status": "UNCERTAIN"})
+
+    def test_a_clean_name_is_left_alone(self):
+        for name in ("Plain", "Ab 3", "Beacon 23, Book #1-5"):
+            with self.subTest(name=name):
+                self.assertIsNone(self.classify(name, "1"))
+
+
+class PlanAbsSeriesChangesTests(unittest.TestCase):
+    def plan(self, rows, items):
+        return FIX.plan_abs_series_changes(rows, lambda item_id: items[item_id])
+
+    def item(self, path, *entries):
+        return {"path": path, "media": {"metadata": {"series": [{"name": n, "sequence": q} for n, q in entries]}}}
+
+    def test_a_clean_series_row_is_never_fetched(self):
+        calls = []
+        rows = [{"name": "Cradle", "books": [{"id": "b1"}]}]
+        got = FIX.plan_abs_series_changes(rows, lambda i: calls.append(i) or {})
+        self.assertEqual((got, calls), ([], []))
+
+    def test_a_book_marker_row_plans_a_fill_sequence_change_per_book(self):
+        rows = [{"name": "Cradle, Book #3", "books": [{"id": "b1"}]}]
+        got = self.plan(rows, {"b1": self.item("/lib/a", ("Cradle, Book #3", ""))})
+        self.assertEqual(len(got), 1)
+        change = got[0]
+        self.assertEqual((change["status"], change["kind"], change["item_id"], change["path"]), ("FILL_SEQUENCE", "abs_item", "b1", "/lib/a"))
+        self.assertEqual((change["old_series"], change["new_series"], change["old_sequence"]), ("Cradle, Book #3", "Cradle", ""))
+        self.assertEqual(change["new_entries"], [{"name": "Cradle", "sequence": "3"}])
+        self.assertEqual(change["old_entries"], [{"name": "Cradle, Book #3", "sequence": ""}])
+
+    def test_a_book_that_already_has_its_sequence_is_only_cleaned(self):
+        rows = [{"name": "Cradle, Book #3", "books": [{"id": "b1"}]}]
+        got = self.plan(rows, {"b1": self.item("/lib/a", ("Cradle, Book #3", "5"))})
+        self.assertEqual(got[0]["status"], "CLEAN_ONLY")
+        self.assertEqual(got[0]["new_entries"], [{"name": "Cradle", "sequence": "5"}])
+
+    def test_an_uncertain_entry_is_reported_but_left_unchanged(self):
+        rows = [{"name": "Zedboy #3", "books": [{"id": "b1"}]}]
+        got = self.plan(rows, {"b1": self.item("/lib/a", ("Zedboy #3", ""))})
+        self.assertEqual(got[0]["status"], "UNCERTAIN")
+        self.assertEqual(got[0]["new_entries"], [{"name": "Zedboy #3", "sequence": ""}])
+
+    def test_other_series_entries_on_the_book_are_kept(self):
+        rows = [{"name": "Cradle, Book #3", "books": [{"id": "b1"}]}]
+        got = self.plan(rows, {"b1": self.item("/lib/a", ("Other Saga", "1"), ("Cradle, Book #3", ""))})
+        names = [e["name"] for e in got[0]["new_entries"]]
+        self.assertEqual(sorted(names), ["Cradle", "Other Saga"])
+
+    def test_a_bare_number_is_corroborated_when_the_base_is_itself_a_listed_series(self):
+        rows = [{"name": "Cradle", "books": []}, {"name": "Cradle #3", "books": [{"id": "b1"}]}]
+        got = self.plan(rows, {"b1": self.item("/lib/a", ("Cradle #3", ""))})
+        self.assertEqual((got[0]["status"], got[0]["new_entries"]), ("FILL_SEQUENCE", [{"name": "Cradle", "sequence": "3"}]))
+
+    def test_an_uncertain_book_is_reported_even_when_another_entry_would_be_filled(self):
+        rows = [{"name": "Zedboy #3", "books": [{"id": "b1"}]}, {"name": "Cradle, Book #4", "books": [{"id": "b1"}]}]
+        item = self.item("/lib/a", ("Zedboy #3", ""), ("Cradle, Book #4", ""))
+        got = self.plan(rows, {"b1": item})
+        self.assertEqual([c["status"] for c in got], ["UNCERTAIN", "FILL_SEQUENCE"])
+
+
 if __name__ == "__main__":
     unittest.main()
