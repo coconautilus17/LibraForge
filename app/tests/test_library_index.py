@@ -485,3 +485,97 @@ class EnsureEbookIndexFreshTests(unittest.TestCase):
         while time.monotonic() < deadline and get_ebook_state().generation == first_generation:
             time.sleep(0.02)
         self.assertGreater(get_ebook_state().generation, first_generation)
+
+
+class DiscFolderSignatureTests(unittest.TestCase):
+    """A disc subfolder's contents roll up into its parent's signature; other
+    subfolders and plain files named like one do not."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _touch(self, rel, content=b"x"):
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+
+    def test_rewriting_a_file_inside_a_disc_folder_changes_the_parent_signature(self):
+        self._touch("Book/Disc 1/a.mp3", b"x")
+        before = folder_listing_signature(self.root / "Book")
+        self._touch("Book/Disc 1/a.mp3", b"xxxx")
+        self.assertNotEqual(before, folder_listing_signature(self.root / "Book"))
+
+    def test_rewriting_a_file_inside_a_non_disc_folder_does_not(self):
+        self._touch("Book/Extras/a.mp3", b"x")
+        before = folder_listing_signature(self.root / "Book")
+        self._touch("Book/Extras/a.mp3", b"xxxx")
+        self.assertEqual(before, folder_listing_signature(self.root / "Book"))
+
+    def test_a_plain_file_named_like_a_disc_is_not_descended_into(self):
+        self._touch("Book/Disc 1", b"x")
+        sig = folder_listing_signature(self.root / "Book")
+        self.assertRegex(sig, r"^[0-9a-f]{64}$")
+        self.assertEqual(sig, folder_listing_signature(self.root / "Book"))
+
+
+class GenerationBumpTests(unittest.TestCase):
+    """_run_build bumps generation by exactly one, and only on a real change."""
+
+    def setUp(self):
+        reset_state_for_tests()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        reset_state_for_tests()
+
+    def _build(self, entries, signatures):
+        from unittest import mock
+        from app import library_index
+        with mock.patch.object(library_index, "build_library_index", return_value=(entries, signatures)):
+            library_index._run_build(self.root)
+        return get_state()
+
+    def test_first_build_moves_generation_by_exactly_one(self):
+        self.assertEqual(self._build([(str(self.root / "a"), False)], {"a": "s"}).generation, 1)
+
+    def test_identical_second_build_keeps_the_generation(self):
+        self._build([(str(self.root / "a"), False)], {"a": "s"})
+        self.assertEqual(self._build([(str(self.root / "a"), False)], {"a": "s"}).generation, 1)
+
+    def test_entries_change_alone_bumps(self):
+        self._build([(str(self.root / "a"), False)], {"a": "s"})
+        self.assertEqual(self._build([(str(self.root / "a"), False), (str(self.root / "b"), False)], {"a": "s"}).generation, 2)
+
+    def test_signature_change_alone_bumps(self):
+        self._build([(str(self.root / "a"), False)], {"a": "s"})
+        self.assertEqual(self._build([(str(self.root / "a"), False)], {"a": "CHANGED"}).generation, 2)
+
+
+class EbookGenerationBumpTests(unittest.TestCase):
+    def setUp(self):
+        from app import library_index
+        self.li = library_index
+        library_index.reset_ebook_state_for_tests()
+
+    def tearDown(self):
+        self.li.reset_ebook_state_for_tests()
+
+    def _build(self, units):
+        from unittest import mock
+        with mock.patch.object(self.li, "build_ebook_index", return_value=units):
+            self.li._run_ebook_build(Path("/nowhere"))
+        return self.li._ebook_state
+
+    def test_a_changed_unit_list_advances_the_generation_by_exactly_one(self):
+        self.assertEqual(self._build([{"stem": "a"}]).generation, 1)
+        self.assertEqual(self._build([{"stem": "a"}, {"stem": "b"}]).generation, 2)
+
+    def test_an_unchanged_unit_list_keeps_the_generation(self):
+        self._build([{"stem": "a"}])
+        self.assertEqual(self._build([{"stem": "a"}]).generation, 1)

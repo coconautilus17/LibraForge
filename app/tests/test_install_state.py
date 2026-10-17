@@ -78,5 +78,54 @@ class InstallStateTests(unittest.TestCase):
         self.assertEqual(data["origin"], "upgraded")
 
 
+class InstallStateReadWriteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.reports, self.auth = base / "reports", base / "auth"
+        self.reports.mkdir()
+        self.auth.mkdir()
+        self.state = self.reports / "state.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_init_returns_the_state_it_wrote(self):
+        state = ins.init_install_state("0.2.5", self.reports, self.auth, [], self.state)
+        self.assertEqual(state["first_seen_version"], "0.2.5")
+        self.assertEqual(json.loads(self.state.read_text())["first_seen_version"], "0.2.5")
+
+    def test_a_second_init_returns_the_stored_state_not_a_new_one(self):
+        ins.init_install_state("0.2.5", self.reports, self.auth, [], self.state)
+        again = ins.init_install_state("9.9.9", self.reports, self.auth, [], self.state)
+        self.assertEqual(again["first_seen_version"], "0.2.5")
+
+    def test_a_state_file_with_another_schema_version_is_replaced(self):
+        self.state.write_text(json.dumps({"schema_version": 2, "first_seen_version": "old"}))
+        state = ins.init_install_state("0.2.5", self.reports, self.auth, [], self.state)
+        self.assertEqual((state["schema_version"], state["first_seen_version"]), (1, "0.2.5"))
+
+    def test_a_state_file_that_is_not_an_object_is_replaced(self):
+        self.state.write_text("[1, 2]")
+        state = ins.init_install_state("0.2.5", self.reports, self.auth, [], self.state)
+        self.assertEqual(state["schema_version"], 1)
+
+    def test_update_state_merges_persists_and_returns_the_result(self):
+        ins.init_install_state("0.2.5", self.reports, self.auth, [], self.state)
+        result = ins.update_state({"author_notice_pending": False, "extra": 1}, self.state)
+        self.assertEqual(result["extra"], 1)
+        self.assertEqual(result["first_seen_version"], "0.2.5")
+        self.assertEqual(json.loads(self.state.read_text()), result)
+
+    def test_update_state_without_a_file_starts_a_versioned_state(self):
+        result = ins.update_state({"k": "v"}, self.state)
+        self.assertEqual(result, {"schema_version": 1, "k": "v"})
+
+    def test_writes_create_the_parent_folder_and_leave_no_temp_file(self):
+        nested = self.reports / "deep" / "state.json"
+        ins.update_state({"k": 1}, nested)
+        self.assertEqual([p.name for p in nested.parent.iterdir()], ["state.json"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -89,5 +89,19 @@ class ProgressPhaseTests(unittest.TestCase):
         )
 
 
+class PhaseLineEdgeTests(unittest.TestCase):
+    def test_applied_line_is_the_recording_phase_and_keeps_the_current_file(self):
+        self.assertEqual(
+            fixer_phase_for_line("APPLIED (full): Book", current_file="Book.m4b"),
+            ("recording", "Recording result", "Book.m4b"),
+        )
+
+    def test_m4b_found_line_needs_both_the_prefix_and_the_suffix(self):
+        line = "found 12 files to convert"
+        self.assertEqual(m4b_phase_for_line(line), ("preparing", "Preparing audio", line))
+        self.assertIsNone(m4b_phase_for_line("found 12 files"))
+        self.assertIsNone(m4b_phase_for_line("we saw 12 files to convert"))
+
+
 if __name__ == "__main__":
     unittest.main()

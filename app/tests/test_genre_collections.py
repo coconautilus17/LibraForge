@@ -60,3 +60,31 @@ class UmbrellaTests(unittest.TestCase):
     def test_store_umbrella_shelves_are_not_collection_genres(self):
         items = [{"id": "x", "media": {"metadata": {"genres": ["Science Fiction & Fantasy", "Literature & Fiction", "Fantasy"]}}}]
         self.assertEqual(sorted(gc.genre_counts(items)), ["Fantasy"])
+
+
+class CollectionsEdgeCaseTests(unittest.TestCase):
+    def test_an_item_without_an_id_is_not_counted_in_any_collection(self):
+        items = [{"media": {"metadata": {"genres": ["Fantasy"]}}},
+                 {"id": "a", "media": {"metadata": {"genres": ["Fantasy"]}}}]
+        self.assertEqual(gc.genre_counts(items)["Fantasy"], ["a"])
+
+    def test_the_same_item_is_not_listed_twice_for_one_genre(self):
+        items = [{"id": "a", "media": {"metadata": {"genres": ["Fantasy", "Fantasy"]}}}]
+        self.assertEqual(gc.genre_counts(items)["Fantasy"], ["a"])
+
+    def _row(self, have, want):
+        existing = [{"id": "c1", "name": "Fantasy", "description": gc.MARKER, "books": [{"id": b} for b in have]}]
+        rows = gc.plan_collections(["Fantasy"], {"Fantasy": want}, existing)
+        return rows[0]
+
+    def test_a_collection_missing_one_book_is_an_update(self):
+        row = self._row(have=["a"], want=["a", "b"])
+        self.assertEqual((row["action"], row["add"], row["remove"]), ("update", ["b"], []))
+
+    def test_a_collection_with_one_extra_book_is_an_update(self):
+        row = self._row(have=["a", "z"], want=["a"])
+        self.assertEqual((row["action"], row["add"], row["remove"]), ("update", [], ["z"]))
+
+    def test_a_matching_collection_is_in_sync(self):
+        row = self._row(have=["a", "b"], want=["b", "a"])
+        self.assertEqual((row["action"], row["add"], row["remove"]), ("in_sync", [], []))

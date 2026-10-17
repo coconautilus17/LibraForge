@@ -164,5 +164,34 @@ class ShowEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class FlightChunkValidationTests(unittest.TestCase):
+    def _push(self, chunk):
+        return f'<script>self.__next_f.push({json.dumps(chunk)})</script>'
+
+    def _credits_payload(self):
+        return "1:" + json.dumps({"credits": [{"all_credits": [
+            {"title": "Cast", "credit_users": [{"fullname": "Real Narrator"}]}]}]})
+
+    def test_a_chunk_that_is_not_the_data_tag_one_is_ignored(self):
+        html = page(SUPREME_MAGUS) + self._push([2, self._credits_payload()])
+        self.assertEqual(pocketfm.parse_show_page(html)["narrator"], "")
+
+    def test_a_chunk_whose_payload_is_not_a_string_is_ignored(self):
+        html = page(SUPREME_MAGUS) + self._push([1, {"credits": []}]) + cast_credits("T.J. Anthony")
+        self.assertEqual(pocketfm.parse_show_page(html)["narrator"], "T.J. Anthony")
+
+    def test_a_chunk_with_only_a_tag_is_ignored(self):
+        html = page(SUPREME_MAGUS) + self._push([1]) + cast_credits("T.J. Anthony")
+        self.assertEqual(pocketfm.parse_show_page(html)["narrator"], "T.J. Anthony")
+
+    def test_a_chunk_that_is_not_a_list_is_ignored(self):
+        html = page(SUPREME_MAGUS) + self._push({"a": 1}) + cast_credits("T.J. Anthony")
+        self.assertEqual(pocketfm.parse_show_page(html)["narrator"], "T.J. Anthony")
+
+    def test_a_well_formed_chunk_is_read(self):
+        html = page(SUPREME_MAGUS) + self._push([1, self._credits_payload()])
+        self.assertEqual(pocketfm.parse_show_page(html)["narrator"], "Real Narrator")
+
+
 if __name__ == "__main__":
     unittest.main()

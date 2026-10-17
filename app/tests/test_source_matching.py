@@ -47,3 +47,22 @@ class TiedEditionsTests(unittest.TestCase):
         # between them is not doubt about which book it is.
         cands = [sparse("Unsouled", "Will Wight"), sparse("Unsouled", "Will Wight"), sparse("Unsouled", "Will Wight")]
         self.assertEqual(sm.best_candidate(UNSOULED, cands), "Unsouled")
+
+
+class BookCluesTests(unittest.TestCase):
+    def test_sequence_narrator_and_series_come_from_the_book(self):
+        clues = sm.book_clues({"title": "Unsouled", "author": "Will Wight", "series_name": "Cradle",
+                               "sequence": "1", "existing_narrator": "Travis Baldree"})
+        self.assertEqual(clues["book_number"], "1")
+        self.assertEqual(clues["narrator"], "Travis Baldree")
+        self.assertEqual(clues["series"], "Cradle")
+
+    def test_missing_sequence_and_narrator_are_blank_not_none_or_dropped_values(self):
+        clues = sm.book_clues({"title": "Unsouled", "author": "Will Wight", "series_name": "Cradle",
+                               "sequence": None, "existing_narrator": None})
+        self.assertFalse(clues.get("book_number"))
+        self.assertFalse(clues.get("narrator"))
+
+    def test_only_the_first_listed_author_is_used(self):
+        clues = sm.book_clues({"title": "T", "author": "Ann Author, Bob Other", "sequence": "", "existing_narrator": ""})
+        self.assertEqual(clues["author"], "Ann Author")
