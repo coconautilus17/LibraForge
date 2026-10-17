@@ -165,5 +165,118 @@ class TitleConflictTests(unittest.TestCase):
         self.assertFalse(self.conflict("", "Unsouled"))
 
 
+class StandaloneFolderNameTests(unittest.TestCase):
+    def parse(self, name):
+        return ORG.parse_standalone_book_folder_name(name)
+
+    def test_author_title_in_either_order_by_which_side_looks_like_a_person(self):
+        self.assertEqual(self.parse("Will Wight - Unsouled"), {"author": "Will Wight", "title": "Unsouled"})
+        self.assertEqual(self.parse("Will Wight, Bob Roe - Unsouled"), {"author": "Will Wight, Bob Roe", "title": "Unsouled"})
+
+    def test_title_author_narrator_for_three_segments(self):
+        self.assertEqual(self.parse("Unsouled - Will Wight - Travis Baldree"),
+                         {"title": "Unsouled", "author": "Will Wight", "narrator": "Travis Baldree"})
+
+    def test_a_bracketed_middle_segment_is_a_tag_not_an_author(self):
+        self.assertEqual(self.parse("Title - [Series-2] - Real Title"), {})
+
+    def test_a_track_style_name_with_a_numeric_last_segment_gives_author_and_title(self):
+        self.assertEqual(self.parse("Will Wight - Unsouled - 01"), {"author": "Will Wight", "title": "Unsouled"})
+        self.assertEqual(self.parse("Wight, Will - Unsouled - 5"), {"author": "Wight, Will", "title": "Unsouled"})
+
+    def test_a_by_credit_after_the_title_names_the_author(self):
+        self.assertEqual(self.parse("Brief History - Subtitle by Stephen Hawking, Leonard Mlodinow"),
+                         {"title": "Brief History", "author": "Stephen Hawking, Leonard Mlodinow"})
+
+    def test_numbered_prefixes_unrecognised_shapes_and_blanks_give_nothing(self):
+        for name in ("01 - Unsouled", "Cradle 3 - Unsouled", "Unsouled", "", "Unsouled - Will Wight"):
+            with self.subTest(name=name):
+                self.assertEqual(self.parse(name), {})
+
+    def test_a_numeric_last_segment_needs_a_person_shaped_author(self):
+        self.assertEqual(ORG.parse_representative_track_name("Unsouled - Cradle - 01"), {})
+        self.assertEqual(ORG.parse_representative_track_name("Will Wight - Unsouled - 01"), {"author": "Will Wight", "title": "Unsouled"})
+        self.assertEqual(ORG.parse_representative_track_name("Will Wight - Unsouled - Chapter One"), {})
+        self.assertEqual(ORG.parse_representative_track_name("Will 5 Wight - Unsouled - 01"), {})
+        self.assertEqual(ORG.parse_representative_track_name(""), {})
+
+
+class ExplicitIdentityFolderTests(unittest.TestCase):
+    def parse(self, name):
+        return ORG.parse_explicit_identity_folder_name(name)
+
+    def test_series_book_title_author_in_the_three_segment_forms(self):
+        expected = {"title": "Unsouled", "author": "Will Wight", "series": "Cradle", "number": "001", "sequence_label": "Book"}
+        self.assertEqual(self.parse("Cradle Book 1 - Unsouled - Will Wight"), expected)
+
+    def test_author_title_with_a_series_in_parentheses(self):
+        self.assertEqual(self.parse("Will Wight - Unsouled (Cradle, Book 1)"),
+                         {"title": "Unsouled", "author": "Will Wight", "series": "Cradle", "number": "001", "sequence_label": "Book"})
+
+    def test_series_book_n_dash_author_uses_the_series_as_the_title(self):
+        self.assertEqual(self.parse("Cradle, Book 1 - Will Wight"),
+                         {"title": "Cradle", "author": "Will Wight", "series": "Cradle", "number": "001", "sequence_label": "Book"})
+
+    def test_a_bare_number_series_needs_an_initials_author_to_avoid_false_positives(self):
+        self.assertEqual(self.parse("Cradle 1 - W. Wight")["author"], "W. Wight")
+        self.assertEqual(self.parse("Cradle 1 - Will Wight"), {})
+
+    def test_title_author_dash_series_number(self):
+        self.assertEqual(self.parse("Unsouled, Will Wight - Cradle 1"),
+                         {"title": "Unsouled", "author": "Will Wight", "series": "Cradle", "number": "001", "sequence_label": "Book"})
+
+    def test_co_author_folders_ending_in_a_book_label_are_left_to_other_parsers(self):
+        self.assertEqual(self.parse("Sebastian Wilde, Jamie Hawke - Happy Hunting Planet Kill, Book 2"), {})
+
+    def test_year_and_book_label_tails_are_not_series_numbers(self):
+        self.assertEqual(self.parse("TheFirstDefier, J.F.Brink - Dungeon Run - 2024"), {})
+
+    def test_plain_titles_and_blanks_are_not_explicit_identities(self):
+        for name in ("Unsouled", "Book 1 - Unsouled", ""):
+            with self.subTest(name=name):
+                self.assertEqual(self.parse(name), {})
+
+
+class BookFolderNameParserTests(unittest.TestCase):
+    def parse(self, name):
+        return ORG.parse_book_folder_name(name)
+
+    def test_the_organised_book_folder_form_gives_a_padded_number_and_the_title(self):
+        self.assertEqual(self.parse("Book 01 - Unsouled"), {"number": "001", "title": "Unsouled", "sequence_label": "Book"})
+        self.assertEqual(self.parse("Vol. 4 - Title"), {"number": "004", "title": "Title", "sequence_label": "Vol."})
+
+    def test_a_series_with_a_book_number_gets_the_series_as_its_title(self):
+        self.assertEqual(self.parse("Cradle, Book 3"), {"series": "Cradle", "number": "003", "sequence_label": "Book", "title": "Cradle"})
+        self.assertEqual(self.parse("Cradle Book 3"), {"title": "Cradle", "number": "003", "sequence_label": "Book"})
+
+    def test_a_range_becomes_a_books_title_and_number(self):
+        self.assertEqual(self.parse("Books 1-3"), {"number": "001-003", "sequence_label": "Book", "title": "Books 1-3"})
+
+    def test_a_light_novel_folder_with_author_year_series_volume_and_narrator(self):
+        got = self.parse("Isuna Hasekura (2008) Spice and Wolf, Volume 8 - Town of Strife 1 (Narrator)")
+        self.assertEqual(got, {"author": "Isuna Hasekura", "year": "2008", "series": "Spice and Wolf", "number": "008",
+                               "title": "Town of Strife 1", "narrator": "Narrator", "sequence_label": "Volume"})
+
+    def test_an_ambiguous_author_title_series_form_keeps_only_the_reliable_number(self):
+        self.assertEqual(self.parse("Shane Walker - Corporate Warfare All Trades, Book 3"), {"number": "003", "sequence_label": "Book"})
+
+    def test_plain_names_are_just_a_title_with_no_number(self):
+        self.assertEqual(self.parse("Plain Name"), {"title": "Plain Name", "number": ""})
+        self.assertEqual(self.parse("Unsouled (2016)"), {"title": "Unsouled (2016)", "number": ""})
+
+    def test_a_blank_name_gives_nothing(self):
+        self.assertEqual(self.parse(""), {})
+
+    @unittest.expectedFailure
+    def test_a_series_first_folder_should_not_invent_an_author_and_a_series_called_book(self):
+        # KNOWN BUG (see docs/test-audit-2026-10-16.md): "Destiny Cycle - Book 004 - Threads
+        # of Destiny Vol 1" is the very example finish() documents as series-first, but
+        # parse_explicit_identity_folder_name reads the first segment as an AUTHOR and
+        # "Book" as the SERIES (loose_middle_series), so the real series is lost.
+        got = self.parse("Destiny Cycle - Book 004 - Threads of Destiny Vol 1")
+        self.assertNotEqual(got.get("series"), "Book")
+        self.assertNotEqual(got.get("author"), "Destiny Cycle")
+
+
 if __name__ == "__main__":
     unittest.main()
