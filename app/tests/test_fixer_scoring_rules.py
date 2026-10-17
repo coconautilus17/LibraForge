@@ -286,5 +286,141 @@ class ReorderedTitleConflictTests(unittest.TestCase):
         self.assertIs(s.has_reordered_title_conflict(clues, {"title": "Darkness Dawn 3"}), False)
 
 
+def score_prod(**over):
+    base = {"title": "Qwerty Alpha", "series": [], "runtime_length_min": 600, "authors": [{"name": "Jane Doe"}],
+            "narrators": [{"name": "Bob Roe"}], "language": "english", "asin": "B0AAAAAAAA"}
+    base.update(over)
+    return base
+
+
+UNRELATED = {"title": "Totally Different", "author": "", "narrator": "", "series": "", "book_number": ""}
+
+
+class ScoreComponentTests(unittest.TestCase):
+    """Each evidence source moves the score by its documented weight."""
+
+    def score(self, clues=None, product=None, minutes=None):
+        return s.score_product_for_metadata({**UNRELATED, **(clues or {})}, product or score_prod(), minutes)
+
+    def delta(self, base_kwargs, changed_kwargs):
+        return round(self.score(**changed_kwargs) - self.score(**base_kwargs), 4)
+
+    def test_duration_bands_add_thirty_eight_thirty_eighteen_and_nothing_when_unknown(self):
+        base = self.score()
+        for minutes, bonus in ((600, 0.38), (640, 0.30), (700, 0.18)):
+            with self.subTest(minutes=minutes):
+                self.assertAlmostEqual(self.score(minutes=minutes) - base, bonus, places=4)
+
+    def test_a_duration_mismatch_costs_thirty_five_points(self):
+        rich = {"abs_asin": "B0AAAAAAAA", "author": "Jane Doe", "narrator": "Bob Roe"}
+        self.assertAlmostEqual(self.score(rich, minutes=600 * 2) - self.score(rich), -0.35, places=4)
+
+    def test_the_score_never_goes_below_zero(self):
+        self.assertEqual(self.score(minutes=1200), 0.0)
+
+    def test_abs_agreement_adds_a_fixed_bonus_only_for_the_same_asin(self):
+        base = self.score()
+        self.assertAlmostEqual(self.score({"abs_asin": "b0aaaaaaaa"}) - base, 0.20, places=4)
+        self.assertAlmostEqual(self.score({"abs_asin": "B0OTHER"}) - base, 0.0, places=4)
+
+    def test_a_matching_author_adds_seventeen_points_and_a_matching_narrator_ten(self):
+        base = self.score()
+        self.assertAlmostEqual(self.score({"author": "Jane Doe"}) - base, 0.17, places=4)
+        self.assertAlmostEqual(self.score({"narrator": "Bob Roe"}) - base, 0.10, places=4)
+
+    def test_title_evidence_adds_twelve_percent_of_its_score(self):
+        base = self.score()
+        full = self.score({"title": "Qwerty Alpha"})
+        title_score = s.title_evidence_score({**UNRELATED, "title": "Qwerty Alpha"}, score_prod())
+        self.assertAlmostEqual(full - base, 0.12 * (title_score - s.title_evidence_score(UNRELATED, score_prod())), places=4)
+
+    def test_a_series_match_adds_a_quarter_and_a_matching_number_adds_eighteen_plus_ten(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "1"}])
+        base = self.score(product=saga)
+        with_series = self.score({"series": "Saga"}, saga)
+        self.assertAlmostEqual(with_series - base, 0.25, places=4)
+        with_number = self.score({"series": "Saga", "book_number": "1", "book_number_source": "path"}, saga)
+        self.assertAlmostEqual(with_number - with_series, 0.18 + 0.10, places=4)
+
+    def test_a_substring_series_without_shared_content_earns_no_series_credit(self):
+        school = score_prod(series=[{"title": "Summoner School", "sequence": "1"}])
+        self.assertAlmostEqual(self.score({"series": "Summoner"}, school) - self.score(product=school), 0.0, places=4)
+
+    def test_a_non_english_edition_loses_thirty_points_unless_the_language_is_english_or_blank(self):
+        base = self.score(minutes=600)
+        self.assertAlmostEqual(self.score(minutes=600, product=score_prod(language="french")) - base, -0.30, places=4)
+        self.assertAlmostEqual(self.score(minutes=600, product=score_prod(language="English")) - base, 0.0, places=4)
+        self.assertAlmostEqual(self.score(minutes=600, product=score_prod(language="")) - base, 0.0, places=4)
+
+    def test_the_score_is_rounded_to_four_places_and_capped_at_one(self):
+        value = self.score({"author": "Jane Doe"})
+        self.assertEqual(value, round(value, 4))
+        self.assertLessEqual(self.score({"title": "Qwerty Alpha", "author": "Jane Doe", "narrator": "Bob Roe"}, minutes=600), 1.0)
+
+
+class ScoreHardRejectTests(unittest.TestCase):
+    def score(self, clues, product=None, minutes=None):
+        return s.score_product_for_metadata(clues, product or score_prod(), minutes)
+
+    def test_a_different_author_scores_zero_whatever_else_matches(self):
+        self.assertEqual(self.score({"title": "Qwerty Alpha", "author": "Zed Q"}, minutes=600), 0.0)
+
+    def test_the_same_words_in_a_different_order_score_zero(self):
+        self.assertEqual(self.score({"title": "Alpha Qwerty"}, minutes=600), 0.0)
+
+    def test_a_conflicting_book_number_scores_zero(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "5"}])
+        clues = {"title": "Totally Different", "series": "Saga", "book_number": "2", "book_number_source": "path"}
+        self.assertEqual(self.score(clues, saga, 600), 0.0)
+
+    def test_a_track_derived_number_never_rejects(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "5"}])
+        clues = {"title": "Totally Different", "series": "Saga", "book_number": "2", "book_number_source": "track"}
+        self.assertGreater(self.score(clues, saga, 600), 0.0)
+
+    def test_asin_identity_bypasses_the_guards_and_has_a_floor(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "1"}])
+        clues = {"title": "Qwerty Alpha", "author": "Jane Doe", "existing_asin": "b0aaaaaaaa", "series": "X",
+                 "book_number": "9", "book_number_source": "path"}
+        self.assertEqual(self.score(clues, saga, 1200), 0.75)
+
+    def test_an_asin_match_needs_the_title_and_author_to_agree_too(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "1"}])
+        clues = {"title": "Qwerty Alpha", "author": "Jane Doe", "existing_asin": "b0aaaaaaaa", "series": "X",
+                 "book_number": "9", "book_number_source": "path"}
+        self.assertEqual(self.score({**clues, "title": "Something Else Entirely"}, saga, 1200), 0.0)
+        self.assertEqual(self.score({**clues, "existing_asin": "B0BBBBBBBB"}, saga, 1200), 0.0)
+
+
+class ScoreFloorTests(unittest.TestCase):
+    def score(self, clues, product=None, minutes=None):
+        return s.score_product_for_metadata({**UNRELATED, **clues}, product or score_prod(), minutes)
+
+    def test_series_plus_a_matching_person_guarantees_at_least_seventy_two(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "1"}])
+        self.assertEqual(self.score({"series": "Saga", "author": "Jane Doe"}, saga), 0.72)
+        self.assertEqual(self.score({"series": "Saga", "narrator": "Bob Roe"}, saga), 0.72)
+
+    def test_duration_plus_series_plus_a_person_raises_the_floor_to_eighty_two(self):
+        saga = score_prod(series=[{"title": "Saga", "sequence": "1"}])
+        self.assertEqual(self.score({"series": "Saga", "author": "Jane Doe"}, saga, 700), 0.82)
+
+    def test_a_perfect_duration_with_the_title_and_a_person_is_certain(self):
+        self.assertEqual(self.score({"title": "Qwerty Alpha", "author": "Jane Doe"}, minutes=600), 1.0)
+
+    def test_a_strong_duration_with_the_title_and_a_person_floors_at_ninety(self):
+        self.assertEqual(self.score({"title": "Qwerty Alpha", "author": "Jane Doe"}, minutes=640), 0.9)
+
+    def test_an_acceptable_duration_with_the_title_and_a_person_floors_at_eighty(self):
+        self.assertEqual(self.score({"title": "Qwerty Alpha", "author": "Jane Doe"}, minutes=700), 0.8)
+
+    def test_a_mismatched_duration_gets_none_of_the_duration_floors(self):
+        self.assertLess(self.score({"title": "Qwerty Alpha", "author": "Jane Doe"}, minutes=1500), 0.8)
+
+    def test_a_strong_local_number_the_candidate_cannot_confirm_blocks_the_duration_floors(self):
+        clues = {"title": "Qwerty Alpha", "author": "Jane Doe", "book_number": "3", "book_number_source": "path"}
+        self.assertLess(self.score(clues, minutes=600), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
