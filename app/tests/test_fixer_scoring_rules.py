@@ -1,6 +1,7 @@
 """Direct tests of the scoring rules in app.fixer.scoring (duration bands,
 omnibus detection, number identity, year), asserting the returned values."""
 import unittest
+from unittest import mock
 
 from app.fixer import scoring as s
 
@@ -420,6 +421,141 @@ class ScoreFloorTests(unittest.TestCase):
     def test_a_strong_local_number_the_candidate_cannot_confirm_blocks_the_duration_floors(self):
         clues = {"title": "Qwerty Alpha", "author": "Jane Doe", "book_number": "3", "book_number_source": "path"}
         self.assertLess(self.score(clues, minutes=600), 1.0)
+
+
+def candidate(asin, minutes=600, narrators=("Bob Roe",), title="The Book", authors=("Jane Doe",), **extra):
+    return {"asin": asin, "title": title, "runtime_length_min": minutes, "authors": [{"name": a} for a in authors],
+            "narrators": [{"name": n} for n in narrators], **extra}
+
+
+class PickBestMatchTests(unittest.TestCase):
+    """Tie-breaking, with every candidate scoring the same so only the rules under test decide."""
+
+    def pick(self, clues, products, minutes=600.0, score=0.8):
+        with mock.patch.object(s, "score_product_for_metadata", return_value=score):
+            return s.pick_best_match_for_metadata(clues, products, minutes)
+
+    def test_nothing_scoring_above_zero_gives_no_match(self):
+        self.assertEqual(self.pick({}, [candidate("A")], score=0.0), (None, 0.0, None))
+        self.assertEqual(self.pick({}, []), (None, 0.0, None))
+
+    def test_the_higher_score_wins_without_any_ambiguity(self):
+        scores = {"A": 0.5, "B": 0.9}
+        with mock.patch.object(s, "score_product_for_metadata", side_effect=lambda c, p, m: scores[p["asin"]]):
+            best, score, ambiguity = s.pick_best_match_for_metadata({}, [candidate("A"), candidate("B")], 600.0)
+        self.assertEqual((best["asin"], score, ambiguity), ("B", 0.9, None))
+
+    def test_scores_within_the_epsilon_count_as_a_tie_and_beyond_it_do_not(self):
+        scores = {"A": 0.81, "B": 0.80}
+        with mock.patch.object(s, "score_product_for_metadata", side_effect=lambda c, p, m: scores[p["asin"]]):
+            _, _, ambiguity = s.pick_best_match_for_metadata({}, [candidate("A", 600), candidate("B", 640)], 600.0)
+        self.assertEqual(ambiguity["count"], 2)
+        scores = {"A": 0.83, "B": 0.80}
+        with mock.patch.object(s, "score_product_for_metadata", side_effect=lambda c, p, m: scores[p["asin"]]):
+            _, _, ambiguity = s.pick_best_match_for_metadata({}, [candidate("A", 600), candidate("B", 640)], 600.0)
+        self.assertIsNone(ambiguity)
+
+    def test_a_better_duration_status_resolves_a_tie_silently(self):
+        best, _, amb = self.pick({}, [candidate("B", 640), candidate("A", 600)])
+        self.assertEqual(best["asin"], "A")
+        self.assertIs(amb["resolved"], True)
+        self.assertIn("on duration", amb["reason"])
+        self.assertEqual(amb["alternatives"], ["The Book [B]"])
+        self.assertEqual(amb["chosen"], "The Book [A]")
+
+    def test_the_same_status_is_resolved_by_a_clear_exact_gap_of_half_a_minute(self):
+        best, _, amb = self.pick({}, [candidate("B", 606), candidate("A", 600)])
+        self.assertEqual((best["asin"], amb["resolved"]), ("A", True))
+        best, _, amb = self.pick({"narrator": ""}, [candidate("B", 600.4, narrators=("Zed",)), candidate("A", 600)])
+        self.assertIs(amb["resolved"], False)
+        self.assertIn("no clear duration, narrator or edition winner", amb["reason"])
+
+    def test_the_gap_must_reach_the_margin_exactly(self):
+        best, _, amb = self.pick({}, [candidate("B", 600.5), candidate("A", 600)])
+        self.assertIs(amb["resolved"], True)
+
+    def test_the_narrator_decides_when_only_one_tied_candidate_fits(self):
+        best, _, amb = self.pick({"narrator": "Bob Roe"},
+                                 [candidate("B", 600.1, narrators=("Other Reader",)), candidate("A", 600.1)])
+        self.assertEqual((best["asin"], amb["resolved"]), ("A", True))
+        self.assertIn("on narrator", amb["reason"])
+
+    def test_two_fitting_narrators_do_not_decide(self):
+        _, _, amb = self.pick({"narrator": "Bob Roe"}, [candidate("A", 600.1), candidate("B", 600.1, title="A Different Book")])
+        self.assertIs(amb["resolved"], False)
+
+    def test_the_audible_sku_decides_next(self):
+        best, _, amb = self.pick({"sku": "BK_AAAA_000001"},
+                                 [candidate("B", 600.1, narrators=("Z",), sku="BK_BBBB_000002"),
+                                  candidate("A", 600.1, narrators=("Y",), sku="bk_aaaa_000001")])
+        self.assertEqual((best["asin"], amb["resolved"]), ("A", True))
+        self.assertIn("on sku", amb["reason"])
+
+    def test_the_publisher_decides_after_the_sku(self):
+        best, _, amb = self.pick({"publisher": "Tantor Audio"},
+                                 [candidate("B", 600.1, narrators=("Z",), publisher_name="Podium Audio"),
+                                  candidate("A", 600.1, narrators=("Y",), publisher_name="Tantor Audio")])
+        self.assertEqual((best["asin"], amb["resolved"]), ("A", True))
+        self.assertIn("on publisher", amb["reason"])
+
+    def test_the_same_recording_under_two_asins_is_resolved_to_the_first(self):
+        _, _, amb = self.pick({}, [candidate("A", 600.1), candidate("B", 600.1)])
+        self.assertIs(amb["resolved"], True)
+        self.assertIn("on same recording", amb["reason"])
+
+    def test_different_recordings_stay_unresolved(self):
+        _, _, amb = self.pick({}, [candidate("A", 600.1), candidate("B", 600.1, narrators=("Someone Else",))])
+        self.assertIs(amb["resolved"], False)
+
+    def test_the_best_duration_is_chosen_among_equal_scores_even_without_resolution(self):
+        best, _, _ = self.pick({}, [candidate("B", 600.4), candidate("A", 600.1)])
+        self.assertEqual(best["asin"], "A")
+
+
+class SameRecordingTests(unittest.TestCase):
+    def test_title_authors_narrators_and_runtime_must_all_agree(self):
+        a = candidate("A", 600)
+        self.assertIs(s._same_recording(a, candidate("B", 600.9)), True)
+        self.assertIs(s._same_recording(a, candidate("B", 602)), False)
+        self.assertIs(s._same_recording(a, candidate("B", 600, title="Other")), False)
+        self.assertIs(s._same_recording(a, candidate("B", 600, authors=("Zed",))), False)
+        self.assertIs(s._same_recording(a, candidate("B", 600, narrators=("Zed",))), False)
+
+    def test_sparse_providers_are_compared_on_title_and_authors_only(self):
+        a = candidate("A", None, narrators=(), _abs_provider="goodreads")
+        b = candidate("B", None, narrators=(), _abs_provider="openlibrary")
+        self.assertIs(s._same_recording(a, b), True)
+        self.assertIs(s._same_recording(a, {**b, "title": "Other"}), False)
+
+    def test_one_sparse_and_one_full_listing_still_need_runtime_and_narrators(self):
+        a = candidate("A", None, narrators=(), _abs_provider="goodreads")
+        self.assertIs(s._same_recording(a, candidate("B", 600)), False)
+
+    def test_books_without_authors_are_never_the_same_recording(self):
+        self.assertIs(s._same_recording(candidate("A", authors=()), candidate("B", authors=())), False)
+
+
+class SkuAndPublisherMatchTests(unittest.TestCase):
+    def test_a_sku_matches_either_product_sku_field_case_insensitively(self):
+        self.assertIs(s._sku_matches({"sku": "bk_a_1"}, {"sku": "BK_A_1"}), True)
+        self.assertIs(s._sku_matches({"sku": "BK_A_1"}, {"sku_lite": "bk_a_1"}), True)
+        self.assertIs(s._sku_matches({"sku": "BK_A_1"}, {"sku": "BK_B_2"}), False)
+
+    def test_a_missing_local_sku_never_matches_a_missing_product_sku(self):
+        self.assertIs(s._sku_matches({}, {}), False)
+        self.assertIs(s._sku_matches({"sku": ""}, {"sku": ""}), False)
+
+    def test_catalog_publishers_match_by_catalog_entry_not_spelling(self):
+        self.assertIs(s._publisher_matches({"publisher": "Tantor"}, {"publisher_name": "Tantor Audio"}), True)
+        self.assertIs(s._publisher_matches({"publisher": "Tantor Audio"}, {"publisher_name": "Graphic Audio"}), False)
+
+    def test_unknown_publishers_match_when_one_contains_the_other(self):
+        self.assertIs(s._publisher_matches({"publisher": "Obscure Press Zed"}, {"publisher_name": "Obscure Press Zed LLC"}), True)
+        self.assertIs(s._publisher_matches({"publisher": "Obscure Press Zed"}, {"publisher_name": "Entirely Different Co"}), False)
+
+    def test_a_missing_publisher_on_either_side_never_matches(self):
+        self.assertIs(s._publisher_matches({}, {"publisher_name": "Tantor Audio"}), False)
+        self.assertIs(s._publisher_matches({"publisher": "Tantor Audio"}, {}), False)
 
 
 if __name__ == "__main__":
