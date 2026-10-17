@@ -137,5 +137,97 @@ class PublisherPolicyTests(unittest.TestCase):
             )
 
 
+class PublisherCatalogDetailTests(unittest.TestCase):
+    setUp = PublisherPolicyTests.setUp
+    tearDown = PublisherPolicyTests.tearDown
+
+    def _write_local(self, payload):
+        self._local.write_text(json.dumps(payload), encoding="utf-8")
+        pp.clear_publisher_cache()
+
+    def load(self):
+        return pp.load_publisher_policy()
+
+    def test_default_entry_without_an_id_gets_a_slug_of_its_name(self):
+        seed = {"publishers": [{"name": "Brilliance Audio"}]}
+        self._default.write_text(json.dumps(seed))
+        pp.clear_publisher_cache()
+        self.assertEqual(self.load()["publishers"][0]["id"], "brilliance-audio")
+
+    def test_custom_entry_enabled_flag_is_respected_and_defaults_to_on(self):
+        self._write_local({"custom_publishers": [
+            {"name": "On Press"}, {"name": "Off Press", "enabled": False}]})
+        by_name = {e["name"]: e["enabled"] for e in self.load()["publishers"] if e["source"] != "default"}
+        self.assertEqual(by_name, {"On Press": True, "Off Press": False})
+
+    def test_custom_entries_keep_learned_provenance_but_other_sources_become_custom(self):
+        self._write_local({"custom_publishers": [
+            {"name": "Learned One", "source": "learned"}, {"name": "Weird One", "source": "imported"},
+            {"name": "Plain One"}]})
+        sources = {e["name"]: e["source"] for e in self.load()["publishers"] if e["name"] != "Tantor Audio"
+                   and e["source"] != "default"}
+        self.assertEqual(sources, {"Learned One": "learned", "Weird One": "custom", "Plain One": "custom"})
+
+    def test_a_custom_entry_that_a_default_already_ships_is_hidden(self):
+        self._write_local({"custom_publishers": [{"name": "Tantor"}, {"name": "Tantor Audio, Graphic Audio"}]})
+        custom = [e for e in self.load()["publishers"] if e["source"] != "default"]
+        self.assertEqual(custom, [])
+
+    def test_save_derives_the_id_from_the_name_and_rejects_duplicates_and_nameless(self):
+        saved = pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[{"name": "New House"}])
+        self.assertEqual([e["id"] for e in saved["custom_publishers"]], ["new-house"])
+        with self.assertRaisesRegex(ValueError, "Duplicate publisher id"):
+            pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[
+                {"name": "A", "id": "x"}, {"name": "B", "id": "x"}])
+        with self.assertRaisesRegex(ValueError, "needs a name"):
+            pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[{"name": "  "}])
+
+    def test_save_keeps_an_explicit_id_and_the_enabled_flag(self):
+        saved = pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[
+            {"name": "Zed", "id": "custom-zed", "enabled": False}])
+        entry = saved["custom_publishers"][0]
+        self.assertEqual((entry["id"], entry["enabled"]), ("custom-zed", False))
+
+    def test_saved_entry_without_an_enabled_flag_is_enabled(self):
+        saved = pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[{"name": "Zed"}])
+        self.assertIs(saved["custom_publishers"][0]["enabled"], True)
+
+    def test_non_ascii_names_are_stored_readably(self):
+        pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[{"name": "Éditions Gallimard", "id": "gal"}])
+        self.assertIn("Éditions Gallimard", self._local.read_text(encoding="utf-8"))
+
+    def test_the_loaded_policy_reports_its_schema_version(self):
+        self.assertEqual(self.load()["schema_version"], 1)
+
+    def test_saved_catalog_file_is_versioned_pretty_json_with_a_trailing_newline(self):
+        pp.save_publisher_policy(disabled_defaults=[], custom_publishers=[{"name": "Zed"}])
+        text = self._local.read_text(encoding="utf-8")
+        self.assertEqual(json.loads(text)["schema_version"], 1)
+        self.assertTrue(text.endswith("\n"))
+        self.assertIn("\n  ", text)
+
+    def test_learned_entries_get_a_slug_id_and_enabled_learned_provenance(self):
+        result = pp.learn_publishers(["Acme Audio"])
+        entry = [e for e in result["custom_publishers"] if e["name"] == "Acme Audio"][0]
+        self.assertEqual((entry["id"], entry["source"], entry["enabled"], entry["aliases"]),
+                         ("acme-audio", "learned", True, []))
+
+    def test_a_name_with_no_slug_characters_still_gets_a_learned_id(self):
+        result = pp.learn_publishers(["***"])
+        self.assertEqual(result["custom_publishers"][0]["id"], "learned-0")
+
+    def test_two_learned_names_with_the_same_slug_get_distinct_ids(self):
+        result = pp.learn_publishers(["Acme Audio", "Acme  Audio!"])
+        ids = [e["id"] for e in result["custom_publishers"]]
+        self.assertEqual(len(set(ids)), len(ids))
+
+    def test_learning_nothing_new_returns_none(self):
+        self.assertIsNone(pp.learn_publishers(["Tantor Audio", "tantor", ""]))
+        self.assertIsNone(pp.learn_publishers([]))
+
+    def test_learning_skips_names_that_are_people_in_the_run(self):
+        self.assertIsNone(pp.learn_publishers(["Jane Doe"], exclude_names=["Jane Doe"]))
+
+
 if __name__ == "__main__":
     unittest.main()
