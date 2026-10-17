@@ -118,5 +118,75 @@ class BothEndsSynthesisTests(unittest.TestCase):
         self.assertEqual(chapters[-1]["end"], 49121.045)
 
 
+class CreditsThresholdAndShapeTests(unittest.TestCase):
+    def test_the_opening_gap_must_exceed_three_seconds(self):
+        self.assertEqual(len(finalize_chapters([_candidate(3.0)], duration=1000.0)), 1)
+        chapters = finalize_chapters([_candidate(3.01)], duration=1000.0)
+        self.assertEqual([c["title"] for c in chapters], ["Opening Credits", "Chapter"])
+
+    def test_synthesized_rows_name_their_reason_and_carry_blank_source_fields(self):
+        chapters = finalize_chapters([_candidate(10.123456)], duration=1000.0,
+                                     silences=[(990.0, 994.0)])
+        opening, _, end = chapters
+        self.assertEqual(opening["reasons"], ["synthesized:leading-gap"])
+        self.assertEqual(end["reasons"], ["synthesized:trailing-gap"])
+        for row in (opening, end):
+            self.assertEqual((row["source_text"], row["source_file"], row["number"], row["marker_kind"]),
+                             ("", "", None, row["title"]))
+        self.assertEqual(opening["end"], 10.123)            # rounded to milliseconds
+        self.assertEqual(opening["original_start"], 0.0)
+        self.assertEqual([c["id"] for c in chapters], [1, 2, 3])
+
+    def test_end_credits_split_at_the_middle_of_the_silence_and_the_last_chapter_ends_there(self):
+        chapters = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(990.0, 994.0)])
+        chapter, end = chapters[-2], chapters[-1]
+        self.assertEqual(end["title"], "End Credits")
+        self.assertEqual((end["start"], end["end"]), (992.0, 1000.0))
+        self.assertEqual(chapter["end"], 992.0)
+        self.assertEqual(end["original_start"], 992.0)
+
+    def test_the_silence_must_last_two_and_a_half_seconds(self):
+        short = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(990.0, 992.4)])
+        self.assertEqual([c["title"] for c in short], ["Opening Credits", "Chapter"])
+        exact = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(990.0, 992.5)])
+        self.assertEqual(exact[-1]["title"], "End Credits")
+
+    def test_enough_audio_must_remain_after_the_silence(self):
+        close = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(995.0, 998.0)])
+        self.assertNotIn("End Credits", [c["title"] for c in close])
+        ok = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(994.0, 997.0)])
+        self.assertEqual(ok[-1]["title"], "End Credits")
+
+    def test_only_silences_in_the_last_two_minutes_are_considered(self):
+        far = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(500.0, 504.0)])
+        self.assertNotIn("End Credits", [c["title"] for c in far])
+        edge = finalize_chapters([_candidate(100.0)], duration=1000.0, silences=[(880.0, 884.0)])
+        self.assertEqual(edge[-1]["title"], "End Credits")
+
+    def test_the_search_never_starts_before_the_last_chapter_does(self):
+        late_chapter = finalize_chapters([_candidate(950.0)], duration=1000.0, silences=[(900.0, 905.0)])
+        self.assertNotIn("End Credits", [c["title"] for c in late_chapter])
+
+    def test_the_earliest_qualifying_silence_wins(self):
+        chapters = finalize_chapters([_candidate(100.0)], duration=1000.0,
+                                     silences=[(960.0, 964.0), (900.0, 904.0)])
+        self.assertEqual(chapters[-1]["start"], 902.0)
+
+    def test_chapter_end_is_the_next_start_and_a_zero_length_chapter_gets_a_one_second_minimum(self):
+        chapters = finalize_chapters([_candidate(10.0), _candidate(10.0, "Dup")], duration=1000.0)
+        by_title = {c["title"]: c for c in chapters}
+        self.assertEqual(by_title["Chapter"]["end"], 10.0 + 1.0)
+        self.assertEqual(finalize_chapters([_candidate(50.0), _candidate(80.0, "B")], 200.0)[-2]["end"], 80.0)
+
+    def test_candidates_are_sorted_and_confidence_is_clamped(self):
+        low = ChapterCandidate(start=60.0, original_start=60.0, end=61.0, title="B", marker_kind="Chapter", confidence=7.0)
+        high = ChapterCandidate(start=20.0, original_start=19.1234, end=21.0, title="A", marker_kind="Chapter", confidence=-3.0)
+        rows = finalize_chapters([low, high], duration=100.0)
+        chapters = [r for r in rows if r["title"] in ("A", "B")]
+        self.assertEqual([r["title"] for r in chapters], ["A", "B"])
+        self.assertEqual((chapters[0]["confidence"], chapters[1]["confidence"]), (0.0, 1.0))
+        self.assertEqual(chapters[0]["original_start"], 19.123)
+
+
 if __name__ == "__main__":
     unittest.main()

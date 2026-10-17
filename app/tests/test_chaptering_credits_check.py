@@ -482,5 +482,181 @@ class DetectChaptersHybridCreditsCheckDecouplingTests(unittest.TestCase):
         self.assertNotIn("bled-in narration", credits_prompt)
 
 
+class ExtractJsonObjectEdgeTests(unittest.TestCase):
+    def test_a_nested_object_is_returned_whole(self):
+        raw = '{"a": 1, "credits_check": {"x": {"y": 2}, "z": [1, 2]}, "b": 3}'
+        self.assertEqual(_extract_json_object(raw, "credits_check"), {"x": {"y": 2}, "z": [1, 2]})
+
+    def test_braces_inside_strings_do_not_end_the_object(self):
+        raw = '{"credits_check": {"note": "closing } brace and { opener", "ok": true}, "other": 1}'
+        self.assertEqual(_extract_json_object(raw, "credits_check"), {"note": "closing } brace and { opener", "ok": True})
+
+    def test_an_escaped_quote_does_not_end_the_string(self):
+        raw = '{"credits_check": {"note": "he said \\"}\\" loudly", "ok": 1}}'
+        self.assertEqual(_extract_json_object(raw, "credits_check"), {"note": 'he said "}" loudly', "ok": 1})
+
+    def test_an_escaped_backslash_before_a_quote_still_closes_the_string(self):
+        raw = '{"credits_check": {"path": "C:\\\\", "ok": 1}}'
+        self.assertEqual(_extract_json_object(raw, "credits_check"), {"path": "C:\\", "ok": 1})
+
+    def test_a_truncated_object_is_none(self):
+        self.assertIsNone(_extract_json_object('{"credits_check": {"a": 1, "b": ', "credits_check"))
+
+    def test_a_key_without_an_object_is_none(self):
+        self.assertIsNone(_extract_json_object('{"credits_check": "none"}', "credits_check"))
+        self.assertIsNone(_extract_json_object('{"other": {}}', "credits_check"))
+
+    def test_an_unparseable_object_body_is_none(self):
+        self.assertIsNone(_extract_json_object('{"credits_check": {not json}}', "credits_check"))
+
+
+class HybridPromptSizingTests(unittest.TestCase):
+    def _result(self, count, review_numbers=(), long_text=False):
+        chapters = [{"id": i, "start": float(i), "number": i, "title": f"Chapter {i}", "reasons": [],
+                     "source_text": ("word " * 200) if long_text else "x"} for i in range(1, count + 1)]
+        return {"source_path": "/lib/Book.m4b", "chapters": chapters,
+                "sequence_review": [{"expected_number": n} for n in review_numbers],
+                "hybrid": {"focused_runs": []}}
+
+    def _payload(self, prompt):
+        return json.loads(prompt.split("Book data: ", 1)[1])
+
+    def test_a_short_book_lists_every_chapter_with_text_cut_to_240_characters(self):
+        payload = self._payload(_build_hybrid_llm_prompt(self._result(10, long_text=True)))
+        self.assertEqual(len(payload["chapters_under_review"]), 10)
+        self.assertTrue(all(len(c["source_text"]) <= 240 for c in payload["chapters_under_review"]))
+        self.assertEqual(len(payload["chapters_under_review"][0]["source_text"]), 240)
+        self.assertEqual(payload["chapter_count"], 10)
+        self.assertIs(payload["clean_path"], True)
+        self.assertEqual(payload["book"], "Book.m4b")
+
+    def test_a_long_book_without_review_items_shows_only_the_first_and_last_eight(self):
+        payload = self._payload(_build_hybrid_llm_prompt(self._result(70)))
+        numbers = [c["number"] for c in payload["chapters_under_review"]]
+        self.assertEqual(numbers, list(range(1, 9)) + list(range(63, 71)))
+        self.assertEqual(payload["chapter_count"], 70)
+
+    def test_sixty_chapters_exactly_are_all_shown(self):
+        payload = self._payload(_build_hybrid_llm_prompt(self._result(60)))
+        self.assertEqual(len(payload["chapters_under_review"]), 60)
+
+    def test_a_long_book_with_review_items_shows_each_flagged_chapter_and_its_neighbours(self):
+        payload = self._payload(_build_hybrid_llm_prompt(self._result(70, review_numbers=[30])))
+        self.assertEqual([c["number"] for c in payload["chapters_under_review"]], [29, 30, 31])
+        self.assertIs(payload["clean_path"], False)
+
+    def test_the_review_selection_is_capped_at_forty(self):
+        payload = self._payload(_build_hybrid_llm_prompt(self._result(70, review_numbers=list(range(1, 69, 2)))))
+        self.assertEqual(len(payload["chapters_under_review"]), 40)
+
+    def test_extra_instructions_are_appended_trimmed_and_blank_ones_ignored(self):
+        with_extra = _build_hybrid_llm_prompt(self._result(2), extra_instructions="  be strict  ")
+        self.assertIn("Additional reviewer instructions from the user: be strict ", with_extra)
+        self.assertNotIn("Additional reviewer", _build_hybrid_llm_prompt(self._result(2), extra_instructions="   "))
+
+    def test_non_ascii_text_is_not_escaped(self):
+        result = self._result(1)
+        result["chapters"][0]["title"] = "Kapitel Ärger"
+        self.assertIn("Kapitel Ärger", _build_hybrid_llm_prompt(result))
+
+
+class ResolveBookCreditsAbsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "book.mp3"
+        self.source.write_bytes(b"")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _sidecar(self, **book):
+        (self.root / "libraforge.json").write_text(json.dumps({"sidecar": {"book": book}}), encoding="utf-8")
+
+    def _abs(self, record, key="K"):
+        from app import chaptering
+        index = {"by_path": {str(self.root): record}} if record else {"by_path": {}}
+        return (patch.object(chaptering, "_abs_config_for_chaptering", return_value=("http://abs", key)),
+                patch.object(chaptering, "_abs_item_index_for_chaptering", return_value=index),
+                patch.object(chaptering, "lookup_item_in_index", side_effect=lambda idx, asin, path: idx["by_path"].get(path)),
+                patch.object(chaptering, "normalize_abs_media_to_internal",
+                             return_value={"author": "ABS Author", "narrator": "ABS Narrator"}))
+
+    def test_a_nested_sidecar_section_is_read(self):
+        self._sidecar(author="Nested A", narrator="Nested N")
+        self.assertEqual(resolve_book_credits(self.source), {"author": "Nested A", "narrator": "Nested N"})
+
+    def test_abs_is_not_asked_when_the_sidecar_already_has_both(self):
+        self._sidecar(author="A", narrator="N")
+        from app import chaptering
+        with patch.object(chaptering, "_abs_config_for_chaptering", side_effect=AssertionError("ABS consulted")):
+            self.assertEqual(resolve_book_credits(self.source), {"author": "A", "narrator": "N"})
+
+    def test_abs_fills_only_the_missing_field(self):
+        self._sidecar(author="Sidecar Author")
+        patches = self._abs({"media": {}})
+        with patches[0], patches[1], patches[2], patches[3]:
+            self.assertEqual(resolve_book_credits(self.source), {"author": "Sidecar Author", "narrator": "ABS Narrator"})
+
+    def test_abs_fills_both_when_the_sidecar_has_neither(self):
+        patches = self._abs({"media": {}})
+        with patches[0], patches[1], patches[2], patches[3]:
+            self.assertEqual(resolve_book_credits(self.source), {"author": "ABS Author", "narrator": "ABS Narrator"})
+
+    def test_without_an_abs_api_key_abs_is_not_queried(self):
+        from app import chaptering
+        patches = self._abs({"media": {}}, key="")
+        with patches[0], patch.object(chaptering, "_abs_item_index_for_chaptering",
+                                      side_effect=AssertionError("index built")):
+            self.assertEqual(resolve_book_credits(self.source), {"author": "", "narrator": ""})
+
+    def test_a_book_abs_does_not_know_falls_through_to_metadata_json(self):
+        (self.root / "metadata.json").write_text(json.dumps({"authors": ["M A"], "narrators": [" ", "M N"]}), encoding="utf-8")
+        patches = self._abs(None)
+        with patches[0], patches[1], patches[2], patches[3]:
+            self.assertEqual(resolve_book_credits(self.source), {"author": "M A", "narrator": "M N"})
+
+    def test_no_sources_at_all_gives_empty_credits(self):
+        from app import chaptering
+        with patch.object(chaptering, "_abs_config_for_chaptering", return_value=("http://abs", "")):
+            self.assertEqual(resolve_book_credits(self.source), {"author": "", "narrator": ""})
+
+
+class AbsConfigForChapteringTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = Path(self.tmp.name) / "abs.json"
+        from app import chaptering
+        self.chaptering = chaptering
+        self.patches = [patch.object(chaptering, "_ABS_CONFIG_FILE", self.cfg),
+                        patch.dict("os.environ", {"ABS_URL": "http://env-abs/", "ABS_API_KEY": "ENVKEY"})]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_without_a_config_file_the_environment_is_used_and_the_url_loses_its_slash(self):
+        self.assertEqual(self.chaptering._abs_config_for_chaptering(), ("http://env-abs", "ENVKEY"))
+
+    def test_the_config_file_overrides_the_environment(self):
+        self.cfg.write_text(json.dumps({"url": "http://file-abs//", "api_key": "FILEKEY"}))
+        self.assertEqual(self.chaptering._abs_config_for_chaptering(), ("http://file-abs", "FILEKEY"))
+
+    def test_a_partial_config_falls_back_per_field(self):
+        self.cfg.write_text(json.dumps({"api_key": "FILEKEY"}))
+        self.assertEqual(self.chaptering._abs_config_for_chaptering(), ("http://env-abs", "FILEKEY"))
+
+    def test_an_unreadable_config_falls_back_to_the_environment(self):
+        self.cfg.write_text("{broken")
+        self.assertEqual(self.chaptering._abs_config_for_chaptering(), ("http://env-abs", "ENVKEY"))
+
+    def test_the_default_url_when_nothing_is_set(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(self.chaptering._abs_config_for_chaptering(), ("http://audiobookshelf", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
