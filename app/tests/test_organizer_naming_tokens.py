@@ -107,15 +107,11 @@ class OrderTokenTests(unittest.TestCase):
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
         self.assertEqual(tokens["order"], "Vol. 5")
 
-    def test_order_empty_when_no_series(self):
-        metadata = dict(BASE_METADATA, series="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["order"], "")
-
-    def test_order_empty_when_no_number(self):
-        metadata = dict(BASE_METADATA, book_number="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["order"], "")
+    def test_order_and_number_are_empty_without_a_series_or_without_a_number(self):
+        for missing in ({"series": ""}, {"book_number": ""}):
+            with self.subTest(missing=missing):
+                tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, **missing))
+                self.assertEqual((tokens["order"], tokens["number"]), ("", ""))
 
 
 class NumberTokenTests(unittest.TestCase):
@@ -127,15 +123,6 @@ class NumberTokenTests(unittest.TestCase):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["number"], ORGANIZER.display_book_number("5"))
 
-    def test_number_empty_when_no_series(self):
-        metadata = dict(BASE_METADATA, series="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["number"], "")
-
-    def test_number_empty_when_no_book_number(self):
-        metadata = dict(BASE_METADATA, book_number="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["number"], "")
 
 
 class TitleRedundancyTests(unittest.TestCase):

@@ -29,13 +29,16 @@ class AbsOwnedAsinsTests(unittest.TestCase):
             self.assertEqual(main._abs_owned_asins(), {"B0AAA11111", "B0BBB22222"})
 
     def test_no_api_key_returns_none(self):
-        with patch("app.main._get_abs_api_key", return_value=""):
+        with patch("app.main._get_abs_api_key", return_value=""), \
+             patch("app.main._abs_request") as request:
             self.assertIsNone(main._abs_owned_asins())
+        request.assert_not_called()  # the missing key is what stops it, not a swallowed network error
 
     def test_abs_error_returns_none(self):
         with patch("app.main._get_abs_api_key", return_value="key"), \
-             patch("app.main._abs_request", side_effect=RuntimeError("down")):
+             patch("app.main._abs_request", side_effect=RuntimeError("down")) as request:
             self.assertIsNone(main._abs_owned_asins())
+        request.assert_called()  # it did try ABS, and the failure was absorbed
 
     def test_no_libraries_at_all_returns_none(self):
         # Regression for #243: _abs_owned_asins() now delegates its

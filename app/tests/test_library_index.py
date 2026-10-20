@@ -39,6 +39,7 @@ class FolderListingSignatureTests(unittest.TestCase):
         self._touch("Book/b.m4b")
         first = folder_listing_signature(self.root / "Book")
         second = folder_listing_signature(self.root / "Book")
+        self.assertTrue(first)  # a real digest, so equality is not just two empty strings
         self.assertEqual(first, second)
 
     def test_changes_when_a_file_is_added(self):
