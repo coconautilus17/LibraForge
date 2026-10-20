@@ -262,7 +262,7 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
         fresh = main_module._m4b_cached_search_is_still_fresh(
             cached_search, Path("/audiobooks/A"), shared,
         )
-        self.assertTrue(fresh)
+        self.assertIs(fresh, True)
 
     def test_folder_signatures_present_but_changed_is_a_miss(self):
         shared = library_index.LibraryIndexState(signatures={"/audiobooks/A": "sig2"})

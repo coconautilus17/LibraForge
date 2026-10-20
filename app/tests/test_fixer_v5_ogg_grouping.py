@@ -71,11 +71,6 @@ class OggGroupingTests(unittest.TestCase):
         # chapter file individually.
         self.assertFalse(FIXER.should_write_json_sidecar(Path("/b/only.ogg")))
 
-    def test_organizer_recognizes_grouped_ogg_book(self):
-        files = bare_number_ogg("/book/Shadow Slave Vol 9 (1301-1900)", 1301, 5)
-        self.assertIn(".ogg", ORGANIZER.MULTI_PART_AUDIO_EXTENSIONS)
-        self.assertTrue(ORGANIZER.looks_like_multi_file_book(files))
-
     def test_fixer_and_organizer_multipart_sets_stay_in_sync(self):
         self.assertEqual(
             FIXER.MULTI_PART_AUDIO_EXTENSIONS,

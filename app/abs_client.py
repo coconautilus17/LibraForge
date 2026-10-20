@@ -792,13 +792,6 @@ def upsert_bootstrapped_file(reports_dir: Path, file_path: Path, asin: str, path
     save_bootstrap_registry(reports_dir, registry)
 
 
-def remove_bootstrapped_file(reports_dir: Path, file_path: Path) -> None:
-    registry = load_bootstrap_registry(reports_dir)
-    if str(file_path) in registry:
-        del registry[str(file_path)]
-        save_bootstrap_registry(reports_dir, registry)
-
-
 def metadata_json_title_matches_abs_media(metadata_json: dict[str, Any], media: dict[str, Any]) -> bool:
     """Conservative "is this really the same book" sanity check before the
     reconciliation sweep deletes a bootstrap file -- guards against a

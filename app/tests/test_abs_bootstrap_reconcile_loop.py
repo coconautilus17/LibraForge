@@ -55,8 +55,12 @@ class AbsBootstrapReconcileTickTests(unittest.TestCase):
         with patch.object(main, "_get_abs_api_key", return_value="key"), \
              patch.object(main, "_get_abs_url", return_value="http://abs"), \
              patch.object(main, "REPORTS_DIR", self.reports_dir), \
-             patch.object(main, "reconcile_bootstrap_registry", side_effect=RuntimeError("boom")):
-            self._run(main._abs_bootstrap_reconcile_tick())  # must not raise
+             patch.object(main, "reconcile_bootstrap_registry", side_effect=RuntimeError("boom")) as reconcile_mock:
+            result = self._run(main._abs_bootstrap_reconcile_tick())  # must not raise
+        reconcile_mock.assert_called_once()           # it really tried, and the failure was contained
+        self.assertIsNone(result)
+        from app.abs_client import load_bootstrap_registry
+        self.assertIn(str(self.reports_dir / "book" / "metadata.json"), load_bootstrap_registry(self.reports_dir))
 
 
 if __name__ == "__main__":

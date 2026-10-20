@@ -167,7 +167,7 @@ class ScanCacheAsinSatisfiedTests(unittest.TestCase):
         self._write({"scan_cache": self._scan_cache("NOREALASIN"),
                      "marker": {"audible": {"asin": "NOREALASIN"}}})
         satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
-        self.assertTrue(satisfied)
+        self.assertIs(satisfied, True)
 
     def test_marker_claiming_real_asin_does_not_satisfy(self):
         # marker claims a real ASIN but the embedded tag (scan_cache) is absent.
@@ -179,7 +179,7 @@ class ScanCacheAsinSatisfiedTests(unittest.TestCase):
     def test_embedded_asin_satisfies(self):
         self._write({"scan_cache": self._scan_cache("B0EMBED1234")})
         satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
-        self.assertTrue(satisfied)
+        self.assertIs(satisfied, True)
 
 
 class ProbeGracefulTests(unittest.TestCase):

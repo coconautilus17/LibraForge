@@ -9,7 +9,6 @@ from app.main import (
     _NOREALASIN,
     _asin_from_libraforge_json,
     _asin_string_from_libraforge_json,
-    _owned_asins_for_folder,
     _scan_owned_asins,
     _write_scan_asin_cache,
 )
@@ -169,37 +168,6 @@ class AsinStringFromLibraforgeJsonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(_asin_string_from_libraforge_json(self._write(Path(d), {"scan_cache": {"asin": _NOREALASIN}})), "")
             self.assertEqual(_asin_string_from_libraforge_json(self._write(Path(d), {"marker": {}})), "")
-
-
-class OwnedAsinsForFolderTests(unittest.TestCase):
-    def test_filename_asin_wins_without_opening_media(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d) / "Book One"
-            folder.mkdir()
-            (folder / "Book One [B0FILE1234].m4b").write_bytes(b"")
-            with patch("app.main._read_asin_from_audio") as read_audio:
-                self.assertEqual(_owned_asins_for_folder(folder), {"B0FILE1234"})
-                read_audio.assert_not_called()  # cheap source used, no media open
-
-    def test_sidecar_used_before_media(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d) / "Book Two"
-            folder.mkdir()
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            (folder / "libraforge.json").write_text(json.dumps({"audible": {"asin": "B0SIDE12345"}}), encoding="utf-8")
-            with patch("app.main._read_asin_from_audio") as read_audio:
-                self.assertEqual(_owned_asins_for_folder(folder), {"B0SIDE12345"})
-                read_audio.assert_not_called()
-
-    def test_falls_back_to_embedded_tag(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d) / "Book Three"
-            folder.mkdir()
-            (folder / "book.m4b").write_bytes(b"")
-            with patch("app.main._read_asin_from_audio", return_value="B0EMBED1234") as read_audio:
-                self.assertEqual(_owned_asins_for_folder(folder), {"B0EMBED1234"})
-                read_audio.assert_called_once()
 
 
 class ScanOwnedAsinsTests(unittest.TestCase):

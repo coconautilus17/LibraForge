@@ -44,31 +44,35 @@ class MatchesSkipPatternsTests(unittest.TestCase):
             make_metadata(title="Bold Beginnings"),
             ["bold beginnings"],
         )
-        self.assertTrue(matched)
+        self.assertIs(matched, True)
+        self.assertEqual(pattern, "bold beginnings")
 
     def test_matches_series_field(self):
-        matched, _ = ORGANIZER.matches_skip_patterns(
+        matched, pattern = ORGANIZER.matches_skip_patterns(
             Path("/audiobooks/Some Folder"),
             make_metadata(series="Dashing Devil"),
             ["dashing devil"],
         )
-        self.assertTrue(matched)
+        self.assertIs(matched, True)
+        self.assertEqual(pattern, "dashing devil")
 
     def test_matches_author_field(self):
-        matched, _ = ORGANIZER.matches_skip_patterns(
+        matched, pattern = ORGANIZER.matches_skip_patterns(
             Path("/audiobooks/Some Folder"),
             make_metadata(author="G.D. Brooks"),
             ["g.d. brooks"],
         )
-        self.assertTrue(matched)
+        self.assertIs(matched, True)
+        self.assertEqual(pattern, "g.d. brooks")
 
     def test_matches_narrator_field(self):
-        matched, _ = ORGANIZER.matches_skip_patterns(
+        matched, pattern = ORGANIZER.matches_skip_patterns(
             Path("/audiobooks/Some Folder"),
             make_metadata(narrator="Full Cast"),
             ["full cast"],
         )
-        self.assertTrue(matched)
+        self.assertIs(matched, True)
+        self.assertEqual(pattern, "full cast")
 
     def test_no_match_returns_false(self):
         matched, pattern = ORGANIZER.matches_skip_patterns(

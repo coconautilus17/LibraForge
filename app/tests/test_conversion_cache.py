@@ -13,16 +13,12 @@ from app.conversion_cache import (
 
 
 class ConversionCacheTests(unittest.TestCase):
-    def test_search_key_is_stable_and_scoped(self):
+    def test_search_key_is_scoped_to_both_the_root_and_the_tool(self):
         root = Path("/library")
-        self.assertEqual(
-            search_cache_key(root, "fixer.py"),
-            search_cache_key(root, "fixer.py"),
-        )
-        self.assertNotEqual(
-            search_cache_key(root, "fixer.py"),
-            search_cache_key(root / "other", "fixer.py"),
-        )
+        key = search_cache_key(root, "fixer.py")
+        self.assertRegex(key, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(key, search_cache_key(root / "other", "fixer.py"))
+        self.assertNotEqual(key, search_cache_key(root, "organizer.py"))
 
     def test_cache_round_trip(self):
         with tempfile.TemporaryDirectory() as temp_dir:

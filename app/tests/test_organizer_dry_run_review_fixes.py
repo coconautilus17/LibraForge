@@ -141,8 +141,9 @@ class LooseFileIntoOccupiedFolderTests(unittest.TestCase):
         book.write_bytes(b"x")
         item = ORGANIZER.BookItem("loose_file", book, [book], book, media_type="ebook")
         (self.target_dir / "Forge Master.m4b").write_bytes(b"y")
-        ok, _path, reason = ORGANIZER.plan_loose_file_move(item, self.target_dir)
-        self.assertTrue(ok, reason)
+        ok, path, reason = ORGANIZER.plan_loose_file_move(item, self.target_dir)
+        self.assertIs(ok, True, reason)
+        self.assertEqual(path, self.target_dir / "Forge Master.epub")
 
     def test_conflict_details_name_what_is_already_there(self):
         (self.target_dir / "Forge Master.m4b").write_bytes(b"y")

@@ -450,16 +450,6 @@ class BootstrapRegistryTests(unittest.TestCase):
     def test_load_missing_registry_returns_empty_dict(self):
         self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
 
-    def test_remove_bootstrapped_file_drops_entry(self):
-        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN1", "/lib/book")
-        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
-        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
-
-    def test_remove_nonexistent_entry_is_a_no_op(self):
-        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
-        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
-
-
 class MetadataJsonTitleMatchesAbsMediaTests(unittest.TestCase):
     def test_matching_titles_case_insensitive(self):
         self.assertTrue(abs_client.metadata_json_title_matches_abs_media(
