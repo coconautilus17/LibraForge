@@ -178,11 +178,27 @@ def abs_search(title: str, author: str, provider: str, abs_url: str, abs_api_key
             "runtime_length_min": duration_min,
             "runtime_length_sec": duration_sec,
             "release_date": str(match.get("publishedYear", "") or ""),
+            # Read by the language penalty and the publisher tiebreak, which
+            # were inactive in ABS mode while these were dropped.
+            "language": match.get("language", "") or "",
+            "publisher_name": match.get("publisher", "") or "",
             "_abs_provider": provider,
             "_abs_isbn": match.get("isbn", "") or "",
             "_abs_genres": clean_provider_genres(match.get("genres") or []),
         })
     return products
+
+
+def abs_lookup_by_asin(asin: str, provider: str, abs_url: str, abs_api_key: str) -> dict | None:
+    """Look up one product by ASIN through ABS (it treats an ASIN title as a direct lookup).
+
+    Only an exact ASIN match counts, so a provider that ignores ASINs returns None.
+    """
+    asin_upper = asin.strip().upper()
+    for product in abs_search(asin_upper, "", provider, abs_url, abs_api_key, 5):
+        if str(product.get("asin", "") or "").upper() == asin_upper:
+            return product
+    return None
 
 
 def abs_agg_search(

@@ -50,7 +50,7 @@ try:
         clean_author_value, canonicalize_author_credits,
         _split_author_names, _authors_compatible, _initials_dedup_key,
         _NAME_FUNCTION_WORDS,
-        looks_like_person_name, should_prefer_path_author,
+        looks_like_person_name, should_prefer_path_author, split_credit_names,
         # series helpers
         extract_series_from_trailing_segment, clean_series_value,
         # tag utilities
@@ -149,6 +149,7 @@ try:
         audible_search,
         audible_lookup_by_asin,
         abs_search,
+        abs_lookup_by_asin,
         abs_agg_search,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
@@ -187,7 +188,7 @@ except ModuleNotFoundError:
         clean_author_value, canonicalize_author_credits,
         _split_author_names, _authors_compatible, _initials_dedup_key,
         _NAME_FUNCTION_WORDS,
-        looks_like_person_name, should_prefer_path_author,
+        looks_like_person_name, should_prefer_path_author, split_credit_names,
         # series helpers
         extract_series_from_trailing_segment, clean_series_value,
         # tag utilities
@@ -286,6 +287,7 @@ except ModuleNotFoundError:
         audible_search,
         audible_lookup_by_asin,
         abs_search,
+        abs_lookup_by_asin,
         abs_agg_search,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
@@ -3956,15 +3958,57 @@ def search_item(
             use_abs = getattr(args, "provider", "audible") == "abs"
 
             if use_abs:
-                # ABS provider: keyword searches only (no per-ASIN direct lookup via ABS).
+                lookup_asin = lambda asin: abs_lookup_by_asin(
+                    asin, args.abs_provider, args.abs_url, args.abs_api_key
+                )
+            else:
+                client = get_thread_client(auth_file, auth_password)
+                lookup_asin = lambda asin: audible_lookup_by_asin(client, asin)
+
+            # ASIN-first: if the file already embeds an ASIN, attempt a direct
+            # product lookup before falling back to keyword searches.
+            existing_asin = clues.get("existing_asin", "")
+            if existing_asin:
+                log.append(f"  Trying ASIN direct lookup: {existing_asin}")
+                asin_product = lookup_asin(existing_asin)
+                if asin_product:
+                    asin_candidate_score = score_product_for_metadata(
+                        clues, asin_product, local_duration_minutes
+                    )
+                    asin_debug = metadata_from_product(asin_product, clues, asin_candidate_score)
+                    log.append(
+                        f"  ASIN lookup: score={asin_candidate_score} "
+                        f"title={asin_debug.get('audible_title')} "
+                        f"mode={asin_debug.get('edit_mode')}"
+                    )
+                    _asin_threshold = 0.40
+                    if asin_candidate_score >= _asin_threshold and asin_candidate_score > score:
+                        product = asin_product
+                        score = asin_candidate_score
+                        used_query = f"ASIN:{existing_asin}"
+                        match_ambiguity = None
+                        effective_min_score = _asin_threshold
+                        result.source_provider = ""  # ASIN overrides any prior special-provider match
+                        queries = []  # ASIN hit is definitive; skip keyword searches
+
+            if use_abs:
+                # ABS takes title and author as separate fields: try the parsed
+                # clues first, then the joined query strings with no author.
+                abs_searches = []
+                if queries and clues.get("title"):
+                    author_names = split_credit_names(clues.get("author", ""))
+                    abs_searches.append((clues["title"], author_names[0] if author_names else ""))
                 for query in queries:
+                    title_part, _, author_part = query.partition(" - ")
+                    abs_searches.append((title_part.strip() or query, author_part.strip()))
+                for title_part, author_part in dict.fromkeys(abs_searches):
                     if product and score >= args.min_score:
                         break
+                    query = f"{title_part} - {author_part}" if author_part else title_part
                     log.append(f"  Trying ABS query ({args.abs_provider}): {query}")
-                    title_part, _, author_part = query.partition(" - ")
                     query_products = abs_search(
-                        title=title_part.strip() or query,
-                        author=author_part.strip(),
+                        title=title_part,
+                        author=author_part,
                         provider=args.abs_provider,
                         abs_url=args.abs_url,
                         abs_api_key=args.abs_api_key,
@@ -3991,34 +4035,6 @@ def search_item(
                             score = candidate_score
                             used_query = query
                             match_ambiguity = candidate_ambiguity
-            else:
-                client = get_thread_client(auth_file, auth_password)
-
-                # ASIN-first: if the file already embeds an ASIN, attempt a direct
-                # product lookup before falling back to keyword searches.
-                existing_asin = clues.get("existing_asin", "")
-                if existing_asin:
-                    log.append(f"  Trying ASIN direct lookup: {existing_asin}")
-                    asin_product = audible_lookup_by_asin(client, existing_asin)
-                    if asin_product:
-                        asin_candidate_score = score_product_for_metadata(
-                            clues, asin_product, local_duration_minutes
-                        )
-                        asin_debug = metadata_from_product(asin_product, clues, asin_candidate_score)
-                        log.append(
-                            f"  ASIN lookup: score={asin_candidate_score} "
-                            f"title={asin_debug.get('audible_title')} "
-                            f"mode={asin_debug.get('edit_mode')}"
-                        )
-                        _asin_threshold = 0.40
-                        if asin_candidate_score >= _asin_threshold and asin_candidate_score > score:
-                            product = asin_product
-                            score = asin_candidate_score
-                            used_query = f"ASIN:{existing_asin}"
-                            match_ambiguity = None
-                            effective_min_score = _asin_threshold
-                            result.source_provider = ""  # ASIN overrides any prior special-provider match
-                            queries = []  # ASIN hit is definitive; skip keyword searches
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score:
