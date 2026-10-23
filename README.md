@@ -5,9 +5,9 @@
 > across code, tests, and documentation, under human review and direction throughout.
 
 Self-hosted Audible metadata matching, M4B conversion, Audiobookshelf-style library
-organisation, series-wide metadata enrichment, and direct Audible downloading - five
-tools in one Docker container, with a vanilla-JS web UI. Every write operation defaults
-to a dry run.
+organisation, chapter detection, series-wide metadata enrichment, and direct Audible
+downloading - six tools in one Docker container, with a vanilla-JS web UI. Metadata,
+conversion, organising and cleanup runs default to a dry run; you apply them explicitly.
 
 ![LibraForge Start Here](docs/start-here.png)
 
@@ -15,7 +15,7 @@ to a dry run.
 
 ## Features
 
-Five tools plus a home dashboard, sharing one container and a common view of your
+Six tools plus a home dashboard, sharing one container and a common view of your
 library. See [docs/features.md](docs/features.md) for full detail on every tool,
 provider, and setting - this is the short version.
 
@@ -34,6 +34,15 @@ provider, and setting - this is the short version.
   disk and a status indicator showing whether that cache is fresh, stale, or still
   building. Flags when `No conversion` (a lossless stream-copy) is safe versus when a
   real re-encode is needed.
+- **Chapter Forge** (`/chapter-forge`) - finds and edits the chapter list of a book. Pick
+  a detection method: **Hybrid** (the default: a silence and keyword scan first, speech
+  recognition only where a chapter number is missing), **Full transcription** (the whole
+  book, most accurate, slowest), **Audible chapters** (the official chapter list for the
+  book's ASIN, no audio processing), or **Compare methods** (runs two and shows them side
+  by side without saving). Edit the result in a chapter editor with audio preview, then
+  save: the chapters go into the book's `libraforge.json`, with `.srt` and `.cue` files
+  next to the audio. Hybrid and Full transcription need the `-chaptering` image (see
+  below); an optional Ollama-compatible LLM can review chapter names in Hybrid mode.
 - **Folder Forge** (`/organizer`) - plans and applies `Author/Series/Book N - Title`
   destination moves with a dry-run preview and structured review reasons per book. The
   destination layout is driven by a configurable naming template rather than a fixed
@@ -52,8 +61,11 @@ provider, and setting - this is the short version.
   switch/rename/disconnect), providers (Audiobookshelf, abs-agg, abs-tract), appearance,
   and everything else global.
 
-**Providers:** Audible (direct), Audiobookshelf, abs-agg (LibriVox, Storytel, BookBeat,
-Big Finish, and others), and Goodreads/Kindle via abs-tract.
+**Providers:** Audible (direct), Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
+Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???,
+and Goodreads or Hardcover when abs-agg has their keys), Goodreads/Kindle via abs-tract,
+and Pocket FM as a Manual Review source. Open Library is used by Enrichment Forge and for
+ebooks.
 
 ---
 
@@ -71,14 +83,11 @@ Big Finish, and others), and Goodreads/Kindle via abs-tract.
   that root, forcing a full re-walk even though per-file probe results still get reused.
   A per-folder diff against the shared library index (already tracked, just not used for
   partial invalidation here) would let an update to one folder skip re-walking the rest.
-- **Full provider validation** - end-to-end tests for the abs-agg sources that don't
-  have dedicated tests yet: **LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD
-  Audiothek, Die drei ???**. Confirmed working today: Audible, Audiobookshelf, and (via
-  dedicated special-provider detection + tests) GraphicAudio and Soundbooth Theater,
-  plus Goodreads and Kindle via abs-tract. The untested ones only go through abs-agg's
-  generic keyword search path, with no confirmation that every response shape
-  normalises to the shared metadata schema without silent field drops.
-- Chapter detection via speech recognition before M4B conversion.
+- **Finish provider validation** - every abs-agg source now has a dedicated test file
+  that checks its response shape against the shared metadata schema. Live checks of
+  **Storytel, Audioteka, BookBeat** and **Hardcover** are blocked by an upstream abs-agg
+  problem (the required parameter is rejected as missing, or the search itself fails),
+  so those tests rest on abs-agg's published schema rather than a live response.
 - Unraid Community Apps package.
 
 See [docs/features.md](docs/features.md) for the Suspicion Report, which superseded an
@@ -207,13 +216,16 @@ LIBRAFORGE_IMAGE_TAG=latest-chaptering AUDIOBOOKS_PATH=/path/to/your/audiobooks 
 | Audible auth directory | `/auth` - active account `/auth/audible-metadata.json`; saved accounts `/auth/accounts/` |
 | Scripts | `/app/scripts` |
 | Reports and caches | `/app/reports` |
+| Saved settings | `/app/settings` (when `LIBRAFORGE_SETTINGS_DIR` is set, as in the published image's compose file); otherwise `/app/config` |
 
 ---
 
 ## Safety
 
-- All operations default to dry-run. Review before applying, and back up media before
-  the first write.
+- Metadata, conversion, organising and cleanup runs default to dry-run. Review before
+  applying, and back up media before the first write. Enrichment Forge writes nothing
+  until you apply the rows you ticked. The Library Downloader is the exception: it
+  downloads what you select.
 - A dedicated, empty Audible account is recommended for metadata lookups; use a
   real-library account for the downloader.
 - The `/auth` directory is mounted **read-write** so the app can add, switch, and
@@ -236,9 +248,10 @@ reproduce, attach the JSON report + debug log, and point out the specific failur
 
 ## Development
 
-See [docs/development.md](docs/development.md) for running tests, restarting after
-backend changes, and other local-dev notes. Static files (`app/static`, `scripts/`) are
-bind-mounted - HTML, CSS, and JS edits are live without a restart.
+See the [developer documentation](docs/developer/README.md) for how the app is put
+together, where its data lives, and how to run and write tests. With the repo's
+`docker-compose.yml` the `app/`, `scripts/` and `config/` folders are bind-mounted: HTML,
+CSS and JS edits are live, and Python edits need `make restart`.
 
 ---
 

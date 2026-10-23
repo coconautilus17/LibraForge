@@ -62,6 +62,36 @@ index" marker shows whether that cache is ready, stale (the fixer script changed
 it was last built), or still being built. Editing a fixer script invalidates every
 cached search keyed to it, since script logic changes can change how files get grouped.
 
+## Chapter Forge (`/chapter-forge`)
+Finds, edits and saves the chapter list of a book. Point it at one audio file (to get
+audio preview) or at a folder of audio files, pick a detection method, and review the
+result in the chapter editor before saving.
+
+- **Hybrid** (recommended): a silence and keyword scan finds the chapter headings first,
+  then speech recognition runs only around gaps in the chapter numbering. Much faster
+  than a full pass. An optional Ollama-compatible LLM can review chapter names; it reads
+  text evidence only and never processes audio.
+- **Full transcription:** transcribes the whole book. Most accurate and slowest on a CPU.
+- **Audible chapters:** one lookup of Audible's own chapter list for the book's ASIN, with
+  no audio processing. The ASIN is filled in from the book's existing sidecar when there
+  is one; otherwise type it in. Works in either image.
+- **Compare methods:** runs two methods back to back, shows them side by side, and saves
+  nothing.
+- **Hybrid and Full transcription need the `-chaptering` image** (see the README's "Two
+  published images"); without it only Audible chapters is available.
+- **Opening and End Credits** entries are added around the detected chapters, the way
+  Audible brackets a book.
+- **Compare to Audible:** checks whatever is loaded in the editor against Audible's chapter
+  data for the book, matched by chapter number rather than list position, whichever
+  method produced the chapters.
+- **Preview runs and resource guards:** a run can be limited to the first N minutes and is
+  processed in chunks. Resource guards watch memory, swap and CPU while it runs and halt
+  detection if the limits are breached twice in a row, instead of exhausting the host.
+- **Saving** writes the chapters into the `chapter_forge` section of the book's
+  `libraforge.json` and creates a `.libraforge-chapters.cue` and optionally a `.srt`
+  subtitle file, a transcript and an AI review note next to the audio. It does not edit the
+  audio file itself.
+
 ## Folder Forge (`/organizer`)
 Plans and applies `Author/Series/Book N - Title` destination moves with a dry-run
 preview and structured review reasons. **Index library and exit** rebuilds the
@@ -77,7 +107,9 @@ Metadata Forge (shown above the planned moves) to flag moves worth a second look
   "Fixer was not applied - Continue anyway?" before planning, since move quality for
   multi-file books leans on fixer-written sidecar metadata.
 - **Naming template:** the destination path is built from a configurable token template
-  (12 tokens, including an ASIN-detect flag and restatement cleanup) instead of a fixed
+  (13 tokens: `{author}`, `{narrator}`, `{series}`, `{title}`, `{subtitle}`, `{order}`,
+  `{number}`, `{publisher}`, `{year}`, `{asin}`, `{edition}`, `{original}` and `{filename}`;
+  with an ASIN-detect flag and restatement cleanup) instead of a fixed
   scheme, so the folder layout can be adapted to match how you already organise books.
 
 ## Enrichment Forge (`/enrichment-forge`)
@@ -89,8 +121,8 @@ whole series at once, instead of fixing each book one at a time.
   library index (not a provider search), with tag variants normalized into one entry.
   Books with no series are listed too, marked Standalone.
 - **Sources:** per book, Audible (every level of its category path), Goodreads reader
-  shelves, AudioSilo (a community audiobook database), Open Library subjects (first three
-  books of a series), keywords such as "LitRPG" or "cultivation" in the Audible summary
+  shelves, AudioSilo (a community audiobook database), Open Library subjects (about a
+  third of a series' books, at least three), keywords such as "LitRPG" or "cultivation" in the Audible summary
   and the book's description, and the book's current genres and tags. Per series,
   progressionfantasy.co.uk's catalogue and the HaremLit Fiction wiki. A match whose title
   doesn't fit the book is ignored rather than trusted. Each source has its own request
@@ -98,11 +130,14 @@ whole series at once, instead of fixing each book one at a time.
   failed and rate-limited counts for every source.
 - **Genres are voted, not piled up, and sources are ranked:** every source's labels are
   mapped onto one controlled list of genres. Editorial sources (Audible's categories and
-  summary, the genre tag embedded in the book's audio file, AudioSilo) count double;
-  crowd sources (Goodreads shelves, Open Library subjects, genres already in
-  Audiobookshelf from earlier tools) count single; a book's main genre needs one
-  editorial source or two crowd sources agreeing. A series keeps every genre supported by
-  at least a quarter of its books, with no fixed limit. The series-level lists count as
+  summary, the genre tag embedded in the book's audio file) count double; crowd sources
+  (Goodreads shelves, Open Library subjects, AudioSilo, genres already in Audiobookshelf
+  from earlier tools) count single. AudioSilo is a crowd source because much of what it
+  holds is Audible's own categories copied in, which would count Audible twice. A book's
+  main genre needs one editorial source or two crowd sources agreeing. A series keeps every
+  main genre supported by at least a quarter of its books (any single book is enough in a
+  series of fewer than four books that have a vote), with no limit on main genres, and up
+  to five subgenres. The series-level lists count as
   support for the whole series, but progressionfantasy.co.uk's broad progression list
   only counts when something else agrees or nothing contradicts it. LitRPG and
   cultivation are kinds of progression fantasy, so when either is a main genre,
@@ -178,9 +213,10 @@ the downloads when finished.
 > download fails, wait a bit and try again.
 
 ## Settings (`/settings`)
-One consolidated page for everything global: Appearance, Title noise, Publishers,
-Author names, Library, Reports (retention policy), Accounts, Audiobookshelf,
-Goodreads/Kindle, Developer, and sidecar cleanup. The gear icon in the header links here from every page;
+One consolidated page for everything global: About, Appearance, Title noise, Publishers,
+Author names, Library, Reports (retention policy), Accounts, Audiobookshelf, abs-agg
+(shown as GA/SBT in the side menu), Goodreads/Kindle (abs-tract), Developer, and a
+Danger zone with the sidecar cleanup. The gear icon in the header links here from every page;
 the old `/auth-setup` URL still works and redirects to the Accounts section.
 
 **Patterns (Title noise, Publishers, Author names):** the three pattern sections share
@@ -210,13 +246,24 @@ each with a recognisable name, and **switch between them in one click**, rename 
 offers retry or local-only delete if Audible is unreachable). The active account is
 shared by every tool.
 
-**Audiobookshelf / abs-agg:** paste an Audiobookshelf API key (create one in ABS
+**Audiobookshelf:** paste an Audiobookshelf API key (create one in ABS
 Settings → Users → API Keys) into the masked field and click **Save and verify**; the
 key is stored server-side and never shown back in the browser. Use **Remove key** to
 delete it with one click. ABS is also what makes the Library Downloader's "already
 owned" detection instant. The key can alternatively be set once via the `ABS_API_KEY`
 environment variable (an env-set key is managed by the operator and cannot be removed
 from the UI).
+
+**abs-agg and abs-tract:** each has its own section with a URL field. abs-agg adds
+GraphicAudio, SoundBooth Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD
+Audiothek and Die drei ???, plus Goodreads and Hardcover when the abs-agg service itself is
+configured with their keys. Storytel, Audioteka and BookBeat need a language, region or
+market value. abs-tract provides the Goodreads/Kindle fallback.
+
+**Danger zone, clean up sidecars:** permanently deletes the JSON files LibraForge writes
+next to your audio (`libraforge.json`, `*.libraforge.json` and related caches), optionally
+with Audiobookshelf's `metadata.json` files as well. It starts as a dry run and never
+touches audio files.
 
 ## Container paths
 
@@ -226,9 +273,12 @@ from the UI).
 | Audible auth directory | `/auth` - active account `/auth/audible-metadata.json`; saved accounts `/auth/accounts/` |
 | Scripts | `/app/scripts` |
 | Reports and caches | `/app/reports` |
+| Saved settings | `/app/settings` (published image) or `/app/config` |
 
 ## Debug tracing
 
-Opt-in (`app/debug_trace.py`, toggleable in Settings), writes to a log file/stderr. A
-raw log is the intended form for this, not a UI feature, so no further work is planned
-there. See [reporting-issues.md](reporting-issues.md) for how to use it when filing a bug.
+Opt-in (`app/debug_trace.py`, toggleable in Settings → Developer). Trace output always
+goes to the container's `stderr` (`docker compose logs libraforge`) and, if you set a log
+file path, to that file as well. Use a path under `/app/reports/`, such as
+`/app/reports/debug-trace.log`. A raw log is the intended form for this, not a UI feature,
+so no further work is planned there. See [reporting-issues.md](reporting-issues.md) for how to use it when filing a bug.
