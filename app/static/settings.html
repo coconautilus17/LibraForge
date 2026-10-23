@@ -395,11 +395,11 @@
             <div>
               <strong>SCORE</strong> -- match scoring. Logs the score components and final result for each candidate considered during matching (title similarity, author match, duration delta, series/sequence conflicts, omnibus range).
             </div>
-            <p style="margin:0">Output goes to the log file path below. Leave the path blank to send trace output to the container's <code>stderr</code> instead (visible in <code>docker compose logs libraforge</code>). To review a saved log file, set a path under <code>/reports/</code> -- the <code>reports/</code> folder is bind-mounted to your host, so the file is accessible outside the container at <code>reports/debug-trace.log</code> (or whatever name you choose).</p>
+            <p style="margin:0">Output goes to the log file path below. Leave the path blank to send trace output to the container's <code>stderr</code> instead (visible in <code>docker compose logs libraforge</code>). To keep a log file, set a path under <code>/app/reports/</code> (the container's reports folder, for example <code>/app/reports/debug-trace.log</code>). With the repo's compose file that folder is the <code>reports/</code> folder next to it; with the published image it is the <code>libraforge-reports</code> volume. A path outside <code>/app/reports/</code> usually cannot be created, in which case the trace still goes to <code>stderr</code>.</p>
           </div>
         </details>
         <label class="preference-field" style="margin-top:12px">Log file path (optional)
-          <input type="text" id="debugTraceFile" placeholder="/reports/debug-trace.log" style="font-family:var(--font-mono);font-size:0.85em" />
+          <input type="text" id="debugTraceFile" placeholder="/app/reports/debug-trace.log" style="font-family:var(--font-mono);font-size:0.85em" />
         </label>
       </div>
     </section>

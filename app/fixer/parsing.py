@@ -1,7 +1,7 @@
 """Text normalization, number parsing, and book-text parsing for the Audible fixer.
 
 Extracted from audible-metadata-fixer-v5.py so the logic is unit-testable and
-readable without loading the full 9k-line monolith.
+readable without loading the whole fixer script.
 
 Import constraint: this module must be importable both as ``app.fixer.parsing``
 (inside the container) and after a sys.path.insert of the repo root (standalone
