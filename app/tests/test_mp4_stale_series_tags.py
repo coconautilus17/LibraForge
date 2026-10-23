@@ -93,15 +93,12 @@ class Mp4SetFreeformAliasesTests(unittest.TestCase):
 
 
 class Mp4SetMovementIndexTests(unittest.TestCase):
-    def test_sets_integer_list_for_a_clean_sequence(self):
-        tags: dict = {}
-        mp4_set_movement_index(tags, "3")
-        self.assertEqual(tags["\xa9mvi"], [3])
-
-    def test_accepts_whole_number_with_trailing_zero_decimal(self):
-        tags: dict = {}
-        mp4_set_movement_index(tags, "3.0")
-        self.assertEqual(tags["\xa9mvi"], [3])
+    def test_sets_an_integer_list_for_a_whole_number_sequence(self):
+        for sequence in ("3", "3.0"):
+            with self.subTest(sequence=sequence):
+                tags: dict = {}
+                mp4_set_movement_index(tags, sequence)
+                self.assertEqual(tags["\xa9mvi"], [3])
 
     def test_blank_clears_existing(self):
         tags = {"\xa9mvi": [3]}

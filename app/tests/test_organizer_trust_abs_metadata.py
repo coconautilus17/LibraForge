@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
@@ -105,7 +106,9 @@ class InferMetadataAbsIndexTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             item = make_folder_item(root, "Some Book", "book.m4b", {"title": "Local Title", "author": "Local Author"})
-            metadata = ORGANIZER.infer_metadata(item, root, abs_index=None)
+            with mock.patch.object(ORGANIZER, "lookup_item_in_index") as lookup:
+                metadata = ORGANIZER.infer_metadata(item, root, abs_index=None)
+            lookup.assert_not_called()
             self.assertEqual(metadata["title"], "Local Title")
 
     def test_loose_file_item_looks_up_by_parent_folder(self):

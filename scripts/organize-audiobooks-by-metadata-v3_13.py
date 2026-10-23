@@ -2505,19 +2505,6 @@ def should_ignore_path(path: Path, root: Path) -> bool:
     return bool({part.lower() for part in relative_parts} & ignored)
 
 
-def direct_supported_audio_files(directory: Path) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return sorted(
-        (
-            item
-            for item in directory.iterdir()
-            if item.is_file() and is_supported_audio(item)
-        ),
-        key=natural_audio_sort_key,
-    )
-
-
 def contains_nested_supported_audio(directory: Path) -> bool:
     for child in directory.iterdir():
         if not child.is_dir():
@@ -2525,44 +2512,6 @@ def contains_nested_supported_audio(directory: Path) -> bool:
         for candidate in child.rglob("*"):
             if candidate.is_file() and is_supported_audio(candidate):
                 return True
-    return False
-
-
-def has_track_number_prefix(file_path: Path) -> bool:
-    return bool(re.match(r"^\s*\d{1,4}(?:\s*/\s*\d{1,4})?\s*[-_.: ]+\S", file_path.stem))
-
-
-def looks_like_multi_file_book(audio_files: list[Path]) -> bool:
-    if len(audio_files) <= 1:
-        return True
-
-    suffixes = {file_path.suffix.lower() for file_path in audio_files}
-    if not suffixes or not suffixes <= MULTI_PART_AUDIO_EXTENSIONS:
-        return False
-
-    numeric_parts = part_sequence_files(audio_files)
-    validation_files = (
-        sorted(numeric_parts, key=natural_audio_sort_key)
-        if len(numeric_parts) >= 2
-        else audio_files
-    )
-    validation = validate_multi_part_group_files(validation_files)
-    if validation["safe"]:
-        return True
-
-    print(
-        "WARNING: not grouping multi-file folder with embedded chapters: "
-        f"{audio_files[0].parent}",
-        file=sys.stderr,
-    )
-    for unsafe in validation["unsafe_files"]:
-        print(
-            "  unsafe: "
-            f"{unsafe['file']} "
-            f"chapters={unsafe['chapter_count']} "
-            f"reason={unsafe['reason']}",
-            file=sys.stderr,
-        )
     return False
 
 

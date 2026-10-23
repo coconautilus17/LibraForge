@@ -24,48 +24,21 @@ class TrustedTitleParentheticalSeriesTests(unittest.TestCase):
     correctly.
     """
 
-    def test_trailing_series_book_parenthetical_is_stripped(self):
-        result = ORGANIZER.clean_book_title(
-            "Rebirth (Dread Knight Book 4)",
-            "Dread Knight",
-            ORGANIZER.normalize_book_number("4"),
-            trusted=True,
-        )
-        self.assertEqual(result, "Rebirth")
-
-    def test_series_number_sign_parenthetical_is_still_stripped(self):
-        result = ORGANIZER.clean_book_title(
-            "End of Trials (Paths of Akashic #2)",
-            "Paths of Akashic",
-            ORGANIZER.normalize_book_number("2"),
-            trusted=True,
-        )
-        self.assertEqual(result, "End of Trials")
-
-    def test_doubled_nested_parenthetical_collapses_to_series(self):
-        # "The Duelist 12 (The Duelist (Completed Series))" -- the trailing
-        # annotation itself contains a nested parenthetical, which the old
-        # single-level bracket regex could not recognize as one unit, so it
-        # only stripped the leading "The Duelist 12" prefix and left the
-        # untouched "(The Duelist (Completed Series))" fragment as the title.
-        result = ORGANIZER.clean_book_title(
-            "The Duelist 12 (The Duelist (Completed Series))",
-            "The Duelist",
-            ORGANIZER.normalize_book_number("12"),
-            trusted=True,
-        )
-        self.assertEqual(result, "The Duelist")
-
-    def test_bracketed_series_comma_number_collapses_to_series(self):
-        # "Dragon Emperor 22 [Dragon Emperor, 22]" -- a doubled
-        # series+number annotation using square brackets instead of parens.
-        result = ORGANIZER.clean_book_title(
-            "Dragon Emperor 22 [Dragon Emperor, 22]",
-            "Dragon Emperor",
-            ORGANIZER.normalize_book_number("22"),
-            trusted=True,
-        )
-        self.assertEqual(result, "Dragon Emperor")
+    def test_a_trailing_series_annotation_is_stripped(self):
+        for title, series, number, expected in (
+            ("Rebirth (Dread Knight Book 4)", "Dread Knight", "4", "Rebirth"),
+            ("End of Trials (Paths of Akashic #2)", "Paths of Akashic", "2", "End of Trials"),
+            # The trailing annotation itself contains a nested parenthetical, which
+            # the old single-level bracket regex could not recognize as one unit, so
+            # it only stripped the leading "The Duelist 12" prefix and left the
+            # untouched "(The Duelist (Completed Series))" fragment as the title.
+            ("The Duelist 12 (The Duelist (Completed Series))", "The Duelist", "12", "The Duelist"),
+            # A doubled series+number annotation using square brackets instead of parens.
+            ("Dragon Emperor 22 [Dragon Emperor, 22]", "Dragon Emperor", "22", "Dragon Emperor"),
+        ):
+            with self.subTest(title=title):
+                result = ORGANIZER.clean_book_title(title, series, ORGANIZER.normalize_book_number(number), trusted=True)
+                self.assertEqual(result, expected)
 
     def test_multiple_distinct_trailing_parentheticals_only_strip_last(self):
         # Guard against the nested-bracket regex over-matching across
@@ -298,23 +271,14 @@ class GenericEditionDescriptorParentheticalTests(unittest.TestCase):
     let them survive as the entire "title".
     """
 
-    def test_series_completion_tag_collapses_to_series(self):
-        result = ORGANIZER.clean_book_title(
-            "Building Harem Town 9 (Series Completion)",
-            "Building Harem Town",
-            ORGANIZER.normalize_book_number("9"),
-            trusted=True,
-        )
-        self.assertEqual(result, "Building Harem Town")
-
-    def test_themed_edition_tag_collapses_to_series(self):
-        result = ORGANIZER.clean_book_title(
-            "Succubus Lord 14 (Swimsuit Edition)",
-            "Succubus Lord",
-            ORGANIZER.normalize_book_number("14"),
-            trusted=True,
-        )
-        self.assertEqual(result, "Succubus Lord")
+    def test_a_generic_edition_tag_collapses_to_the_series(self):
+        for title, series, number in (
+            ("Building Harem Town 9 (Series Completion)", "Building Harem Town", "9"),
+            ("Succubus Lord 14 (Swimsuit Edition)", "Succubus Lord", "14"),
+        ):
+            with self.subTest(title=title):
+                result = ORGANIZER.clean_book_title(title, series, ORGANIZER.normalize_book_number(number), trusted=True)
+                self.assertEqual(result, series)
 
     def test_book_folder_name_drops_series_completion_tag(self):
         with tempfile.TemporaryDirectory() as tmp:

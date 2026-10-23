@@ -54,7 +54,7 @@ class TitleNoiseTests(unittest.TestCase):
         # A bracketed word that is not a release tag or publisher stays.
         self.assertEqual(
             sanitize_book_title("Dark Age (3 of 3) [Dramatized Adaptation]"),
-            sanitize_book_title("Dark Age (3 of 3) [Dramatized Adaptation]"),
+            "Dark Age (3 of 3) [Dramatized Adaptation]",
         )
 
 

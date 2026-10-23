@@ -163,7 +163,7 @@ class PartBracketStripTests(unittest.TestCase):
     def test_does_not_strip_narrator_brackets(self):
         # "Hel Rose, Will Rose" ends in a name, not "- N"
         result = self._sanitize("First Leash {Hel Rose, Will Rose}")
-        self.assertIn("Hel Rose", result)
+        self.assertEqual(result, "First Leash {Hel Rose, Will Rose}")
 
     def test_does_not_strip_asin_brackets(self):
         # ASIN brackets don't end in "- N" so they are not touched by the new rule
@@ -884,19 +884,27 @@ class NumberCandidateHyphenTests(unittest.TestCase):
 
 
 class SplitSeriesTrailingNumberTests(unittest.TestCase):
-    def test_book_word_suffix_is_stripped_and_fills_an_empty_sequence(self):
-        self.assertEqual(FIXER.split_series_trailing_number("Blight, Book 1", ""), ("Blight", "1"))
+    def test_a_trailing_book_marker_is_stripped_and_a_given_sequence_wins(self):
+        for series, sequence, expected_series, expected_sequence in (
+            ("Blight, Book 1", "", "Blight", "1"),
+            # The wording is noise either way, so the series text is still cleaned,
+            # but a sequence Audible already gave us separately wins over the
+            # number found in the (possibly wrong) trailing text.
+            ("Blight, Book 1", "2", "Blight", "2"),
+            # Real case: "Dean Koontz: From the Vault" (a themed reissue
+            # collection with no real reading order) -- Audible's own template
+            # still appends ", Book #" with nothing after the "#". The numbered
+            # regex needs a digit and never matches this at all.
+            ("Dean Koontz: From the Vault, Book #", "", "Dean Koontz: From the Vault", ""),
+            ("Blight, Book #", "3", "Blight", "3"),
+        ):
+            with self.subTest(series=series, sequence=sequence, expected_series=expected_series, expected_sequence=expected_sequence):
+                self.assertEqual(FIXER.split_series_trailing_number(series, sequence), (expected_series, expected_sequence))
 
     def test_matches_regardless_of_case_or_a_hash(self):
         for raw in ("Blight, Book 1", "Blight, BOOK #1", "Blight, book1", "Blight, Vol. 1", "Blight, VOLUME 1"):
             series, _ = FIXER.split_series_trailing_number(raw, "")
             self.assertEqual(series, "Blight", raw)
-
-    def test_an_existing_sequence_is_never_overwritten(self):
-        # The wording is noise either way, so the series text is still cleaned,
-        # but a sequence Audible already gave us separately wins over the
-        # number found in the (possibly wrong) trailing text.
-        self.assertEqual(FIXER.split_series_trailing_number("Blight, Book 1", "2"), ("Blight", "2"))
 
     def test_no_trailing_number_is_left_alone(self):
         self.assertEqual(FIXER.split_series_trailing_number("Blight", "1"), ("Blight", "1"))
@@ -906,30 +914,11 @@ class SplitSeriesTrailingNumberTests(unittest.TestCase):
         product = {"series": [{"title": "Blight, Book 1"}]}
         self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
 
-    def test_bare_book_marker_with_no_number_is_stripped(self):
-        # Real case: "Dean Koontz: From the Vault" (a themed reissue
-        # collection with no real reading order) -- Audible's own template
-        # still appends ", Book #" with nothing after the "#". The numbered
-        # regex needs a digit and never matches this at all.
-        self.assertEqual(
-            FIXER.split_series_trailing_number("Dean Koontz: From the Vault, Book #", ""),
-            ("Dean Koontz: From the Vault", ""),
-        )
-
     def test_bare_book_marker_matches_regardless_of_case_or_hash(self):
         for raw in ("Blight, Book", "Blight, BOOK #", "Blight, book", "Blight, Vol.", "Blight, VOLUME"):
             series, sequence = FIXER.split_series_trailing_number(raw, "")
             self.assertEqual(series, "Blight", raw)
             self.assertEqual(sequence, "", raw)
-
-    def test_bare_book_marker_never_overwrites_an_existing_sequence(self):
-        self.assertEqual(
-            FIXER.split_series_trailing_number("Blight, Book #", "3"), ("Blight", "3"),
-        )
-
-    def test_get_primary_series_keeps_its_own_sequence_field_over_the_suffix(self):
-        product = {"series": [{"title": "Blight, Book 1", "sequence": "1"}]}
-        self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
 
     def test_get_primary_series_prefers_its_own_conflicting_sequence_field(self):
         # An Audible data inconsistency (the title's own number disagrees with

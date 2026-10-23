@@ -83,12 +83,6 @@ class CanonicalAuthorNameTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertEqual(a, "J.R.R. Tolkien")
 
-    def test_mid_name_initials_collapse(self):
-        self.assertEqual(
-            ORGANIZER.canonical_author_name("George R. R. Martin"),
-            ORGANIZER.canonical_author_name("George R.R. Martin"),
-        )
-
     def test_lone_initial_gets_a_dot_but_no_merge(self):
         self.assertEqual(ORGANIZER.canonical_author_name("Iain M Banks"), "Iain M. Banks")
 

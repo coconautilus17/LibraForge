@@ -31,17 +31,21 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         item.update(overrides)
         return item
 
-    def test_missing_series_is_flagged(self):
-        # This is a correct match, just missing series -- from bad source
+    def test_a_missing_series_is_flagged(self):
+        # A correct match that is just missing its series -- from bad source
         # tagging or the data never existing in the first place. False
         # positives here are fine (easy to dismiss in review).
-        item = self._base_item(match={"title": "Metal Mage 15", "author": "Eric Vall", "series": ""})
-
-        result = REVIEW.review_metadata_item(item, make_args())
-
-        self.assertIsNotNone(result)
-        codes = {r["code"] for r in result["reasons"]}
-        self.assertIn("missing_series", codes)
+        for label, overrides in (
+            ("match has no series", {"match": {"title": "Metal Mage 15", "author": "Eric Vall", "series": ""}}),
+            ("no series anywhere", {
+                "local": {"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+                "match": {"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
+            }),
+        ):
+            with self.subTest(label):
+                result = REVIEW.review_metadata_item(self._base_item(**overrides), make_args())
+                self.assertIsNotNone(result)
+                self.assertIn("missing_series", {r["code"] for r in result["reasons"]})
 
     def test_real_local_series_with_no_match_series_is_not_flagged(self):
         # report_items' local.series is now real embedded-tag data (the fixer
@@ -59,18 +63,6 @@ class ReviewMetadataItemMissingFieldsTests(unittest.TestCase):
         result = REVIEW.review_metadata_item(item, make_args())
 
         self.assertIsNone(result)
-
-    def test_no_series_anywhere_is_flagged(self):
-        item = self._base_item(
-            local={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
-            match={"title": "Pocket Dungeon 4", "author": "Eric Vall", "series": ""},
-        )
-
-        result = REVIEW.review_metadata_item(item, make_args())
-
-        self.assertIsNotNone(result)
-        codes = {r["code"] for r in result["reasons"]}
-        self.assertIn("missing_series", codes)
 
     def test_unmatched_item_with_no_local_series_is_flagged(self):
         # A cleaner completeness picture wants every book with no series
@@ -248,19 +240,17 @@ class ReviewOrganizerItemInfoOnlyReasonTests(unittest.TestCase):
 
 
 class SplitTitleBaseAndNumberTests(unittest.TestCase):
-    def test_splits_trailing_number(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core 2"), ("Dungeon Core", "2"))
-
-    def test_no_trailing_number_returns_whole_title(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core"), ("Dungeon Core", ""))
-
-    def test_number_must_be_a_separate_token(self):
-        # "1% Lifesteal" must not be split -- the leading "1" isn't a
-        # trailing sequence number and isn't even at the end of the string.
-        self.assertEqual(REVIEW.split_title_base_and_number("1% Lifesteal"), ("1% Lifesteal", ""))
-
-    def test_decimal_sequence_number(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Side Quest 2.5"), ("Side Quest", "2.5"))
+    def test_splits_a_trailing_number(self):
+        for title, expected_base, expected_number in (
+            ("Dungeon Core 2", "Dungeon Core", "2"),
+            ("Dungeon Core", "Dungeon Core", ""),
+            # "1% Lifesteal" must not be split -- the leading "1" isn't a
+            # trailing sequence number and isn't even at the end of the string.
+            ("1% Lifesteal", "1% Lifesteal", ""),
+            ("Side Quest 2.5", "Side Quest", "2.5"),
+        ):
+            with self.subTest(title=title, expected_base=expected_base, expected_number=expected_number):
+                self.assertEqual(REVIEW.split_title_base_and_number(title), (expected_base, expected_number))
 
 
 class MajorityAuthorAndNoteTests(unittest.TestCase):

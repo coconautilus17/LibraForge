@@ -29,8 +29,10 @@ BASE_METADATA = {
 
 
 class ValidateNamingTemplateTests(unittest.TestCase):
-    def test_default_template_has_no_problems(self):
-        self.assertEqual(ORGANIZER.validate_naming_template(ORGANIZER.DEFAULT_NAMING_TEMPLATE), [])
+    def test_valid_templates_have_no_problems(self):
+        for template in (ORGANIZER.DEFAULT_NAMING_TEMPLATE, "{author}/{title},{asin}"):
+            with self.subTest(template=template):
+                self.assertEqual(ORGANIZER.validate_naming_template(template), [])
 
     def test_unknown_token_is_reported(self):
         problems = ORGANIZER.validate_naming_template("{author}/{bogus}/")
@@ -44,15 +46,13 @@ class ValidateNamingTemplateTests(unittest.TestCase):
         problems = ORGANIZER.validate_naming_template("{title}")
         self.assertTrue(any("/" in p for p in problems))
 
-    def test_custom_valid_template_has_no_problems(self):
-        problems = ORGANIZER.validate_naming_template("{author}/{title},{asin}")
-        self.assertEqual(problems, [])
-
-    def test_original_token_is_recognized(self):
-        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{original}"), [])
-
-    def test_filename_token_is_recognized(self):
-        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{filename}"), [])
+    def test_original_and_filename_tokens_are_recognized(self):
+        for template in (
+            "{author}/{original}",
+            "{author}/{filename}",
+        ):
+            with self.subTest(template=template):
+                self.assertEqual(ORGANIZER.validate_naming_template(template), [])
 
     def test_original_and_filename_together_is_rejected(self):
         # The two file-name tokens are mutually exclusive -- a template picks
@@ -64,7 +64,7 @@ class ValidateNamingTemplateTests(unittest.TestCase):
         # With the default scheme now behind an explicit toggle, an empty
         # template field is a user error, not a silent "use the default".
         problems = ORGANIZER.validate_naming_template("")
-        self.assertTrue(problems)
+        self.assertEqual(problems, ["Template is empty -- enter a template, or turn on the default scheme."])
 
 
 class BuildTargetDirForTemplateTests(unittest.TestCase):

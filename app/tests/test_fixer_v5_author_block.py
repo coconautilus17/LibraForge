@@ -42,31 +42,18 @@ def product(title, authors, asin="", language="english", duration_minutes=None):
 
 
 class AuthorIdentityConflictTests(unittest.TestCase):
-    def test_clearly_different_author_conflicts(self):
-        clues = {"title": "Cradle", "author": "Arthur C. Clarke"}
-        prod = product("Cradle", ["Will Wight"])
-        self.assertTrue(FIXER.has_author_identity_conflict(clues, prod))
-
-    def test_same_author_no_conflict(self):
-        clues = {"title": "Cradle", "author": "Will Wight"}
-        prod = product("Cradle", ["Will Wight"])
-        self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
-
-    def test_coauthor_subset_no_conflict(self):
-        # Local lists both authors; product lists one. Shared token / containment.
-        clues = {"title": "Cradle", "author": "Arthur C. Clarke, Gentry Lee"}
-        prod = product("Cradle", ["Arthur C. Clarke"])
-        self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
-
-    def test_name_format_variation_no_conflict(self):
-        clues = {"title": "The Hobbit", "author": "J. R. R. Tolkien"}
-        prod = product("The Hobbit", ["J.R.R. Tolkien"])
-        self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
-
-    def test_missing_local_author_no_conflict(self):
-        clues = {"title": "Cradle", "author": ""}
-        prod = product("Cradle", ["Will Wight"])
-        self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
+    def test_author_identity_conflict(self):
+        for title, local_author, product_authors, expected in (
+            ("Cradle", "Arthur C. Clarke", ["Will Wight"], True),
+            ("Cradle", "Will Wight", ["Will Wight"], False),
+            # Local lists both authors; product lists one. Shared token / containment.
+            ("Cradle", "Arthur C. Clarke, Gentry Lee", ["Arthur C. Clarke"], False),
+            ("The Hobbit", "J. R. R. Tolkien", ["J.R.R. Tolkien"], False),
+            ("Cradle", "", ["Will Wight"], False),
+        ):
+            with self.subTest(local_author=local_author, product_authors=product_authors):
+                clues = {"title": title, "author": local_author}
+                self.assertIs(FIXER.has_author_identity_conflict(clues, product(title, product_authors)), expected)
 
     def test_generic_author_no_conflict(self):
         clues = {"title": "Cradle", "author": "Unknown"}
@@ -120,7 +107,7 @@ class AuthorHardBlockScoringTests(unittest.TestCase):
         clues = {"title": "Cradle", "author": "Will Wight", "series": "Cradle"}
         prod = product("Cradle", ["Will Wight"], duration_minutes=600)
         score = FIXER.score_product_for_metadata(clues, prod, local_duration_minutes=600)
-        self.assertGreater(score, 0.0)
+        self.assertEqual(score, 1.0)
 
     def test_asin_identity_bypasses_block(self):
         # A confirmed embedded ASIN must still win even if author strings differ

@@ -805,15 +805,6 @@ def resource_guard_message(
     return "; ".join(breaches)
 
 
-def probe_audio_summary(
-    path: Path,
-    probe_reader: CachedAudioProbeReader | None = None,
-) -> dict[str, Any]:
-    files = source_audio_files(path)
-    reader = probe_reader or probe_audio_file
-    return summarize_audio_probes(files, [reader(audio_file) for audio_file in files])
-
-
 def cached_audio_summary(path: Path) -> dict[str, Any] | None:
     with M4B_DISCOVERY_CACHE_LOCK:
         cache = load_discovery_cache(M4B_DISCOVERY_CACHE)
@@ -7744,40 +7735,6 @@ def _asin_string_from_libraforge_json(path: Path) -> str:
         if asin and asin != _NOREALASIN:
             return asin.upper()
     return ""
-
-
-def _owned_asins_for_folder(folder: Path) -> set[str]:
-    """Resolve a book folder's ASIN(s) using the cheapest source available.
-
-    Order: [B0XXXXXXXX] filename token, then a libraforge.json sidecar, and only
-    as a last resort the embedded media tag (which opens the file -- slow over a
-    network mount). Most organized books resolve without ever opening media.
-    """
-    try:
-        audio = _book_audio_files(folder)
-    except OSError:
-        # Folder vanished or is unreadable mid-scan (libraries change while a
-        # scan runs). Skip it rather than failing the whole scan.
-        return set()
-    if not audio:
-        return set()
-
-    # 1) Filename token -- no file open.
-    owned = {m.group(1).upper() for f in audio if (m := _FILENAME_ASIN_RE.search(f.name))}
-    if owned:
-        return owned
-
-    # 2) libraforge.json sidecar -- small JSON read, no media parse.
-    first = audio[0]
-    for sidecar in (first.parent / (first.name + ".libraforge.json"), folder / "libraforge.json"):
-        if sidecar.is_file():
-            asin = _asin_string_from_libraforge_json(sidecar)
-            if asin:
-                return {asin}
-
-    # 3) Embedded tag -- opens the media file.
-    asin = _read_asin_from_audio(first)
-    return {asin} if asin else set()
 
 
 def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, str]], list[Path]]:

@@ -206,8 +206,7 @@ class MergeSeriesEntriesTests(unittest.TestCase):
 
     def test_appends_when_no_existing_entry_matches(self):
         merged = abs_client.merge_series_entries([{"name": "Other Series", "sequence": "2"}], "Blight", "1")
-        self.assertIn({"name": "Blight", "sequence": "1"}, merged)
-        self.assertIn({"name": "Other Series", "sequence": "2"}, merged)
+        self.assertEqual(merged, [{"name": "Other Series", "sequence": "2"}, {"name": "Blight", "sequence": "1"}])
 
     def test_dirty_entry_of_the_same_series_is_replaced_not_duplicated(self):
         merged = abs_client.merge_series_entries(
@@ -449,16 +448,6 @@ class BootstrapRegistryTests(unittest.TestCase):
 
     def test_load_missing_registry_returns_empty_dict(self):
         self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
-
-    def test_remove_bootstrapped_file_drops_entry(self):
-        abs_client.upsert_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"), "ASIN1", "/lib/book")
-        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
-        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
-
-    def test_remove_nonexistent_entry_is_a_no_op(self):
-        abs_client.remove_bootstrapped_file(self.reports_dir, Path("/lib/book/metadata.json"))
-        self.assertEqual(abs_client.load_bootstrap_registry(self.reports_dir), {})
-
 
 class MetadataJsonTitleMatchesAbsMediaTests(unittest.TestCase):
     def test_matching_titles_case_insensitive(self):

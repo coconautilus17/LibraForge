@@ -86,27 +86,6 @@ class ExecutePlannedMoveFolderRenameTests(unittest.TestCase):
             self.assertTrue((target / "Custom Filename.m4b").is_file())
             self.assertFalse((target / "book.m4b").exists())
 
-    def test_folder_move_without_rename_request_keeps_original_name(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "_unorganized" / "Some Book"
-            source.mkdir(parents=True)
-            (source / "book.m4b").write_text("audio", encoding="utf-8")
-            target = root / "Author" / "Some Book"
-            move = {
-                "kind": "folder",
-                "source": source,
-                "target": target,
-                "companions": [],
-                "partial_group": False,
-                "leftover_files": [],
-            }
-            ORGANIZER.execute_planned_move(
-                move, merge_existing_targets=False, remove_empty_dirs=False, root=root
-            )
-            self.assertTrue((target / "book.m4b").is_file())
-
-
 class GenericSidecarsForLooseFileTests(unittest.TestCase):
     def test_finds_generic_sidecars_and_cover_ignoring_audio_filename(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -91,10 +91,6 @@ class GoodreadsPacer:
 _STOPWORDS = {"the", "a", "an", "of", "and", "book"}
 
 
-def _words(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", (text or "").lower())) - _STOPWORDS
-
-
 def clean_query_title(title: str) -> str:
     """Strip library-naming noise before searching: 'Series - Book 001 - X',
     trailing (...)/[...] groups, ', Book Six', a trailing bare number."""

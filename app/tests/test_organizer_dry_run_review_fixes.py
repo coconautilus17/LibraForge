@@ -78,17 +78,16 @@ class SeriesNameInsideTitleTests(unittest.TestCase):
             "The Shortest History of Reality",
         )
 
-    def test_real_prefix_decoration_is_still_stripped(self):
-        self.assertEqual(
-            ORGANIZER.strip_series_prefix("Dashing Devil Bold Beginnings", "Dashing Devil"),
-            "Bold Beginnings",
-        )
-
-    def test_separator_prefix_is_still_stripped_even_before_a_connective(self):
-        self.assertEqual(
-            ORGANIZER.strip_series_prefix("Dashing Devil: Of Fire and Blood", "Dashing Devil"),
-            "Of Fire and Blood",
-        )
+    def test_a_real_series_prefix_is_still_stripped(self):
+        for title, expected in (
+            ("Dashing Devil Bold Beginnings", "Bold Beginnings"),
+            ("Dashing Devil: Of Fire and Blood", "Of Fire and Blood"),
+        ):
+            with self.subTest(title=title, expected=expected):
+                self.assertEqual(
+                    ORGANIZER.strip_series_prefix(title, "Dashing Devil"),
+                    expected,
+                )
 
 
 class LooseFileIntoOccupiedFolderTests(unittest.TestCase):
@@ -141,8 +140,9 @@ class LooseFileIntoOccupiedFolderTests(unittest.TestCase):
         book.write_bytes(b"x")
         item = ORGANIZER.BookItem("loose_file", book, [book], book, media_type="ebook")
         (self.target_dir / "Forge Master.m4b").write_bytes(b"y")
-        ok, _path, reason = ORGANIZER.plan_loose_file_move(item, self.target_dir)
-        self.assertTrue(ok, reason)
+        ok, path, reason = ORGANIZER.plan_loose_file_move(item, self.target_dir)
+        self.assertIs(ok, True, reason)
+        self.assertEqual(path, self.target_dir / "Forge Master.epub")
 
     def test_conflict_details_name_what_is_already_there(self):
         (self.target_dir / "Forge Master.m4b").write_bytes(b"y")
@@ -279,10 +279,9 @@ class TitleBySomeoneStandaloneFolderTests(unittest.TestCase):
         )
 
     def test_by_clause_that_is_not_a_name_list_is_not_an_author(self):
-        self.assertNotEqual(
-            ORGANIZER.parse_standalone_book_folder_name("Dennis E. Taylor - Walking by the river at night").get("author"),
-            "the river at night",
-        )
+        self.assertEqual(
+            ORGANIZER.parse_standalone_book_folder_name("Dennis E. Taylor - Walking by the river at night"),
+            {"author": "Dennis E. Taylor", "title": "Walking by the river at night"})
 
 
 class PathNarratorThatIsReallyTheTitleTests(unittest.TestCase):
@@ -412,7 +411,7 @@ class SequenceOnlyNoteIsNotFlaggedForNoiseTests(unittest.TestCase):
             }}))
             item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
             metadata = ORGANIZER.infer_metadata(item, root)
-            self.assertNotIn("title matches series name; using sequence only", metadata["review_reasons"])
+            self.assertEqual(metadata["review_reasons"], [])
 
 
 class ArticleOnlyTitleDifferenceIsNotAConflictTests(unittest.TestCase):

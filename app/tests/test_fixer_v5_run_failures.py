@@ -121,22 +121,22 @@ class AlbumIsNotASeriesTests(unittest.TestCase):
     def parse(self, **tags):
         return FIXER.parse_title_series_number_from_metadata(tags)
 
-    def test_album_that_is_the_title_is_not_a_series(self):
-        self.assertEqual(self.parse(title="Sapiens", album="Sapiens")["series"], "")
+    def test_an_album_is_a_series_clue_unless_it_echoes_the_title(self):
+        for title, album, expected in (
+            ("Sapiens", "Sapiens", ""),
+            ("Soul Harvest", "Dread Knight", "Dread Knight"),
+        ):
+            with self.subTest(title=title, album=album, expected=expected):
+                self.assertEqual(self.parse(title=title, album=album)["series"], expected)
 
-    def test_album_that_starts_the_title_is_not_a_series(self):
-        parsed = self.parse(title="Intra Mundum: Reforged: A LitRPG Adventure", album="Intra Mundum: Reforged")
-        self.assertEqual(parsed["series"], "")
-
-    def test_title_ending_in_a_year_is_not_a_series_number_echo(self):
-        # Postwar: "... Since 1945" ends in a year, not a book number.
-        parsed = self.parse(title="Postwar: A History of Europe Since 1945",
-                            album="Postwar: A History of Europe Since 1945")
-        self.assertEqual(parsed["series"], "")
-
-    def test_a_different_album_is_still_a_series_clue(self):
-        self.assertEqual(self.parse(title="Soul Harvest", album="Dread Knight")["series"], "Dread Knight")
-
+    def test_an_album_that_starts_or_ends_the_title_is_not_a_series(self):
+        for title, album in (
+            ("Intra Mundum: Reforged: A LitRPG Adventure", "Intra Mundum: Reforged"),
+            # Postwar: "... Since 1945" ends in a year, not a book number.
+            ("Postwar: A History of Europe Since 1945", "Postwar: A History of Europe Since 1945"),
+        ):
+            with self.subTest(title=title, album=album):
+                self.assertEqual(self.parse(title=title, album=album)["series"], "")
 
 class ParentheticalSeriesInTitleTests(unittest.TestCase):
     """Reforged's title tag ends "(The Tower Series, Book 2)", its real series."""
@@ -174,7 +174,7 @@ class TitleIsItsOwnSeriesTests(unittest.TestCase):
     def test_other_book_in_the_umbrella_series_is_not(self):
         homo_deus = {**self.SAPIENS, "title": "Homo Deus", "runtime_length_min": 894}
         clues = {"title": "Sapiens", "author": "Yuval Noah Harari", "local_duration_minutes": 918.7}
-        self.assertNotEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "full")
+        self.assertEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "none")
 
 
 class ReadByNarratorTests(unittest.TestCase):

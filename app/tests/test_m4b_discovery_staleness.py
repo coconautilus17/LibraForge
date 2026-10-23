@@ -235,13 +235,18 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
     handling of a malformed or missing folder_signatures field, isolated
     from the full discover_m4b_candidates flow."""
 
-    def test_missing_folder_signatures_key_is_a_miss_not_a_crash(self):
-        shared = library_index.LibraryIndexState(signatures={"/audiobooks/A": "sig1"})
-        cached_search = {"path": "/audiobooks", "results": {}}  # no folder_signatures key
-        fresh = main_module._m4b_cached_search_is_still_fresh(
-            cached_search, Path("/audiobooks"), shared,
-        )
-        self.assertFalse(fresh)
+    def test_a_cached_search_that_does_not_match_the_current_signatures_is_a_miss(self):
+        for label, current, cached_signatures in (
+            ("no folder_signatures key (a miss, not a crash)", {"/audiobooks/A": "sig1"}, None),
+            ("folder changed", {"/audiobooks/A": "sig2"}, {"/audiobooks/A": "sig1"}),
+            ("new folder not in the cached signatures", {"/audiobooks/A": "sig1", "/audiobooks/B": "sig1"}, {"/audiobooks/A": "sig1"}),
+        ):
+            with self.subTest(label):
+                shared = library_index.LibraryIndexState(signatures=current)
+                cached_search = {"path": "/audiobooks", "results": {}}
+                if cached_signatures is not None:
+                    cached_search["folder_signatures"] = cached_signatures
+                self.assertFalse(main_module._m4b_cached_search_is_still_fresh(cached_search, Path("/audiobooks"), shared))
 
     def test_folder_signatures_present_and_matching_is_fresh(self):
         # Uses "/audiobooks/A" rather than "/audiobooks" as target_path: the
@@ -262,33 +267,7 @@ class M4BCachedSearchFreshnessTests(unittest.TestCase):
         fresh = main_module._m4b_cached_search_is_still_fresh(
             cached_search, Path("/audiobooks/A"), shared,
         )
-        self.assertTrue(fresh)
-
-    def test_folder_signatures_present_but_changed_is_a_miss(self):
-        shared = library_index.LibraryIndexState(signatures={"/audiobooks/A": "sig2"})
-        cached_search = {
-            "path": "/audiobooks",
-            "folder_signatures": {"/audiobooks/A": "sig1"},
-            "results": {},
-        }
-        fresh = main_module._m4b_cached_search_is_still_fresh(
-            cached_search, Path("/audiobooks"), shared,
-        )
-        self.assertFalse(fresh)
-
-    def test_new_folder_not_in_cached_signatures_is_a_miss(self):
-        shared = library_index.LibraryIndexState(
-            signatures={"/audiobooks/A": "sig1", "/audiobooks/B": "sig1"}
-        )
-        cached_search = {
-            "path": "/audiobooks",
-            "folder_signatures": {"/audiobooks/A": "sig1"},
-            "results": {},
-        }
-        fresh = main_module._m4b_cached_search_is_still_fresh(
-            cached_search, Path("/audiobooks"), shared,
-        )
-        self.assertFalse(fresh)
+        self.assertIs(fresh, True)
 
     def test_file_target_path_is_scoped_to_its_parent_folder(self):
         # target_path.is_file() must be checked against a real path (Path

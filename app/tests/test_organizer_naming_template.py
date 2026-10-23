@@ -78,19 +78,13 @@ class NonCoreTokensExcludedFromSignificanceTests(unittest.TestCase):
 
 
 class EmptyBracketCollapseTests(unittest.TestCase):
-    def test_empty_square_brackets_removed(self):
-        folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{series} [{edition}]/",
-            {"series": "Dao of Magic", "edition": ""},
-        )
-        self.assertEqual(folders, ["Dao of Magic"])
-
-    def test_empty_parens_removed(self):
-        folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{series} ({edition})/",
-            {"series": "Dao of Magic", "edition": ""},
-        )
-        self.assertEqual(folders, ["Dao of Magic"])
+    def test_empty_brackets_and_parens_are_removed(self):
+        for template in ("{series} [{edition}]/", "{series} ({edition})/"):
+            with self.subTest(template=template):
+                folders, filename, reasons = ORGANIZER.render_naming_template(
+                    template, {"series": "Dao of Magic", "edition": ""},
+                )
+                self.assertEqual(folders, ["Dao of Magic"])
 
     def test_nonempty_brackets_kept(self):
         folders, filename, reasons = ORGANIZER.render_naming_template(
@@ -258,11 +252,13 @@ class PathTraversalSafetyTests(unittest.TestCase):
     "Unknown Title"/"Unknown Series"); the flat-token renderer must be too.
     """
 
-    def test_dotdot_segment_is_treated_as_empty(self):
-        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty(".."))
-
-    def test_single_dot_segment_is_treated_as_empty(self):
-        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty("."))
+    def test_dot_segments_are_treated_as_empty(self):
+        for segment in (
+            "..",
+            ".",
+        ):
+            with self.subTest(segment=segment):
+                self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty(segment))
 
     def test_sanitize_never_emits_dotdot(self):
         self.assertNotIn(ORGANIZER._sanitize_naming_segment(".."), {".", ".."})
@@ -368,7 +364,7 @@ class OriginalAndFilenameTokenTests(unittest.TestCase):
             source_file=Path("/lib/Great Title [ASIN.B0ABC12345] [2025] [128].m4b"),
             destination_root=Path("/audiobooks"),
         )
-        self.assertNotIn("B0ABC12345", filename or "")
+        self.assertEqual(filename, "Great Title")
 
     def test_tokens_empty_when_filename_does_not_apply(self):
         _f, filename, _r = self._render(
@@ -486,23 +482,15 @@ class AsinMismatchFlagTests(unittest.TestCase):
         self.assertTrue(any("differs" in r for r in reasons))
         self.assertIsNotNone(filename)
 
-    def test_same_asin_in_name_does_not_flag(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/Some Title [B0ABCDEFGH].m4b")
-        )
-        self.assertEqual(reasons, [])
-
-    def test_no_identifier_in_name_does_not_flag(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/A Perfectly Clean Title.m4b")
-        )
-        self.assertEqual(reasons, [])
-
-    def test_no_flag_when_template_has_no_asin(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original}", "B0ABCDEFGH", Path("/lib/Some Title [B0ZZZZZZZZ].m4b")
-        )
-        self.assertEqual(reasons, [])
+    def test_no_mismatch_is_flagged(self):
+        for label, template, source in (
+            ("same asin in the name", "{author}/{original} [{asin}]", "Some Title [B0ABCDEFGH].m4b"),
+            ("no identifier in the name", "{author}/{original} [{asin}]", "A Perfectly Clean Title.m4b"),
+            ("template has no asin", "{author}/{original}", "Some Title [B0ZZZZZZZZ].m4b"),
+        ):
+            with self.subTest(label):
+                _f, _filename, reasons = self._render(template, "B0ABCDEFGH", Path("/lib") / source)
+                self.assertEqual(reasons, [])
 
     def test_isbn_style_mismatch_is_detected(self):
         # Canonical is a 10-digit ISBN; the name carries a different B0 asin.

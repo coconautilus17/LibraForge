@@ -4,9 +4,11 @@ and the fast worker path (run_audible_chapters_backend) with the network
 boundary (audible_lookup_chapters) mocked -- no real Audible calls.
 """
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -44,20 +46,21 @@ class ResolveAsinForChapteringTests(unittest.TestCase):
             )
             self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0MARKERASIN")
 
-    def test_no_sidecar_and_no_override_returns_empty(self):
-        with tempfile.TemporaryDirectory() as root:
-            source = Path(root) / "book.mp3"
-            source.write_bytes(b"")
-            self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
-
-    def test_sidecar_present_but_no_asin_anywhere_returns_empty(self):
-        with tempfile.TemporaryDirectory() as root:
-            source = Path(root) / "book.mp3"
-            source.write_bytes(b"")
-            (Path(root) / "libraforge.json").write_text(
-                json.dumps({"book": {"title": "Some Book"}}), encoding="utf-8"
-            )
-            self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
+    def test_no_asin_anywhere_returns_empty(self):
+        for label, files in (
+            ("no sidecar and no override", {}),
+            ("sidecar present but no asin anywhere", {"libraforge.json": {"book": {"title": "Some Book"}}}),
+            ("neither sidecar nor metadata.json has an asin", {
+                "libraforge.json": {"scan_cache": {"asin": "HAS_ASIN"}},
+                "metadata.json": {"title": "Some Book"},
+            }),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as root:
+                source = Path(root) / "book.mp3"
+                source.write_bytes(b"")
+                for name, payload in files.items():
+                    (Path(root) / name).write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
 
     def test_falls_back_to_sibling_metadata_json_when_sidecar_has_no_book_section(self):
         # Real-world bug found live on Divine Apostasy Book 2: books that
@@ -98,18 +101,6 @@ class ResolveAsinForChapteringTests(unittest.TestCase):
                 json.dumps({"asin": "B0NOSIDECAR"}), encoding="utf-8"
             )
             self.assertEqual(resolve_asin_for_chaptering(source, ""), "B0NOSIDECAR")
-
-    def test_neither_sidecar_nor_metadata_json_has_asin_returns_empty(self):
-        with tempfile.TemporaryDirectory() as root:
-            source = Path(root) / "book.mp3"
-            source.write_bytes(b"")
-            (Path(root) / "libraforge.json").write_text(
-                json.dumps({"scan_cache": {"asin": "HAS_ASIN"}}), encoding="utf-8"
-            )
-            (Path(root) / "metadata.json").write_text(
-                json.dumps({"title": "Some Book"}), encoding="utf-8"
-            )
-            self.assertEqual(resolve_asin_for_chaptering(source, ""), "")
 
     def test_abs_lookup_is_tried_before_metadata_json_fallback(self):
         """Inserted between the sidecar check and the metadata.json
@@ -264,11 +255,14 @@ class ChapteringLoadReturnsAsinTests(unittest.TestCase):
 
 class ChapteringRunsAcceptsAudibleBackendTests(unittest.TestCase):
     def test_audible_chapters_no_longer_rejected_as_unsupported(self):
+        # Only main's own reference is replaced. Patching threading.Thread itself would
+        # also stop the web server's worker threads from starting, and the request would hang.
+        mock_thread = MagicMock()
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             (root_path / "book.mp3").write_bytes(b"")
             with patch.object(main_module, "AUDIOBOOKS_ROOT", root_path), \
-                 patch.object(main_module.threading, "Thread") as mock_thread:
+                 patch.object(main_module, "threading", SimpleNamespace(**{**vars(threading), "Thread": mock_thread})):
                 response = client.post(
                     "/api/chaptering/runs",
                     json={

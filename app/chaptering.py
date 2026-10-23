@@ -327,15 +327,6 @@ def title_from_match(match: re.Match[str], text: str) -> tuple[str, int | None]:
     return title[:140] or kind, number
 
 
-def _title_word_count_after_marker(title: str, kind: str, number: int | None) -> int:
-    words = re.findall(r"[A-Za-z0-9']+", title)
-    if not words:
-        return 0
-    marker_index = next((i for i, word in enumerate(words) if word.lower() == kind.lower()), 0)
-    skip = marker_index + (2 if number is not None else 1)
-    return max(0, len(words[skip:]))
-
-
 def trim_long_heading_title(title: str, kind: str, number: int | None) -> str:
     text = normalize_text(title).strip()
     if kind != "Chapter" or number is None:

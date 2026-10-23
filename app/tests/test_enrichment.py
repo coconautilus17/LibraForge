@@ -19,14 +19,16 @@ def _fake_normalize_series(value: str) -> str:
 
 
 class StripSequenceSuffixTests(unittest.TestCase):
-    def test_strips_hash_number(self):
-        self.assertEqual(
-            enrichment.strip_series_sequence_suffix("Youngest Son of the Black-Hearted #1"),
-            "Youngest Son of the Black-Hearted",
-        )
-
-    def test_no_suffix_unchanged(self):
-        self.assertEqual(enrichment.strip_series_sequence_suffix("Scholomance"), "Scholomance")
+    def test_strips_a_hash_number_and_leaves_a_plain_name(self):
+        for text, expected in (
+            ("Youngest Son of the Black-Hearted #1", "Youngest Son of the Black-Hearted"),
+            ("Scholomance", "Scholomance"),
+        ):
+            with self.subTest(text=text, expected=expected):
+                self.assertEqual(
+                    enrichment.strip_series_sequence_suffix(text),
+                    expected,
+                )
 
     def test_blank_input(self):
         self.assertEqual(enrichment.strip_series_sequence_suffix(""), "")
@@ -202,11 +204,13 @@ class GetSeriesBooksTests(unittest.TestCase):
 
 
 class ExtractSeriesSequenceTests(unittest.TestCase):
-    def test_extracts_integer_sequence(self):
-        self.assertEqual(enrichment.extract_series_sequence("Scholomance #4"), "4")
-
-    def test_extracts_decimal_sequence(self):
-        self.assertEqual(enrichment.extract_series_sequence("Scholomance #4.5"), "4.5")
+    def test_extracts_the_sequence_number(self):
+        for text, expected in (
+            ("Scholomance #4", "4"),
+            ("Scholomance #4.5", "4.5"),
+        ):
+            with self.subTest(text=text, expected=expected):
+                self.assertEqual(enrichment.extract_series_sequence(text), expected)
 
     def test_no_suffix_returns_none(self):
         self.assertIsNone(enrichment.extract_series_sequence("Scholomance"))
@@ -639,7 +643,8 @@ class StableSeriesKeyTests(unittest.TestCase):
 
     def test_name_lookup_still_works(self):
         groups = enrichment.group_items_by_series([_item("1", "Dune #1", "Frank Herbert")], _fake_normalize_series)
-        self.assertEqual(len(enrichment.get_series_books(groups, "Dune", _fake_normalize_series)), 1)
+        books = enrichment.get_series_books(groups, "Dune", _fake_normalize_series)
+        self.assertEqual([b["id"] for b in books], ["1"])
 
 
 class SplitGroupByAuthorTests(unittest.TestCase):

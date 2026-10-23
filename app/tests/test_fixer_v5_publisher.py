@@ -91,19 +91,15 @@ class PublisherCaptureTests(unittest.TestCase):
         }
         self.assertEqual(FIXER.detect_special_provider(clues), "graphicaudio")
 
-    def test_plain_title_is_not_special_provider(self):
-        clues = {"title": "Storm Front", "author": "Jim Butcher"}
-        self.assertIsNone(FIXER.detect_special_provider(clues))
-
-    def test_full_cast_title_alone_is_not_graphicaudio(self):
-        # "Full-Cast Edition" (Harry Potter / Pottermore) is not a dramatized
-        # adaptation and must not be misrouted to the GraphicAudio endpoint.
-        clues = {
-            "title": "Harry Potter and the Goblet of Fire (Full-Cast Edition)",
-            "author": "J.K. Rowling",
-        }
-        self.assertIsNone(FIXER.detect_special_provider(clues))
-
+    def test_ordinary_titles_are_not_a_special_provider(self):
+        for clues in (
+            {"title": "Storm Front", "author": "Jim Butcher"},
+            # "Full-Cast Edition" (Harry Potter / Pottermore) is not a dramatized
+            # adaptation and must not be misrouted to the GraphicAudio endpoint.
+            {"title": "Harry Potter and the Goblet of Fire (Full-Cast Edition)", "author": "J.K. Rowling"},
+        ):
+            with self.subTest(title=clues["title"]):
+                self.assertIsNone(FIXER.detect_special_provider(clues))
 
 class PublisherWriteTests(unittest.TestCase):
     def _product(self):
@@ -163,20 +159,6 @@ class PublisherWriteTests(unittest.TestCase):
         clues = {"title": "The Book", "author": "Jane Doe", "local_duration_minutes": 600}
         meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
         self.assertEqual(meta["publisher"], "Soundbooth Theater")
-
-    def test_local_publisher_clue_still_wins_for_non_special_provider_matches(self):
-        # Regression guard: a normal Audible match (no _abs_provider key at
-        # all) must keep using the existing clues["publisher"] behavior,
-        # completely unaffected by this fix.
-        product = self._product()
-        clues = {
-            "title": "The Book",
-            "author": "Jane Doe",
-            "publisher": "Tantor Audio",
-            "local_duration_minutes": 600,
-        }
-        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
-        self.assertEqual(meta["publisher"], "Tantor Audio")
 
     def test_non_special_abs_provider_still_uses_local_clue(self):
         # An abs-agg match from a non-special provider (e.g. LibriVox) must

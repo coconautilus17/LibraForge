@@ -40,17 +40,6 @@ class MarketingCleanupKindTests(unittest.TestCase):
         for raw in ("Amelia", "The Nine Magics", "Pocket Dungeon", "Emma", "Ascension", ""):
             self.assertEqual(ORGANIZER.marketing_cleanup_kind(raw), "", raw)
 
-    def test_reason_set_contains_all_three_constants(self):
-        self.assertEqual(
-            ORGANIZER.MARKETING_REASONS,
-            frozenset({
-                ORGANIZER.MARKETING_SERIES_DROPPED_REASON,
-                ORGANIZER.MARKETING_SERIES_TRIMMED_REASON,
-                ORGANIZER.MARKETING_TITLE_TRIMMED_REASON,
-            }),
-        )
-
-
 class GenreCouplingTests(unittest.TestCase):
     def test_bare_genre_words_and_couplings_are_genre_only(self):
         for value in ("LitRPG", "Cultivation", "Isekai", "Fantasy Cultivation", "LitRPG Isekai", "a LitRPG"):

@@ -167,7 +167,7 @@ class ScanCacheAsinSatisfiedTests(unittest.TestCase):
         self._write({"scan_cache": self._scan_cache("NOREALASIN"),
                      "marker": {"audible": {"asin": "NOREALASIN"}}})
         satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
-        self.assertTrue(satisfied)
+        self.assertIs(satisfied, True)
 
     def test_marker_claiming_real_asin_does_not_satisfy(self):
         # marker claims a real ASIN but the embedded tag (scan_cache) is absent.
@@ -179,7 +179,7 @@ class ScanCacheAsinSatisfiedTests(unittest.TestCase):
     def test_embedded_asin_satisfies(self):
         self._write({"scan_cache": self._scan_cache("B0EMBED1234")})
         satisfied, _ = _scan_cache_from_sidecar(self.audio, self.audio.parent)
-        self.assertTrue(satisfied)
+        self.assertIs(satisfied, True)
 
 
 class ProbeGracefulTests(unittest.TestCase):
@@ -228,7 +228,7 @@ class ScanStalenessTests(unittest.TestCase):
         self._touch("Author/Book2/Book2.m4b")
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertEqual(second.status_code, 200)
-        self.assertGreater(second.json()["total"], first_total)
+        self.assertEqual(second.json()["total"], first_total + 1)
 
     def test_new_book_folder_under_existing_series_is_counted(self):
         self._touch("Sanderson/Mistborn/Book 1/Book1.m4b")

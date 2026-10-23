@@ -39,6 +39,7 @@ class FolderListingSignatureTests(unittest.TestCase):
         self._touch("Book/b.m4b")
         first = folder_listing_signature(self.root / "Book")
         second = folder_listing_signature(self.root / "Book")
+        self.assertTrue(first)  # a real digest, so equality is not just two empty strings
         self.assertEqual(first, second)
 
     def test_changes_when_a_file_is_added(self):
@@ -315,20 +316,22 @@ from app.library_index import (
 
 
 class IsEbookFileTests(unittest.TestCase):
-    def test_epub_is_ebook(self):
-        self.assertTrue(is_ebook_file(Path("book.epub")))
+    def test_ebook_extensions_are_ebooks_in_any_case(self):
+        for name in (
+            "book.epub",
+            "book.pdf",
+            "book.EPUB",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(is_ebook_file(Path(name)))
 
-    def test_pdf_is_ebook(self):
-        self.assertTrue(is_ebook_file(Path("book.pdf")))
-
-    def test_case_insensitive(self):
-        self.assertTrue(is_ebook_file(Path("book.EPUB")))
-
-    def test_mobi_is_not_ebook(self):
-        self.assertFalse(is_ebook_file(Path("book.mobi")))
-
-    def test_audio_file_is_not_ebook(self):
-        self.assertFalse(is_ebook_file(Path("book.m4b")))
+    def test_other_extensions_are_not_ebooks(self):
+        for name in (
+            "book.mobi",
+            "book.m4b",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(is_ebook_file(Path(name)))
 
 
 class BuildEbookIndexTests(unittest.TestCase):

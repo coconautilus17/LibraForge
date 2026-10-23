@@ -79,9 +79,14 @@ class FilterEntriesByIgnoredFoldersTests(unittest.TestCase):
 
 
 class ManualReviewSearchIndexIsStaleTests(unittest.TestCase):
-    def test_never_built_is_stale(self):
-        state = _ManualReviewSearchIndex()
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig1"))
+    def test_a_never_built_errored_or_changed_index_is_stale(self):
+        for label, state, signature in (
+            ("never built", _ManualReviewSearchIndex(), "sig1"),
+            ("ready but the ignore signature changed", _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1"), "sig2"),
+            ("error state, so it can retry", _ManualReviewSearchIndex(status="error", source_generation=1, ignored_signature="sig1"), "sig1"),
+        ):
+            with self.subTest(label):
+                self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, signature))
 
     def test_ready_with_matching_generation_and_signature_is_fresh(self):
         # ebook_source_generation defaults to -1 (never derived), so the
@@ -94,14 +99,6 @@ class ManualReviewSearchIndexIsStaleTests(unittest.TestCase):
     def test_ready_with_newer_shared_generation_is_stale(self):
         state = _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1")
         self.assertTrue(_manual_review_search_index_is_stale(state, 2, 0, "sig1"))
-
-    def test_ready_with_changed_ignore_signature_is_stale(self):
-        state = _ManualReviewSearchIndex(status="ready", source_generation=1, ignored_signature="sig1")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig2"))
-
-    def test_error_state_is_stale_so_it_can_retry(self):
-        state = _ManualReviewSearchIndex(status="error", source_generation=1, ignored_signature="sig1")
-        self.assertTrue(_manual_review_search_index_is_stale(state, 1, 0, "sig1"))
 
     def test_externally_seeded_ready_state_with_sentinel_generation_is_trusted(self):
         # A caller that sets status="ready" directly (bypassing
@@ -174,7 +171,7 @@ class RunManualReviewSearchIndexBuildTests(unittest.TestCase):
         )
         state = _ManualReviewSearchIndex(status="ready", entries=[("/stale/path", False)], book_count=1)
         _run_manual_review_search_index_build(state, self.root, [])
-        self.assertNotIn(("/stale/path", False), state.entries)
+        self.assertEqual(state.entries, [(str(self.root / "Author" / "NewBook"), False)])
 
     def test_waits_for_shared_walk_instead_of_reporting_ready_empty_while_idle(self):
         # Regression: deriving from a shared index that has never

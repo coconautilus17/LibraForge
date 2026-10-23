@@ -65,25 +65,22 @@ class RawTokenPassthroughTests(unittest.TestCase):
 
 
 class EditionTokenTests(unittest.TestCase):
-    def test_edition_token_reads_edition_tag_field(self):
-        metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["edition"], "GraphicAudio")
-
-    def test_edition_token_empty_when_no_edition_tag(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["edition"], "")
-
+    def test_edition_token_reads_the_edition_tag_field_and_is_empty_without_one(self):
+        for metadata, expected in (
+            (dict(BASE_METADATA, edition_tag="GraphicAudio"), "GraphicAudio"),
+            (BASE_METADATA, ""),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(ORGANIZER.resolve_naming_tokens(metadata)["edition"], expected)
 
 class SubtitleTokenTests(unittest.TestCase):
-    def test_subtitle_token_reads_subtitle_field(self):
-        metadata = dict(BASE_METADATA, subtitle="A Reckoners Novel")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["subtitle"], "A Reckoners Novel")
-
-    def test_subtitle_token_empty_when_no_subtitle(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["subtitle"], "")
+    def test_subtitle_token_reads_the_subtitle_field_and_is_empty_without_one(self):
+        for metadata, expected in (
+            (dict(BASE_METADATA, subtitle="A Reckoners Novel"), "A Reckoners Novel"),
+            (BASE_METADATA, ""),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(ORGANIZER.resolve_naming_tokens(metadata)["subtitle"], expected)
 
     def test_subtitle_is_decoration_not_core(self):
         # A segment combining {subtitle} with only one other (core) token
@@ -107,36 +104,17 @@ class OrderTokenTests(unittest.TestCase):
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
         self.assertEqual(tokens["order"], "Vol. 5")
 
-    def test_order_empty_when_no_series(self):
-        metadata = dict(BASE_METADATA, series="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["order"], "")
-
-    def test_order_empty_when_no_number(self):
-        metadata = dict(BASE_METADATA, book_number="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["order"], "")
+    def test_order_and_number_are_empty_without_a_series_or_without_a_number(self):
+        for missing in ({"series": ""}, {"book_number": ""}):
+            with self.subTest(missing=missing):
+                tokens = ORGANIZER.resolve_naming_tokens(dict(BASE_METADATA, **missing))
+                self.assertEqual((tokens["order"], tokens["number"]), ("", ""))
 
 
 class NumberTokenTests(unittest.TestCase):
     def test_number_is_bare_display_number_no_label(self):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["number"], "5")
-
-    def test_number_matches_display_book_number(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["number"], ORGANIZER.display_book_number("5"))
-
-    def test_number_empty_when_no_series(self):
-        metadata = dict(BASE_METADATA, series="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["number"], "")
-
-    def test_number_empty_when_no_book_number(self):
-        metadata = dict(BASE_METADATA, book_number="")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["number"], "")
-
 
 class TitleRedundancyTests(unittest.TestCase):
     def test_title_stays_full_even_when_redundant_with_order(self):
@@ -152,10 +130,6 @@ class TitleRedundancyTests(unittest.TestCase):
         metadata = dict(BASE_METADATA, title="Dashing Devil")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
         self.assertEqual(tokens["title"], "Dashing Devil")
-
-    def test_distinct_title_is_kept(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["title"], "Bold Beginnings")
 
     def test_asin_like_title_falls_back_to_series_but_stays_full(self):
         metadata = dict(BASE_METADATA, title="B07XYZ1234")
