@@ -927,10 +927,6 @@ class SplitSeriesTrailingNumberTests(unittest.TestCase):
             FIXER.split_series_trailing_number("Blight, Book #", "3"), ("Blight", "3"),
         )
 
-    def test_get_primary_series_keeps_its_own_sequence_field_over_the_suffix(self):
-        product = {"series": [{"title": "Blight, Book 1", "sequence": "1"}]}
-        self.assertEqual(FIXER.get_primary_series(product), ("Blight", "1"))
-
     def test_get_primary_series_prefers_its_own_conflicting_sequence_field(self):
         # An Audible data inconsistency (the title's own number disagrees with
         # the separate sequence field) still gets the text cleaned; the

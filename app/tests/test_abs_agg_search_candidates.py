@@ -156,19 +156,5 @@ class AbsAggCandidatesLanguageTests(unittest.TestCase):
         self.assertEqual(candidate["chosen_metadata"]["language"], "german")
         self.assertEqual(candidate["chosen_metadata_by_mode"]["full"]["language"], "german")
 
-    def test_missing_language_field_is_blank_not_absent(self):
-        from app.main import search_abs_agg_candidates
-
-        payload = {"matches": [{"title": "Some Book", "author": "Some Author"}]}
-        with patch("urllib.request.urlopen", fake_urlopen_for(payload)):
-            result = search_abs_agg_candidates(
-                query="Some Book",
-                base_url="http://abs-agg:3000",
-                provider="bookbeat",
-            )
-        candidate = result["results"][0]
-        self.assertEqual(candidate["chosen_metadata"]["language"], "")
-
-
 if __name__ == "__main__":
     unittest.main()

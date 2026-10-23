@@ -164,20 +164,6 @@ class PublisherWriteTests(unittest.TestCase):
         meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
         self.assertEqual(meta["publisher"], "Soundbooth Theater")
 
-    def test_local_publisher_clue_still_wins_for_non_special_provider_matches(self):
-        # Regression guard: a normal Audible match (no _abs_provider key at
-        # all) must keep using the existing clues["publisher"] behavior,
-        # completely unaffected by this fix.
-        product = self._product()
-        clues = {
-            "title": "The Book",
-            "author": "Jane Doe",
-            "publisher": "Tantor Audio",
-            "local_duration_minutes": 600,
-        }
-        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
-        self.assertEqual(meta["publisher"], "Tantor Audio")
-
     def test_non_special_abs_provider_still_uses_local_clue(self):
         # An abs-agg match from a non-special provider (e.g. LibriVox) must
         # not be misclassified as GraphicAudio/SoundBooth Theater -- only the

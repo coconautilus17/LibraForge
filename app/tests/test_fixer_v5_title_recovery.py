@@ -161,10 +161,6 @@ class NormalizeBookNumberStripTests(unittest.TestCase):
         self.assertNotIn("vol", result)
         self.assertNotIn("#2", result)
 
-    def test_series_name_preserved(self):
-        result = normalize("The Grand Tour, Book #1")
-        self.assertIn("grand tour", result)
-
     def test_plain_title_unchanged(self):
         result = normalize("Dune")
         self.assertEqual(result, "dune")

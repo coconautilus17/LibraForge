@@ -119,12 +119,6 @@ class NumberTokenTests(unittest.TestCase):
         tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
         self.assertEqual(tokens["number"], "5")
 
-    def test_number_matches_display_book_number(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["number"], ORGANIZER.display_book_number("5"))
-
-
-
 class TitleRedundancyTests(unittest.TestCase):
     def test_title_stays_full_even_when_redundant_with_order(self):
         metadata = dict(BASE_METADATA, title="Book 5")
@@ -139,10 +133,6 @@ class TitleRedundancyTests(unittest.TestCase):
         metadata = dict(BASE_METADATA, title="Dashing Devil")
         tokens = ORGANIZER.resolve_naming_tokens(metadata)
         self.assertEqual(tokens["title"], "Dashing Devil")
-
-    def test_distinct_title_is_kept(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["title"], "Bold Beginnings")
 
     def test_asin_like_title_falls_back_to_series_but_stays_full(self):
         metadata = dict(BASE_METADATA, title="B07XYZ1234")

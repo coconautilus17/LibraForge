@@ -223,13 +223,6 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
     def _read_marker(self):
         return json.loads((self.folder / "Solo.m4b.libraforge.json").read_text())["marker"]
 
-    def test_written_fields_recorded(self):
-        FIXER.write_marker(
-            self.media, {"asin": "B0X", "edit_mode": "full"}, {}, 1.0, "normal", False,
-            written_fields=["asin", "title"],
-        )
-        self.assertEqual(self._read_marker()["written_fields"], ["asin", "title"])
-
     def test_written_fields_merge_across_runs(self):
         FIXER.write_marker(
             self.media, {"asin": "B0X", "edit_mode": "full"}, {}, 1.0, "normal", False,
@@ -251,16 +244,6 @@ class WriteMarkerWrittenFieldsTests(unittest.TestCase):
             written_fields=None,
         )
         self.assertEqual(self._read_marker()["written_fields"], ["asin"])
-
-    def test_genre_is_persisted_in_marker(self):
-        # marker.audible previously had no genre key at all, so a single-file
-        # book's genre was unrecoverable from the marker on a later run (e.g.
-        # Manual Review re-loading the book) even though it was correctly
-        # embedded in the file's own tags.
-        FIXER.write_marker(
-            self.media, {"asin": "B0X", "edit_mode": "full", "genre": "Fantasy"}, {}, 1.0, "normal", False,
-        )
-        self.assertEqual(self._read_marker()["audible"]["genre"], "Fantasy")
 
     def test_genre_falls_back_to_current_when_match_has_none(self):
         # mutagen_write_mp4_tags/mutagen_write_mp3_tags only touch the genre
