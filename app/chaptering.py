@@ -519,8 +519,9 @@ def find_marker_candidates(segments: list[TranscriptSegment]) -> list[ChapterCan
         if not text or any(phrase in lowered for phrase in EXCLUDED_PHRASES):
             continue
         for match in MARKER_RE.finditer(text):
-            prefix = text[max(0, match.start() - 16):match.start()]
-            if END_OF_RE.search(prefix):
+            # END_OF_RE needs the marker word itself ("end of CHAPTER"), so the window runs through it.
+            announcement = text[max(0, match.start() - 16):match.start() + len(match.group("kind"))]
+            if END_OF_RE.search(announcement):
                 continue
             kind = title_case_marker(match.group("kind"))
             start = estimate_marker_time(segment, match.start(), len(text))
