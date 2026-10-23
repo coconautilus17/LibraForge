@@ -2,6 +2,7 @@
 abs-tract retry/breaker/throttle behaviour and dramatized-provider detection."""
 import io
 import json
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -90,12 +91,58 @@ class ThreadClientTests(unittest.TestCase):
     def test_the_client_is_built_once_per_thread_and_reused(self):
         search._thread_local.__dict__.pop("client", None)
         fake_audible = mock.Mock()
-        with mock.patch.object(search, "audible", fake_audible):
-            first = search.get_thread_client("auth.json")
-            second = search.get_thread_client("auth.json")
+        with tempfile.NamedTemporaryFile(suffix=".json") as auth, \
+                mock.patch.object(search, "audible", fake_audible):
+            first = search.get_thread_client(auth.name)
+            second = search.get_thread_client(auth.name)
         self.assertIs(first, second)
-        fake_audible.Authenticator.from_file.assert_called_once_with("auth.json")
+        fake_audible.Authenticator.from_file.assert_called_once_with(auth.name)
         search._thread_local.__dict__.pop("client", None)
+
+    def test_no_auth_file_falls_back_to_the_public_catalog(self):
+        search._thread_local.__dict__.pop("client", None)
+        fake_audible = mock.Mock()
+        with mock.patch.object(search, "audible", fake_audible):
+            client = search.get_thread_client("/nonexistent/audible-metadata.json")
+        self.assertIsInstance(client, search.PublicAudibleClient)
+        fake_audible.Authenticator.from_file.assert_not_called()
+        search._thread_local.__dict__.pop("client", None)
+
+
+class PublicAudibleClientTests(unittest.TestCase):
+    def test_get_calls_the_marketplace_catalog_and_parses_json(self):
+        urls = []
+        def fake(req, timeout=None):
+            urls.append(req.full_url)
+            return _Resp(json.dumps({"products": [{"asin": "B0X"}]}).encode())
+        with mock.patch("urllib.request.urlopen", fake):
+            out = search.audible_search(search.PublicAudibleClient("uk"), "Moby Dick", 50)
+        self.assertEqual(out, [{"asin": "B0X"}])
+        self.assertTrue(urls[0].startswith("https://api.audible.co.uk/1.0/catalog/products?keywords=Moby+Dick&num_results=50"))
+
+    def test_unknown_region_uses_the_us_catalog(self):
+        self.assertEqual(search.PublicAudibleClient("zz").base_url, "https://api.audible.com/1.0/")
+
+    def test_throttling_is_retried_then_succeeds(self):
+        calls = []
+        def fake(req, timeout=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+            return _Resp(b'{"product": {"asin": "B0X"}}')
+        with mock.patch("urllib.request.urlopen", fake), mock.patch.object(search.time, "sleep"):
+            self.assertEqual(search.PublicAudibleClient().get("catalog/products/B0X"), {"product": {"asin": "B0X"}})
+        self.assertEqual(len(calls), 2)
+
+    def test_not_found_is_not_retried(self):
+        calls = []
+        def fake(req, timeout=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        with mock.patch("urllib.request.urlopen", fake):
+            # audible_lookup_by_asin swallows the error and tries keyword search too.
+            self.assertIsNone(search.audible_lookup_by_asin(search.PublicAudibleClient(), "B0NOPE0000"))
+        self.assertEqual(len(calls), 2)
 
 class AbsSearchTests(unittest.TestCase):
     def search(self, payload, **kw):

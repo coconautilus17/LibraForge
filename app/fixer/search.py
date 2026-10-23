@@ -8,6 +8,7 @@ filesystem and have no dependency on the fixer script itself.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -518,12 +519,65 @@ def detect_special_provider(clues: dict) -> str | None:
 
 _thread_local = threading.local()
 
+# Audible's catalog API answers without a login: the same product, search and
+# chapter data the logged-in client gets, for any marketplace.
+PUBLIC_AUDIBLE_DOMAINS = {
+    "us": "audible.com", "uk": "audible.co.uk", "ca": "audible.ca", "au": "audible.com.au",
+    "de": "audible.de", "fr": "audible.fr", "it": "audible.it", "es": "audible.es",
+    "in": "audible.in", "jp": "audible.co.jp",
+}
+
+
+class PublicAudibleClient:
+    """Login-free stand-in for audible.Client, for catalog calls only.
+
+    Same ``get(path, params)`` shape and return value, so audible_search,
+    audible_lookup_by_asin and audible_lookup_chapters work unchanged. Account
+    endpoints (library, licenses) need a real login and fail here.
+    """
+
+    def __init__(self, region: str = "", timeout: float = 20.0, retries: int = 2):
+        region = (region or os.environ.get("AUDIBLE_PUBLIC_REGION", "") or "us").lower()
+        self.base_url = f"https://api.{PUBLIC_AUDIBLE_DOMAINS.get(region, 'audible.com')}/1.0/"
+        self.timeout = timeout
+        self.retries = retries
+
+    def get(self, path: str, params: dict | None = None) -> dict:
+        import urllib.error as _urlerror
+        import urllib.parse as _urlparse
+        import urllib.request as _urlrequest
+
+        url = self.base_url + path.lstrip("/")
+        if params:
+            url += "?" + _urlparse.urlencode(params)
+        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+        for attempt in range(self.retries + 1):
+            try:
+                with _urlrequest.urlopen(req, timeout=self.timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except _urlerror.HTTPError as exc:
+                # Throttling or a transient upstream error: back off and retry.
+                if exc.code not in (429, 500, 502, 503, 504) or attempt == self.retries:
+                    raise
+            except (_urlerror.URLError, OSError):
+                if attempt == self.retries:
+                    raise
+            time.sleep(1.5 * (attempt + 1))
+        return {}
+
+
+def get_catalog_client(auth_file: str, password: str | None = None):
+    """The logged-in client when an auth file exists, else the public catalog."""
+    if auth_file and os.path.isfile(auth_file):
+        kwargs = {"password": password} if password else {}
+        auth = audible.Authenticator.from_file(auth_file, **kwargs)
+        return audible.Client(auth=auth)
+    return PublicAudibleClient()
+
 
 def get_thread_client(auth_file: str, password: str | None = None) -> audible.Client:
     if not hasattr(_thread_local, "client"):
-        kwargs = {"password": password} if password else {}
-        auth = audible.Authenticator.from_file(auth_file, **kwargs)
-        _thread_local.client = audible.Client(auth=auth)
+        _thread_local.client = get_catalog_client(auth_file, password)
     return _thread_local.client
 
 

@@ -220,34 +220,23 @@
     return true;
   }
   // Shared by every provider <select> that offers both "audible" and "abs":
-  // if the currently-selected one isn't actually connected but the other one
-  // is, switch to the one that is and tell the user why (via the shared
-  // styled notice, not a native alert). Works in both directions -- audible
-  // missing routes to abs, abs missing routes to audible -- so the same
-  // helper covers Start run, m4b-tool search, and Search For Selected Target
-  // without duplicating the swap logic per direction in each caller.
+  // if "abs" is selected but Audiobookshelf isn't connected, switch to
+  // "audible" and tell the user why (via the shared styled notice, not a
+  // native alert). Covers Start run, m4b-tool search, and Search For Selected
+  // Target. Never the other way: Audible searches work without a login (the
+  // backend falls back to Audible's public catalog).
   async function autoRouteProvider(selectEl, actionLabel) {
     const value = selectEl?.value;
-    if (value !== "audible" && value !== "abs") return false;
+    if (value !== "abs") return false;
     const state = await getConnectionState();
-    let target = null;
-    if (value === "audible" && !state.audible && state.abs) target = "abs";
-    else if (value === "abs" && !state.abs && state.audible) target = "audible";
-    if (!target) return false;
+    if (state.abs) return false;
 
-    selectEl.value = target;
+    selectEl.value = "audible";
     selectEl.dispatchEvent(new Event("change"));
-
-    const copy = target === "abs"
-      ? {
-        title: "Switched to Audiobookshelf",
-        body: `No Audible account is connected, so this ${actionLabel} has been routed through your <strong>Audiobookshelf (ABS)</strong> connection instead.`,
-      }
-      : {
-        title: "Switched to Audible",
-        body: `Audiobookshelf isn't connected, so this ${actionLabel} has been routed through your <strong>Audible</strong> account instead.`,
-      };
-    await window.UiCommon.showNotice(copy.title, copy.body);
+    await window.UiCommon.showNotice(
+      "Switched to Audible",
+      `Audiobookshelf isn't connected, so this ${actionLabel} has been routed through <strong>Audible</strong> instead.`,
+    );
     return true;
   }
 
@@ -272,6 +261,7 @@
     // or neither is), fall through to the real "at least one" gate -- it
     // no-ops when already satisfied, and redirects when truly nothing works.
     await autoRouteProvider(selectEl, actionLabel);
+    if (selectEl?.value === "audible") return true;
     return ensureConnected("any");
   }
 
