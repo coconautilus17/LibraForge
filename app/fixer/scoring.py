@@ -41,6 +41,7 @@ from app.fixer.parsing import (
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
+    ET_AL_RE,
 )
 
 # ---------------------------------------------------------------------------
@@ -1187,6 +1188,15 @@ def score_product_for_metadata(
     if series_match and (author_good or narrator_good):
         score = max(score, 0.72)
 
+    # The file's narrator tag names a reader this recording doesn't have: the
+    # right book, maybe, but another edition of it. It can still match (and
+    # write book-level fields), but never at full confidence, so the
+    # recording the file actually is wins whenever it is in the pool
+    # (Moby Dick: Hootkins locally, an Epstein recording at the same runtime).
+    _narrator_conflict = bool(clues.get("narrator")) and different_edition(
+        clues, product, duration_result
+    ) is not None
+
     # Perfect confidence path:
     # duration <= 3% difference + title match + author match
     # should be considered extremely reliable.
@@ -1196,7 +1206,12 @@ def score_product_for_metadata(
         and (author_good or narrator_good)
         and not _number_unconfirmed
     ):
-        score = 1.0
+        score = 0.90 if _narrator_conflict else 1.0
+
+    # Audible Virtual Voice (AI-narrated) products are never the recording a
+    # file with a human narrator tag came from.
+    if _narrator_conflict and product.get("is_vvab"):
+        score -= 0.20
 
     # ASIN identity floor: ASIN+title+author confirmed above -- guarantee this
     # clears the min_score gate even when duration or series penalised the score.
@@ -1291,7 +1306,10 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
     # in another credit. Prefer that reader, but keep the tag if no other
     # reader is identifiable (the author may narrate).
     tagged_reader = [name for name in tagged if _authors_compatible(name, authors) is not True]
-    local = tagged_reader or credited or tagged
+    # A group credit ("Kimberly A. Blessing et al.") naming only authors is an
+    # author/editor credit, not an author who narrates.
+    group_credit = bool(ET_AL_RE.search(clues.get("narrator", "") or ""))
+    local = tagged_reader or credited or ([] if group_credit else tagged)
     if not local or any(
         narrator_match_score({"narrator": name}, product) >= NARRATOR_GOOD_SCORE
         for name in tagged + readers(credits)
@@ -1815,6 +1833,14 @@ def metadata_from_product(
         narrator_to_write = edition["local_narrator"] if edition else narrator_text
         year_to_write = year
         summary_to_write = summary
+        if edition:
+            # Another recording of the same book: only book-level fields come
+            # from it. Its ASIN, cover, release year and ISBN describe that
+            # recording, and its ASIN would make every later ABS/AudNexus
+            # lookup describe it too, so keep the file's own values.
+            current = clues.get("current") or {}
+            edition["match_asin"] = product.get("asin", "")
+            year_to_write = sanitize_tag(current.get("year", ""))
     elif edit_mode == "series_only":
         # Preserve local book identity; fix only the grouping-critical fields and clean author.
         local_title = clues.get("title") or clues.get("raw_title")
@@ -1872,8 +1898,17 @@ def metadata_from_product(
     special_provider = SPECIAL_PROVIDERS.get(product.get("_abs_provider") or "", "")
     publisher = special_provider or sanitize_tag(clues.get("publisher", ""))
 
+    asin = product.get("asin", "")
+    isbn = product.get("_abs_isbn", "") or ""
+    cover_url = get_cover_url(product)
+    if edition:
+        local_asin = str(clues.get("existing_asin", "") or "").upper()
+        asin = "" if local_asin == "NOREALASIN" else local_asin
+        isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
+        cover_url = ""
+
     return {
-        "asin": product.get("asin", ""),
+        "asin": asin,
         "title": title,
         "subtitle": subtitle,
         "author": author_text or sanitize_tag(clues.get("author", "")),
@@ -1884,12 +1919,12 @@ def metadata_from_product(
         "summary": summary_to_write,
         "publisher": publisher,
         "genre": genre_text,
-        "isbn": product.get("_abs_isbn", "") or "",
+        "isbn": isbn,
         "album": album,
         "audible_title": audible_title,
         "audible_sequence": sequence,
         "audible_year": year,
-        "cover_url": get_cover_url(product),
+        "cover_url": cover_url,
         "audible_duration_minutes": get_audible_duration_minutes(product),
         "audible_number_candidates": get_audible_number_candidates(product),
         "duration": duration_result,
