@@ -65,25 +65,22 @@ class RawTokenPassthroughTests(unittest.TestCase):
 
 
 class EditionTokenTests(unittest.TestCase):
-    def test_edition_token_reads_edition_tag_field(self):
-        metadata = dict(BASE_METADATA, edition_tag="GraphicAudio")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["edition"], "GraphicAudio")
-
-    def test_edition_token_empty_when_no_edition_tag(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["edition"], "")
-
+    def test_edition_token_reads_the_edition_tag_field_and_is_empty_without_one(self):
+        for metadata, expected in (
+            (dict(BASE_METADATA, edition_tag="GraphicAudio"), "GraphicAudio"),
+            (BASE_METADATA, ""),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(ORGANIZER.resolve_naming_tokens(metadata)["edition"], expected)
 
 class SubtitleTokenTests(unittest.TestCase):
-    def test_subtitle_token_reads_subtitle_field(self):
-        metadata = dict(BASE_METADATA, subtitle="A Reckoners Novel")
-        tokens = ORGANIZER.resolve_naming_tokens(metadata)
-        self.assertEqual(tokens["subtitle"], "A Reckoners Novel")
-
-    def test_subtitle_token_empty_when_no_subtitle(self):
-        tokens = ORGANIZER.resolve_naming_tokens(BASE_METADATA)
-        self.assertEqual(tokens["subtitle"], "")
+    def test_subtitle_token_reads_the_subtitle_field_and_is_empty_without_one(self):
+        for metadata, expected in (
+            (dict(BASE_METADATA, subtitle="A Reckoners Novel"), "A Reckoners Novel"),
+            (BASE_METADATA, ""),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(ORGANIZER.resolve_naming_tokens(metadata)["subtitle"], expected)
 
     def test_subtitle_is_decoration_not_core(self):
         # A segment combining {subtitle} with only one other (core) token

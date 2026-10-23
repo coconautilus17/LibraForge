@@ -62,28 +62,20 @@ class EndCreditsSynthesisTests(unittest.TestCase):
         self.assertEqual(chapters[2]["end"], 49121.045)
         self.assertIsNone(chapters[2]["confidence"])
 
-    def test_no_end_credits_without_a_qualifying_silence(self):
-        candidates = [_candidate(0.5), _candidate(100.0)]
-        silences = [(150.0, 150.8), (300.0, 300.5)]  # too short to count
-        chapters = finalize_chapters(candidates, duration=1000.0, silences=silences)
-        self.assertEqual(len(chapters), 2)
-
-    def test_no_end_credits_when_silence_is_too_close_to_file_end(self):
-        candidates = [_candidate(0.5), _candidate(100.0)]
-        silences = [(995.0, 998.0)]  # qualifies as silence but leaves <3s trailing
-        chapters = finalize_chapters(candidates, duration=1000.0, silences=silences)
-        self.assertEqual(len(chapters), 2)
-
-    def test_no_end_credits_for_silence_before_the_last_chapter(self):
-        candidates = [_candidate(0.5), _candidate(50.0), _candidate(900.0)]
-        silences = [(60.0, 65.0)]  # long, but occurs before the last chapter's own start
-        chapters = finalize_chapters(candidates, duration=1000.0, silences=silences)
-        self.assertEqual(len(chapters), 3)
-
-    def test_no_end_credits_without_silences_argument(self):
-        candidates = [_candidate(0.5), _candidate(48972.999)]
-        chapters = finalize_chapters(candidates, duration=49121.045)
-        self.assertEqual(len(chapters), 2)
+    def test_no_end_credits_are_synthesized_without_a_qualifying_trailing_silence(self):
+        for starts, silences, duration in (
+            # too short to count
+            ((0.5, 100.0), [(150.0, 150.8), (300.0, 300.5)], 1000.0),
+            # qualifies as silence but leaves <3s trailing
+            ((0.5, 100.0), [(995.0, 998.0)], 1000.0),
+            # long, but occurs before the last chapter's own start
+            ((0.5, 50.0, 900.0), [(60.0, 65.0)], 1000.0),
+            # no silences at all
+            ((0.5, 48972.999), None, 49121.045),
+        ):
+            with self.subTest(starts=starts, silences=silences, duration=duration):
+                chapters = finalize_chapters([_candidate(s) for s in starts], duration=duration, silences=silences)
+                self.assertEqual(len(chapters), len(starts))
 
     def test_picks_the_earliest_qualifying_silence_not_the_latest(self):
         # The credits reading itself has its own internal pauses -- picking

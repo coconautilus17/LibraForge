@@ -78,19 +78,13 @@ class NonCoreTokensExcludedFromSignificanceTests(unittest.TestCase):
 
 
 class EmptyBracketCollapseTests(unittest.TestCase):
-    def test_empty_square_brackets_removed(self):
-        folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{series} [{edition}]/",
-            {"series": "Dao of Magic", "edition": ""},
-        )
-        self.assertEqual(folders, ["Dao of Magic"])
-
-    def test_empty_parens_removed(self):
-        folders, filename, reasons = ORGANIZER.render_naming_template(
-            "{series} ({edition})/",
-            {"series": "Dao of Magic", "edition": ""},
-        )
-        self.assertEqual(folders, ["Dao of Magic"])
+    def test_empty_brackets_and_parens_are_removed(self):
+        for template in ("{series} [{edition}]/", "{series} ({edition})/"):
+            with self.subTest(template=template):
+                folders, filename, reasons = ORGANIZER.render_naming_template(
+                    template, {"series": "Dao of Magic", "edition": ""},
+                )
+                self.assertEqual(folders, ["Dao of Magic"])
 
     def test_nonempty_brackets_kept(self):
         folders, filename, reasons = ORGANIZER.render_naming_template(

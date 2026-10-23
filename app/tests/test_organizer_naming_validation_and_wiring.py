@@ -29,8 +29,10 @@ BASE_METADATA = {
 
 
 class ValidateNamingTemplateTests(unittest.TestCase):
-    def test_default_template_has_no_problems(self):
-        self.assertEqual(ORGANIZER.validate_naming_template(ORGANIZER.DEFAULT_NAMING_TEMPLATE), [])
+    def test_valid_templates_have_no_problems(self):
+        for template in (ORGANIZER.DEFAULT_NAMING_TEMPLATE, "{author}/{title},{asin}"):
+            with self.subTest(template=template):
+                self.assertEqual(ORGANIZER.validate_naming_template(template), [])
 
     def test_unknown_token_is_reported(self):
         problems = ORGANIZER.validate_naming_template("{author}/{bogus}/")
@@ -43,10 +45,6 @@ class ValidateNamingTemplateTests(unittest.TestCase):
     def test_no_slash_is_reported(self):
         problems = ORGANIZER.validate_naming_template("{title}")
         self.assertTrue(any("/" in p for p in problems))
-
-    def test_custom_valid_template_has_no_problems(self):
-        problems = ORGANIZER.validate_naming_template("{author}/{title},{asin}")
-        self.assertEqual(problems, [])
 
     def test_original_and_filename_tokens_are_recognized(self):
         for template in (

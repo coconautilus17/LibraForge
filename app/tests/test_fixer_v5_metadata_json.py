@@ -204,41 +204,21 @@ class MetadataJsonWriteTests(unittest.TestCase):
             self.assertEqual(target, source.with_name("loose.m4b.metadata.json"))
             self.assertTrue(target.exists())
 
-    def test_metadata_json_does_not_add_audiobook_genre_fallback(self):
-        meta = {"title": "No Genre", "author": "Jane Doe"}
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "book.m4b"
-            source.write_bytes(b"")
-            target = FIXER.write_audiobookshelf_metadata_json(
-                source, meta, {}, alone_in_folder=True
-            )
-            payload = json.loads(target.read_text(encoding="utf-8"))
-            self.assertEqual(payload["genres"], [])
-
-    def test_multi_genre_string_splits_into_separate_array_entries(self):
-        # Previously ["Fantasy, LitRPG"] (one malformed combined entry) --
-        # confirmed live before this fix.
-        meta = {"title": "Multi Genre", "author": "Jane Doe", "genre": "Fantasy, LitRPG"}
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "book.m4b"
-            source.write_bytes(b"")
-            target = FIXER.write_audiobookshelf_metadata_json(
-                source, meta, {}, alone_in_folder=True
-            )
-            payload = json.loads(target.read_text(encoding="utf-8"))
-            self.assertEqual(payload["genres"], ["Fantasy", "LitRPG"])
-
-    def test_multi_genre_split_still_applies_blocklist_and_dedup(self):
-        meta = {"title": "T", "author": "A", "genre": "Fantasy, Audiobook, fantasy"}
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "book.m4b"
-            source.write_bytes(b"")
-            target = FIXER.write_audiobookshelf_metadata_json(
-                source, meta, {}, alone_in_folder=True
-            )
-            payload = json.loads(target.read_text(encoding="utf-8"))
-            self.assertEqual(payload["genres"], ["Fantasy"])
-
+    def test_genres_written_to_metadata_json(self):
+        for meta, expected in (
+            ({"title": "No Genre", "author": "Jane Doe"}, []),
+            # Previously ["Fantasy, LitRPG"] (one malformed combined entry) --
+            # confirmed live before this fix.
+            ({"title": "Multi Genre", "author": "Jane Doe", "genre": "Fantasy, LitRPG"}, ["Fantasy", "LitRPG"]),
+            # the split still applies the blocklist and dedup
+            ({"title": "T", "author": "A", "genre": "Fantasy, Audiobook, fantasy"}, ["Fantasy"]),
+        ):
+            with self.subTest(genre=meta.get("genre")), tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "book.m4b"
+                source.write_bytes(b"")
+                target = FIXER.write_audiobookshelf_metadata_json(source, meta, {}, alone_in_folder=True)
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                self.assertEqual(payload["genres"], expected)
 
 class SkipBlankFieldsTests(unittest.TestCase):
     """skip_blank_fields (Manual Review's Apply Fill) is keyed off the *new*

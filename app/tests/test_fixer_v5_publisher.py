@@ -91,19 +91,15 @@ class PublisherCaptureTests(unittest.TestCase):
         }
         self.assertEqual(FIXER.detect_special_provider(clues), "graphicaudio")
 
-    def test_plain_title_is_not_special_provider(self):
-        clues = {"title": "Storm Front", "author": "Jim Butcher"}
-        self.assertIsNone(FIXER.detect_special_provider(clues))
-
-    def test_full_cast_title_alone_is_not_graphicaudio(self):
-        # "Full-Cast Edition" (Harry Potter / Pottermore) is not a dramatized
-        # adaptation and must not be misrouted to the GraphicAudio endpoint.
-        clues = {
-            "title": "Harry Potter and the Goblet of Fire (Full-Cast Edition)",
-            "author": "J.K. Rowling",
-        }
-        self.assertIsNone(FIXER.detect_special_provider(clues))
-
+    def test_ordinary_titles_are_not_a_special_provider(self):
+        for clues in (
+            {"title": "Storm Front", "author": "Jim Butcher"},
+            # "Full-Cast Edition" (Harry Potter / Pottermore) is not a dramatized
+            # adaptation and must not be misrouted to the GraphicAudio endpoint.
+            {"title": "Harry Potter and the Goblet of Fire (Full-Cast Edition)", "author": "J.K. Rowling"},
+        ):
+            with self.subTest(title=clues["title"]):
+                self.assertIsNone(FIXER.detect_special_provider(clues))
 
 class PublisherWriteTests(unittest.TestCase):
     def _product(self):

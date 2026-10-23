@@ -64,24 +64,14 @@ class TitleIsRedundantWithSequenceTests(unittest.TestCase):
         )
 
 class BuildBookFolderNameStillCollapsesTests(unittest.TestCase):
-    def test_refactor_preserves_existing_collapse_behavior(self):
-        metadata = {
-            "title": "Book 5",
-            "series": "Dashing Devil",
-            "book_number": "5",
-            "sequence_label": "",
-        }
-        self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 5")
-
-    def test_refactor_preserves_existing_distinct_title_behavior(self):
-        metadata = {
-            "title": "Bold Beginnings",
-            "series": "Dashing Devil",
-            "book_number": "5",
-            "sequence_label": "",
-        }
-        self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 5 - Bold Beginnings")
-
+    def test_a_redundant_title_collapses_and_a_distinct_one_is_kept(self):
+        for title, expected in (
+            ("Book 5", "Book 5"),
+            ("Bold Beginnings", "Book 5 - Bold Beginnings"),
+        ):
+            with self.subTest(title=title):
+                metadata = {"title": title, "series": "Dashing Devil", "book_number": "5", "sequence_label": ""}
+                self.assertEqual(ORGANIZER.build_book_folder_name(metadata), expected)
 
 if __name__ == "__main__":
     unittest.main()

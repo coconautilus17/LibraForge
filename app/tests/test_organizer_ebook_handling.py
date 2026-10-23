@@ -110,13 +110,14 @@ class MetadataFromSidecarEbookTests(unittest.TestCase):
 
 
 class SeriesDirLabelAndTargetDirEbookTests(unittest.TestCase):
-    def test_series_dir_label_appends_ebook_suffix(self):
-        metadata = {"series": "Land of the Elementals", "media_type": "ebook"}
-        self.assertEqual(ORGANIZER.series_dir_label(metadata), "Land of the Elementals - EBOOK")
-
-    def test_series_dir_label_without_ebook_is_unaffected(self):
-        metadata = {"series": "Land of the Elementals", "media_type": "audiobook"}
-        self.assertEqual(ORGANIZER.series_dir_label(metadata), "Land of the Elementals")
+    def test_series_dir_label_appends_the_ebook_suffix_only_for_ebooks(self):
+        for media_type, expected in (
+            ("ebook", "Land of the Elementals - EBOOK"),
+            ("audiobook", "Land of the Elementals"),
+        ):
+            with self.subTest(media_type=media_type):
+                metadata = {"series": "Land of the Elementals", "media_type": media_type}
+                self.assertEqual(ORGANIZER.series_dir_label(metadata), expected)
 
     def test_series_dir_label_combines_edition_tag_and_ebook_suffix(self):
         metadata = {"series": "His Dark Materials", "edition_tag": "Dramatized", "media_type": "ebook"}
@@ -185,23 +186,14 @@ class CompanionFilesForNeverClaimsAnEbookTests(unittest.TestCase):
     audiobook's folder with no "- EBOOK" suffix at all -- and the ebook's
     own independent move then failed since the file was already gone."""
 
-    def test_a_same_stem_epub_is_not_claimed_as_the_audiobooks_companion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            audio = root / "Some Novel.m4b"
-            audio.write_bytes(b"fake audio")
-            epub = root / "Some Novel.epub"
-            epub.write_bytes(b"fake epub")
-            self.assertEqual(ORGANIZER.companion_files_for(audio), [])
-
-    def test_a_same_stem_pdf_is_not_claimed_as_the_audiobooks_companion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            audio = root / "Some Novel.m4b"
-            audio.write_bytes(b"fake audio")
-            pdf = root / "Some Novel.pdf"
-            pdf.write_bytes(b"fake pdf")
-            self.assertEqual(ORGANIZER.companion_files_for(audio), [])
+    def test_a_same_stem_ebook_is_not_claimed_as_the_audiobooks_companion(self):
+        for extension in (".epub", ".pdf"):
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                audio = root / "Some Novel.m4b"
+                audio.write_bytes(b"fake audio")
+                (root / f"Some Novel{extension}").write_bytes(b"fake ebook")
+                self.assertEqual(ORGANIZER.companion_files_for(audio), [])
 
     def test_mobi_and_azw3_still_ride_along_as_companions(self):
         # Unaffected: is_ebook_file()/build_ebook_book_items() only ever
