@@ -198,10 +198,15 @@ def clean_author_value(value: str) -> str:
     return remove_parenthetical(re.sub(r"\[[^\]]*\]", " ", value or ""))
 
 
+# "Kimberly A. Blessing et al.": one named person plus unnamed others.
+ET_AL_RE = re.compile(r"\s*\bet(?:\.\s*|\s+)al\b\.?", re.IGNORECASE)
+
+
 def split_credit_names(value: str) -> list[str]:
     """Split a credit string ("A/B & C") into its individual names."""
     value = clean_author_value(value or "")
     parts = re.split(r"\s*(?:,|;|&|/|\band\b|\bwith\b)\s*", value, flags=re.IGNORECASE)
+    parts = [ET_AL_RE.sub("", p) for p in parts]
     return [p.strip() for p in parts if p.strip()]
 
 

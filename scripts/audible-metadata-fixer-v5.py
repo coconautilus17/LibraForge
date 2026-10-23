@@ -1798,6 +1798,10 @@ def should_skip_due_to_marker(
         return False, ""
 
     if marker.get("applied") is True:
+        # Matched only to another recording of the book, and the file has no
+        # real ASIN of its own: search again, the recording itself may turn up.
+        if marker.get("different_edition") and not marker_real_asin(marker):
+            return False, ""
         return True, "already processed"
 
     return False, ""
@@ -1929,6 +1933,9 @@ def write_marker(
         "output_kind": output_kind,
         "written_fields": merged_written,
         "duration": metadata.get("duration", {}),
+        # Matched to another recording of the book (kept the local narrator
+        # and recording fields). Lets later runs retry it and audits find it.
+        **({"different_edition": metadata["different_edition"]} if metadata.get("different_edition") else {}),
         "audible": {
             "asin": _sv("asin", True),
             "title": _marker_survivor_value(

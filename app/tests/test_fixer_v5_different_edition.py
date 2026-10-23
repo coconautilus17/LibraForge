@@ -97,6 +97,58 @@ class DifferentEditionTests(unittest.TestCase):
         self.assertEqual(metadata["narrator"], "Paul Chequer")
         self.assertNotIn("different_edition", metadata)
 
+    def test_other_recording_keeps_the_files_recording_fields(self):
+        # Its ASIN, cover, release year and ISBN describe the other recording.
+        product = {**SPIRAL, "release_date": "2012-01-10", "_abs_isbn": "9781111111111",
+                   "product_images": {"500": "https://example/chequer.jpg"}}
+        clues = {**SPIRAL_CLUES, "existing_asin": "B00LOCAL01",
+                 "current": {"year": "2010", "isbn": "9782222222222"}}
+        metadata = metadata_from_product(product, clues, 1.0)
+        self.assertEqual(metadata["asin"], "B00LOCAL01")
+        self.assertEqual(metadata["year"], "2010")
+        self.assertEqual(metadata["isbn"], "9782222222222")
+        self.assertEqual(metadata["cover_url"], "")
+        self.assertEqual(metadata["different_edition"]["match_asin"], "B006QM9TO4")
+        # Book-level fields still come from the match.
+        self.assertEqual((metadata["title"], metadata["series"], metadata["sequence"]), ("Spiral", "Tunnels", "5"))
+
+    def test_other_recording_without_a_local_asin_writes_none(self):
+        for existing in ("", "NOREALASIN"):
+            metadata = metadata_from_product(SPIRAL, {**SPIRAL_CLUES, "existing_asin": existing}, 1.0)
+            self.assertEqual(metadata["asin"], "")
+
+    def test_same_recording_still_writes_the_match_asin_and_cover(self):
+        product = {**SPIRAL, "product_images": {"500": "https://example/chequer.jpg"}}
+        clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0, "existing_asin": "B00LOCAL01",
+                 "credit_names": ["Roderick Gordon", "Paul Chequer"]}
+        metadata = metadata_from_product(product, clues, 1.0)
+        self.assertEqual(metadata["asin"], "B006QM9TO4")
+        self.assertEqual(metadata["cover_url"], "https://example/chequer.jpg")
+
+    def test_et_al_credit_naming_the_author_is_not_another_narrator(self):
+        # Movies and the Meaning of Life: the "narrator" tag held the editors
+        # ("Kimberly A. Blessing et al."); the match, at the same runtime, is
+        # the file's own recording read by Gary Roelofs.
+        movies = {"asin": "B07MFM825D", "title": "Movies and the Meaning of Life",
+                  "authors": [{"name": "Kimberly A. Blessing"}, {"name": "Paul J. Tudico"}],
+                  "narrators": [{"name": "Gary Roelofs"}], "runtime_length_min": 649}
+        clues = {"title": "Movies and the Meaning of Life", "author": "Kimberly A. Blessing",
+                 "narrator": "Kimberly A. Blessing et al.", "credit_names": ["Kimberly A. Blessing et al."],
+                 "local_duration_minutes": 649.72}
+        metadata = metadata_from_product(movies, clues, 1.0)
+        self.assertNotIn("different_edition", metadata)
+        self.assertEqual(metadata["narrator"], "Gary Roelofs")
+        self.assertEqual(split_credit_names("Kimberly A. Blessing et al."), ["Kimberly A. Blessing"])
+        self.assertEqual(split_credit_names("Peter Etal"), ["Peter Etal"])
+
+    def test_ai_voice_edition_is_penalised_against_a_human_narrator(self):
+        from app.fixer.scoring import score_product_for_metadata
+        clues = {**GUNS_CLUES}
+        human = score_product_for_metadata(clues, GUNS, clues["local_duration_minutes"])
+        ai = score_product_for_metadata(clues, {**GUNS, "is_vvab": True}, clues["local_duration_minutes"])
+        self.assertEqual(human, 0.9)
+        self.assertAlmostEqual(ai, 0.7)
+
 
 class DifferentEditionReportTests(unittest.TestCase):
     def setUp(self):
@@ -119,6 +171,42 @@ class DifferentEditionReportTests(unittest.TestCase):
         item = self._item(metadata_from_product(GUNS, GUNS_CLUES, 1.0))
         self.assertEqual(item["different_edition"]["local_narrator"], "John Lee")
         self.assertEqual(item["match"]["narrator"], "John Lee")
+
+    def _apply(self, folder, metadata, clues):
+        source = Path(folder) / "Spiral.m4b"
+        source.write_bytes(b"")
+        self.fixer.write_marker(source=source, metadata=metadata, clues=clues, score=0.9,
+                                mode="normal", aggressive=False, alone=True, written_fields=["title"])
+        return source
+
+    def test_different_edition_without_real_asin_is_retried_next_run(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            clues = {**SPIRAL_CLUES, "current": {}}
+            source = self._apply(folder, metadata_from_product(SPIRAL, clues, 0.9), clues)
+            marker = self.fixer.load_marker(source)
+            self.assertEqual(marker["different_edition"]["match_asin"], "B006QM9TO4")
+            self.assertEqual(self.fixer.should_skip_due_to_marker(source, False, False), (False, ""))
+
+    def test_different_edition_with_the_files_own_asin_is_not_retried(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            clues = {**SPIRAL_CLUES, "existing_asin": "B00LOCAL01", "current": {"asin": "B00LOCAL01"}}
+            source = self._apply(folder, metadata_from_product(SPIRAL, clues, 0.9), clues)
+            self.assertEqual(self.fixer.should_skip_due_to_marker(source, False, False),
+                             (True, "already processed"))
+
+    def test_same_recording_marker_drops_an_old_different_edition_flag(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            clues = {**SPIRAL_CLUES, "current": {}}
+            source = self._apply(folder, metadata_from_product(SPIRAL, clues, 0.9), clues)
+            same = {**SPIRAL_CLUES, "local_duration_minutes": 684.0, "current": {},
+                    "credit_names": ["Roderick Gordon", "Paul Chequer"]}
+            self._apply(folder, metadata_from_product(SPIRAL, same, 1.0), same)
+            self.assertNotIn("different_edition", self.fixer.load_marker(source))
+            self.assertEqual(self.fixer.should_skip_due_to_marker(source, False, False),
+                             (True, "already processed"))
 
     def test_report_item_without_the_flag(self):
         clues = {**SPIRAL_CLUES, "local_duration_minutes": 684.0,

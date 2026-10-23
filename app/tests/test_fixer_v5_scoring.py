@@ -335,12 +335,13 @@ class TieBreakTests(unittest.TestCase):
         self.assertIn("same recording", ambiguity["reason"])
 
     def test_narrator_breaks_tie_duration_cannot(self):
-        # Two recordings of the same book, durations too close to separate:
-        # the one read by the local narrator wins.
+        # Two recordings of the same book, durations too close to separate and
+        # only "strong" (so both reach the same 0.90 floor): the one read by the
+        # local narrator wins.
         other = product(asin="B0OTHER", title="Power Mage 5", series="Power Mage",
-                        sequence="5", narrators=("Someone Else",), minutes=600.0)
+                        sequence="5", narrators=("Someone Else",), minutes=640.0)
         ours = product(asin="B0OURS", title="Power Mage 5", series="Power Mage",
-                       sequence="5", narrators=("Narrator Y",), minutes=600.1)
+                       sequence="5", narrators=("Narrator Y",), minutes=640.1)
         chosen, _score, ambiguity = FIXER.pick_best_match_for_metadata(
             self.clues, [other, ours], 600.0
         )
@@ -348,6 +349,22 @@ class TieBreakTests(unittest.TestCase):
         self.assertTrue(ambiguity["resolved"])
         self.assertIn("narrator", ambiguity["reason"])
         self.assertEqual(ambiguity["alternatives"], ["Power Mage 5 [B0OTHER]"])
+
+    def test_other_narrator_at_perfect_runtime_loses_outright(self):
+        # Moby Dick: the file is the Hootkins recording; an Epstein recording
+        # has the same runtime. The conflicting narrator caps it at 0.90, so
+        # the file's own recording wins on score, not on a tiebreak.
+        other = product(asin="B0OTHER", title="Power Mage 5", series="Power Mage",
+                        sequence="5", narrators=("Someone Else",), minutes=600.0)
+        ours = product(asin="B0OURS", title="Power Mage 5", series="Power Mage",
+                       sequence="5", narrators=("Narrator Y",), minutes=600.1)
+        chosen, score, ambiguity = FIXER.pick_best_match_for_metadata(
+            self.clues, [other, ours], 600.0
+        )
+        self.assertEqual(chosen["asin"], "B0OURS")
+        self.assertEqual(score, 1.0)
+        self.assertIsNone(ambiguity)
+        self.assertEqual(FIXER.score_product_for_metadata(self.clues, other, 600.0), 0.9)
 
     def test_narrator_does_not_override_clear_duration_winner(self):
         # Duration separates them, so the narrator is not consulted.
