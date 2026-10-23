@@ -228,7 +228,7 @@ class ScanStalenessTests(unittest.TestCase):
         self._touch("Author/Book2/Book2.m4b")
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertEqual(second.status_code, 200)
-        self.assertGreater(second.json()["total"], first_total)
+        self.assertEqual(second.json()["total"], first_total + 1)
 
     def test_new_book_folder_under_existing_series_is_counted(self):
         self._touch("Sanderson/Mistborn/Book 1/Book1.m4b")

@@ -280,10 +280,9 @@ class TitleBySomeoneStandaloneFolderTests(unittest.TestCase):
         )
 
     def test_by_clause_that_is_not_a_name_list_is_not_an_author(self):
-        self.assertNotEqual(
-            ORGANIZER.parse_standalone_book_folder_name("Dennis E. Taylor - Walking by the river at night").get("author"),
-            "the river at night",
-        )
+        self.assertEqual(
+            ORGANIZER.parse_standalone_book_folder_name("Dennis E. Taylor - Walking by the river at night"),
+            {"author": "Dennis E. Taylor", "title": "Walking by the river at night"})
 
 
 class PathNarratorThatIsReallyTheTitleTests(unittest.TestCase):

@@ -163,7 +163,7 @@ class PartBracketStripTests(unittest.TestCase):
     def test_does_not_strip_narrator_brackets(self):
         # "Hel Rose, Will Rose" ends in a name, not "- N"
         result = self._sanitize("First Leash {Hel Rose, Will Rose}")
-        self.assertIn("Hel Rose", result)
+        self.assertEqual(result, "First Leash {Hel Rose, Will Rose}")
 
     def test_does_not_strip_asin_brackets(self):
         # ASIN brackets don't end in "- N" so they are not touched by the new rule

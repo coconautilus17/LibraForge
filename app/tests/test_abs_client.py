@@ -206,8 +206,7 @@ class MergeSeriesEntriesTests(unittest.TestCase):
 
     def test_appends_when_no_existing_entry_matches(self):
         merged = abs_client.merge_series_entries([{"name": "Other Series", "sequence": "2"}], "Blight", "1")
-        self.assertIn({"name": "Blight", "sequence": "1"}, merged)
-        self.assertIn({"name": "Other Series", "sequence": "2"}, merged)
+        self.assertEqual(merged, [{"name": "Other Series", "sequence": "2"}, {"name": "Blight", "sequence": "1"}])
 
     def test_dirty_entry_of_the_same_series_is_replaced_not_duplicated(self):
         merged = abs_client.merge_series_entries(

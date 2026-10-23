@@ -279,6 +279,8 @@ class DebugTraceTest(unittest.TestCase):
         lines = [l for l in buf.getvalue().splitlines() if l.strip()]
         # Each call emits 2 lines (enter + exit); header is 1 line
         self.assertGreaterEqual(len(lines), 40)
+        # every line after the header is a whole record; a torn write leaves a line that does not mention fn
+        self.assertEqual([l for l in lines[1:] if "fn" not in l], [])
 
     # --- file sink ------------------------------------------------------------
 

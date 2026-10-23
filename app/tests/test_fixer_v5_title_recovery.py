@@ -187,12 +187,12 @@ class TitleSeriesBareNumberParseTests(unittest.TestCase):
     def test_year_suffix_not_treated_as_book_number(self):
         # A 4-digit trailing number (year) must not be parsed as "Series, N".
         result = fixer.parse_structured_book_text("Some Title - Some Series, 2021")
-        self.assertNotEqual(result.get("book_number"), "2021")
+        self.assertEqual(result, {})
 
     def test_plain_dash_title_not_misparsed(self):
         # No trailing ", N" -> the bare-number rule must not fire.
         result = fixer.parse_structured_book_text("Author Name - Some Title")
-        self.assertNotEqual(result.get("series"), "Some Title")
+        self.assertEqual(result, {})
 
 
 class SeriesNumberAuthorParseTests(unittest.TestCase):

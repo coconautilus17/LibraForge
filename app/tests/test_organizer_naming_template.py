@@ -368,7 +368,7 @@ class OriginalAndFilenameTokenTests(unittest.TestCase):
             source_file=Path("/lib/Great Title [ASIN.B0ABC12345] [2025] [128].m4b"),
             destination_root=Path("/audiobooks"),
         )
-        self.assertNotIn("B0ABC12345", filename or "")
+        self.assertEqual(filename, "Great Title")
 
     def test_tokens_empty_when_filename_does_not_apply(self):
         _f, filename, _r = self._render(

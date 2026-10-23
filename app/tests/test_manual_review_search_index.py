@@ -174,7 +174,7 @@ class RunManualReviewSearchIndexBuildTests(unittest.TestCase):
         )
         state = _ManualReviewSearchIndex(status="ready", entries=[("/stale/path", False)], book_count=1)
         _run_manual_review_search_index_build(state, self.root, [])
-        self.assertNotIn(("/stale/path", False), state.entries)
+        self.assertEqual(state.entries, [(str(self.root / "Author" / "NewBook"), False)])
 
     def test_waits_for_shared_walk_instead_of_reporting_ready_empty_while_idle(self):
         # Regression: deriving from a shared index that has never

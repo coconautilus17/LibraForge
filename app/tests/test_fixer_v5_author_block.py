@@ -120,7 +120,7 @@ class AuthorHardBlockScoringTests(unittest.TestCase):
         clues = {"title": "Cradle", "author": "Will Wight", "series": "Cradle"}
         prod = product("Cradle", ["Will Wight"], duration_minutes=600)
         score = FIXER.score_product_for_metadata(clues, prod, local_duration_minutes=600)
-        self.assertGreater(score, 0.0)
+        self.assertEqual(score, 1.0)
 
     def test_asin_identity_bypasses_block(self):
         # A confirmed embedded ASIN must still win even if author strings differ

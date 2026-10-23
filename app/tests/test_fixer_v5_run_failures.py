@@ -174,7 +174,7 @@ class TitleIsItsOwnSeriesTests(unittest.TestCase):
     def test_other_book_in_the_umbrella_series_is_not(self):
         homo_deus = {**self.SAPIENS, "title": "Homo Deus", "runtime_length_min": 894}
         clues = {"title": "Sapiens", "author": "Yuval Noah Harari", "local_duration_minutes": 918.7}
-        self.assertNotEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "full")
+        self.assertEqual(FIXER.metadata_from_product(homo_deus, clues, 0.93)["edit_mode"], "none")
 
 
 class ReadByNarratorTests(unittest.TestCase):

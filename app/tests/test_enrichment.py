@@ -639,7 +639,8 @@ class StableSeriesKeyTests(unittest.TestCase):
 
     def test_name_lookup_still_works(self):
         groups = enrichment.group_items_by_series([_item("1", "Dune #1", "Frank Herbert")], _fake_normalize_series)
-        self.assertEqual(len(enrichment.get_series_books(groups, "Dune", _fake_normalize_series)), 1)
+        books = enrichment.get_series_books(groups, "Dune", _fake_normalize_series)
+        self.assertEqual([b["id"] for b in books], ["1"])
 
 
 class SplitGroupByAuthorTests(unittest.TestCase):

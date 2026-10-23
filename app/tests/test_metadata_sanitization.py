@@ -1163,7 +1163,7 @@ class MetadataTitleFallbackTests(unittest.TestCase):
 
         recovered = FIXER.recover_invalid_local_title(dict(clues), path)
 
-        self.assertNotEqual(recovered["title"].strip().lower(), "unorganized")
+        self.assertEqual(recovered["title"], "some-book")
 
 
 class DanglingTitleBracketTests(unittest.TestCase):
