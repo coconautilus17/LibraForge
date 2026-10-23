@@ -33,75 +33,42 @@ normalize  = fixer.normalize_for_match
 
 
 class GenericChapterTitleTests(unittest.TestCase):
-    # ── existing patterns still work ──────────────────────────────────────
-    def test_numeric_chapter_is_generic(self):
-        self.assertTrue(is_generic("chapter 5"))
+    # chapter, track, episode, lecture, word-form chapter and filler/bonus patterns
+    def test_chapter_episode_lecture_and_credit_titles_are_generic(self):
+        for title in (
+            "chapter 5",
+            "track 3",
+            "42",
+            "Episode 6",
+            # "Episode Six - Possession" normalizes to "episode six possession"
+            "episode six possession",
+            "episode six",
+            "episode twelve",
+            "lecture 10",
+            "lecture 10 your plan to prevent burnout",
+            "chapter forty-two",
+            "chapter one",
+            "chapter thirty three",
+            "bloopers",
+            "bonus content",
+            "bonus material",
+            "the story continues in harry potter",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(is_generic(title))
 
-    def test_track_number_is_generic(self):
-        self.assertTrue(is_generic("track 3"))
-
-    def test_bare_number_is_generic(self):
-        self.assertTrue(is_generic("42"))
-
-    # ── episode patterns ──────────────────────────────────────────────────
-    def test_episode_number_is_generic(self):
-        self.assertTrue(is_generic("Episode 6"))
-
-    def test_episode_number_with_subtitle_is_generic(self):
-        # "Episode Six - Possession" normalizes to "episode six possession"
-        self.assertTrue(is_generic("episode six possession"))
-
-    def test_episode_word_number_is_generic(self):
-        self.assertTrue(is_generic("episode six"))
-
-    def test_episode_twelve_is_generic(self):
-        self.assertTrue(is_generic("episode twelve"))
-
-    # ── lecture patterns ──────────────────────────────────────────────────
-    def test_lecture_number_is_generic(self):
-        self.assertTrue(is_generic("lecture 10"))
-
-    def test_lecture_number_with_subtitle_is_generic(self):
-        self.assertTrue(is_generic("lecture 10 your plan to prevent burnout"))
-
-    # ── word-form chapter patterns ────────────────────────────────────────
-    def test_chapter_word_number_is_generic(self):
-        self.assertTrue(is_generic("chapter forty-two"))
-
-    def test_chapter_one_is_generic(self):
-        self.assertTrue(is_generic("chapter one"))
-
-    def test_chapter_thirty_three_is_generic(self):
-        self.assertTrue(is_generic("chapter thirty three"))
-
-    # ── filler/bonus patterns ─────────────────────────────────────────────
-    def test_bloopers_is_generic(self):
-        self.assertTrue(is_generic("bloopers"))
-
-    def test_bonus_content_is_generic(self):
-        self.assertTrue(is_generic("bonus content"))
-
-    def test_bonus_material_is_generic(self):
-        self.assertTrue(is_generic("bonus material"))
-
-    def test_the_story_continues_is_generic(self):
-        self.assertTrue(is_generic("the story continues in harry potter"))
-
-    # ── real titles must NOT be flagged ───────────────────────────────────
-    def test_real_title_not_generic(self):
-        self.assertFalse(is_generic("The Name of the Wind"))
-
-    def test_episode_as_real_title_word_not_generic(self):
-        # "Episode" alone, or in a real title context, should not match
-        # episode-number patterns (requires a number/word after it)
-        self.assertFalse(is_generic("episode"))
-
-    def test_chapter_alone_not_generic(self):
-        # bare "chapter" with no identifier is not a pattern
-        self.assertFalse(is_generic("chapter"))
-
-    def test_short_title_not_generic(self):
-        self.assertFalse(is_generic("Dune"))
+    def test_real_titles_are_not_generic(self):
+        for title in (
+            "The Name of the Wind",
+            # "Episode" alone, or in a real title context, should not match
+            # episode-number patterns (requires a number/word after it)
+            "episode",
+            # bare "chapter" with no identifier is not a pattern
+            "chapter",
+            "Dune",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(is_generic(title))
 
 
 class InvalidLocalTitleAuthorPrefixTests(unittest.TestCase):

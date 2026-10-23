@@ -48,11 +48,13 @@ class ValidateNamingTemplateTests(unittest.TestCase):
         problems = ORGANIZER.validate_naming_template("{author}/{title},{asin}")
         self.assertEqual(problems, [])
 
-    def test_original_token_is_recognized(self):
-        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{original}"), [])
-
-    def test_filename_token_is_recognized(self):
-        self.assertEqual(ORGANIZER.validate_naming_template("{author}/{filename}"), [])
+    def test_original_and_filename_tokens_are_recognized(self):
+        for template in (
+            "{author}/{original}",
+            "{author}/{filename}",
+        ):
+            with self.subTest(template=template):
+                self.assertEqual(ORGANIZER.validate_naming_template(template), [])
 
     def test_original_and_filename_together_is_rejected(self):
         # The two file-name tokens are mutually exclusive -- a template picks

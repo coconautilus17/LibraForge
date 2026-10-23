@@ -13,20 +13,27 @@ SPEC.loader.exec_module(ORGANIZER)
 
 
 class TitleIsRedundantWithSequenceTests(unittest.TestCase):
-    def test_title_equal_to_prefix_is_redundant(self):
-        self.assertTrue(
-            ORGANIZER.title_is_redundant_with_sequence("Book 5", "Dashing Devil", "", "5")
-        )
+    def test_a_title_equal_to_its_series_or_prefix_is_redundant(self):
+        for title in (
+            "Book 5",
+            "Dashing Devil",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(
+                    ORGANIZER.title_is_redundant_with_sequence(title, "Dashing Devil", "", "5")
+                )
 
-    def test_title_equal_to_series_is_redundant(self):
-        self.assertTrue(
-            ORGANIZER.title_is_redundant_with_sequence("Dashing Devil", "Dashing Devil", "", "5")
-        )
-
-    def test_distinct_title_is_not_redundant(self):
-        self.assertFalse(
-            ORGANIZER.title_is_redundant_with_sequence("Bold Beginnings", "Dashing Devil", "", "5")
-        )
+    def test_a_distinct_title_is_not_redundant(self):
+        for title, series in (
+            ("Bold Beginnings", "Dashing Devil"),
+            # A remainder that isn't a valid roman numeral (or doesn't equal the
+            # number) stays a distinct title -- e.g. a subtitle word.
+            ("Dao of Magic Zenith", "Dao of Magic"),
+        ):
+            with self.subTest(title=title, series=series):
+                self.assertFalse(
+                    ORGANIZER.title_is_redundant_with_sequence(title, series, "", "5")
+                )
 
     def test_no_series_or_number_is_never_redundant(self):
         self.assertFalse(ORGANIZER.title_is_redundant_with_sequence("Book 5", "", "", ""))
@@ -55,14 +62,6 @@ class TitleIsRedundantWithSequenceTests(unittest.TestCase):
         self.assertFalse(
             ORGANIZER.title_is_redundant_with_sequence("Dao of Magic IV", "Dao of Magic", "", "5")
         )
-
-    def test_trailing_non_roman_letter_is_not_treated_as_number(self):
-        # A remainder that isn't a valid roman numeral (or doesn't equal the
-        # number) stays a distinct title -- e.g. a subtitle word.
-        self.assertFalse(
-            ORGANIZER.title_is_redundant_with_sequence("Dao of Magic Zenith", "Dao of Magic", "", "5")
-        )
-
 
 class BuildBookFolderNameStillCollapsesTests(unittest.TestCase):
     def test_refactor_preserves_existing_collapse_behavior(self):

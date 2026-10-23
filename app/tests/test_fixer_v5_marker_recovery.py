@@ -39,11 +39,13 @@ FIXER = load_module("fixer_v5_marker_recovery", "scripts/audible-metadata-fixer-
 
 
 class MarkerRealAsinTests(unittest.TestCase):
-    def test_real_asin_uppercased(self):
-        self.assertEqual(FIXER.marker_real_asin({"audible": {"asin": "b0real1234"}}), "B0REAL1234")
-
-    def test_norealasin_is_empty(self):
-        self.assertEqual(FIXER.marker_real_asin({"audible": {"asin": "NOREALASIN"}}), "")
+    def test_a_real_asin_is_uppercased_and_a_placeholder_is_empty(self):
+        for asin, expected in (
+            ("b0real1234", "B0REAL1234"),
+            ("NOREALASIN", ""),
+        ):
+            with self.subTest(asin=asin, expected=expected):
+                self.assertEqual(FIXER.marker_real_asin({"audible": {"asin": asin}}), expected)
 
     def test_missing_is_empty(self):
         self.assertEqual(FIXER.marker_real_asin({}), "")

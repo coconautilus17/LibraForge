@@ -258,11 +258,13 @@ class PathTraversalSafetyTests(unittest.TestCase):
     "Unknown Title"/"Unknown Series"); the flat-token renderer must be too.
     """
 
-    def test_dotdot_segment_is_treated_as_empty(self):
-        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty(".."))
-
-    def test_single_dot_segment_is_treated_as_empty(self):
-        self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty("."))
+    def test_dot_segments_are_treated_as_empty(self):
+        for segment in (
+            "..",
+            ".",
+        ):
+            with self.subTest(segment=segment):
+                self.assertTrue(ORGANIZER._naming_segment_is_effectively_empty(segment))
 
     def test_sanitize_never_emits_dotdot(self):
         self.assertNotIn(ORGANIZER._sanitize_naming_segment(".."), {".", ".."})

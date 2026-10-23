@@ -121,8 +121,13 @@ class AlbumIsNotASeriesTests(unittest.TestCase):
     def parse(self, **tags):
         return FIXER.parse_title_series_number_from_metadata(tags)
 
-    def test_album_that_is_the_title_is_not_a_series(self):
-        self.assertEqual(self.parse(title="Sapiens", album="Sapiens")["series"], "")
+    def test_an_album_is_a_series_clue_unless_it_echoes_the_title(self):
+        for title, album, expected in (
+            ("Sapiens", "Sapiens", ""),
+            ("Soul Harvest", "Dread Knight", "Dread Knight"),
+        ):
+            with self.subTest(title=title, album=album, expected=expected):
+                self.assertEqual(self.parse(title=title, album=album)["series"], expected)
 
     def test_album_that_starts_the_title_is_not_a_series(self):
         parsed = self.parse(title="Intra Mundum: Reforged: A LitRPG Adventure", album="Intra Mundum: Reforged")
@@ -133,10 +138,6 @@ class AlbumIsNotASeriesTests(unittest.TestCase):
         parsed = self.parse(title="Postwar: A History of Europe Since 1945",
                             album="Postwar: A History of Europe Since 1945")
         self.assertEqual(parsed["series"], "")
-
-    def test_a_different_album_is_still_a_series_clue(self):
-        self.assertEqual(self.parse(title="Soul Harvest", album="Dread Knight")["series"], "Dread Knight")
-
 
 class ParentheticalSeriesInTitleTests(unittest.TestCase):
     """Reforged's title tag ends "(The Tower Series, Book 2)", its real series."""

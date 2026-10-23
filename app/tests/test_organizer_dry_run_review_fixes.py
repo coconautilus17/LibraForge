@@ -78,17 +78,16 @@ class SeriesNameInsideTitleTests(unittest.TestCase):
             "The Shortest History of Reality",
         )
 
-    def test_real_prefix_decoration_is_still_stripped(self):
-        self.assertEqual(
-            ORGANIZER.strip_series_prefix("Dashing Devil Bold Beginnings", "Dashing Devil"),
-            "Bold Beginnings",
-        )
-
-    def test_separator_prefix_is_still_stripped_even_before_a_connective(self):
-        self.assertEqual(
-            ORGANIZER.strip_series_prefix("Dashing Devil: Of Fire and Blood", "Dashing Devil"),
-            "Of Fire and Blood",
-        )
+    def test_a_real_series_prefix_is_still_stripped(self):
+        for title, expected in (
+            ("Dashing Devil Bold Beginnings", "Bold Beginnings"),
+            ("Dashing Devil: Of Fire and Blood", "Of Fire and Blood"),
+        ):
+            with self.subTest(title=title, expected=expected):
+                self.assertEqual(
+                    ORGANIZER.strip_series_prefix(title, "Dashing Devil"),
+                    expected,
+                )
 
 
 class LooseFileIntoOccupiedFolderTests(unittest.TestCase):

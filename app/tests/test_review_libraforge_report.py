@@ -248,19 +248,17 @@ class ReviewOrganizerItemInfoOnlyReasonTests(unittest.TestCase):
 
 
 class SplitTitleBaseAndNumberTests(unittest.TestCase):
-    def test_splits_trailing_number(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core 2"), ("Dungeon Core", "2"))
-
-    def test_no_trailing_number_returns_whole_title(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Dungeon Core"), ("Dungeon Core", ""))
-
-    def test_number_must_be_a_separate_token(self):
-        # "1% Lifesteal" must not be split -- the leading "1" isn't a
-        # trailing sequence number and isn't even at the end of the string.
-        self.assertEqual(REVIEW.split_title_base_and_number("1% Lifesteal"), ("1% Lifesteal", ""))
-
-    def test_decimal_sequence_number(self):
-        self.assertEqual(REVIEW.split_title_base_and_number("Side Quest 2.5"), ("Side Quest", "2.5"))
+    def test_splits_a_trailing_number(self):
+        for title, expected_base, expected_number in (
+            ("Dungeon Core 2", "Dungeon Core", "2"),
+            ("Dungeon Core", "Dungeon Core", ""),
+            # "1% Lifesteal" must not be split -- the leading "1" isn't a
+            # trailing sequence number and isn't even at the end of the string.
+            ("1% Lifesteal", "1% Lifesteal", ""),
+            ("Side Quest 2.5", "Side Quest", "2.5"),
+        ):
+            with self.subTest(title=title, expected_base=expected_base, expected_number=expected_number):
+                self.assertEqual(REVIEW.split_title_base_and_number(title), (expected_base, expected_number))
 
 
 class MajorityAuthorAndNoteTests(unittest.TestCase):
