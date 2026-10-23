@@ -1,15 +1,8 @@
-import importlib.util
-import sys
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-SPEC = importlib.util.spec_from_file_location(
-    "organizer_duplicate_warning", ROOT / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-)
-ORGANIZER = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = ORGANIZER
-SPEC.loader.exec_module(ORGANIZER)
+ORGANIZER = load_script("organizer_duplicate_warning", "organize-audiobooks-by-metadata-v3_13.py")
 
 FOLDER = Path("/in/Pocket Dungeon/Pocket Dungeon 2")
 MERGED = FOLDER / "Eric Vall - [Pocket Dungeon-2] - Pocket Dungeon 2.m4b"

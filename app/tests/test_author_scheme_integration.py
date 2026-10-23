@@ -1,26 +1,9 @@
-import importlib.util
 import os
-import sys
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_module
 
 ROOT = Path(__file__).parents[2]
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    sys.modules["audible"] = stub
-
-
-def load_module(name, relative_path):
-    spec = importlib.util.spec_from_file_location(name, ROOT / relative_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
 
 ORGANIZER = load_module("organizer_author_scheme", "scripts/organize-audiobooks-by-metadata-v3_13.py")
 FIXER = load_module("fixer_author_scheme", "scripts/audible-metadata-fixer-v5.py")

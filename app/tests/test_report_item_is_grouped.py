@@ -5,33 +5,10 @@ discover_manual_review_targets and inspect_manual_review_target
 docs/superpowers/specs/2026-07-07-manual-review-multifile-edit-cover-design.md.
 """
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-import importlib.util
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from app.tests.script_loader import load_module
 
 
 FIXER = load_module("fixer_v5_report_item_is_grouped", "scripts/audible-metadata-fixer-v5.py")

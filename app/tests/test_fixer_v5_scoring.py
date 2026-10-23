@@ -1,31 +1,7 @@
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
+from app.tests.script_loader import load_module
 
 from app.fixer.scoring import metadata_from_product
-
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 FIXER = load_module("fixer_v5_scoring", "scripts/audible-metadata-fixer-v5.py")
@@ -870,7 +846,6 @@ class SubstringSeriesCoincidentalMatchTests(unittest.TestCase):
         )
         score = FIXER.score_product_for_metadata(clues, p, 458.6784981166667)
         self.assertLess(score, 0.70, f"score={score}")
-
 
 
 class NumberCandidateHyphenTests(unittest.TestCase):

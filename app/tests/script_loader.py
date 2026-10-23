@@ -9,7 +9,7 @@ import sys
 import types
 from pathlib import Path
 
-SCRIPTS = Path(__file__).parents[2] / "scripts"
+ROOT = Path(__file__).parents[2]
 
 try:
     import audible  # noqa: F401
@@ -20,9 +20,14 @@ except ModuleNotFoundError:
     sys.modules["audible"] = _stub
 
 
-def load_script(module_name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(module_name, SCRIPTS / filename)
+def load_module(module_name: str, relative_path: str):
+    """Load any source file (a script, or a module by path) relative to the repo root."""
+    spec = importlib.util.spec_from_file_location(module_name, ROOT / relative_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_script(module_name: str, filename: str):
+    return load_module(module_name, f"scripts/{filename}")

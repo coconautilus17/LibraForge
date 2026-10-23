@@ -3,8 +3,8 @@ scripts/review-libraforge-report.py. The review script decides which matches a
 human has to look at, so each helper's exact output matters."""
 import copy
 import unittest
-
 from app.tests.script_loader import load_script
+
 
 REVIEW = load_script("review_libraforge_report_helpers", "review-libraforge-report.py")
 
@@ -85,7 +85,6 @@ class ReportKindTests(unittest.TestCase):
         self.assertEqual(REVIEW.infer_report_kind({"items": [{}]}), "unknown")
         self.assertEqual(REVIEW.infer_report_kind({"report_items": []}), "unknown")
         self.assertEqual(REVIEW.infer_report_kind({}), "unknown")
-
 
 
 class ReviewMetadataItemReasonTests(unittest.TestCase):

@@ -1,32 +1,10 @@
 """Tests for is_generic_chapter_title, is_invalid_local_title, and
 normalize_for_match changes introduced to support title recovery."""
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
+from app.tests.script_loader import load_script
 
 
-def load_fixer():
-    path = ROOT / "scripts" / "audible-metadata-fixer-v5.py"
-    spec = importlib.util.spec_from_file_location("audible_fixer_v5", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-fixer = load_fixer()
+fixer = load_script("audible_fixer_v5", "audible-metadata-fixer-v5.py")
 is_generic = fixer.is_generic_chapter_title
 is_invalid = fixer.is_invalid_local_title
 normalize  = fixer.normalize_for_match

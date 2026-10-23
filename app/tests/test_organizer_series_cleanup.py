@@ -1,21 +1,10 @@
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_module
 
 ROOT = Path(__file__).parents[2]
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 ORGANIZER = load_module(

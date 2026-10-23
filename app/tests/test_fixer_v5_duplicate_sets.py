@@ -2,25 +2,11 @@
 e.g. "Spiral - 001..025.mp3" and "Spiral-Part01..13.mp3", both 728 min) must
 not be split into one fake book per orphaned file: the folder is reported
 once, for the user to keep one set."""
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-spec = importlib.util.spec_from_file_location("fixer_v5_duplicate_sets", ROOT / "scripts/audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = FIXER
-spec.loader.exec_module(FIXER)
+FIXER = load_script("fixer_v5_duplicate_sets", "audible-metadata-fixer-v5.py")
 
 SPIRAL = Path("/audiobooks/_unorganized/Roderick Gordon - Tunnels 05 - Spiral")
 CHAPTER_RIP = [SPIRAL / f"Spiral - {i:03d}.mp3" for i in range(1, 26)]

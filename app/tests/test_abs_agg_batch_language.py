@@ -15,32 +15,8 @@ Real (trimmed) fixture captured live from abs-agg's librivox endpoint,
 2026-07-20: an English Frankenstein reading and a German one for the exact
 same work.
 """
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
-
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from app.tests.script_loader import load_module
 
 
 SEARCH = load_module("fixer_search_abs_agg_language", "app/fixer/search.py")

@@ -8,25 +8,14 @@ Goodreads results at all, and "Tunnel Rat 01" was accepted as "Tunnel Rat 3".
 Now match_ebook reuses the fixer's clues, query variants, abs-tract client
 (throttle, retries, circuit breaker) and full-match gate.
 """
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
 from unittest.mock import patch
+from app.tests.script_loader import load_script
 
 from app.fixer import search as fixer_search
 from app.fixer.parsing import _authors_compatible, goodreads_title_query_variants
 
-ROOT = Path(__file__).parents[2]
-if "audible" not in sys.modules:
-    stub = types.ModuleType("audible")
-    stub.Client = stub.Authenticator = type("Stub", (), {})
-    sys.modules["audible"] = stub
-_spec = importlib.util.spec_from_file_location("fixer_v5_ebook_match", ROOT / "scripts/audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = FIXER
-_spec.loader.exec_module(FIXER)
+FIXER = load_script("fixer_v5_ebook_match", "audible-metadata-fixer-v5.py")
 
 TANYA_4 = {
     "title": "The Saga of Tanya the Evil, Vol. 04: Dabit Deus His Quoque Finem", "author": "Carlo Zen",

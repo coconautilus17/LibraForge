@@ -1,35 +1,13 @@
 """abs-tract (Goodreads/Kindle) client + Goodreads edit-mode gate in v5."""
-import importlib.util
 import json
-import sys
 import time
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from app.tests.script_loader import load_script
 
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_fixer():
-    path = ROOT / "scripts" / "audible-metadata-fixer-v5.py"
-    spec = importlib.util.spec_from_file_location("audible_fixer_v5_abstract", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-fixer = load_fixer()
+fixer = load_script("audible_fixer_v5_abstract", "audible-metadata-fixer-v5.py")
 
 
 class _FakeResp:
