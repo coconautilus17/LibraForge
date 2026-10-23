@@ -1,34 +1,12 @@
 """Regression tests for the defects the test audit found (issues #373 to #379)."""
-import importlib.util
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from app import chaptering as c
 from app.fixer import scoring as s
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-
-def load_script(name, filename):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
+from app.tests.script_loader import load_script
 
 FIXER = load_script("known_defects_fixer", "audible-metadata-fixer-v5.py")
 ORG = load_script("known_defects_organizer", "organize-audiobooks-by-metadata-v3_13.py")
