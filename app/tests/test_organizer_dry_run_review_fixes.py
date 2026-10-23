@@ -411,7 +411,7 @@ class SequenceOnlyNoteIsNotFlaggedForNoiseTests(unittest.TestCase):
             }}))
             item = ORGANIZER.BookItem("loose_file", audio, [audio], audio)
             metadata = ORGANIZER.infer_metadata(item, root)
-            self.assertNotIn("title matches series name; using sequence only", metadata["review_reasons"])
+            self.assertEqual(metadata["review_reasons"], [])
 
 
 class ArticleOnlyTitleDifferenceIsNotAConflictTests(unittest.TestCase):

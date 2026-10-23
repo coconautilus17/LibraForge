@@ -4,9 +4,11 @@ and the fast worker path (run_audible_chapters_backend) with the network
 boundary (audible_lookup_chapters) mocked -- no real Audible calls.
 """
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -253,11 +255,14 @@ class ChapteringLoadReturnsAsinTests(unittest.TestCase):
 
 class ChapteringRunsAcceptsAudibleBackendTests(unittest.TestCase):
     def test_audible_chapters_no_longer_rejected_as_unsupported(self):
+        # Only main's own reference is replaced. Patching threading.Thread itself would
+        # also stop the web server's worker threads from starting, and the request would hang.
+        mock_thread = MagicMock()
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             (root_path / "book.mp3").write_bytes(b"")
             with patch.object(main_module, "AUDIOBOOKS_ROOT", root_path), \
-                 patch.object(main_module.threading, "Thread") as mock_thread:
+                 patch.object(main_module, "threading", SimpleNamespace(**{**vars(threading), "Thread": mock_thread})):
                 response = client.post(
                     "/api/chaptering/runs",
                     json={
