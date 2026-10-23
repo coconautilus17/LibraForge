@@ -741,6 +741,38 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         )
         self.assertEqual(parsed["tag_series"], "Divine Apostasy")
 
+    def test_hyphen_inside_a_word_is_not_a_roman_numeral_separator(self):
+        # "The X-Files" was read as series "The", book X (10), title "Files: ...".
+        for title in ("The X-Files: Cold Cases", "The V-2 Rocket", "Star Wars X-Wing: Rogue Squadron"):
+            parsed = FIXER.parse_title_series_number_from_metadata({"title": title})
+            self.assertEqual(parsed["title"], title)
+            self.assertEqual(parsed["series"], "")
+            self.assertEqual(parsed["book_number"], "")
+
+    def test_roman_numeral_series_title_still_splits(self):
+        for title in ("Rocky IV - The Fight", "Rocky IV: The Fight", "Rocky IV- The Fight"):
+            parsed = FIXER.parse_title_series_number_from_metadata({"title": title})
+            self.assertEqual(parsed["title"], "The Fight")
+            self.assertEqual(parsed["series"], "Rocky")
+            self.assertEqual(parsed["book_number"], "4")
+
+    def test_credit_list_author_tag_beats_folder_subtitle_guess(self):
+        # Folder "The X-Files - Cold Cases" parses as title "The X-Files", author
+        # "Cold Cases". The real author tag is a long credit list with a role
+        # suffix, which must still count as a person and keep its place.
+        tag_author = "Joe Harris, Chris Carter, Dirk Maggs - adaptation"
+        self.assertFalse(FIXER.should_prefer_path_author(tag_author, "Cold Cases"))
+        self.assertTrue(FIXER.should_prefer_path_author("", "Cold Cases"))
+        self.assertTrue(FIXER.should_prefer_path_author("Audible Studios Presents The Show", "Jane Doe"))
+
+        clues = FIXER.build_search_clues_from_file(
+            Path("/library/Joe Harris/The X-Files - Cold Cases/The X-Files Cold Cases.m4b"),
+            tags={"title": "The X-Files: Cold Cases", "album": "The X-Files: Cold Cases", "artist": tag_author},
+        )
+        self.assertEqual(clues["title"], "The X-Files: Cold Cases")
+        self.assertEqual(clues["author"], tag_author)
+        self.assertEqual(clues.get("series", ""), "")
+
     def test_genre_tag_is_captured_as_a_clue(self):
         # Local genre was never extracted into clues at all -- the "Local"
         # column in match-report cards always showed blank regardless of what

@@ -383,7 +383,13 @@ def should_prefer_path_author(current_author: str, candidate_author: str) -> boo
     if not current_author:
         return True
 
-    return looks_like_person_name(candidate_author) and not looks_like_person_name(current_author)
+    # A long credit list ("Joe Harris, Chris Carter, Dirk Maggs - adaptation")
+    # fails the whole-string name check but is still a real author tag when any
+    # one of its credits is a person.
+    current_is_person = looks_like_person_name(current_author) or any(
+        looks_like_person_name(name) for name in split_credit_names(current_author)
+    )
+    return looks_like_person_name(candidate_author) and not current_is_person
 
 
 # ---------------------------------------------------------------------------
@@ -1512,8 +1518,10 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
         book_number_source = "title"
         title = match.group("title").strip()
 
+    # A dash only separates when a space follows it: the hyphen in
+    # "The X-Files" or "The V-2 Rocket" is part of a word, not "Series X - Title".
     roman_match = re.match(
-        r"^(?P<series>.+?)\s+(?P<roman>I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)\s*[:\-]\s*(?P<title>.+)$",
+        r"^(?P<series>.+?)\s+(?P<roman>I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)\s*(?::|-(?=\s))\s*(?P<title>.+)$",
         raw_title,
         flags=re.IGNORECASE,
     )
