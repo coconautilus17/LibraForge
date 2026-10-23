@@ -1757,17 +1757,7 @@ def restore_metadata_backups(
             print()
             restored += 1
         except Exception as error:
-            reason = f"failed: {error}"
             print(f"  ERROR: {error}")
-            append_manual_review(
-                manual_review,
-                file_path,
-                [reason],
-                clues=locals().get("clues", {}),
-                score=locals().get("score", None),
-                query=locals().get("used_query", ""),
-                status="failed",
-            )
             print()
             failed += 1
 

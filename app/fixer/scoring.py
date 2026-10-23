@@ -490,15 +490,17 @@ def product_title_equals_series(product: dict) -> bool:
 
 
 def is_omnibus_product(product: dict) -> bool:
-    title = normalize_for_match(product.get("title", "") or "")
-    subtitle = normalize_for_match(product.get("subtitle", "") or "")
+    # Raw text, not normalize_for_match(): that already turns "1-3" into "1 3" and drops "&".
+    title = str(product.get("title", "") or "").lower()
+    subtitle = str(product.get("subtitle", "") or "").lower()
     _, sequence = get_primary_series(product)
     sequence = str(sequence or "").strip()
+    book_range = r"\bbooks?\s+\d+\s*(?:[-\u2013\u2014&]|to|through)\s*\d+\b"
 
-    if re.search(r"\bbooks?\s+\d+\s*(?:-|to|through|&)\s*\d+\b", title):
+    if re.search(book_range, title):
         return True
 
-    if re.search(r"\bbooks?\s+\d+\s*(?:-|to|through|&)\s*\d+\b", subtitle):
+    if re.search(book_range, subtitle):
         return True
 
     if re.fullmatch(r"\d+\s*-\s*\d+", sequence):
@@ -519,12 +521,15 @@ def is_generic_series_number_title(clues: dict) -> bool:
     # "All the Skills - Book 003"
     # "The Perfect Run - Book 003"
     # "Amber the Cursed Berserker - Book 002"
-    generic_patterns = [
-        rf"^{re.escape(series)}\s+book\s+0*{re.escape(number)}$",
-        rf"^{re.escape(series)}\s+0*{re.escape(number)}$",
-    ]
+    # normalize_for_match() strips "Book N" from the title, so the "<series> book N"
+    # form is matched on a plain lowercase, punctuation-free copy instead.
+    def plain(value) -> str:
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).split())
 
-    return any(re.fullmatch(pattern, title) for pattern in generic_patterns)
+    return bool(
+        re.fullmatch(rf"{re.escape(plain(clues.get('series')))}\s+book\s+0*{re.escape(number)}", plain(clues.get("title")))
+        or re.fullmatch(rf"{re.escape(series)}\s+0*{re.escape(number)}", title)
+    )
 
 
 # ---------------------------------------------------------------------------

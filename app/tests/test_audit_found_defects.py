@@ -1,6 +1,4 @@
-"""Tests that document real, open defects. Each is marked expectedFailure with the
-issue that tracks it. When a defect is fixed the test starts passing, which
-unittest reports as an unexpected success: remove the decorator then."""
+"""Regression tests for the defects the test audit found (issues #373 to #379)."""
 import importlib.util
 import sys
 import tempfile
@@ -42,8 +40,7 @@ def product(**over):
     return base
 
 
-class ChapterForgeDefects(unittest.TestCase):
-    @unittest.expectedFailure
+class ChapterForgeRegressions(unittest.TestCase):
     def test_an_end_of_chapter_announcement_should_not_become_a_marker(self):
         # Issue #378: END_OF_RE is searched in the 16 characters BEFORE the marker, which
         # never contain the marker word itself ("chapter"), so it cannot fire.
@@ -51,8 +48,7 @@ class ChapterForgeDefects(unittest.TestCase):
         self.assertEqual([x.number for x in got], [6])
 
 
-class FixerDefects(unittest.TestCase):
-    @unittest.expectedFailure
+class FixerRegressions(unittest.TestCase):
     def test_a_failing_restore_should_be_counted_and_the_loop_should_continue(self):
         # Issue #379: the except branch uses an undefined name `manual_review`, so the
         # first failure raises NameError and ends the whole restore run.
@@ -72,7 +68,6 @@ class FixerDefects(unittest.TestCase):
             with mock.patch.object(FIXER, "restore_metadata_from_backup", side_effect=fake_restore), mock.patch("builtins.print"):
                 self.assertEqual(FIXER.restore_metadata_backups([broken, ok]), (1, 0, 1))
 
-    @unittest.expectedFailure
     def test_hyphen_and_ampersand_ranges_in_the_title_should_mark_an_omnibus(self):
         # Issue #373: is_omnibus_product runs its range regex on normalize_for_match()
         # output, which has already turned "1-3" into "1 3" and dropped "&", so only
@@ -81,7 +76,6 @@ class FixerDefects(unittest.TestCase):
             with self.subTest(title=title, subtitle=subtitle):
                 self.assertIs(s.is_omnibus_product(product(title=title, subtitle=subtitle, series=[])), True)
 
-    @unittest.expectedFailure
     def test_series_plus_book_n_should_be_generic_too(self):
         # Issue #374: the docstring example "All the Skills - Book 003" never matches,
         # because normalize_for_match() strips "Book N" from the title before the
@@ -90,14 +84,12 @@ class FixerDefects(unittest.TestCase):
         self.assertIs(s.is_generic_series_number_title(clues), True)
 
 
-class FolderForgeDefects(unittest.TestCase):
-    @unittest.expectedFailure
+class FolderForgeRegressions(unittest.TestCase):
     def test_a_whole_number_written_with_a_zero_decimal_should_not_keep_a_dangling_dot(self):
         # Issue #375: "1.0" becomes "001." because ".0".rstrip("0") is "." (truthy),
         # so the `or ".0"` fallback never applies.
         self.assertFalse(ORG.normalize_book_number("1.0").endswith("."))
 
-    @unittest.expectedFailure
     def test_a_co_author_prefix_should_be_removed_as_the_docstring_promises(self):
         # Issue #376: the docstring lists "Dan Raxor, Jace Cannon - Supers of Vault 12"
         # as handled, but the leading segment is compared with each author separately,
@@ -106,7 +98,6 @@ class FolderForgeDefects(unittest.TestCase):
             ORG.strip_author_narrator_noise_from_title("Dan Raxor, Jace Cannon - Supers of Vault 12", "Dan Raxor, Jace Cannon", "", False),
             "Supers of Vault 12")
 
-    @unittest.expectedFailure
     def test_a_series_first_folder_should_not_invent_an_author_and_a_series_called_book(self):
         # Issue #377: "Destiny Cycle - Book 004 - Threads of Destiny Vol 1" is the very
         # example finish() documents as series-first, but parse_explicit_identity_folder_name

@@ -1057,7 +1057,8 @@ def normalize_book_number(value: str, width: int = 3) -> str:
 
     whole, fraction = match.groups()
     if fraction:
-        fraction = fraction.rstrip("0") or ".0"
+        trimmed = fraction.rstrip("0")
+        fraction = trimmed if trimmed != "." else ".0"
     return f"{int(whole):0{width}d}{fraction or ''}"
 
 
@@ -1952,7 +1953,11 @@ def strip_author_narrator_noise_from_title(title: str, author: str, narrator: st
     # Remove leading "Author - ". For co-author prefixes, remove all text up to
     # the first dash only when the known primary author appears before that dash.
     before_dash, sep, after_dash = value.partition(" - ")
-    if sep and person_segment_matches(before_dash, people):
+    before_people = split_people(before_dash) if sep else []
+    if sep and (
+        person_segment_matches(before_dash, people)
+        or (before_people and all(person_segment_matches(person, people) for person in before_people))
+    ):
         candidate = after_dash.strip(" -")
         if candidate and not title_is_bad_after_cleanup(candidate):
             value = candidate
@@ -2777,8 +2782,12 @@ def parse_explicit_identity_folder_name(name: str) -> dict[str, str]:
             middle, require_label=False
         )
 
-        # Author - Series Book N - Title
-        if plausible_author_credit(first) and (
+        # Author - Series Book N - Title. A middle that is only "Book 004" has no
+        # series name, so the first segment is a series, not an author.
+        if (
+            plausible_author_credit(first)
+            and normalize_for_compare(loose_middle_series) not in {"book", "books", "volume", "volumes", "vol", "vols"}
+        ) and (
             looks_like_title_phrase(last)
             or (loose_middle_series and not middle_series)
             or not plausible_author_credit(last)
