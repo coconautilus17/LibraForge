@@ -100,6 +100,21 @@ class SearchItemAbsModeTests(unittest.TestCase):
         search.assert_called()
         self.assertEqual(result.metadata["asin"], "B0038GOF7C")
 
+    def test_asin_hit_with_wrong_runtime_still_loses_to_a_better_keyword_match(self):
+        # The Storyteller: embedded ASIN is the 635 min original, the file is
+        # the 698 min expanded edition, which keyword search finds.
+        clues = self._clues(title="The Storyteller", author="Dave Grohl", narrator="Dave Grohl",
+                            local_duration_minutes=698.6, existing_asin="1761100009")
+        original = dict(product("1761100009", "Dave Grohl", 635), title="The Storyteller",
+                        authors=[{"name": "Dave Grohl"}])
+        expanded = dict(product("B0C15MDNX6", "Dave Grohl", 698), title="The Storyteller",
+                        subtitle="Expanded", authors=[{"name": "Dave Grohl"}])
+        with patch.object(FIXER, "abs_lookup_by_asin", return_value=original), \
+                patch.object(FIXER, "abs_search", return_value=[expanded]) as search:
+            result = self._call(clues, ["The Storyteller Dave Grohl"])
+        search.assert_called()
+        self.assertEqual(result.metadata["asin"], "B0C15MDNX6")
+
     def test_structured_title_and_first_credit_are_sent_before_joined_queries(self):
         clues = self._clues(author="Herman Melville, Anthony Heald - foreword")
         with patch.object(FIXER, "abs_search", return_value=[]) as search:

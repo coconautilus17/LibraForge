@@ -3968,6 +3968,7 @@ def search_item(
             # ASIN-first: if the file already embeds an ASIN, attempt a direct
             # product lookup before falling back to keyword searches.
             existing_asin = clues.get("existing_asin", "")
+            asin_unconfirmed = False
             if existing_asin:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
@@ -3989,7 +3990,16 @@ def search_item(
                         match_ambiguity = None
                         effective_min_score = _asin_threshold
                         result.source_provider = ""  # ASIN overrides any prior special-provider match
-                        queries = []  # ASIN hit is definitive; skip keyword searches
+                        # A stale embedded ASIN can name another edition (a 635 min
+                        # original inside a 698 min expanded file): the hit is
+                        # definitive only when the runtime agrees. Otherwise keyword
+                        # search still runs and must beat it to replace it.
+                        asin_duration = (asin_debug.get("duration") or {}).get("status", "unknown")
+                        if asin_duration in {"perfect", "unknown"}:
+                            queries = []
+                        else:
+                            asin_unconfirmed = True
+                            log.append(f"  ASIN hit runtime is {asin_duration}; still trying keyword search")
 
             if use_abs:
                 # ABS takes title and author as separate fields: try the parsed
@@ -4002,7 +4012,7 @@ def search_item(
                     title_part, _, author_part = query.partition(" - ")
                     abs_searches.append((title_part.strip() or query, author_part.strip()))
                 for title_part, author_part in dict.fromkeys(abs_searches):
-                    if product and score >= args.min_score:
+                    if product and score >= args.min_score and not asin_unconfirmed:
                         break
                     query = f"{title_part} - {author_part}" if author_part else title_part
                     log.append(f"  Trying ABS query ({args.abs_provider}): {query}")
@@ -4035,9 +4045,10 @@ def search_item(
                             score = candidate_score
                             used_query = query
                             match_ambiguity = candidate_ambiguity
+                            asin_unconfirmed = False
 
             for query in queries if not use_abs else []:
-                if product and score >= args.min_score:
+                if product and score >= args.min_score and not asin_unconfirmed:
                     break
                 log.append(f"  Trying query: {query}")
                 cache_key = (query.lower(), args.limit)
@@ -4082,6 +4093,7 @@ def search_item(
                     score = candidate_score
                     used_query = query
                     match_ambiguity = candidate_ambiguity
+                    asin_unconfirmed = False
 
                 if candidate_score >= args.min_score:
                     break
