@@ -102,6 +102,7 @@ from app.fixer.search import (
     audible_lookup_chapters,
 )
 from app.fixer.search import audible_search as fixer_audible_search
+from app.fixer.parsing import library_author_folder
 from app.m4b_naming import canonical_m4b_title
 from app.manual_review import build_sidecar_multipart_context
 from app.progress_phases import (
@@ -5868,15 +5869,7 @@ def scan_folder_stream_route(req: ScanRequest) -> StreamingResponse:
 
 
 def _book_author(folder: Path, scan_root: Path) -> str:
-    try:
-        rel = folder.relative_to(AUDIOBOOKS_ROOT)
-        return rel.parts[0] if len(rel.parts) > 1 else ""
-    except ValueError:
-        try:
-            rel = folder.relative_to(scan_root)
-            return rel.parts[0] if len(rel.parts) > 1 else ""
-        except ValueError:
-            return ""
+    return library_author_folder(folder, [AUDIOBOOKS_ROOT, scan_root])
 
 
 def _embedded_cover_bytes(audio_file: Path) -> tuple[bytes, str] | None:

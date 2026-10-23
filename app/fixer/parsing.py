@@ -1623,6 +1623,22 @@ GENERIC_TITLE_RECOVERY_FOLDER_NAMES = {
 }
 
 
+def library_author_folder(folder: Path, roots: list[Path]) -> str:
+    """The first folder below the library root, when ``folder`` is nested under it.
+
+    In the Author/Title (or Author/Series/Book) layout that is the author.
+    "" for a book folder directly in the root. The first root ``folder`` is
+    inside wins, so pass the library root before a narrower scan root.
+    """
+    for root in roots:
+        try:
+            rel = Path(folder).relative_to(root)
+        except ValueError:
+            continue
+        return rel.parts[0] if len(rel.parts) > 1 else ""
+    return ""
+
+
 def is_invalid_local_title(value: str, author: str = "") -> bool:
     title_norm = normalize_for_match(value)
     author_norm = normalize_for_match(clean_author_value(author))

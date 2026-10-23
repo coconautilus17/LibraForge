@@ -72,6 +72,7 @@ try:
         # metadata parsers
         parse_title_series_number_from_metadata,
         is_invalid_local_title, recover_invalid_local_title,
+        library_author_folder, GENERIC_TITLE_RECOVERY_FOLDER_NAMES,
         # query noise helpers
         SEARCH_TITLE_PREFIX_NOISE, _TRAILING_BY_AUTHOR_RE,
         strip_publisher_search_noise, strip_title_search_noise,
@@ -210,6 +211,7 @@ except ModuleNotFoundError:
         # metadata parsers
         parse_title_series_number_from_metadata,
         is_invalid_local_title, recover_invalid_local_title,
+        library_author_folder, GENERIC_TITLE_RECOVERY_FOLDER_NAMES,
         # query noise helpers
         SEARCH_TITLE_PREFIX_NOISE, _TRAILING_BY_AUTHOR_RE,
         strip_publisher_search_noise, strip_title_search_noise,
@@ -2881,6 +2883,18 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         ):
             clues["series"] = hierarchy_series
 
+    # No author tag: the Author/ folder the book sits under (Author/Title,
+    # Author/Series/Book) is one. Only fills a missing field, never a staging
+    # folder like _unorganized. Taken before the folder-name parse below, which
+    # can read a "Title - Subtitle" folder as "Title - Author"
+    # ("The X-Files - Cold Cases"); that parse still wins when the Author/
+    # folder doesn't look like a person.
+    if not clues.get("author"):
+        folder_author = clean_author_value(library_author_folder(file_path.parent, LIBRARY_ROOTS))
+        if folder_author and normalize_for_match(folder_author) not in GENERIC_TITLE_RECOVERY_FOLDER_NAMES:
+            clues["author"] = folder_author
+            clues["author_source"] = "folder"
+
     descriptive_path_meta = parse_descriptive_book_from_path(
         file_path, known_author=clues.get("author", "")
     )
@@ -2898,6 +2912,8 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
             )
         ):
             clues["author"] = descriptive_path_meta["author"]
+            if clues.get("author_source") == "folder":
+                clues.pop("author_source")
 
         if (
             descriptive_path_meta.get("title")
@@ -3154,6 +3170,8 @@ def build_multi_file_search_context(
 # grouping one set would orphan every file of the other as a fake book.
 DUPLICATE_SET_MIN_FILES = 3
 DUPLICATE_SET_FOLDERS: dict[Path, str] = {}
+# Library root(s) for the Author/ folder clue: AUDIOBOOKS_ROOT, then the run's root.
+LIBRARY_ROOTS: list[Path] = []
 
 
 def nested_chapter_sequence_files(
@@ -6047,6 +6065,9 @@ def main():
         nested_groups = find_nested_chapter_groups(files)
         multi_part_group_map = build_multi_part_group_map(files, nested_groups=nested_groups)
 
+    LIBRARY_ROOTS[:] = [
+        Path(p).resolve() for p in (os.environ.get("AUDIOBOOKS_ROOT", ""), str(root)) if p
+    ]
     DUPLICATE_SET_FOLDERS.clear()
     DUPLICATE_SET_FOLDERS.update(find_duplicate_set_folders(files, nested_groups=nested_groups))
     for _dup_folder, _dup_reason in sorted(DUPLICATE_SET_FOLDERS.items()):
