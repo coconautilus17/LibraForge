@@ -1,17 +1,10 @@
 """Folder Forge title cleaning, one stripper at a time and then end to end
 through clean_book_title(). Each row is a title as found in the wild, the series
 and number the organizer knows, and the title it must end up with."""
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_title_cleaning", SCRIPT_PATH)
-ORG = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORG
-SPEC.loader.exec_module(ORG)
+ORG = load_script("organizer_title_cleaning", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 class SequenceLabelForSeriesTests(unittest.TestCase):

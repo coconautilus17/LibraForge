@@ -1,27 +1,11 @@
 """build_search_clues_from_file: how the Metadata Fixer combines a file's tags
 with its folder hierarchy into the clues used to search. Tags are passed in, so
 no audio files are needed; each test is one rule of the combination."""
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_search_clues_from_file", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_search_clues_from_file", "audible-metadata-fixer-v5.py")
 
 
 def clues(path, **tags):

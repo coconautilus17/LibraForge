@@ -2,32 +2,17 @@
 real MP4 file: it must put the backed-up tags back, report what it did, and
 refuse a missing root."""
 import contextlib
-import importlib.util
 import io
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_cli_restore", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_cli_restore", "audible-metadata-fixer-v5.py")
 
 
 def run_cli(*args):

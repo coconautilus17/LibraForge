@@ -2,27 +2,11 @@
 volume-chapter albums, two copies of one book in one folder, and distinct
 complete works that merely share a folder. Tag and size readers are injected so
 no audio files are needed."""
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_grouping_guards", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_grouping_guards", "audible-metadata-fixer-v5.py")
 
 MB = 1_000_000
 

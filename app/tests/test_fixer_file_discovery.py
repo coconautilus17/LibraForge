@@ -1,28 +1,12 @@
 """Which files the Metadata Fixer considers, and in what order: supported
 extensions, ignored system folders, temporary outputs, natural ordering, the
 folder-ignore tokens and the user's skip patterns."""
-import importlib.util
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_file_discovery", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_file_discovery", "audible-metadata-fixer-v5.py")
 
 
 class FindAudioFilesTests(unittest.TestCase):
