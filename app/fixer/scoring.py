@@ -844,6 +844,12 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
       - any shared name token (co-authors, middle-name variants, translators).
     Only a complete absence of overlap counts as a conflict.
     """
+    # An author read off the Author/ folder (no author tag) is supporting
+    # evidence only: a folder that isn't an author ("Fantasy/") must not
+    # reject the right book.
+    if clues.get("author_source") == "folder":
+        return False
+
     local_author = normalize_for_match(clean_author_value(clues.get("author", "")))
     product_author = normalize_for_match(" ".join(get_people(product, "authors")))
 
@@ -1590,6 +1596,8 @@ def determine_edit_mode(
         gr_author_compat = _authors_compatible(
             clues.get("author", ""), " ".join(get_people(product, "authors"))
         )
+        if gr_author_compat is False and clues.get("author_source") == "folder":
+            gr_author_compat = None  # a folder guess that disagrees is no author at all
         if gr_author_compat is True:
             gr_author_ok = True
         elif gr_author_compat is None:
