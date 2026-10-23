@@ -482,23 +482,15 @@ class AsinMismatchFlagTests(unittest.TestCase):
         self.assertTrue(any("differs" in r for r in reasons))
         self.assertIsNotNone(filename)
 
-    def test_same_asin_in_name_does_not_flag(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/Some Title [B0ABCDEFGH].m4b")
-        )
-        self.assertEqual(reasons, [])
-
-    def test_no_identifier_in_name_does_not_flag(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original} [{asin}]", "B0ABCDEFGH", Path("/lib/A Perfectly Clean Title.m4b")
-        )
-        self.assertEqual(reasons, [])
-
-    def test_no_flag_when_template_has_no_asin(self):
-        _f, _filename, reasons = self._render(
-            "{author}/{original}", "B0ABCDEFGH", Path("/lib/Some Title [B0ZZZZZZZZ].m4b")
-        )
-        self.assertEqual(reasons, [])
+    def test_no_mismatch_is_flagged(self):
+        for label, template, source in (
+            ("same asin in the name", "{author}/{original} [{asin}]", "Some Title [B0ABCDEFGH].m4b"),
+            ("no identifier in the name", "{author}/{original} [{asin}]", "A Perfectly Clean Title.m4b"),
+            ("template has no asin", "{author}/{original}", "Some Title [B0ZZZZZZZZ].m4b"),
+        ):
+            with self.subTest(label):
+                _f, _filename, reasons = self._render(template, "B0ABCDEFGH", Path("/lib") / source)
+                self.assertEqual(reasons, [])
 
     def test_isbn_style_mismatch_is_detected(self):
         # Canonical is a 10-digit ISBN; the name carries a different B0 asin.

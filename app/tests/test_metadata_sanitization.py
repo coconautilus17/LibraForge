@@ -148,21 +148,16 @@ class TechnicalLabelSanitizationTests(unittest.TestCase):
 
 
 class SeriesDeduplicationTests(unittest.TestCase):
-    def test_plain_metadata_confirmed_series_prefix_is_removed(self):
-        title = ORGANIZER.clean_book_title(
-            "Dashing Devil Bold Beginnings [xHE-AAC LLC]",
-            "Dashing Devil",
-            "5",
-        )
-        self.assertEqual(title, "Bold Beginnings")
-
-    def test_punctuation_differences_in_series_prefix_are_tolerated(self):
-        title = ORGANIZER.clean_book_title(
-            "Reborn-as-a-Space-Mercenary A New Voyage",
-            "Reborn as a Space Mercenary",
-            "10",
-        )
-        self.assertEqual(title, "A New Voyage")
+    def test_clean_book_title_removes_a_confirmed_series_prefix(self):
+        for title, series, number, expected in (
+            ("Dashing Devil Bold Beginnings [xHE-AAC LLC]", "Dashing Devil", "5", "Bold Beginnings"),
+            # punctuation differences in the prefix are tolerated
+            ("Reborn-as-a-Space-Mercenary A New Voyage", "Reborn as a Space Mercenary", "10", "A New Voyage"),
+            # a title that is only a percentage keeps its leading number
+            ("1% Lifesteal", "1% Lifesteal", "001", "1% Lifesteal"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(ORGANIZER.clean_book_title(title, series, number), expected)
 
     def test_short_legitimate_prefix_is_not_removed(self):
         title = ORGANIZER.clean_book_title("It Ends with Us", "It", "1")
@@ -186,27 +181,14 @@ class SeriesDeduplicationTests(unittest.TestCase):
             "Book 5 - Bold Beginnings",
         )
 
-    def test_series_plus_number_only_collapses_to_sequence_folder(self):
-        metadata = {
-            "title": ORGANIZER.clean_book_title(
-                "Accidental Champion 5",
-                "Accidental Champion",
-                "005",
-            ),
-            "series": "Accidental Champion",
-            "book_number": "005",
-            "sequence_label": "Book",
-        }
-        self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 5")
-
-    def test_series_only_title_collapses_to_sequence_folder(self):
-        metadata = {
-            "title": "Accidental Champion",
-            "series": "Accidental Champion",
-            "book_number": "002",
-            "sequence_label": "Book",
-        }
-        self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 2")
+    def test_a_title_that_only_restates_the_series_collapses_to_the_sequence_folder(self):
+        for label, title, book_number, expected in (
+            ("series plus number", ORGANIZER.clean_book_title("Accidental Champion 5", "Accidental Champion", "005"), "005", "Book 5"),
+            ("series only", "Accidental Champion", "002", "Book 2"),
+        ):
+            with self.subTest(label):
+                metadata = {"title": title, "series": "Accidental Champion", "book_number": book_number, "sequence_label": "Book"}
+                self.assertEqual(ORGANIZER.build_book_folder_name(metadata), expected)
 
     def test_series_plus_word_number_collapses_to_sequence_folder(self):
         metadata = {
@@ -220,15 +202,6 @@ class SeriesDeduplicationTests(unittest.TestCase):
             "sequence_label": "Book",
         }
         self.assertEqual(ORGANIZER.build_book_folder_name(metadata), "Book 6")
-
-    def test_percentage_title_keeps_leading_number(self):
-        title = ORGANIZER.clean_book_title(
-            "1% Lifesteal",
-            "1% Lifesteal",
-            "001",
-        )
-        self.assertEqual(title, "1% Lifesteal")
-
 
 class MetadataTitleFallbackTests(unittest.TestCase):
     def test_identity_rich_original_folder_name_orders(self):

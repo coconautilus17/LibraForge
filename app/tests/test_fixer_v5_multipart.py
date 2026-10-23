@@ -75,30 +75,32 @@ class MultiPartGroupingTests(unittest.TestCase):
         grouped = {p for fs in groups.values() for p in fs}
         return files, groups, grouped
 
-    def test_high_chapter_part_files_are_not_forced_together(self):
+    def test_files_with_many_embedded_chapters_are_not_forced_together(self):
         # A "Part N" filename token is not proof of a real split -- it can just
         # as easily be two separate (or duplicate) complete recordings sharing
         # a naming convention. A real high embedded chapter count outranks the
         # filename, so these must NOT be grouped just because they say "Part".
         # The tool leaves this for the user to merge or leave as-is.
-        names = [
-            "LotR1 - The Fellowship of the Ring - Part 1 (read by Phil Dragash).m4b",
-            "LotR1 - The Fellowship of the Ring - Part 2 (read by Phil Dragash).m4b",
-            "The Lord of the Rings The Fellowship of the Ring.m4b",
-        ]
-        chapters = {names[0]: 12, names[1]: 10, names[2]: 22}
-        _files, groups, _grouped = self._group(names, chapters)
-        self.assertEqual(groups, {})
-
-    def test_part_inside_parens_high_chapters_not_forced_together(self):
-        names = [
-            "Ready Player One (RP1SFX 9 Part 1).m4b",
-            "Ready Player One (RP1SFX 9 Part 2).m4b",
-            "Ready Player One.m4b",
-        ]
-        chapters = {names[0]: 32, names[1]: 8, names[2]: 40}
-        _files, groups, _grouped = self._group(names, chapters)
-        self.assertEqual(groups, {})
+        for label, files in (
+            ("part tokens", {
+                "LotR1 - The Fellowship of the Ring - Part 1 (read by Phil Dragash).m4b": 12,
+                "LotR1 - The Fellowship of the Ring - Part 2 (read by Phil Dragash).m4b": 10,
+                "The Lord of the Rings The Fellowship of the Ring.m4b": 22,
+            }),
+            ("part inside parens", {
+                "Ready Player One (RP1SFX 9 Part 1).m4b": 32,
+                "Ready Player One (RP1SFX 9 Part 2).m4b": 8,
+                "Ready Player One.m4b": 40,
+            }),
+            # Two complete books in one folder, no part markers, many chapters each.
+            ("distinct complete books", {
+                "J. R. R. Tolkien - The Fellowship of the Ring.m4b": 50,
+                "J. R. R. Tolkien - The Two Towers.m4b": 50,
+            }),
+        ):
+            with self.subTest(label):
+                _files, groups, _grouped = self._group(list(files), files)
+                self.assertEqual(groups, {})
 
     def test_low_chapter_part_files_group_excluding_unrelated_complete_edition(self):
         # The narrow, safe case a part marker still helps with: two low-chapter
@@ -117,16 +119,6 @@ class MultiPartGroupingTests(unittest.TestCase):
         files, groups, grouped = self._group(names, chapters)
         self.assertEqual(groups[Path("/book")], files[:2])
         self.assertNotIn(files[2], grouped)
-
-    def test_distinct_complete_books_not_grouped(self):
-        # Two complete books in one folder, no part markers, many chapters each.
-        names = [
-            "J. R. R. Tolkien - The Fellowship of the Ring.m4b",
-            "J. R. R. Tolkien - The Two Towers.m4b",
-        ]
-        chapters = {names[0]: 50, names[1]: 50}
-        _files, groups, _grouped = self._group(names, chapters)
-        self.assertEqual(groups, {})
 
     def test_zero_padded_numeric_parts_still_group(self):
         # Pre-existing behavior must be preserved.

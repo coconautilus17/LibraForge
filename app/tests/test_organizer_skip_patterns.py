@@ -31,21 +31,16 @@ class MatchesSkipPatternsTests(unittest.TestCase):
         self.assertFalse(matched)
         self.assertEqual(pattern, "")
 
-    def test_matches_path_substring_case_insensitively(self):
-        matched, pattern = ORGANIZER.matches_skip_patterns(
-            Path("/audiobooks/Casual Farming/Book 1"), make_metadata(), ["casual farming"]
-        )
-        self.assertTrue(matched)
-        self.assertEqual(pattern, "casual farming")
-
-    def test_matches_title_field(self):
-        matched, pattern = ORGANIZER.matches_skip_patterns(
-            Path("/audiobooks/Some Folder"),
-            make_metadata(title="Bold Beginnings"),
-            ["bold beginnings"],
-        )
-        self.assertIs(matched, True)
-        self.assertEqual(pattern, "bold beginnings")
+    def test_matches_the_path_title_or_author(self):
+        for label, path, metadata, pattern in (
+            ("path substring, case-insensitively", "/audiobooks/Casual Farming/Book 1", make_metadata(), "casual farming"),
+            ("title field", "/audiobooks/Some Folder", make_metadata(title="Bold Beginnings"), "bold beginnings"),
+            ("author field", "/audiobooks/Some Folder", make_metadata(author="G.D. Brooks"), "g.d. brooks"),
+        ):
+            with self.subTest(label):
+                matched, matched_pattern = ORGANIZER.matches_skip_patterns(Path(path), metadata, [pattern])
+                self.assertIs(matched, True)
+                self.assertEqual(matched_pattern, pattern)
 
     def test_matches_series_field(self):
         matched, pattern = ORGANIZER.matches_skip_patterns(
@@ -55,15 +50,6 @@ class MatchesSkipPatternsTests(unittest.TestCase):
         )
         self.assertIs(matched, True)
         self.assertEqual(pattern, "dashing devil")
-
-    def test_matches_author_field(self):
-        matched, pattern = ORGANIZER.matches_skip_patterns(
-            Path("/audiobooks/Some Folder"),
-            make_metadata(author="G.D. Brooks"),
-            ["g.d. brooks"],
-        )
-        self.assertIs(matched, True)
-        self.assertEqual(pattern, "g.d. brooks")
 
     def test_matches_narrator_field(self):
         matched, pattern = ORGANIZER.matches_skip_patterns(
