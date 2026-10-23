@@ -6062,6 +6062,11 @@ def main():
     print(f"Mode: {'APPLY' if args.apply else 'DRY RUN'}")
     print(f"Minimum score: {args.min_score}")
     print(f"Writer: {args.writer}")
+    if getattr(args, "provider", "audible") != "abs":
+        print(
+            "Audible: logged-in account" if Path(args.auth_file).is_file()
+            else "Audible: no login found, using the public Audible catalog"
+        )
     print(f"Search workers: {args.workers}")
     print(f"Write workers:  {args.write_workers}")
     if args.enable_goodreads_fallback:

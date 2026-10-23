@@ -100,6 +100,7 @@ from app.fixer.search import (
     abs_tract_search,
     audible_lookup_by_asin,
     audible_lookup_chapters,
+    get_catalog_client,
 )
 from app.fixer.search import audible_search as fixer_audible_search
 from app.m4b_naming import canonical_m4b_title
@@ -1047,8 +1048,7 @@ def search_audible_candidates(
             unique_queries.append(item)
             seen_queries.add(key)
 
-    auth = audible.Authenticator.from_file(auth_file)
-    client = audible.Client(auth=auth)
+    client = get_catalog_client(auth_file)
 
     by_asin: dict[str, dict[str, Any]] = {}
 
@@ -4452,8 +4452,7 @@ def run_audible_chapters_backend(run_id: str, req: ChapteringRunRequest) -> None
             )
         state.stats["asin"] = asin
 
-        auth = audible.Authenticator.from_file(DEFAULT_AUTH_FILE)
-        client = audible.Client(auth=auth)
+        client = get_catalog_client(str(DEFAULT_AUTH_FILE))
         raw_chapters = audible_lookup_chapters(client, asin)
         if raw_chapters is None:
             raise RuntimeError(
@@ -8916,8 +8915,7 @@ def audible_compare_chapters(req: ChapteringAudibleCompareRequest) -> dict[str, 
             status_code=400,
             detail="No ASIN found in the existing sidecar and none provided.",
         )
-    auth = audible.Authenticator.from_file(DEFAULT_AUTH_FILE)
-    client = audible.Client(auth=auth)
+    client = get_catalog_client(str(DEFAULT_AUTH_FILE))
     raw_chapters = audible_lookup_chapters(client, asin)
     if raw_chapters is None:
         raise HTTPException(
