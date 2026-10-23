@@ -1,35 +1,12 @@
 """An applied match is reused unless the run explicitly requests a rematch."""
-import importlib.util
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_fixer():
-    path = ROOT / "scripts/audible-metadata-fixer-v5.py"
-    spec = importlib.util.spec_from_file_location("fixer_v5_force_reprocess", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-FIXER = load_fixer()
+FIXER = load_script("fixer_v5_force_reprocess", "audible-metadata-fixer-v5.py")
 
 
 class ForceReprocessMarkerTests(unittest.TestCase):

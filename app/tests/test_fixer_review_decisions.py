@@ -1,27 +1,11 @@
 """The Metadata Fixer's review decisions: why a selected match is flagged for a
 human, and how several books matched to one ASIN are separated into the one that
 is right and the ones that are not."""
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_review_decisions", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_review_decisions", "audible-metadata-fixer-v5.py")
 
 
 class SelectedMatchReasonTests(unittest.TestCase):

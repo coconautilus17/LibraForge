@@ -12,34 +12,11 @@ describe what the writer actually left embedded for the same field_policy:
 
 See docs/design/manual-review-apply-rewrite-rules.md.
 """
-import importlib.util
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
-
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from app.tests.script_loader import load_module
 
 
 FIXER = load_module("fixer_v5_field_policy_marker", "scripts/audible-metadata-fixer-v5.py")

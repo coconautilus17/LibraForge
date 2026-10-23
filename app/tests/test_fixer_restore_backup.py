@@ -1,31 +1,15 @@
 """Restoring a book's original tags from the backup the fixer took before it
 wrote anything. Runs on real MP4 and MP3 files (made with ffmpeg, read back with
 mutagen) because the point is what ends up inside the file."""
-import importlib.util
 import json
 import shutil
 import subprocess
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_restore_backup", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_restore_backup", "audible-metadata-fixer-v5.py")
 
 ORIGINAL = {"title": "Original Title", "artist": "Original Author", "album_artist": "Original Author", "album": "Original Album",
             "grouping": "Original Series", "composer": "Original Narrator", "date": "2001", "genre": "Fantasy",

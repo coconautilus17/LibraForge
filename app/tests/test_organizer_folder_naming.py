@@ -2,17 +2,10 @@
 when a title is redundant next to it, the book folder, and the default
 Author/Series/Book path. Also the legacy collection-folder parser and the rule
 that decides when two different titles are a real conflict."""
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_folder_naming", SCRIPT_PATH)
-ORG = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORG
-SPEC.loader.exec_module(ORG)
+ORG = load_script("organizer_folder_naming", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 class DisplayNumberTests(unittest.TestCase):

@@ -1,20 +1,15 @@
 """Folder Forge run end to end through its command line (dry run and apply) on a
 temporary library: what it reports, what it moves and what it refuses to touch."""
 import contextlib
-import importlib.util
 import io
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_cli_e2e", SCRIPT_PATH)
-ORG = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORG
-SPEC.loader.exec_module(ORG)
+ORG = load_script("organizer_cli_e2e", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 class CliFixture(unittest.TestCase):

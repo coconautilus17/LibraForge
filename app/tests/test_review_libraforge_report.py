@@ -1,16 +1,8 @@
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
+from app.tests.script_loader import load_script
 
 
-ROOT = Path(__file__).parents[2]
-SCRIPT_PATH = ROOT / "scripts" / "review-libraforge-report.py"
-SPEC = importlib.util.spec_from_file_location("review_libraforge_report", SCRIPT_PATH)
-REVIEW = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = REVIEW
-SPEC.loader.exec_module(REVIEW)
+REVIEW = load_script("review_libraforge_report", "review-libraforge-report.py")
 
 
 def make_args():

@@ -1,18 +1,12 @@
 """Folder Forge's structure cache: how an existing Author/Series/Book library is
 read into canonical authors and series (so new books join the right folders)
 and how a series is matched against an entry."""
-import importlib.util
-import sys
 import tempfile
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_structure_cache", SCRIPT_PATH)
-ORG = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORG
-SPEC.loader.exec_module(ORG)
+ORG = load_script("organizer_structure_cache", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 class Library(unittest.TestCase):

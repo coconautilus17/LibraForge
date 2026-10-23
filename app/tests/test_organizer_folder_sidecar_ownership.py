@@ -6,19 +6,13 @@ ebook inherited "Finnegans Wake / James Joyce" from it, all resolved to one
 target and blocked each other. Walrus King's Tunnel Rat 02 and 03 inherited
 book 01's sequence the same way (#351).
 """
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_v3_13_ownership", SCRIPT_PATH)
-ORGANIZER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORGANIZER
-SPEC.loader.exec_module(ORGANIZER)
+ORGANIZER = load_script("organizer_v3_13_ownership", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 def loose(path: Path, media_type: str = "audiobook"):

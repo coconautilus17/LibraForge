@@ -1,17 +1,12 @@
 """Direct tests of the comparison and classification helpers in
 scripts/review-libraforge-report.py. The review script decides which matches a
 human has to look at, so each helper's exact output matters."""
-import importlib.util
-import sys
+import copy
 import unittest
-from pathlib import Path
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-SPEC = importlib.util.spec_from_file_location("review_libraforge_report_helpers", ROOT / "scripts" / "review-libraforge-report.py")
-REVIEW = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = REVIEW
-SPEC.loader.exec_module(REVIEW)
+
+REVIEW = load_script("review_libraforge_report_helpers", "review-libraforge-report.py")
 
 
 class SimilarityTests(unittest.TestCase):
@@ -90,9 +85,6 @@ class ReportKindTests(unittest.TestCase):
         self.assertEqual(REVIEW.infer_report_kind({"items": [{}]}), "unknown")
         self.assertEqual(REVIEW.infer_report_kind({"report_items": []}), "unknown")
         self.assertEqual(REVIEW.infer_report_kind({}), "unknown")
-
-
-import copy
 
 
 class ReviewMetadataItemReasonTests(unittest.TestCase):

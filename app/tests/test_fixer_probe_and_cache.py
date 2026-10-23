@@ -1,30 +1,15 @@
 """probe_file (one ffprobe call -> tags + minutes) and read_tags_and_duration
 (which source the fixer reads a file's tags from: live probe, folder file cache,
 or the per-file backup)."""
-import importlib.util
 import json
-import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_probe_and_cache", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_probe_and_cache", "audible-metadata-fixer-v5.py")
 
 
 def completed(payload, returncode=0):

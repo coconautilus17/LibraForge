@@ -1,29 +1,14 @@
 """The Metadata Fixer's library-wide duplicate-ASIN guard (so one ASIN never ends
 up on two books), the on-disk ASIN cache that feeds it, and the cover download
 checks."""
-import importlib.util
-import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
+from app.tests.script_loader import load_script
 
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-SPEC = importlib.util.spec_from_file_location("fixer_asin_guards", ROOT / "scripts" / "audible-metadata-fixer-v5.py")
-FIXER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = FIXER
-SPEC.loader.exec_module(FIXER)
+FIXER = load_script("fixer_asin_guards", "audible-metadata-fixer-v5.py")
 
 
 def result(path, asin, status="matched", conflict=False):

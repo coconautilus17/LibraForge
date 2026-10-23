@@ -1,32 +1,13 @@
 """Failures from the forced full Metadata Forge run 20260928-231259-50a3d3ef
 on /audiobooks/_unorganized, one class per root cause."""
-import importlib.util
-import sys
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
+from app.tests.script_loader import load_script
 
 
-def _load_fixer():
-    spec = importlib.util.spec_from_file_location("fixer_v5_run_failures", ROOT / "scripts/audible-metadata-fixer-v5.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-FIXER = _load_fixer()
+FIXER = load_script("fixer_v5_run_failures", "audible-metadata-fixer-v5.py")
 
 
 def group_clues(folder, per_file):

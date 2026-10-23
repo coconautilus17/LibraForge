@@ -6,14 +6,12 @@ Crossley (728 min, credited "Roderick Gordon/Brian Williams/Steven Crossley");
 Audible US only sells the Audible Studios edition read by Paul Chequer
 (682 min). A full match would have written Paul Chequer as the narrator.
 """
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
 
 from app.fixer.parsing import split_credit_names
 from app.fixer.scoring import metadata_from_product
+from app.tests.script_loader import load_script
 
 SPIRAL = {
     "asin": "B006QM9TO4", "title": "Spiral", "authors": [{"name": "Roderick Gordon"}],  # co-author Brian Williams unlisted
@@ -102,15 +100,7 @@ class DifferentEditionTests(unittest.TestCase):
 
 class DifferentEditionReportTests(unittest.TestCase):
     def setUp(self):
-        if "audible" not in sys.modules:
-            stub = types.ModuleType("audible")
-            stub.Client = stub.Authenticator = type("Stub", (), {})
-            sys.modules["audible"] = stub
-        path = Path(__file__).parents[2] / "scripts/audible-metadata-fixer-v5.py"
-        spec = importlib.util.spec_from_file_location("fixer_v5_different_edition", path)
-        self.fixer = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = self.fixer
-        spec.loader.exec_module(self.fixer)
+        self.fixer = load_script("fixer_v5_different_edition", "audible-metadata-fixer-v5.py")
 
     def _item(self, metadata):
         result = self.fixer.ItemResult(index=1, file_path=Path("/lib/Spiral/01.mp3"),

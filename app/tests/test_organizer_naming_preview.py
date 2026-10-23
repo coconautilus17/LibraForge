@@ -1,18 +1,12 @@
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from app.tests.script_loader import load_script
 
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_v3_13_naming_preview", SCRIPT_PATH)
-ORGANIZER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORGANIZER
-SPEC.loader.exec_module(ORGANIZER)
+ORGANIZER = load_script("organizer_v3_13_naming_preview", "organize-audiobooks-by-metadata-v3_13.py")
 
 
 def _write_book(root: Path, folder: str, audio_name: str, book: dict) -> None:

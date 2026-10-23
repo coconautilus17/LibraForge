@@ -6,29 +6,9 @@ they were grouped and matched as Book 1. Big files whose own album tags name
 different books are separate books; a long book split into big parts (a
 Shadow Slave volume) shares one album and still groups.
 """
-import importlib.util
-import sys
-import types
 import unittest
 from pathlib import Path
-
-ROOT = Path(__file__).parents[2]
-
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    audible_stub = types.ModuleType("audible")
-    audible_stub.Client = type("Client", (), {})
-    audible_stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = audible_stub
-
-
-def load_module(name: str, relative_path: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / relative_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from app.tests.script_loader import load_module
 
 
 FIXER = load_module("fixer_v5_distinct_books", "scripts/audible-metadata-fixer-v5.py")

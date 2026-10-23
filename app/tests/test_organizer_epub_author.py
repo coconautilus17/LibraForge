@@ -3,20 +3,14 @@
 Seen on a real dry run: "The Saga of Tanya the Evil - Volume 09.epub" sat alone in its
 folder with no sidecar and was skipped as unknown author, although its OPF names Carlo Zen.
 """
-import importlib.util
-import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from app.tests.script_loader import load_script
 
-SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "organize-audiobooks-by-metadata-v3_13.py"
-SPEC = importlib.util.spec_from_file_location("organizer_v3_13_epub_author", SCRIPT_PATH)
-ORGANIZER = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = ORGANIZER
-SPEC.loader.exec_module(ORGANIZER)
+ORGANIZER = load_script("organizer_v3_13_epub_author", "organize-audiobooks-by-metadata-v3_13.py")
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">

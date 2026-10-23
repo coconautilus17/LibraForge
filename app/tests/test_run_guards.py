@@ -8,15 +8,10 @@ hasn't exited yet.
 #321: a cancelled Metadata Forge run went on to probe every file in the
 library for duplicate ASINs before noticing the cancel.
 """
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
 import unittest.mock
 from unittest.mock import MagicMock
-
-ROOT = Path(__file__).parents[2]
+from app.tests.script_loader import load_script
 
 
 class _Proc:
@@ -70,26 +65,9 @@ class ConflictingRunTests(unittest.TestCase):
         self.assertIsNone(self.conflict([done, exited, other, sibling], "/audiobooks/_unorganized"))
 
 
-try:
-    import audible  # noqa: F401
-except ModuleNotFoundError:
-    stub = types.ModuleType("audible")
-    stub.Client = type("Client", (), {})
-    stub.Authenticator = type("Authenticator", (), {})
-    sys.modules["audible"] = stub
-
-
-def _load_fixer():
-    spec = importlib.util.spec_from_file_location("fixer_v5_run_guards", ROOT / "scripts/audible-metadata-fixer-v5.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 class CancelSkipsDuplicateScanTests(unittest.TestCase):
     def setUp(self):
-        self.fixer = _load_fixer()
+        self.fixer = load_script("fixer_v5_run_guards", "audible-metadata-fixer-v5.py")
         matched = MagicMock(status="matched", asin_conflict=False, metadata={"asin": "B0TEST0001"})
         self.results = [matched]
 
@@ -110,7 +88,7 @@ class CancelExitTests(unittest.TestCase):
     stops cleanly after its in-flight writes."""
 
     def setUp(self):
-        self.fixer = _load_fixer()
+        self.fixer = load_script("fixer_v5_run_guards", "audible-metadata-fixer-v5.py")
 
     def tearDown(self):
         self.fixer._cancel_requested = False

@@ -1,21 +1,9 @@
-import importlib.util
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-ROOT = Path(__file__).parents[2]
-
-
-def load_module(name: str, relative_path: str):
-    path = ROOT / relative_path
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from app.tests.script_loader import load_module
 
 
 import os
@@ -169,7 +157,6 @@ class TagTests(unittest.TestCase):
             finally:
                 sys.argv = old
             self.assertEqual(str(ID3(track)["TPE1"].text[0]), "V A Lewis")
-
 
 
 class AbsAuthorPlanTests(unittest.TestCase):
