@@ -51,6 +51,45 @@ BookOrbit stack, add it as a library, start a bulk metadata fetch, then pass
 `BOOKORBIT_CREDS`). BookOrbit fetches one book at a time with a 2 to 5 s pause between
 books (longer while a provider throttles), so a full library takes about 12 hours.
 
+### Optional: compare with Audiobookshelf Quick Match and beets-audible
+
+Both read the same mock files. Never point either at your real library: Quick Match writes.
+
+```bash
+python3 dev/benchmark/bo_mock.py dev/benchmark/data/complete.json dev/benchmark/data/abs_books
+# throwaway ABS on the mock (read-only), then Quick Match every book, one at a time
+docker run -d --name abs-bench --network homelab-proxy -v /tmp/abs-bench/config:/config \
+  -v /tmp/abs-bench/metadata:/metadata -v "$PWD/dev/benchmark/data/abs_books:/audiobooks:ro" \
+  ghcr.io/advplyr/audiobookshelf:latest
+docker run --rm --network homelab-proxy --entrypoint /opt/venv/bin/python -v "$PWD/dev/benchmark:/bench" \
+  libraforge-libraforge /bench/abs_quickmatch.py http://abs-bench /bench/data/abs_quickmatch.jsonl
+
+# beets reads tags with mutagen, so its mock uses standard iTunes atoms
+python3 dev/benchmark/bo_mock.py dev/benchmark/data/complete.json dev/benchmark/data/beets_books --itunes
+# in a python image: pip install beets beets-audible; BEETSDIR=<dir with beets/config.yaml>,
+# BENCH_BOOKS=<books.json>; beet import -q -C -W <book folders>; then:
+python3 dev/benchmark/beets_rows.py dev/benchmark/data/complete.json dev/benchmark/data/beets.jsonl <beets.db>...
+```
+
+Score them like any run (`absqm=...jsonl beets=...jsonl`). beets matches one book at a time;
+split the folders across several imports with their own databases to finish in about 1.5 hours.
+
+### The HTML report
+
+`report.py` builds one standalone page: every book's original tags, the clues the matcher
+parsed, the searches it ran, its candidates, the decision and the fields against the
+library's answer, plus a summary and one comparison table per other tool.
+
+```bash
+python3 dev/benchmark/report.py dev/benchmark/data/complete.json dev/benchmark/data/scores.json \
+    public dev/benchmark/data/public.jsonl dev/benchmark/data/report.html \
+    --commit "$(git rev-parse --short HEAD)" --compare "absqm=Audiobookshelf Quick Match" \
+    --compare "bo=BookOrbit" --compare "beets=beets-audible"
+```
+
+The page carries the whole library's titles, paths and tags: it stays in `data/` unless you
+decide to publish it.
+
 ## tools/
 
 - `chapter_match.py <file> <ASIN>...`: which listing is this audio? Compares the file's

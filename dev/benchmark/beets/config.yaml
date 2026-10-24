@@ -1,0 +1,24 @@
+# beets-audible benchmark config: README's recommended settings, minus the
+# file writing (-C -W on import), cover art and side files.
+plugins: audible benchlength
+pluginpath: [/bench/beets/benchplug]
+directory: /tmp/beets-out
+library: /tmp/beets.db
+import:
+  quiet_fallback: skip
+  write: no
+  copy: no
+  move: no
+  log: /bench/data/beets_import.log
+musicbrainz:
+  enabled: no
+audible:
+  match_chapters: true
+  data_source_mismatch_penalty: 0.0
+  fetch_art: false
+  include_narrator_in_artists: false
+  keep_series_reference_in_title: true
+  keep_series_reference_in_subtitle: true
+  write_description_file: false
+  write_reader_file: false
+  region: us
