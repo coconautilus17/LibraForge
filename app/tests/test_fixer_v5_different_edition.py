@@ -97,6 +97,20 @@ class DifferentEditionTests(unittest.TestCase):
         self.assertEqual(metadata["narrator"], "Paul Chequer")
         self.assertNotIn("different_edition", metadata)
 
+    def test_the_files_author_spelled_unlike_the_match_is_not_a_reader(self):
+        # The Idle System (#405): artist "Pegaz A", Audible author "Pegaz", no
+        # narrator tag. The credit is the author, so the match's ASIN is written.
+        idle = {"asin": "B07RSCQMKZ", "title": "The Idle System: The Birth", "authors": [{"name": "Pegaz"}],
+                "narrators": [{"name": "Roman Howell"}], "series": [{"title": "The Idle System", "sequence": "3"}],
+                "runtime_length_min": 562}
+        clues = {"title": "The Idle System: The Birth", "author": "Pegaz A", "narrator": "",
+                 "credit_names": ["Pegaz A"], "book_number": "3", "book_number_source": "title",
+                 "existing_asin": "B07RRFDQ2J", "local_duration_minutes": 562.66}
+        metadata = metadata_from_product(idle, clues, 1.0)
+        self.assertNotIn("different_edition", metadata)
+        self.assertEqual(metadata["asin"], "B07RSCQMKZ")
+        self.assertEqual(metadata["narrator"], "Roman Howell")
+
     def test_other_recording_keeps_the_files_recording_fields(self):
         # Its ASIN, cover, release year and ISBN describe the other recording.
         product = {**SPIRAL, "release_date": "2012-01-10", "_abs_isbn": "9781111111111",

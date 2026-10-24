@@ -330,7 +330,8 @@ def get_audible_number_candidates(product: dict) -> list[str]:
             continue
 
         match = re.search(r"(?:^|\s)(\d+(?:\.\d+)?)\s*(?::|-(?=\s|$)|$)", cleaned)
-        if match:
+        # A trailing year ("...after 1945") is a date, not a book number.
+        if match and not re.fullmatch(r"(?:19|20)\d{2}", match.group(1)):
             candidates.append(normalize_book_number(match.group(1)))
 
     unique: list[str] = []
@@ -673,6 +674,17 @@ def strong_identity_overrides_number_conflict(
                     return False
             except (ValueError, TypeError):
                 return False
+
+    # Each title has a word the other lacks: they name two books of the series
+    # ("... The Secondary Phase" vs "... Tertiary Phase"), however similar.
+    # Numbers are left to the number checks above.
+    def words(title: str) -> set[str]:
+        return {t for t in significant_title_tokens(title) if not t.isdigit()}
+
+    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
+    audible_tokens = words(product.get("title", "") or "")
+    if local_tokens - audible_tokens and audible_tokens - local_tokens:
+        return False
 
     duration = compare_duration(
         local_minutes=local_duration_minutes,
@@ -1298,10 +1310,14 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
     if not match_narrator:
         return None
     authors = " ".join(get_people(product, "authors"))
+    # The file's own author tag names its author, even when spelled unlike
+    # the match ("Pegaz A" for Audible's "Pegaz"): never a reader.
+    local_authors = {normalize_for_match(n) for n in split_credit_names(clues.get("author", ""))}
 
     def readers(values) -> list[str]:
         return [name for value in values for name in split_credit_names(value)
-                if _authors_compatible(name, authors) is not True]
+                if _authors_compatible(name, authors) is not True
+                and normalize_for_match(name) not in local_authors]
 
     # The author can also narrate. Trust an explicit narrator tag unless another
     # local credit identifies the matched recording's reader.

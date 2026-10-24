@@ -1083,6 +1083,8 @@ _ORGANIZER_INFO_ONLY_REASONS = {
     "series inferred from path",
     "author inferred from path",
     "title matches series name; using sequence only",
+    "sequence label differs between metadata and path",
+    "sequence label differs from the rest of this series in this run",
 }
 
 

@@ -279,7 +279,6 @@ function render(state) {
   renderStats(stats);
   renderApplyResult(stats);
   latestMoveItems = stats.move_items || [];
-  populateReviewReasonFilter(latestMoveItems);
   renderRisks(latestMoveItems);
   renderMoves(latestMoveItems);
 
@@ -363,6 +362,9 @@ const NOTE_ONLY_REASONS = new Set([
   "title matches series name; using sequence only",
   "title inferred from path",
   "series inferred from path",
+  "author inferred from path",
+  "sequence label differs between metadata and path",
+  "sequence label differs from the rest of this series in this run",
 ]);
 
 function reviewReasonsOf(item) {
@@ -417,26 +419,36 @@ function reviewReasonLabel(reason) {
   return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
-function populateReviewReasonFilter(items) {
+// Search text and the review-only box narrow the list before the reason
+// filter does, so the same two narrow the options: a reason with no move left
+// under them is not offered, and each option shows how many moves it holds.
+function matchesBaseFilters(item, query, reviewOnly) {
+  if (reviewOnly && !isReviewMove(item)) return false;
+  if (!query) return true;
+  return [item.title, item.author, item.series, item.number, item.source, item.target]
+    .some((value) => String(value || "").toLowerCase().includes(query));
+}
+
+function populateReviewReasonFilter(items, query, reviewOnly) {
   const select = $("reviewReasonFilter");
   const current = select.value;
-  const reasons = [...new Set(
-    items.flatMap((item) => item.review_reasons || [])
-  )].sort();
+  const counts = new Map();
+  items.filter((item) => matchesBaseFilters(item, query, reviewOnly)).forEach((item) => {
+    new Set(item.review_reasons || []).forEach((reason) => counts.set(reason, (counts.get(reason) || 0) + 1));
+  });
+  const reasons = [...counts.keys()].sort();
   select.innerHTML = '<option value="">All reasons</option>'
-    + reasons.map((r) => `<option value="${escapeHtml(r)}"${r === current ? " selected" : ""}>${escapeHtml(reviewReasonLabel(r))}</option>`).join("");
+    + reasons.map((r) => `<option value="${escapeHtml(r)}"${r === current ? " selected" : ""}>${escapeHtml(reviewReasonLabel(r))} (${counts.get(r)})</option>`).join("");
 }
 
 function renderMoves(items) {
   const query = $("moveSearch").value.trim().toLowerCase();
   const reviewOnly = $("reviewOnly").checked;
+  populateReviewReasonFilter(items, query, reviewOnly);
   const reasonFilter = $("reviewReasonFilter").value;
   const filtered = items.filter((item) => {
-    if (reviewOnly && !isReviewMove(item)) return false;
-    if (reasonFilter && !(item.review_reasons || []).includes(reasonFilter)) return false;
-    if (!query) return true;
-    return [item.title, item.author, item.series, item.number, item.source, item.target]
-      .some((value) => String(value || "").toLowerCase().includes(query));
+    if (!matchesBaseFilters(item, query, reviewOnly)) return false;
+    return !reasonFilter || (item.review_reasons || []).includes(reasonFilter);
   });
 
   const blockedCount = items.filter(isBlockedMove).length;

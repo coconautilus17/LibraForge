@@ -61,7 +61,8 @@ provider, and setting - this is the short version.
   switch/rename/disconnect), providers (Audiobookshelf, abs-agg, abs-tract), appearance,
   and everything else global.
 
-**Providers:** Audible (direct), Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
+**Providers:** the Audible public catalog (no login, any marketplace), Audible through
+your logged-in account, Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
 Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???,
 and Goodreads or Hardcover when abs-agg has their keys), Goodreads/Kindle via abs-tract,
 and Pocket FM as a Manual Review source. Open Library is used by Enrichment Forge and for
@@ -118,8 +119,9 @@ cp .env.example .env      # then edit AUDIOBOOKS_PATH / AUDIBLE_AUTH_PATH, and U
 make up                   # re-run to apply
 ```
 
-Connect an Audible account from **Settings → Accounts**, or skip Audible and use
-Audiobookshelf / abs-agg as providers. For HTTPS, attach to your reverse proxy network
+Metadata Forge and M4B Tool search the public Audible catalog with no login. Connect an
+Audible account from **Settings → Accounts** only to download your own library or to search
+through your account. For HTTPS, attach to your reverse proxy network
 via `docker-compose.override.yml` (git-ignored).
 
 Common commands: `make up`, `make down`, `make logs`, `make restart`, `make test`
@@ -151,8 +153,8 @@ AUDIOBOOKS_PATH=/path/to/your/audiobooks \
   docker compose -f docker-compose.dist.yml up -d
 ```
 
-Then open **http://127.0.0.1:5056** and connect an Audible account under
-Settings → Accounts (or skip it and use Audiobookshelf / abs-agg). Upgrade later with
+Then open **http://127.0.0.1:5056**. Matching works right away through the public Audible
+catalog; connect an Audible account under Settings → Accounts to download your library. Upgrade later with
 `docker pull ghcr.io/coconautilus17/libraforge:latest`.
 
 > **Upgrading from 0.2.4 or earlier?** Earlier run commands and compose files had no

@@ -101,6 +101,7 @@ from app.fixer.search import (
     audible_lookup_by_asin,
     audible_lookup_chapters,
     get_catalog_client,
+    PUBLIC_AUDIBLE_DOMAINS,
 )
 from app.fixer.search import audible_search as fixer_audible_search
 from app.fixer.parsing import library_author_folder
@@ -1029,6 +1030,7 @@ def search_audible_candidates(
     metadata: dict[str, Any] | None = None,
     limit: int = 10,
     script_name: str = "",
+    public_region: str = "",
 ) -> dict[str, Any]:
     fixer_module = load_fixer_module(script_name or default_fixer_script())
     clues = build_context_clues(fixer_module, metadata)
@@ -1049,7 +1051,7 @@ def search_audible_candidates(
             unique_queries.append(item)
             seen_queries.add(key)
 
-    client = get_catalog_client(auth_file)
+    client = get_catalog_client(auth_file, public_region=public_region)
 
     by_asin: dict[str, dict[str, Any]] = {}
 
@@ -1210,6 +1212,8 @@ class RunRequest(BaseModel):
     write_mode: str = "smart"
     provider: str = "audible"
     abs_provider: str = "audible"
+    # provider "audible-public": the marketplace whose public catalog to search.
+    audible_region: str = "us"
     enable_goodreads_fallback: bool = False
     # Ebooks only: Open Library through ABS, tried last (it is slow).
     enable_openlibrary_fallback: bool = False
@@ -1266,6 +1270,9 @@ class AudibleSearchRequest(BaseModel):
     metadata: M4BMetadataForm = Field(default_factory=M4BMetadataForm)
     limit: int = 10
     script_name: str = Field(default_factory=default_fixer_script)
+    # Set by the "Audible public catalog" provider: search that marketplace's
+    # public catalog, ignoring any login.
+    audible_region: str = ""
 
 
 class ManualReviewLoadRequest(BaseModel):
@@ -2124,9 +2131,11 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
 
     if req.restore_metadata:
         cmd.append("--restore-metadata")
-    else:
-        if req.auth_file:
-            cmd += ["--auth-file", req.auth_file]
+    elif req.provider == "audible-public" and _fixer_major_version(req.script_name) >= 5:
+        region = req.audible_region if req.audible_region in PUBLIC_AUDIBLE_DOMAINS else "us"
+        cmd += ["--audible-public-region", region]
+    elif req.auth_file:
+        cmd += ["--auth-file", req.auth_file]
 
     if req.apply:
         cmd.append("--apply")
@@ -8741,7 +8750,13 @@ def audible_search(req: AudibleSearchRequest) -> dict[str, Any]:
         metadata=req.metadata.model_dump(),
         limit=req.limit,
         script_name=req.script_name,
+        public_region=req.audible_region,
     )
+
+
+@app.get("/api/audible/public-regions")
+def audible_public_regions() -> dict[str, Any]:
+    return {"regions": PUBLIC_AUDIBLE_DOMAINS}
 
 
 @app.post("/api/chaptering/load")

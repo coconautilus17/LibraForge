@@ -108,6 +108,15 @@ class ThreadClientTests(unittest.TestCase):
         fake_audible.Authenticator.from_file.assert_not_called()
         search._thread_local.__dict__.pop("client", None)
 
+    def test_a_public_region_ignores_an_existing_login(self):
+        fake_audible = mock.Mock()
+        with tempfile.NamedTemporaryFile(suffix=".json") as auth, \
+                mock.patch.object(search, "audible", fake_audible):
+            client = search.get_catalog_client(auth.name, public_region="uk")
+        self.assertIsInstance(client, search.PublicAudibleClient)
+        self.assertEqual(client.base_url, "https://api.audible.co.uk/1.0/")
+        fake_audible.Authenticator.from_file.assert_not_called()
+
 
 class PublicAudibleClientTests(unittest.TestCase):
     def test_get_calls_the_marketplace_catalog_and_parses_json(self):

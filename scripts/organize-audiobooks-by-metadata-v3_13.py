@@ -1900,6 +1900,8 @@ def person_segment_matches(segment: str, people: list[str]) -> bool:
         return False
 
     for person in people:
+        # "Professor David Nutt" is credited in a folder as plain "David Nutt".
+        person = re.sub(r"^(?:prof(?:essor)?|dr|mr|mrs|ms|sir)\.?\s+", "", person.strip(), flags=re.IGNORECASE)
         person_key = normalize_for_compare(person)
         if not person_key:
             continue
@@ -2664,6 +2666,14 @@ def build_ebook_book_items(root: Path) -> list[BookItem]:
     return items
 
 
+# A pack folder's own "Books 1 thru 3" / "Books 1-3" / "Book 9+10" tail: it counts
+# the books in the folder, so it is not part of the series name.
+TRAILING_BOOK_RANGE_RE = re.compile(
+    r"[\s,]*\bbooks?\s*#?\d{1,4}\s*(?:[-–—+&,]|and|to|thru|through)\s*\d{1,4}\s*$",
+    re.IGNORECASE,
+)
+
+
 def parse_legacy_series_container(name: str) -> dict[str, str]:
     """Parse old collection folders.
 
@@ -2688,6 +2698,7 @@ def parse_legacy_series_container(name: str) -> dict[str, str]:
         # Common legacy pack folder: "Author - Series (#1-6)".
         if re.search(r"\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)", right) or re.search(r"\bbooks?\s*#?\d", right, flags=re.IGNORECASE):
             series = re.sub(r"\s*\(#?\d{1,4}\s*[-–—+]\s*\d{1,4}\)\s*$", "", right).strip()
+            series = TRAILING_BOOK_RANGE_RE.sub("", series).strip()
             return {"series": clean_series_name(series), "author": left, "narrator": ""}
     if len(parts) == 1:
         # "Series Name (Book 1 & 2)" or "Series Name (Books 1-3)" collection container.
@@ -2838,7 +2849,14 @@ def parse_explicit_identity_folder_name(name: str) -> dict[str, str]:
         cleaned,
         flags=re.IGNORECASE,
     )
-    if match and plausible_author_credit(match.group("author")):
+    if (
+        match
+        and plausible_author_credit(match.group("author"))
+        # "Liberty, Book 1 - Head Of The Class" / "..., Book 2 - Dropout" end in
+        # the book's title: a single word or a title phrase is not a credit.
+        and len(match.group("author").split()) > 1
+        and not looks_like_title_phrase(match.group("author"))
+    ):
         return result(
             match.group("series"),
             match.group("author"),
@@ -3419,6 +3437,10 @@ def path_clues(item: BookItem, root: Path) -> dict[str, str]:
     if not clues.get("book_number"):
         for value in [source_name, representative_name, parent.name if parent else ""]:
             number = detect_number_from_text(value)
+            if "-" in number and value not in (source_name, representative_name):
+                # A range in the folder above names the books it holds; it does
+                # not number this one file.
+                continue
             if number:
                 clues["book_number"] = number
                 label = detect_sequence_label_from_text(value)
@@ -3470,6 +3492,9 @@ def title_conflict_should_trigger_review(
         narrator,
     )
     metadata_clean = clean_book_title(metadata_hint, series, book_number)
+    # An Audible download name is "<number> <series>_ <cut-off title>_<ASIN>_<codec>...":
+    # what follows the ASIN is encoder detail, not title.
+    path_hint = re.split(r"[_\s]B0[A-Z0-9]{8}(?![A-Za-z0-9])", path_hint, maxsplit=1)[0]
     path_clean = clean_book_title(path_hint, series, book_number)
 
     if not has_distinct_book_title(metadata_clean, series, book_number):
@@ -3480,6 +3505,24 @@ def title_conflict_should_trigger_review(
     metadata_key = title_key_ignoring_article(metadata_clean)
     path_key = title_key_ignoring_article(path_clean)
     if not metadata_key or not path_key or metadata_key == path_key:
+        return False
+
+    # A file name that is only a release code ("DS1WBMMNBTD-EA") says nothing
+    # about the title, so there is nothing to disagree with.
+    if re.fullmatch(r"(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9_-]{8,}", path_clean):
+        return False
+
+    # Every word of the shorter title appearing in the longer one is the same
+    # book with a subtitle or credit added on one side ("1177 B.C. (Revised and
+    # Updated)" vs "... The Year Civilization Collapsed ..."). A path left with
+    # only an article ("The") has no title in it at all.
+    metadata_words = re.findall(r"[a-z0-9]+", metadata_clean.lower())
+    path_words = re.findall(r"[a-z0-9]+", path_clean.lower())
+    series_words = set(re.findall(r"[a-z0-9]+", series.lower()))
+    if not set(path_words) - {"a", "an", "the"} - series_words:
+        return False
+    short, long_ = sorted((metadata_words, path_words), key=len)
+    if short and set(short) <= set(long_):
         return False
 
     # If one cleaned value simply contains the other, this is usually a path
@@ -4606,8 +4649,7 @@ def render_naming_template(
                 different = sorted(existing - {canonical_asin})
                 if different:
                     review_reasons.append(
-                        f"existing identifier {different[0]} in the source name "
-                        f"differs from the metadata ASIN {canonical_asin}"
+                        "an identifier in the source name differs from the metadata ASIN"
                     )
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:

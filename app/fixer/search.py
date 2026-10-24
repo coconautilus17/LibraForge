@@ -570,13 +570,17 @@ class PublicAudibleClient:
         return {}
 
 
-def get_catalog_client(auth_file: str, password: str | None = None):
-    """The logged-in client when an auth file exists, else the public catalog."""
-    if auth_file and os.path.isfile(auth_file):
+def get_catalog_client(auth_file: str, password: str | None = None, public_region: str = ""):
+    """The logged-in client when an auth file exists, else the public catalog.
+
+    public_region picks the public catalog of that marketplace even when an
+    auth file exists (the "Audible public catalog" provider).
+    """
+    if not public_region and auth_file and os.path.isfile(auth_file):
         kwargs = {"password": password} if password else {}
         auth = audible.Authenticator.from_file(auth_file, **kwargs)
         return audible.Client(auth=auth)
-    return PublicAudibleClient()
+    return PublicAudibleClient(region=public_region)
 
 
 def get_thread_client(auth_file: str, password: str | None = None) -> audible.Client:
