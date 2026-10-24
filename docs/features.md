@@ -156,7 +156,9 @@ whole series at once, instead of fixing each book one at a time.
   Progression Fantasy is kept as a subgenre.
 - **Your own genres are pinned:** genres you set by hand in Audiobookshelf (real genres
   that differ from the audio file's own tag and weren't written by Metadata Forge or
-  Enrichment Forge) are always pre-filled, marked "yours", and never outvoted.
+  Enrichment Forge) are always pre-filled, marked "yours", and never outvoted. A genre
+  the book's own Audible listing carries is the store's (an Audiobookshelf match wrote
+  it), so it votes like other evidence instead.
 - **Library genres, not store categories:** merged store names are split ("Action &
   Adventure" becomes Action and Adventure) wherever a genre is shown or written; a name
   is kept whole only when neither part is a genre on its own (Sword & Sorcery).
