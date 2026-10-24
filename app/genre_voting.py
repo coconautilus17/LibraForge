@@ -58,11 +58,20 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     for source, labels in voters.items():
         mains, source_subs = classify([labels])
         if "Non-Fiction" in mains and set(mains) & _FICTION_OR_AUDIENCE:
-            # One source calling a book a novel (or a children's book) and
-            # non-fiction is naming its subject: Audible shelves Dungeon
-            # Crawler Carl under Music and Hatchet under Mental Health. The
-            # subject stays a subgenre; only another source can say non-fiction.
-            mains = [g for g in mains if g != "Non-Fiction"]
+            # One source shelving a book as both fiction (or a children's
+            # book) and non-fiction: its labels decide. Dungeon Crawler Carl's
+            # one Music shelf beside Fantasy and Sci-Fi is a subject, as are
+            # The Billion Dollar Spy's one Espionage beside three politics
+            # shelves. An even count keeps both for the other sources to settle.
+            sides = collections.Counter()
+            for label in labels:
+                label_mains = set(classify([[label]])[0])
+                sides["non-fiction"] += "Non-Fiction" in label_mains
+                sides["fiction"] += bool(label_mains & _FICTION_OR_AUDIENCE)
+            if sides["fiction"] > sides["non-fiction"]:
+                mains = [g for g in mains if g != "Non-Fiction"]
+            elif sides["non-fiction"] > sides["fiction"]:
+                mains = [g for g in mains if g not in _FICTION_OR_AUDIENCE]
         for genre in mains:
             votes[genre] += SOURCE_WEIGHTS.get(source, 1)
             evidence[genre].add(source)
