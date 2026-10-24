@@ -1806,6 +1806,10 @@ def should_skip_due_to_marker(
         # real ASIN of its own: search again, the recording itself may turn up.
         if marker.get("different_edition") and not marker_real_asin(marker):
             return False, ""
+        # Matched only to another book of the series: the book itself was not
+        # found yet, so search again.
+        if marker.get("edit_mode") == "series_only":
+            return False, ""
         return True, "already processed"
 
     return False, ""
@@ -3986,6 +3990,17 @@ def search_item(
             # product lookup before falling back to keyword searches.
             existing_asin = clues.get("existing_asin", "")
             asin_unconfirmed = False
+
+            def match_is_settled() -> bool:
+                # A series_only match is another book of the series: keep it
+                # as the fallback, but the book itself may still turn up.
+                return bool(
+                    product
+                    and score >= args.min_score
+                    and not asin_unconfirmed
+                    and metadata_from_product(product, clues, score).get("edit_mode") != "series_only"
+                )
+
             if existing_asin:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
@@ -4012,7 +4027,7 @@ def search_item(
                         # definitive only when the runtime agrees. Otherwise keyword
                         # search still runs and must beat it to replace it.
                         asin_duration = (asin_debug.get("duration") or {}).get("status", "unknown")
-                        if asin_duration in {"perfect", "unknown"}:
+                        if asin_duration in {"perfect", "unknown"} and asin_debug.get("edit_mode") != "series_only":
                             queries = []
                         else:
                             asin_unconfirmed = True
@@ -4029,7 +4044,7 @@ def search_item(
                     title_part, _, author_part = query.partition(" - ")
                     abs_searches.append((title_part.strip() or query, author_part.strip()))
                 for title_part, author_part in dict.fromkeys(abs_searches):
-                    if product and score >= args.min_score and not asin_unconfirmed:
+                    if match_is_settled():
                         break
                     query = f"{title_part} - {author_part}" if author_part else title_part
                     log.append(f"  Trying ABS query ({args.abs_provider}): {query}")
@@ -4053,7 +4068,7 @@ def search_item(
                             f"  Candidate: score={candidate_score} "
                             f"title={debug_metadata.get('audible_title')} "
                             f"mode={debug_metadata.get('edit_mode')} "
-                            f"asin={debug_metadata.get('asin')}"
+                            f"asin={candidate.get('asin')}"
                         )
                         if candidate_ambiguity:
                             log.append(f"  {candidate_ambiguity['reason']}")
@@ -4065,7 +4080,7 @@ def search_item(
                             asin_unconfirmed = False
 
             for query in queries if not use_abs else []:
-                if product and score >= args.min_score and not asin_unconfirmed:
+                if match_is_settled():
                     break
                 log.append(f"  Trying query: {query}")
                 cache_key = (query.lower(), args.limit)
@@ -4097,7 +4112,7 @@ def search_item(
                         f"sequence={debug_metadata.get('audible_sequence')} "
                         f"duration={debug_metadata.get('audible_duration_minutes')} "
                         f"mode={debug_metadata.get('edit_mode')} "
-                        f"asin={debug_metadata.get('asin')}"
+                        f"asin={candidate.get('asin')}"
                     )
                     if candidate_ambiguity:
                         log.append(f"  {candidate_ambiguity['reason']}")
@@ -4112,7 +4127,7 @@ def search_item(
                     match_ambiguity = candidate_ambiguity
                     asin_unconfirmed = False
 
-                if candidate_score >= args.min_score:
+                if candidate_score >= args.min_score and debug_metadata.get("edit_mode") != "series_only":
                     break
 
             # Goodreads fallback (abs-tract): fires whenever Audible + ASIN did
@@ -4938,6 +4953,9 @@ def _build_report_item(result: "ItemResult") -> dict:
         # written, the book's own was kept (scoring.different_edition).
         if meta.get("different_edition"):
             item["different_edition"] = meta["different_edition"]
+        # Another book of the series supplied only the grouping fields.
+        if meta.get("series_match_asin"):
+            item["series_match_asin"] = meta["series_match_asin"]
     return item
 
 def print_plan(

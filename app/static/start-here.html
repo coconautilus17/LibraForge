@@ -69,7 +69,7 @@
         <h3>Edit modes</h3>
         <ul>
           <li><span class="match-mode-badge">Full metadata</span> writes the planned title, author, series, sequence, year, genre, and ASIN. If local credits identify a different recording, the book's own narrator is kept instead of the match's narrator.</li>
-          <li><span class="match-mode-badge">Series only</span> uses the match for series grouping while keeping the local title and narrator. It can clean up the author, and does not take a sequence number from the match. Blank sequence and year values may be cleared when writing tags.</li>
+          <li><span class="match-mode-badge">Series only</span> uses the match for series grouping while keeping the local title and narrator. The match is another book of the series, so its ASIN, ISBN and subtitle are not written either; the file keeps its own. It can clean up the author, and does not take a sequence number from the match. Blank sequence and year values may be cleared when writing tags. A series-only book is searched again on later runs, in case the book itself turns up.</li>
         </ul>
       </div>
 
