@@ -21,3 +21,6 @@ PROJECT_REFERENCE.md
 .ruff_cache/
 .venv/
 venv/
+
+# dev branch tooling never ships
+dev/
