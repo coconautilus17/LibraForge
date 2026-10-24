@@ -76,10 +76,15 @@ class SubjectShelfTests(unittest.TestCase):
     def test_a_novel_on_a_subject_shelf_is_not_non_fiction(self):
         # Audible: Dungeon Crawler Carl under Music, Hatchet under Mental Health.
         dcc = book_vote({"audible": ["music", "fantasy", "science fiction", "comedy & humor"]})
-        hatchet = book_vote({"audible": ["teen & young adult", "action & adventure", "mental health"]})
+        hatchet = book_vote({"audible": ["teen & young adult", "action & adventure", "difficult situations", "depression",
+                                         "mental health", "self esteem & self image"]})
         self.assertNotIn("Non-Fiction", dcc["main"])
         self.assertNotIn("Non-Fiction", hatchet["main"])
         self.assertIn("Psychology", hatchet["sub"])
+
+    def test_a_non_fiction_book_on_one_fiction_shelf_stays_non_fiction(self):
+        spy = book_vote({"audible": ["politics & social sciences", "politics & government", "freedom & security", "espionage"]})
+        self.assertEqual(spy["main"], {"Non-Fiction"})
 
     def test_classics_with_a_subject_stay_non_fiction(self):
         self.assertIn("Non-Fiction", book_vote({"audible": ["classics", "philosophy"]})["main"])
