@@ -330,7 +330,8 @@ def get_audible_number_candidates(product: dict) -> list[str]:
             continue
 
         match = re.search(r"(?:^|\s)(\d+(?:\.\d+)?)\s*(?::|-(?=\s|$)|$)", cleaned)
-        if match:
+        # A trailing year ("...after 1945") is a date, not a book number.
+        if match and not re.fullmatch(r"(?:19|20)\d{2}", match.group(1)):
             candidates.append(normalize_book_number(match.group(1)))
 
     unique: list[str] = []

@@ -362,6 +362,9 @@ const NOTE_ONLY_REASONS = new Set([
   "title matches series name; using sequence only",
   "title inferred from path",
   "series inferred from path",
+  "author inferred from path",
+  "sequence label differs between metadata and path",
+  "sequence label differs from the rest of this series in this run",
 ]);
 
 function reviewReasonsOf(item) {
