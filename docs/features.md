@@ -154,6 +154,15 @@ whole series at once, instead of fixing each book one at a time.
   only counts when something else agrees or nothing contradicts it. LitRPG and
   cultivation are kinds of progression fantasy, so when either is a main genre,
   Progression Fantasy is kept as a subgenre.
+- **No genre is thrown away:** a genre from Audible, AudioSilo, the file's tag or
+  Audiobookshelf that the controlled list doesn't name is kept as a subgenre under the
+  source's own spelling ("Folk Tales & Myths", "LGBTQ+"). Only scrap is dropped: format
+  words ("Audiobook", "Hörbuch"), store umbrellas ("Science Fiction & Fantasy", "Literature
+  & Fiction") and keyword lists stuffed into a genre tag. Audible's top-level category
+  votes too (History, Romance, Religion & Spirituality), and Audible's Spanish and French
+  store categories ("Fantasía", "Ciencia e ingeniería") count as the English ones. Goodreads
+  shelves and Open Library subjects are free-form reader tags, so only the ones that name
+  a known genre count.
 - **Your own genres are pinned:** genres you set by hand in Audiobookshelf (real genres
   that differ from the audio file's own tag and weren't written by Metadata Forge or
   Enrichment Forge) are always pre-filled, marked "yours", and never outvoted. A genre

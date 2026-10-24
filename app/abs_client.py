@@ -456,10 +456,10 @@ def has_real_genres(values: Any) -> bool:
     """True when any value names a known genre once merged store labels are
     split. "Audiobook", foreign-store labels ("Fantasía") and keyword soup
     don't, so they are safe to replace."""
-    from app.genre_taxonomy import _canonical, _is_known_genre, split_compound_genres
+    from app.genre_taxonomy import FOREIGN_STORE_ALIASES, _canonical, _is_known_genre, split_compound_genres
 
     return any(
-        _canonical(g) or _is_known_genre(g)
+        (_canonical(g) or _is_known_genre(g)) and g.strip().lower() not in FOREIGN_STORE_ALIASES
         for g in split_compound_genres(_as_list(values), canonical=False)
     )
 

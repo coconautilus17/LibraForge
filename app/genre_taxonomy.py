@@ -13,6 +13,7 @@ format, never a genre.
 from __future__ import annotations
 
 import collections
+import html
 import math
 import re
 from typing import Any
@@ -89,6 +90,32 @@ LABEL_MAP.update({
  "entertainment & performing arts":(["Non-Fiction"],["Arts"]), "performing arts":(["Non-Fiction"],["Arts"]), "personal success":(["Non-Fiction"],["Self-Help"]),
  "death & dying":(["Non-Fiction"],[]), "unexplained mysteries":(["Non-Fiction"],["Paranormal"]), "ministry & evangelism":(["Non-Fiction"],["Religion"]),
 })
+NF = "Non-Fiction"
+LABEL_MAP.update({
+ # Audible's root categories that are non-fiction (the root of a ladder votes
+ # too, app/enrichment.audible_category_ladder_genres). Mixed roots (Arts &
+ # Entertainment, Literature & Fiction) are umbrellas there instead.
+ "health & wellness":([NF],["Health"]), "relationships, parenting & personal development":([NF],["Personal Development"]),
+ "money & finance":([NF],["Finance"]), "business & careers":([NF],["Business"]), "education & learning":([NF],["Education"]),
+ "sports & outdoors":([NF],["Sports"]), "computers & technology":([NF],["Technology"]), "travel & tourism":([NF],["Travel"]),
+ "lgbtq+":([],["LGBTQ+"]),
+ # Non-fiction subjects that name the subject on their own, when no root
+ # category came with them (AudioSilo, an ABS genre tag).
+ "philosophy":([NF],["Philosophy"]), "consciousness & thought":([NF],["Philosophy"]), "ethics & morality":([NF],["Philosophy"]),
+ "economics":([NF],["Economics"]), "mathematics":([NF],["Mathematics"]), "physics":([NF],["Science"]), "biology":([NF],["Science"]),
+ "biological sciences":([NF],["Science"]), "astronomy & space science":([NF],["Science"]), "evolution & genetics":([NF],["Science"]),
+ "computer science":([NF],["Technology"]), "technology":([NF],["Technology"]), "engineering":([NF],["Technology"]),
+ "anthropology":([NF],["Society"]), "social sciences":([NF],["Society"]), "political science":([NF],["Politics"]),
+ "international relations":([NF],["Politics"]), "public policy":([NF],["Politics"]), "law":([NF],["Law"]),
+ "mental health":([NF],["Psychology"]), "psychology & mental health":([NF],["Psychology"]), "psychotherapy":([NF],["Psychology"]),
+ "developmental psychology":([NF],["Psychology"]), "child psychology":([NF],["Psychology"]), "personal development":([NF],["Personal Development"]),
+ "religious studies":([NF],["Religion"]), "other religions, practices & sacred texts":([NF],["Religion"]), "christianity":([NF],["Religion"]),
+ "buddhism":([NF],["Religion"]), "judaism":([NF],["Religion"]), "islam":([NF],["Religion"]), "hinduism":([NF],["Religion"]),
+ "personal finance":([NF],["Finance"]), "investing & trading":([NF],["Finance"]), "management & leadership":([NF],["Business"]),
+ "marketing & sales":([NF],["Business"]), "career success":([NF],["Business"]), "education":([NF],["Education"]),
+ # A thriller shelf, not politics: split, its "Politics" voted Non-Fiction.
+ "spies & politics":(["Thriller"],["Espionage", "Political"]), "spies":(["Thriller"],["Espionage"]),
+})
 LABEL_MAP.setdefault("erotica", (["Romance"], ["Erotica"]))
 _KEYWORDS = {"litrpg":r"\blit\s?rpg\b|\bgamelit\b","progression fantasy":r"progression fantasy","cultivation":r"\bcultivation\b|\bxianxia\b|\bwuxia\b",
     "portal fantasy":r"\bisekai\b|portal fantasy","harem":r"\bharem\b","dungeon core":r"dungeon core",
@@ -108,6 +135,24 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery",
  "non-fiction":"non fiction","sci-fi":"science fiction","scifi":"science fiction","sci fi":"science fiction",
  "military sci-fi":"military science fiction","hard sci-fi":"hard science fiction","biography":"memoir","children's":"children's audiobooks"}
+# Audible's Spanish and French store categories, as an ABS match against those
+# stores writes them: they vote as the English store category they are, and
+# stay foreign labels for Metadata Forge (app/abs_client.has_real_genres) and
+# are never taken for a genre the user set by hand.
+_ALIASES["parenting relationships"] = "relationships, parenting & personal development"  # AudioSilo's slug
+FOREIGN_STORE_ALIASES = {
+ "fantasía":"fantasy","fantástico":"fantasy","ciencia ficción":"science fiction","acción y aventura":"action & adventure","aventura":"adventure",
+ "postapocalíptica":"post-apocalyptic","epopeyas":"epic","militar":"military","cuentos de hadas":"fairy tales","literatura y ficción":"literature & fiction",
+ "política y ciencias sociales":"politics & social sciences","ciencias políticas":"political science","política y gobierno":"politics & government",
+ "ciencia e ingeniería":"science & engineering","ciencia":"science","antropología":"anthropology","economía":"economics","legislación":"law",
+ "dinero y finanzas":"money & finance","éxito profesional":"career success","negocios y profesiones":"business & careers","gestión":"management & leadership",
+ "marketing y ventas":"marketing & sales","desarrollo empresarial y emprendimiento":"business & careers","informática y tecnología":"computers & technology",
+ "medicina y sector de la salud":"health & wellness","enfermedad física y trastornos":"health & wellness","psicología y salud mental":"psychology & mental health",
+ "religión y espiritualidad":"religion & spirituality","estudios religiosos":"religious studies","otras religiones, prácticas y textos":"other religions, practices & sacred texts",
+ "cristiandad":"christianity","budismo":"buddhism","hinduismo":"hinduism","educación":"education","guerras y conflictos":"wars & conflicts",
+ "era moderna":"modern","américa":"americas","humoristique":"humor","épique":"epic",
+}
+_ALIASES.update(FOREIGN_STORE_ALIASES)
 
 
 _COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
@@ -117,6 +162,23 @@ def _output_names() -> dict[str, str]:
     """Controlled genre names, lowercase -> canonical spelling."""
     names = set(MAIN_ORDER) | {n for m, sub in LABEL_MAP.values() for n in m + sub}
     return {n.lower(): n for n in names if not n.endswith("?")}
+
+
+def label_for_slug(slug: str) -> str | None:
+    """The table's label a URL slug stands for ("health-wellness" is Health &
+    Wellness, "lgbtq" is LGBTQ+): slugs drop "&", "+" and commas."""
+    def bare(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
+    wanted = bare(slug)
+    for label in list(LABEL_MAP) + list(_output_names()):
+        if bare(label) == wanted:
+            return label
+    return None
+
+
+def known_genre_names() -> set[str]:
+    """Every controlled genre name, lowercase."""
+    return set(_output_names())
 
 
 def _canonical(text: str) -> str | None:
@@ -190,7 +252,8 @@ STRONG_MAINS = {"LitRPG", "Progression Fantasy", "Cultivation", "Harem"}
 PROGRESSION_KINDS = ("LitRPG", "Cultivation")
 
 # Composite Audible category names that contain a comma themselves.
-_COMPOSITES = ("Mystery, Thriller & Suspense", "Movie, TV & Video Game Tie-Ins")
+_COMPOSITES = ("Mystery, Thriller & Suspense", "Movie, TV & Video Game Tie-Ins", "Relationships, Parenting & Personal Development",
+               "Other Religions, Practices & Sacred Texts", "Otras religiones, prácticas y textos")
 
 
 def normalize_label(label: Any) -> str:
@@ -203,7 +266,7 @@ def labels_from_genres(values: Any) -> list[str]:
     """Split genre strings / Audible ladder paths into normalized labels."""
     out: list[str] = []
     for value in values or []:
-        text = str(value)
+        text = html.unescape(str(value))  # "Men&#8217;s Adventure" is one genre
         for comp in _COMPOSITES:
             text = text.replace(comp, comp.replace(",", "\u00a7"))
         for part in re.split(r"\s*[,:;/]\s*", text):
@@ -211,8 +274,14 @@ def labels_from_genres(values: Any) -> list[str]:
             if not part or part.lower() == "mystery, thriller & suspense":
                 continue
             label = normalize_label(part)
-            if not label or label in NON_GENRES:
+            # "Fantasy Audiobook" is Fantasy; "<series name> Audiobook" is nothing.
+            without_format = _FORMAT_WORD_RE.sub(" ", label).strip()
+            if without_format != label:
+                label = without_format if _is_known_genre(without_format) else ""
+            if not label or is_scrap_label(label):
                 continue
+            if label == part.lower():
+                _SPELLING.setdefault(label, part)
             if label not in LABEL_MAP and _COMPOUND_SPLIT_RE.search(label):
                 # A merged label the table doesn't know ("Sci-Fi & Fantasy"):
                 # map its parts instead.
@@ -236,6 +305,31 @@ def labels_from_text(text: str) -> list[str]:
 
 NON_GENRES = {"audiobook", "audiobooks", "audio book", "audio books", "fiction", "literature & fiction",
                "genre fiction", "science fiction & fantasy", "miscellaneous"}
+# The scrap list: labels that are never a genre. Every other label a source
+# names is kept, under its own name when the table above has no entry for it.
+_SCRAP_LABELS = {"speech", "spoken word", "audbioook", "hörbuch", "audiolibro", "livre audio", "unabridged", "abridged",
+                 "adult", "general", "other", "books", "book", "ebook", "kindle"}
+_FORMAT_WORD_RE = re.compile(r"\b(?:audio ?books?|hörbuch|audiolibro)\b")
+# How a source spelled a label the table doesn't know ("LGBTQ+", "Consciousness
+# & Thought"), so a kept genre reads the way the source wrote it.
+_SPELLING: dict[str, str] = {}
+
+
+def is_scrap_label(label: Any) -> bool:
+    label = normalize_label(label)
+    if not label or label in NON_GENRES or label in _SCRAP_LABELS or not re.search(r"[^\W\d_]", label):
+        return True
+    # A tag stuffed with keywords ("dragon shapeshifter dinosaur tamer king
+    # quest fae"), not one genre: real genre names that long join their parts.
+    return len(label.split()) >= 5 and not re.search(r"&|\band\b", label)
+
+
+def display_name(label: str) -> str:
+    """A kept label the table doesn't know, as the source spelled it."""
+    spelled = _SPELLING.get(label)
+    if spelled:
+        return spelled if spelled != spelled.lower() else spelled.title()
+    return label.title()
 
 
 _SF_SUBGENRES = ("Space Opera", "Hard Sci-Fi", "Military Sci-Fi", "Post-Apocalyptic", "Dystopian",
@@ -253,6 +347,7 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
     threshold = 1 if labelled < 4 else math.ceil(0.25 * labelled)
     main: collections.Counter = collections.Counter()
     sub: collections.Counter = collections.Counter()
+    names = _output_names()
     for labels in books_labels:
         book_mains: set[str] = set()
         book_subs: set[str] = set()
@@ -260,6 +355,12 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
             if label in LABEL_MAP:
                 book_mains.update(LABEL_MAP[label][0])
                 book_subs.update(LABEL_MAP[label][1])
+            elif label in names:  # a genre the vote itself names ("Historical Fantasy")
+                (book_mains if names[label] in MAIN_ORDER else book_subs).add(names[label])
+            elif not is_scrap_label(label):
+                # Not in the table but a real genre (Audible's "Contemporary",
+                # "Folk Tales & Myths"): kept under its own name.
+                book_subs.add(display_name(label))
         main.update(book_mains)
         sub.update(book_subs)
     for label in extra_labels:

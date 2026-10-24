@@ -16,13 +16,18 @@ import collections
 import math
 from typing import Any
 
-from app.genre_taxonomy import LABEL_MAP, MAIN_ORDER, PROGRESSION_KINDS, STRONG_MAINS, classify, normalize_label
+from app.genre_taxonomy import LABEL_MAP, MAIN_ORDER, PROGRESSION_KINDS, STRONG_MAINS, classify, known_genre_names, normalize_label
 
 SERIES_SOURCE = "series-source"
 PINNED_SOURCE = "yours"
 _MAINSTREAM = ("Mystery", "Thriller", "Horror", "Romance")
 _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology", "Religion", "Society",
-                     "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism"}
+                     "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism",
+                     "Philosophy", "Economics", "Mathematics", "Technology", "Law", "Health",
+                     "Personal Development", "Finance", "Business", "Education", "Sports", "Travel"}
+# Genres that make a book fiction, or a book for children or teens. Classics,
+# Humor and Audio Drama can be either (Plato's Republic, humor essays).
+_FICTION_OR_AUDIENCE = set(MAIN_ORDER) - {"Non-Fiction", "Classics", "Humor", "Audio Drama"}
 _REAL_SF_SUBS = ("Space Opera", "Military Sci-Fi", "Post-Apocalyptic", "Hard Sci-Fi")
 # Sources are ranked, not counted equally. Editorial sources (the publisher's
 # own catalogue and copy, the file's embedded genre tag) carry weight 2; crowd
@@ -52,6 +57,21 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     sub_evidence: dict[str, set[str]] = collections.defaultdict(set)
     for source, labels in voters.items():
         mains, source_subs = classify([labels])
+        if "Non-Fiction" in mains and set(mains) & _FICTION_OR_AUDIENCE:
+            # One source shelving a book as both fiction (or a children's
+            # book) and non-fiction: its labels decide. Dungeon Crawler Carl's
+            # one Music shelf beside Fantasy and Sci-Fi is a subject, as are
+            # The Billion Dollar Spy's one Espionage beside three politics
+            # shelves. An even count keeps both for the other sources to settle.
+            sides = collections.Counter()
+            for label in labels:
+                label_mains = set(classify([[label]])[0])
+                sides["non-fiction"] += "Non-Fiction" in label_mains
+                sides["fiction"] += bool(label_mains & _FICTION_OR_AUDIENCE)
+            if sides["fiction"] > sides["non-fiction"]:
+                mains = [g for g in mains if g != "Non-Fiction"]
+            elif sides["non-fiction"] > sides["fiction"]:
+                mains = [g for g in mains if g not in _FICTION_OR_AUDIENCE]
         for genre in mains:
             votes[genre] += SOURCE_WEIGHTS.get(source, 1)
             evidence[genre].add(source)
@@ -95,7 +115,7 @@ def vote_unit(
     """Series (or standalone) result: main genres, subgenres, per-genre
     evidence {genre: {source: books}}, series evidence and agreement.
     `pinned` ({genre: books}) are the user's own ABS genres: always kept."""
-    voted = [v for v in book_votes if v["main"]]
+    voted = [v for v in book_votes if v["main"] or v["sub"]]
     n = len(voted) or 1  # books with no vote (no matches, no audio) never dilute
     threshold = 1 if n < 4 else math.ceil(0.25 * n)
     main_votes: collections.Counter = collections.Counter()
@@ -162,7 +182,11 @@ def vote_unit(
         mains.remove("Progression Fantasy")
 
     if "Non-Fiction" in mains:
-        sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k in _NON_FICTION_SUBS})
+        # Fiction subgenres go; non-fiction ones and genres the table doesn't
+        # know (Audible's "Folk Tales & Myths") stay.
+        known = known_genre_names()
+        sub_votes = collections.Counter({k: v for k, v in sub_votes.items()
+                                         if k in _NON_FICTION_SUBS or k.lower() not in known})
     else:
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k not in _NON_FICTION_SUBS})
     subs = [s for s, c in sorted(sub_votes.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -200,5 +224,5 @@ def vote_unit(
         "pinned": list(dict.fromkeys(pinned_names)),
         "evidence": {**{g: dict(evidence[g]) for g in mains}, **{s: dict(sub_evidence[s]) for s in subs}},
         "series_evidence": list(series_evidence) if not standalone else [],
-        "agreement": "ok" if mains else "none",
+        "agreement": "ok" if mains or subs else "none",
     }
