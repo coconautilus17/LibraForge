@@ -64,6 +64,39 @@ class ReviewTierTests(unittest.TestCase):
         self.assertFalse(self.call("isBlockedMove", good_item(structure="existing")))
 
 
+@unittest.skipIf(quickjs is None, "quickjs not installed")
+class ReasonFilterOptionsTests(unittest.TestCase):
+    """The reason dropdown offers only reasons that still have a move under the search and review-only filters."""
+
+    def matches(self, item, query, review_only):
+        block = JS[JS.index(START):JS.index(END)] + JS[JS.index("function matchesBaseFilters"):JS.index("function populateReviewReasonFilter")]
+        context = quickjs.Context()
+        context.eval(block)
+        return json.loads(context.eval(f"JSON.stringify(matchesBaseFilters({json.dumps(item)}, {json.dumps(query)}, {json.dumps(review_only)}))"))
+
+    def test_search_text_narrows_the_options(self):
+        item = good_item(title="Dune", review_reasons=["series inferred from path"])
+        self.assertTrue(self.matches(item, "dune", False))
+        self.assertFalse(self.matches(item, "emma", False))
+
+    def test_review_only_drops_moves_that_carry_only_notes(self):
+        item = good_item(review_reasons=["title inferred from path"])
+        self.assertFalse(self.matches(item, "", True))
+        self.assertTrue(self.matches(item, "", False))
+
+    def test_populate_counts_per_reason_and_is_rebuilt_on_every_render(self):
+        body = JS[JS.index("function populateReviewReasonFilter"):JS.index("function renderMoves")]
+        self.assertIn("counts.get(r)", body)
+        render = JS[JS.index("function renderMoves"):]
+        self.assertLess(render.index("populateReviewReasonFilter("), render.index('$("reviewReasonFilter").value'))
+
+
+class ReasonStringsAreFixedTests(unittest.TestCase):
+    def test_asin_mismatch_reason_carries_no_per_book_value(self):
+        self.assertIn('"an identifier in the source name differs from the metadata ASIN"', SCRIPT)
+        self.assertNotIn("existing identifier {", SCRIPT)
+
+
 class NoteTierMatchesTheOrganizerTests(unittest.TestCase):
     def test_every_note_only_reason_is_a_string_the_organizer_really_emits(self):
         block = JS[JS.index("const NOTE_ONLY_REASONS"):JS.index("function reviewReasonsOf")]
