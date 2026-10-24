@@ -68,6 +68,25 @@ class ExecutePlannedMoveTests(unittest.TestCase):
             self.assertTrue((moves[0]["target"].parent / "libraforge.json").exists())
             self.assertFalse(folder.exists(), "the emptied source folder is cleaned up after the last book")
 
+    def test_a_cover_and_notes_file_keep_their_own_names_beside_the_book(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folder = root / "incoming" / "Some Book"
+            folder.mkdir(parents=True)
+            audio = folder / "Some Book.m4b"
+            extras = [folder / "cover-ln.jpg", folder / "info.txt", folder / "Other Name.nfo"]
+            for path in [audio, *extras]:
+                path.touch()
+            target = root / "lib" / "Author" / "Some Book" / "Some Book.m4b"
+
+            ORGANIZER.execute_planned_move(
+                {"kind": "loose_file", "source": audio, "target": target, "companions": extras},
+                merge_existing_targets=False, remove_empty_dirs=True, root=root,
+            )
+
+            self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ["Other Name.nfo", "Some Book.m4b", "cover-ln.jpg", "info.txt"])
+            self.assertFalse(folder.exists())
+
     def test_raises_when_source_no_longer_exists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
