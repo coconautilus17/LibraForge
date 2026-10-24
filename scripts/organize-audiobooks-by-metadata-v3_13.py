@@ -166,6 +166,11 @@ COMPANION_SUFFIXES = (
 # formats have no independent organizing path of their own to collide with.
 COMPANION_SIDE_EXTENSIONS = {".mobi", ".azw3", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".txt"}
 
+# What else a book's own folder carries besides its files: covers, track
+# listings, release notes. They go with the book whatever they are named, but
+# only out of a folder that holds that one book (see generic_sidecars_for_loose_file).
+BOOK_EXTRA_EXTENSIONS = COMPANION_SIDE_EXTENSIONS | {".cue", ".nfo", ".sfv", ".m3u", ".m3u8", ".wax"}
+
 NON_AUTHOR_ROLE_RE = re.compile(
     r"\s+-\s+(?:translator|translations?|introduction|introductions?|editor|foreword|afterword|adapter|adapted by)\s*$",
     re.IGNORECASE,
@@ -3097,6 +3102,12 @@ def abs_metadata_as_sidecar_candidate(media: dict[str, Any], library_item_id: st
     }
 
 
+def book_files_in_folder(folder: Path) -> list[Path]:
+    """The audio and ebook files directly in `folder`."""
+    from app.library_index import is_ebook_file
+    return [f for f in folder.iterdir() if f.is_file() and (is_supported_audio(f) or is_ebook_file(f))]
+
+
 def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
     """Whether a loose file may read its folder's libraforge.json.
 
@@ -3107,10 +3118,7 @@ def loose_file_owns_folder_sidecar(folder_lf: Path, source: Path) -> bool:
     """
     from app.library_index import is_ebook_file
     try:
-        book_files = [
-            f for f in source.parent.iterdir()
-            if f.is_file() and (is_supported_audio(f) or is_ebook_file(f))
-        ]
+        book_files = book_files_in_folder(source.parent)
     except OSError:
         return True
     if len(book_files) <= 1:
@@ -5519,7 +5527,27 @@ def generic_sidecars_for_loose_file(audio_path: Path) -> list[Path]:
             companions.append(sibling)
         elif name_lower.startswith(("cover.", "book_cover")) and sibling.suffix.lower() in COMPANION_SIDE_EXTENSIONS:
             companions.append(sibling)
-    return sorted(companions)
+    if folder_holds_only_this_book(audio_path):
+        companions += [
+            sibling for sibling in audio_path.parent.iterdir()
+            if sibling.is_file() and sibling != audio_path and sibling.suffix.lower() in BOOK_EXTRA_EXTENSIONS
+        ]
+    return sorted(set(companions))
+
+
+def folder_holds_only_this_book(book_path: Path) -> bool:
+    """Whether `book_path`'s folder holds just this one book, so every cover and
+    notes file in it is this book's. An audiobook owns them when it is the only
+    audio file there; an ebook only when the folder has no audio and all its
+    ebook files are one book (the epub and pdf of one stem)."""
+    try:
+        book_files = book_files_in_folder(book_path.parent)
+    except OSError:
+        return False
+    audio = [f for f in book_files if is_supported_audio(f)]
+    if audio:
+        return audio == [book_path]
+    return book_path in book_files and len({f.stem for f in book_files}) == 1
 
 
 def remove_empty_parents(start_dir: Path, root: Path) -> None:
@@ -5629,11 +5657,15 @@ def execute_planned_move(
                 # Side-extension companion (e.g. Book.jpg alongside Book.m4b):
                 # keep the same stem, just change the extension.
                 companion_target = target.with_suffix(companion.suffix)
-            else:
+            elif companion.name.startswith(source.name):
                 # Suffix companion (e.g. Book.m4b.libraforge.json):
                 # append the suffix after the full audio filename.
                 suffix = companion.name.removeprefix(source.name)
                 companion_target = target.with_name(target.name + suffix)
+            else:
+                # A cover or notes file with a name of its own (cover-ln.jpg,
+                # info.txt): keep it, beside the book.
+                companion_target = target.parent / companion.name
             shutil.move(str(companion), str(companion_target))
             if companion_target.name.endswith(".metadata.json"):
                 final = companion_target.parent / "metadata.json"

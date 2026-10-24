@@ -97,15 +97,55 @@ class GenericSidecarsForLooseFileTests(unittest.TestCase):
                 found, {"libraforge.json", "metadata.json", "cover.jpg", "book_cover_nsfw.webp"}
             )
 
-    def test_does_not_include_the_audio_file_itself_or_unrelated_files(self):
+    def test_does_not_include_the_audio_file_itself_or_junk(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = Path(tmp) / "Book"
             source_dir.mkdir()
             audio = source_dir / "Book.m4b"
             audio.write_text("audio", encoding="utf-8")
-            (source_dir / "release.nfo").write_text("info", encoding="utf-8")
-            found = ORGANIZER.generic_sidecars_for_loose_file(audio)
-            self.assertEqual(found, [])
+            for junk in ("Thumbs.db", "Book.chapter-count-cache.json", "desktop.ini"):
+                (source_dir / junk).write_text("x", encoding="utf-8")
+            (source_dir / ".pad").mkdir()
+            self.assertEqual(ORGANIZER.generic_sidecars_for_loose_file(audio), [])
+
+    def test_covers_and_notes_with_their_own_names_belong_to_the_only_book_in_the_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp) / "Book"
+            source_dir.mkdir()
+            audio = source_dir / "Book.m4b"
+            audio.write_text("audio", encoding="utf-8")
+            names = ["cover-ln.jpg", "folder.jpg", "back.png", "info.txt", "Book.nfo", "tracks.cue", "x.sfv", "x.m3u", "x.wax"]
+            for name in names:
+                (source_dir / name).write_text("x", encoding="utf-8")
+            found = {p.name for p in ORGANIZER.generic_sidecars_for_loose_file(audio)}
+            self.assertEqual(found, set(names))
+
+    def test_a_folder_with_two_audiobooks_leaves_unnamed_extras_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp) / "Pack"
+            source_dir.mkdir()
+            first, second = source_dir / "One.m4b", source_dir / "Two.m4b"
+            for path in (first, second, source_dir / "folder.jpg", source_dir / "info.txt"):
+                path.write_text("x", encoding="utf-8")
+            self.assertEqual(ORGANIZER.generic_sidecars_for_loose_file(first), [])
+            self.assertEqual(ORGANIZER.generic_sidecars_for_loose_file(second), [])
+
+    def test_an_ebook_gets_the_extras_only_when_no_audiobook_shares_the_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            alone = Path(tmp) / "Alone"
+            alone.mkdir()
+            epub = alone / "Book.epub"
+            for path in (epub, alone / "Book.pdf", alone / "cover-ln.jpg"):
+                path.write_text("x", encoding="utf-8")
+            self.assertEqual({p.name for p in ORGANIZER.generic_sidecars_for_loose_file(epub)}, {"cover-ln.jpg"})
+
+            shared = Path(tmp) / "Shared"
+            shared.mkdir()
+            audio, ebook = shared / "Book.m4b", shared / "Book.epub"
+            for path in (audio, ebook, shared / "cover-ln.jpg"):
+                path.write_text("x", encoding="utf-8")
+            self.assertEqual({p.name for p in ORGANIZER.generic_sidecars_for_loose_file(audio)}, {"cover-ln.jpg"})
+            self.assertEqual(ORGANIZER.generic_sidecars_for_loose_file(ebook), [])
 
 
 class ExecutePlannedMoveLooseFileGenericSidecarTests(unittest.TestCase):
