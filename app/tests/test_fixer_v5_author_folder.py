@@ -52,6 +52,16 @@ class FolderAuthorClueTests(unittest.TestCase):
         self.assertEqual(clues["author"], "H. Melville")
         self.assertNotEqual(clues.get("author_source"), "folder")
 
+    def test_an_author_tag_holding_the_series_name_gives_way_to_the_folder(self):
+        # Kyle West's Starsea Cycle rips (#408): artist and album are the series.
+        tags = {"title": "The Starsea Cycle - Book 001 - The Mages of Starsea", "artist": "The Starsea Cycle",
+                "album": "The Starsea Cycle", "composer": "Rob Brinkmann"}
+        clues = clues_for("Kyle West/The Starsea Cycle/Book 1 - The Mages of Starsea/"
+                          "The Starsea Cycle - Book 001 - The Mages of Starsea.m4b", tags)
+        self.assertEqual(clues["author"], "Kyle West")
+        self.assertEqual(clues["author_source"], "folder")
+        self.assertEqual(clues["title"], "The Mages of Starsea")
+
     def test_author_folder_beats_a_title_subtitle_folder_name(self):
         # Untagged, "The X-Files - Cold Cases" alone parses as author "Cold Cases".
         clues = clues_for("Joe Harris/The X-Files - Cold Cases/The X-Files Cold Cases.m4b", {})
