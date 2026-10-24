@@ -98,6 +98,12 @@ def run(index_book):
         )
         item = fixer._build_report_item(result)
         item["log"] = result.log_lines
+        # What the matcher worked from: the clues parsed from the tags and the
+        # path, and the queries planned from them (report.py shows both).
+        queries, clues = search_context_cache[fixer.get_search_context_cache_key(path, {})]
+        item["clues"] = {k: v for k, v in clues.items() if not k.startswith("_") and k != "current"
+                         and isinstance(v, (str, int, float, list)) and v not in ("", [], None)}
+        item["planned_queries"] = list(queries)
     except Exception as exc:  # keep going; record the failure
         item = {"path": str(path), "status": "error", "error": repr(exc)}
     item["folder"] = book["folder"]
