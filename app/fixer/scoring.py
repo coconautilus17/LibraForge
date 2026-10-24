@@ -236,7 +236,15 @@ def get_primary_series(product: dict) -> tuple[str, str]:
         # Audible left the series field empty but the subtitle names it.
         return series_from_subtitle(product.get("subtitle"))
 
-    first = series[0] or {}
+    # A book in several series ([The Cosmere, The Stormlight Archive 4]) comes
+    # back from Audible in no stable order: a numbered series beats an
+    # unnumbered umbrella, unless with_preferred_series() put the series the
+    # file names first.
+    first = series[0] if product.get("_series_from_clues") else next(
+        (s for s in series if s and (s.get("sequence") or s.get("position"))),
+        series[0],
+    )
+    first = first or {}
 
     series_name = first.get("title") or first.get("name") or ""
     sequence = first.get("sequence") or first.get("position") or ""
@@ -966,6 +974,24 @@ def with_best_local_author(clues: dict, product: dict) -> dict:
     return clues
 
 
+def with_preferred_series(product: dict, clues: dict) -> dict:
+    """The product with the series the file names first in its series list.
+
+    A listing in several series (Mage Errant 5 and The Aetheriad 4) comes back
+    from Audible in a different order from one request to the next, and
+    get_primary_series() reads one of them. When the file's series clue names
+    one, that one is first, so scoring and the write agree run after run."""
+    series = product.get("series") or []
+    local = normalize_for_match(clues.get("series", ""))
+    if len(series) < 2 or not local:
+        return product
+    for index, entry in enumerate(series):
+        name, _ = split_series_trailing_number(sanitize_tag((entry or {}).get("title") or (entry or {}).get("name") or ""), "")
+        if normalize_for_match(name) == local:
+            return {**product, "series": [entry] + series[:index] + series[index + 1:], "_series_from_clues": True}
+    return product
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
@@ -973,6 +999,7 @@ def score_product_for_metadata(
     local_duration_minutes: float | None = None,
 ) -> float:
     clues = with_best_local_author(clues, product)
+    product = with_preferred_series(product, clues)
     # ASIN identity: embedded ASIN + title + author is bullet-proof confirmation.
     # When all three match, skip hard-reject guards designed for wrong-book
     # false positives and guarantee a floor score above the min_score gate.
@@ -1463,7 +1490,7 @@ def pick_best_match_for_metadata(
     """
     scored = [
         (score, product)
-        for product in products
+        for product in (with_preferred_series(p, clues) for p in products)
         for score in (
             score_product_for_metadata(clues, product, local_duration_minutes),
         )
@@ -1873,6 +1900,7 @@ def metadata_from_product(
     score: float,
     requested_edit_mode: str = "",
 ) -> dict:
+    product = with_preferred_series(product, clues)
     audible_title = sanitize_tag(product.get("title", ""))
     subtitle = sanitize_tag(product.get("subtitle", ""))
 
