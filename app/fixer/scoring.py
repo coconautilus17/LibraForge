@@ -1371,8 +1371,11 @@ def _publisher_matches(clues: dict, product: dict) -> bool:
     return bool(local_n and remote_n) and (local_n in remote_n or remote_n in local_n)
 
 
-# A runtime rival has to be a real candidate, not a scrap that only shares a title.
+# A runtime rival has to be a real candidate, not a scrap that only shares a title,
+# and match the audio closely enough to overrule the tags: the real cases sit
+# within 0.2%, while a same-cast file trimmed a little runs ~1% off another cast.
 RUNTIME_RIVAL_MIN_SCORE = 0.70
+RUNTIME_RIVAL_MAX_DIFF_PERCENT = 1.0
 
 
 def _runtime_rival(
@@ -1395,12 +1398,14 @@ def _runtime_rival(
     title = normalize_for_match(best_product.get("title", ""))
     authors = {normalize_for_match(a) for a in get_people(best_product, "authors")}
     for score, product in scored:
+        diff = _candidate_duration(product, local_duration_minutes).get("diff_percent")
         if (
             product is not best_product
             and score >= RUNTIME_RIVAL_MIN_SCORE
             and normalize_for_match(product.get("title", "")) == title
             and authors & {normalize_for_match(a) for a in get_people(product, "authors")}
-            and _candidate_duration(product, local_duration_minutes).get("status") == "perfect"
+            and diff is not None
+            and diff <= RUNTIME_RIVAL_MAX_DIFF_PERCENT
         ):
             def label(p: dict) -> str:
                 return f"{p.get('title', '') or '?'} [{p.get('asin', '') or '?'}]"

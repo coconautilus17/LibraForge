@@ -46,6 +46,15 @@ class RuntimeRivalScoringTests(unittest.TestCase):
         self.assertEqual(best["asin"], "B0CLGCXHQT")
         self.assertTrue(ambiguity is None or ambiguity["resolved"])
 
+    def test_a_rival_only_close_on_runtime_does_not_overrule_the_tags(self):
+        # Small Great Things: the tags name the UK cast (1001 min, 3.9% off);
+        # the US cast runs 974 min, 1.1% off a 963-min file. Too close to call.
+        uk = dict(HARDING, title="Small Great Things", runtime_length_min=1001)
+        us = dict(BRICK, title="Small Great Things", runtime_length_min=974)
+        clues = dict(CLUES, title="Small Great Things", existing_asin=uk["asin"], local_duration_minutes=963.0)
+        _best, _score, ambiguity = SCORING.pick_best_match_for_metadata(clues, [uk, us], 963.0)
+        self.assertTrue(ambiguity is None or ambiguity.get("resolved") is not False)
+
     def test_another_title_with_a_perfect_runtime_is_no_rival(self):
         other = dict(BRICK, title="Never Go Back")
         _best, _score, ambiguity = SCORING.pick_best_match_for_metadata(CLUES, [HARDING, other], 598.1)
