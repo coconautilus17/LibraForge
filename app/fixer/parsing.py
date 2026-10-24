@@ -585,6 +585,16 @@ def normalize_book_number(value: str) -> str:
         return value
 
 
+# A collection of books, not one book: "Books 1-3", "Books 1 thru 3",
+# "Book 1-3". Singular "Book" needs a tight dash or a word ("Book 1 to 3"),
+# since "Book 3 - 1984" is book 3 titled 1984.
+BOOK_RANGE_RE = re.compile(
+    r"\bbooks\s+\d+(?:\.\d+)?\s*(?:-|–|—|to|thru|through|&|and)\s*\d+"
+    r"|\bbook\s+\d+(?:\.\d+)?(?:[-–—]|\s+(?:to|thru|through)\s+)\d+",
+    re.IGNORECASE,
+)
+
+
 @trace(ALTER, capture=["value"])
 def extract_book_number_from_text(value: str) -> str:
     """Extract a strong book number from title/path text.
@@ -604,11 +614,7 @@ def extract_book_number_from_text(value: str) -> str:
         return ""
 
     # Avoid collection/range hints.
-    if re.search(
-        r"\bbooks\s+\d+(?:\.\d+)?\s*(?:-|to|through|&)\s*\d+",
-        value,
-        flags=re.IGNORECASE,
-    ):
+    if BOOK_RANGE_RE.search(value):
         return ""
 
     patterns = [
@@ -634,7 +640,7 @@ def extract_folder_book_number(value: str) -> str:
         return number
 
     value = clean_text(value)
-    if not value:
+    if not value or BOOK_RANGE_RE.search(value):
         return ""
 
     leading = re.match(
@@ -679,7 +685,7 @@ def extract_title_identity_number(value: str) -> str:
     if not value:
         return ""
 
-    if re.search(
+    if BOOK_RANGE_RE.search(value) or re.search(
         r"\bbooks?\s+\d+(?:\.\d+)?\s*(?:-|to|through|&|and)\s*\d+",
         value,
         flags=re.IGNORECASE,
