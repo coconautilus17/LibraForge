@@ -23,6 +23,11 @@ Searches Audible (or another provider) and writes matched metadata to your files
 - **ASIN aware:** the matched ASIN is embedded in every file; if a file already carries
   an ASIN (tags or `[B0XXXXXXXX]` in the name) it is looked up directly first, and an
   ASIN mismatch flags the book for manual review.
+- **Series-only matches:** when only another book of the same series is found (a
+  novella, an omnibus, the next volume), only the grouping fields (series, author,
+  genre) are written. The file keeps its own title, narrator, number, ASIN, ISBN and
+  subtitle, and the search keeps trying the remaining queries in case the book itself
+  turns up. Later runs search a series-only book again instead of skipping it.
 - **Manual Review:** load any book or folder, search Audible manually, and apply per
   book with an explicit `Full metadata` or `Series only` mode. A filesystem search index
   (built in the background, shown as a persistent "Search index: N books" marker) lets
@@ -40,7 +45,10 @@ Searches Audible (or another provider) and writes matched metadata to your files
   likely-wrong ones (bitrate leaked into a title, duplicated title brackets, redundant
   series prefixes, generic omnibus titles, and more) for a quick second look - no LLM
   involved, cheap enough to run after every apply.
-- **Providers:** Audible (direct), **Audiobookshelf** (via its own search API),
+- **Providers:** the **Audible public catalog** (Audible's own catalog, no login; pick the
+  marketplace, US, UK, DE and so on), **Audible (your account)** (the same catalog through
+  your logged-in account; with no login a run or search switches to the public catalog and
+  says so), **Audiobookshelf** (via its own search API, which returns fewer candidates),
   **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads /
   Kindle** (via `abs-tract`) as an opt-in fallback for no-match, series-only, or
   low-score books. Goodreads rate-limits aggressively; a circuit breaker opens after

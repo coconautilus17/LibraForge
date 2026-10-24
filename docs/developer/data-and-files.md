@@ -27,7 +27,9 @@ each written by the step that owns it:
 
 - `marker`: that the book was processed and how (`processed_at`, `applied`, `mode`,
   `edit_mode`, `score`, `source_file`, the matched `audible` block, `local_before`,
-  `restored_at`). The fixer uses it to skip already-applied books.
+  `restored_at`). The fixer uses it to skip already-applied books, except a
+  `series_only` apply (matched only to another book of the series) and a
+  `different_edition` apply with no real ASIN of its own: both are searched again.
 - `backup`: the original tags (`format_tags`) captured before the first write, with
   `created_at`, `source_file` and `duration_minutes`. `--restore-metadata` reads this.
 - `sidecar`: the metadata plan for an M4B conversion (`book`, `audible`, source file list,

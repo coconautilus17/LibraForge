@@ -157,10 +157,14 @@
         <div class="grid">
           <label><span class="field-label">Metadata provider</span>
             <select id="metaProvider">
-              <option value="audible">Audible</option>
+              <option value="audible-public">Audible public catalog (no login)</option>
+              <option value="audible">Audible (your account)</option>
               <option value="abs">Audiobookshelf (ABS)</option>
               <option value="abs-agg">abs-agg</option>
             </select>
+          </label>
+          <label id="audibleRegionLabel" hidden><span class="field-label">Audible marketplace <span class="info-tip" data-tooltip="Which Audible store's catalog to search."></span></span>
+            <select id="audibleRegion"></select>
           </label>
           <label id="absProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf."></span></span>
             <select id="absProvider"></select>

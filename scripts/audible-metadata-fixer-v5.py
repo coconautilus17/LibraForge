@@ -161,6 +161,7 @@ try:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
@@ -300,6 +301,7 @@ except ModuleNotFoundError:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
@@ -1804,6 +1806,10 @@ def should_skip_due_to_marker(
         # real ASIN of its own: search again, the recording itself may turn up.
         if marker.get("different_edition") and not marker_real_asin(marker):
             return False, ""
+        # Matched only to another book of the series: the book itself was not
+        # found yet, so search again.
+        if marker.get("edit_mode") == "series_only":
+            return False, ""
         return True, "already processed"
 
     return False, ""
@@ -2888,8 +2894,12 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # folder like _unorganized. Taken before the folder-name parse below, which
     # can read a "Title - Subtitle" folder as "Title - Author"
     # ("The X-Files - Cold Cases"); that parse still wins when the Author/
-    # folder doesn't look like a person.
-    if not clues.get("author"):
+    # folder doesn't look like a person. An author tag that is just the series
+    # or album name ("The Starsea Cycle" as artist) names no author either.
+    author_is_series = bool(clues.get("author")) and normalize_for_match(clues["author"]) in {
+        normalize_for_match(clues.get(key, "")) for key in ("series", "album")
+    } - {""}
+    if not clues.get("author") or author_is_series:
         folder_author = clean_author_value(library_author_folder(file_path.parent, LIBRARY_ROOTS))
         if folder_author and normalize_for_match(folder_author) not in GENERIC_TITLE_RECOVERY_FOLDER_NAMES:
             clues["author"] = folder_author
@@ -3985,6 +3995,16 @@ def search_item(
             existing_asin = clues.get("existing_asin", "")
             asin_unconfirmed = False
 
+            def match_is_settled() -> bool:
+                # A series_only match is another book of the series: keep it
+                # as the fallback, but the book itself may still turn up.
+                return bool(
+                    product
+                    and score >= args.min_score
+                    and not asin_unconfirmed
+                    and metadata_from_product(product, clues, score).get("edit_mode") != "series_only"
+                )
+
             def same_listing_contest(candidate: dict, ambiguity: dict | None) -> bool:
                 # Keyword search picked the listing already held (the embedded
                 # ASIN's) but found it contested, e.g. the runtime matching
@@ -3993,6 +4013,7 @@ def search_item(
                     product and ambiguity and not ambiguity.get("resolved")
                     and candidate.get("asin") == product.get("asin")
                 )
+
             if existing_asin:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
@@ -4019,7 +4040,7 @@ def search_item(
                         # definitive only when the runtime agrees. Otherwise keyword
                         # search still runs and must beat it to replace it.
                         asin_duration = (asin_debug.get("duration") or {}).get("status", "unknown")
-                        if asin_duration in {"perfect", "unknown"}:
+                        if asin_duration in {"perfect", "unknown"} and asin_debug.get("edit_mode") != "series_only":
                             queries = []
                         else:
                             asin_unconfirmed = True
@@ -4036,7 +4057,7 @@ def search_item(
                     title_part, _, author_part = query.partition(" - ")
                     abs_searches.append((title_part.strip() or query, author_part.strip()))
                 for title_part, author_part in dict.fromkeys(abs_searches):
-                    if product and score >= args.min_score and not asin_unconfirmed:
+                    if match_is_settled():
                         break
                     query = f"{title_part} - {author_part}" if author_part else title_part
                     log.append(f"  Trying ABS query ({args.abs_provider}): {query}")
@@ -4060,7 +4081,7 @@ def search_item(
                             f"  Candidate: score={candidate_score} "
                             f"title={debug_metadata.get('audible_title')} "
                             f"mode={debug_metadata.get('edit_mode')} "
-                            f"asin={debug_metadata.get('asin')}"
+                            f"asin={candidate.get('asin')}"
                         )
                         if candidate_ambiguity:
                             log.append(f"  {candidate_ambiguity['reason']}")
@@ -4074,7 +4095,7 @@ def search_item(
                             match_ambiguity = candidate_ambiguity
 
             for query in queries if not use_abs else []:
-                if product and score >= args.min_score and not asin_unconfirmed:
+                if match_is_settled():
                     break
                 log.append(f"  Trying query: {query}")
                 cache_key = (query.lower(), args.limit)
@@ -4106,7 +4127,7 @@ def search_item(
                         f"sequence={debug_metadata.get('audible_sequence')} "
                         f"duration={debug_metadata.get('audible_duration_minutes')} "
                         f"mode={debug_metadata.get('edit_mode')} "
-                        f"asin={debug_metadata.get('asin')}"
+                        f"asin={candidate.get('asin')}"
                     )
                     if candidate_ambiguity:
                         log.append(f"  {candidate_ambiguity['reason']}")
@@ -4123,7 +4144,7 @@ def search_item(
                 elif same_listing_contest(candidate, candidate_ambiguity):
                     match_ambiguity = candidate_ambiguity
 
-                if candidate_score >= args.min_score:
+                if candidate_score >= args.min_score and debug_metadata.get("edit_mode") != "series_only":
                     break
 
             # Goodreads fallback (abs-tract): fires whenever Audible + ASIN did
@@ -4949,6 +4970,9 @@ def _build_report_item(result: "ItemResult") -> dict:
         # written, the book's own was kept (scoring.different_edition).
         if meta.get("different_edition"):
             item["different_edition"] = meta["different_edition"]
+        # Another book of the series supplied only the grouping fields.
+        if meta.get("series_match_asin"):
+            item["series_match_asin"] = meta["series_match_asin"]
     return item
 
 def print_plan(
@@ -5684,6 +5708,14 @@ def main():
     )
 
     parser.add_argument(
+        "--audible-public-region",
+        default="",
+        choices=["", *PUBLIC_AUDIBLE_DOMAINS],
+        help="Search this marketplace's public Audible catalog (us, uk, de, ...) "
+        "without logging in, even when an auth file exists",
+    )
+
+    parser.add_argument(
         "--ask-password",
         action="store_true",
         help="Ask for encrypted auth file password",
@@ -6013,6 +6045,12 @@ def main():
     global _exit_on_cancel
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
+    if args.audible_public_region:
+        # get_catalog_client falls back to PublicAudibleClient when there is no
+        # auth file; the client reads its marketplace from the environment.
+        args.auth_file = ""
+        os.environ["AUDIBLE_PUBLIC_REGION"] = args.audible_public_region
+
     if args.debug_trace:
         cats = None
         if args.debug_trace_categories:
@@ -6104,10 +6142,13 @@ def main():
     print(f"Minimum score: {args.min_score}")
     print(f"Writer: {args.writer}")
     if getattr(args, "provider", "audible") != "abs":
-        print(
-            "Audible: logged-in account" if Path(args.auth_file).is_file()
-            else "Audible: no login found, using the public Audible catalog"
-        )
+        if args.audible_public_region:
+            print(f"Audible: public catalog ({args.audible_public_region})")
+        else:
+            print(
+                "Audible: logged-in account" if Path(args.auth_file).is_file()
+                else "Audible: no login found, using the public Audible catalog"
+            )
     print(f"Search workers: {args.workers}")
     print(f"Write workers:  {args.write_workers}")
     if args.enable_goodreads_fallback:

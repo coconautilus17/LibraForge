@@ -42,9 +42,9 @@
   <main class="shell" id="main-content">
 
     <div id="authBanner" class="callout callout-warning" style="margin-top:4px" hidden>
-      <strong>Audible auth needed.</strong>
-      Metadata Forge and M4B Tool require an Audible auth file to search the catalogue.
-      <a href="/settings#accounts">Set up auth →</a>
+      <strong>No Audible login.</strong>
+      Metadata Forge and M4B Tool search the public Audible catalog without one. A login is only needed to download your own Audible library.
+      <a href="/settings#accounts">Log in →</a>
     </div>
 
     <div class="start-here-hero">
@@ -56,10 +56,20 @@
       <summary>Guide: what the badges and modes mean</summary>
 
       <div class="guide-section">
+        <h3>Metadata providers</h3>
+        <ul>
+          <li><strong>Audible public catalog (no login)</strong>: Audible's own catalog, searched directly with no account. Pick the marketplace (US, UK, DE, ...) your books come from, since titles, series and narrators can differ between stores. This is the most accurate choice for most libraries.</li>
+          <li><strong>Audible (your account)</strong>: the same catalog through your logged-in Audible account and its marketplace. With no login, a run or search switches to the public catalog and tells you so.</li>
+          <li><strong>Audiobookshelf (ABS)</strong>: asks your Audiobookshelf server to search a provider on your behalf. It returns fewer candidates per search than Audible directly, so it finds fewer books.</li>
+          <li><strong>Goodreads fallback</strong> (opt-in, via abs-tract) is tried only when Audible finds no confident match.</li>
+        </ul>
+      </div>
+
+      <div class="guide-section">
         <h3>Edit modes</h3>
         <ul>
           <li><span class="match-mode-badge">Full metadata</span> writes the planned title, author, series, sequence, year, genre, and ASIN. If local credits identify a different recording, the book's own narrator is kept instead of the match's narrator.</li>
-          <li><span class="match-mode-badge">Series only</span> uses the match for series grouping while keeping the local title and narrator. It can clean up the author, and does not take a sequence number from the match. Blank sequence and year values may be cleared when writing tags.</li>
+          <li><span class="match-mode-badge">Series only</span> uses the match for series grouping while keeping the local title and narrator. The match is another book of the series, so its ASIN, ISBN and subtitle are not written either; the file keeps its own. It can clean up the author, and does not take a sequence number from the match. Blank sequence and year values may be cleared when writing tags. A series-only book is searched again on later runs, in case the book itself turns up.</li>
         </ul>
       </div>
 

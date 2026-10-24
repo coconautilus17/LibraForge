@@ -768,6 +768,19 @@ class MetadataTitleFallbackTests(unittest.TestCase):
 
         self.assertEqual(FIXER.extract_book_number_from_path(path), "15")
 
+    def test_book_range_folder_is_not_a_book_number(self):
+        # An omnibus folder: "Books 1-3" is not book 3, or it conflicts with
+        # the omnibus's Audible sequence (Arcane Lawmaker, #400).
+        for folder in ("Books 1-3", "Books 1 - 3", "Book 1-3", "Books 1 thru 3",
+                       "Book 1 to 3", "Walrus King - Tunnel Rat Books 1 thru 3"):
+            path = Path(f"/books/Dante King/Arcane Lawmaker/{folder}/Dante King - Arcane Lawmaker Omnibus.m4b")
+            self.assertEqual(FIXER.extract_book_number_from_path(path), "", folder)
+
+    def test_single_book_folder_with_numeric_title_keeps_its_number(self):
+        path = Path("/books/Author/Series/Book 3 - 1984/Book 3 - 1984.m4b")
+        self.assertEqual(FIXER.extract_book_number_from_path(path), "3")
+        self.assertEqual(FIXER.extract_folder_book_number("Book 12"), "12")
+
     def test_audible_subtitle_number_fills_missing_series_sequence(self):
         product = {
             "title": "Shade's First Rule",

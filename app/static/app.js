@@ -34,6 +34,7 @@ async function resumeActiveRun() {
 
 const PROVIDER_LABELS = {
   'audible': 'Audible',
+  'audible-public': 'Audible public catalog',
   'abs': 'Audiobookshelf',
   'abs-agg': 'abs-agg',
   'graphicaudio': 'GraphicAudio',
@@ -125,6 +126,7 @@ function collectRequest() {
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualProvider')?.value || 'audible') : 'audible',
     abs_provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualAbsProvider')?.value || 'audible') : 'audible',
+    audible_region: $('manualAudibleRegion')?.value || 'us',
     enable_goodreads_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableGoodreadsFallback')?.checked) : false,
     enable_openlibrary_fallback: fixerMajorVersion($('script').value) >= 5 ? Boolean($('enableOpenLibraryFallback')?.checked) : false,
     debug_trace: fixerMajorVersion($('script').value) >= 5 ? Boolean(prefs.debugTrace) : false,
@@ -1102,6 +1104,7 @@ async function runManualProviderSearch() {
       metadata: collectManualMetadata(),
       limit: 10,
       script_name: $('script').value,
+      audible_region: provider === 'audible-public' ? ($('manualAudibleRegion')?.value || 'us') : '',
     };
     res = await fetch('/api/m4b/search', {
       method: 'POST',
@@ -2010,6 +2013,7 @@ if ($('targetScanBtn')) {
     } catch {}
   }
   await loadAbsProviders($('manualAbsProvider'));
+  await window.LibraForgeAuth?.loadAudibleRegions($('manualAudibleRegion'));
 
   function updateAbsAggParamHint(selectEl, paramsInputEl) {
     const hint = getAbsAggProviderParamHint(selectEl.value);
@@ -2031,6 +2035,7 @@ if ($('targetScanBtn')) {
     const v = $('manualProvider').value;
     const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
+    if ($('manualAudibleRegionLabel')) $('manualAudibleRegionLabel').hidden = v !== 'audible-public';
     if ($('manualAbsProviderLabel')) $('manualAbsProviderLabel').hidden = !isAbs;
     if ($('absWarning')) $('absWarning').hidden = !isAbs;
     ['manualAbsAggProviderLabel', 'manualAbsAggParamsLabel', 'manualAbsAggUrlLabel'].forEach(id => {
@@ -2052,6 +2057,7 @@ if ($('targetScanBtn')) {
   }
   $('manualProvider').addEventListener('change', toggleManualProviderFields);
   toggleManualProviderFields();
+  window.LibraForgeAuth?.preferPublicCatalog($('manualProvider'));
 
   $('manualAbsAggUrl').addEventListener('change', () => saveAbsAggUrl($('manualAbsAggUrl').value.trim()));
 })();
