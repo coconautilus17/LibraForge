@@ -19,6 +19,7 @@ from app.debug_trace import trace, ALTER, CHOOSE, SCORE
 from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
     is_never_series,
+    series_from_subtitle,
     normalize_for_match,
     parse_sequence_number,
     extract_book_number_from_text,
@@ -232,7 +233,8 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
 
     if not series:
-        return "", ""
+        # Audible left the series field empty but the subtitle names it.
+        return series_from_subtitle(product.get("subtitle"))
 
     first = series[0] or {}
 
