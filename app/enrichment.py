@@ -726,6 +726,7 @@ def compile_series_enrichment(
         "genre_evidence": unit["evidence"],
         "series_evidence": unit["series_evidence"],
         "agreement": unit["agreement"],
+        "genre_conflicts": unit["conflicts"],
         "narrator": ", ".join(_dedupe_preserve_order(all_narrators)),
         "explicit_flagged_count": flagged_count,
         "explicit_total_count": len(books),

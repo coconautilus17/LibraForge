@@ -300,6 +300,9 @@ async function compileSeries(seriesName, seriesKey) {
   renderSuggestions();
   $("agreementNotice").hidden = agreed;
   $("agreementNotice").innerHTML = agreed ? "" : `<span class="dot">&#9679;</span><span><strong>No genre reached agreement across the sources for this ${data.standalone ? "book" : "series"}.</strong> The subgenres below are every genre any source suggested; keep the ones that fit. Type a genre like Fantasy or Thriller into Add to make it a main genre.</span>`;
+  const conflicts = data.genre_conflicts || [];
+  $("conflictNotice").hidden = !conflicts.length;
+  $("conflictNotice").innerHTML = conflicts.map((c) => `<span class="dot">&#9679;</span><span><strong>Sources disagree: ${escapeHtml(conflictText(c))}.</strong> These genres exclude each other but both reached the vote; kept ${escapeHtml(c.kept.join(", ") || "neither")}. A wrong match or a mislabelled source is the usual cause, so check the book rows before applying.</span>`).join("");
   $("seriesEvidence").textContent = (data.series_evidence || []).length ? `Series lists: ${data.series_evidence.join(" · ")}` : "";
   // Narrators differ per book and edition, so nothing is pre-filled (#299).
   $("narratorInput").value = "";
@@ -500,6 +503,11 @@ function sameGenres(a, b) {
   return norm(a) === norm(b);
 }
 
+// "Thriller (12 books) and Non-Fiction (3 books)"
+function conflictText(conflict) {
+  return conflict.genres.map((g) => `${g} (${conflict.support[g]} book${conflict.support[g] === 1 ? "" : "s"})`).join(" and ");
+}
+
 function batchProposed(unit) {
   return [...(unit.main_genres || []), ...(unit.sub_genres || [])];
 }
@@ -509,9 +517,10 @@ function batchMatches(unit, filter) {
   if (filter === "failed") return unit.state === "failed" || unit.state === "apply_failed";
   if (filter === "applied") return unit.state === "applied";
   if (filter === "changed") return unit.state === "compiled" && !sameGenres(batchProposed(unit), unit.current_genres);
-  // Needs review: nothing agreed, little evidence, or it failed.
+  // Needs review: nothing agreed, sources disagree, little evidence, or it failed.
   return unit.state === "failed" || unit.state === "apply_failed"
-    || (unit.state === "compiled" && (unit.agreement === "none" || unit.coverage <= 2 || (unit.degraded || []).length));
+    || (unit.state === "compiled" && (unit.agreement === "none" || (unit.conflicts || []).length
+      || unit.coverage <= 2 || (unit.degraded || []).length));
 }
 
 function renderBatchProgress(data) {
@@ -543,7 +552,7 @@ function renderBatchTable() {
       <thead><tr><th></th><th>Series or book</th><th>Sources</th><th>Now</th><th>Proposed</th><th>Explicit</th><th></th></tr></thead>
       <tbody>${rows.map((u) => {
         const pickable = u.state === "compiled" || u.state === "apply_failed";
-        const checked = u.state === "compiled" && u.agreement !== "none";
+        const checked = u.state === "compiled" && u.agreement !== "none" && !(u.conflicts || []).length;
         const pinned = new Set(u.pinned_genres || []);
         const chip = (g, main) => `<span class="batch-genre${main ? " main" : ""}${pinned.has(g) ? " pinned" : ""}">${escapeHtml(g)}</span>`;
         const proposed = u.state === "failed"
@@ -555,7 +564,7 @@ function renderBatchTable() {
           <td>${escapeHtml(u.name)} ${u.standalone ? '<span class="badge standalone-badge">Standalone</span>' : `<span class="section-note">${u.book_count} book${u.book_count === 1 ? "" : "s"}</span>`}${u.state === "applied" ? ' <span class="badge">applied</span>' : ""}${u.state === "apply_failed" ? ` <span class="batch-error">${(u.failures || []).length} book${(u.failures || []).length === 1 ? "" : "s"} failed; tick to retry</span>` : ""}</td>
           <td>${u.state === "pending" ? "" : (u.coverage || 0)}${(u.degraded || []).length ? `<div class="batch-error" title="Paused or failing while this compiled; Resume compiles it again">missing: ${escapeHtml(u.degraded.join(", "))}</div>` : ""}</td>
           <td class="batch-now">${escapeHtml((u.current_genres || []).join(", ") || "none")}</td>
-          <td>${proposed}</td>
+          <td>${proposed}${(u.conflicts || []).map((c) => `<div class="batch-error" title="These genres exclude each other but both reached the vote; Edit to check">conflict: ${escapeHtml(conflictText(c))}</div>`).join("")}</td>
           <td>${u.explicit_suggested ? `${u.explicit_suggested} (HaremLit)` : ""}</td>
           <td><button type="button" class="secondary batch-edit" data-key="${escapeHtml(u.key)}" data-name="${escapeHtml(u.name)}">Edit</button></td>
         </tr>`;

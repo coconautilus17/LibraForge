@@ -82,6 +82,7 @@ def slim_result(compiled: dict[str, Any]) -> dict[str, Any]:
         "pinned_genres": compiled.get("pinned_genres") or [],
         "genre_evidence": compiled.get("genre_evidence") or {},
         "agreement": compiled.get("agreement", "ok"),
+        "conflicts": compiled.get("genre_conflicts") or [],
         "series_evidence": compiled.get("series_evidence") or [],
         "explicit_summary": compiled.get("explicit_summary") or {},
         # How many sources answered at all: a quick "how much do we know" badge.

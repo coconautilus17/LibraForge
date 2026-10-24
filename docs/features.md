@@ -163,6 +163,11 @@ whole series at once, instead of fixing each book one at a time.
   store categories ("Fantasía", "Ciencia e ingeniería") count as the English ones. Goodreads
   shelves and Open Library subjects are free-form reader tags, so only the ones that name
   a known genre count.
+- **Disagreeing sources are flagged:** when genres that exclude each other both reach the
+  vote (Non-Fiction and a fiction genre, Young Adult and Children's), the larger side is
+  kept and the series shows a "Sources disagree" notice with each side's book count. In
+  the batch review such a series is listed under Needs review and left unticked, since
+  the usual cause is a wrong match or a mislabelled source.
 - **Your own genres are pinned:** genres you set by hand in Audiobookshelf (real genres
   that differ from the audio file's own tag and weren't written by Metadata Forge or
   Enrichment Forge) are always pre-filled, marked "yours", and never outvoted. A genre

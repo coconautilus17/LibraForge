@@ -50,7 +50,8 @@ MAX_CANDIDATES = 10
 def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     """One book's vote: {"main": set, "sub": Counter, "evidence": {genre:
     set(sources)}, "sub_evidence": {sub: set(sources)}, "other": set of main
-    genres some source named that didn't pass}."""
+    genres some source named that didn't pass, "contested": {genre: weight}
+    when sources called it both fiction and non-fiction}."""
     votes: collections.Counter = collections.Counter()
     subs: collections.Counter = collections.Counter()
     evidence: dict[str, set[str]] = collections.defaultdict(set)
@@ -79,6 +80,18 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
             subs[sub] += 1
             sub_evidence[sub].add(source)
     main = {g for g, w in votes.items() if w >= MAIN_WEIGHT}
+    contested: dict[str, int] = {}
+    fiction = main & _FICTION_OR_AUDIENCE
+    if "Non-Fiction" in main and fiction:
+        # Sources disagree on this one book (Audible: History, Open Library:
+        # spies): the side with more evidence weight wins, as the vote counts
+        # it; a tie is left to the series vote. Either way it is reported.
+        contested = {g: votes[g] for g in fiction | {"Non-Fiction"}}
+        non_fiction, other = votes["Non-Fiction"], max(votes[g] for g in fiction)
+        if non_fiction > other:
+            main -= fiction
+        elif other > non_fiction:
+            main.discard("Non-Fiction")
     fallback = {g: w for g, w in votes.items() if g not in STRONG_MAINS}
     if not main and fallback:
         # Only lone crowd sources answered: fall back to their best-supported
@@ -89,7 +102,13 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
         tied = sorted((g for g, c in votes.items() if c == top), key=MAIN_ORDER.index)
         main = set(tied[:2])
     return {"main": main, "sub": subs, "evidence": {g: evidence[g] for g in main},
-            "sub_evidence": dict(sub_evidence), "other": set(votes) - main}
+            "sub_evidence": dict(sub_evidence), "other": set(votes) - main, "contested": contested}
+
+
+def _conflict(side_a: list[str], side_b: list[str], votes: collections.Counter, kept: list[str]) -> dict[str, Any]:
+    """{"genres": both sides, "support": {genre: books}, "kept": the ones still main}."""
+    genres = side_a + side_b
+    return {"genres": genres, "support": {g: votes[g] for g in genres}, "kept": [g for g in genres if g in kept]}
 
 
 def place_pinned(name: str) -> tuple[list[str], list[str]]:
@@ -152,12 +171,27 @@ def vote_unit(
         evidence[genre][SERIES_SOURCE] += 1
 
     mains = [g for g in MAIN_ORDER if main_votes[g] >= threshold]
-    fiction = [g for g in mains if g != "Non-Fiction"]
+    # Genres that exclude each other but both reached the threshold: one is
+    # kept, and the disagreement is reported (#436), since it usually means a
+    # wrong match or a mislabelled source.
+    conflicts: list[dict[str, Any]] = []
+    # Classics, Humor and Audio Drama sit beside Non-Fiction (Plato, humor essays).
+    fiction = [g for g in mains if g in _FICTION_OR_AUDIENCE]
     if "Non-Fiction" in mains and fiction:
         if main_votes["Non-Fiction"] > max(main_votes[g] for g in fiction):
-            mains = ["Non-Fiction"]
+            mains = [g for g in mains if g not in fiction]
         else:
             mains.remove("Non-Fiction")
+        conflicts.append(_conflict(["Non-Fiction"], fiction, main_votes, mains))
+    else:
+        # Books whose own sources disagreed, settled per book above.
+        disputed = [v["contested"] for v in voted if v.get("contested")]
+        if disputed:
+            books_per_genre = collections.Counter(g for c in disputed for g in c)
+            sides = [g for g in MAIN_ORDER if g in books_per_genre and g != "Non-Fiction"]
+            conflicts.append(_conflict(["Non-Fiction"], sides, books_per_genre, mains))
+    if "Young Adult" in mains and "Children's" in mains:
+        conflicts.append(_conflict(["Young Adult"], ["Children's"], main_votes, mains))
     if "Fantasy" in mains and "Sci-Fi" in mains:
         fantasy, scifi = main_votes["Fantasy"], main_votes["Sci-Fi"]
         if min(fantasy, scifi) < 0.5 * max(fantasy, scifi):
@@ -225,4 +259,5 @@ def vote_unit(
         "evidence": {**{g: dict(evidence[g]) for g in mains}, **{s: dict(sub_evidence[s]) for s in subs}},
         "series_evidence": list(series_evidence) if not standalone else [],
         "agreement": "ok" if mains or subs else "none",
+        "conflicts": conflicts,
     }
