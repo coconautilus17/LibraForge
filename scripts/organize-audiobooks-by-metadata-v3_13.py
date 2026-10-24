@@ -5612,6 +5612,11 @@ def execute_planned_move(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
         for companion in move.get("companions", []):
+            if not companion.exists():
+                # Planned for this book and for a sibling in the same folder (an
+                # audiobook and its ebook share libraforge.json and a cover); the
+                # sibling that moved first took it.
+                continue
             if companion.name.lower() in GENERIC_LOOSE_FILE_SIDECAR_NAMES or (
                 companion.name.lower().startswith(("cover.", "book_cover"))
                 and companion.suffix.lower() in COMPANION_SIDE_EXTENSIONS
