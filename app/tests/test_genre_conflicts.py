@@ -25,6 +25,10 @@ class GenreConflictTests(unittest.TestCase):
         self.assertEqual(unit["main"], ["Non-Fiction"])
         self.assertEqual(unit["conflicts"][0]["kept"], ["Non-Fiction"])
 
+    def test_classics_and_humor_sit_beside_non_fiction(self):
+        unit = unit_of([vote("Non-Fiction", "Classics", "Humor")] * 3)
+        self.assertEqual((unit["main"], unit["conflicts"]), (["Humor", "Classics", "Non-Fiction"], []))
+
     def test_a_genre_under_the_threshold_is_no_conflict(self):
         unit = unit_of([vote("Thriller")] * 11 + [vote("Thriller", "Non-Fiction")])
         self.assertEqual(unit["conflicts"], [])

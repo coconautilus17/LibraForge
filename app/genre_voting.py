@@ -175,10 +175,11 @@ def vote_unit(
     # kept, and the disagreement is reported (#436), since it usually means a
     # wrong match or a mislabelled source.
     conflicts: list[dict[str, Any]] = []
-    fiction = [g for g in mains if g != "Non-Fiction"]
+    # Classics, Humor and Audio Drama sit beside Non-Fiction (Plato, humor essays).
+    fiction = [g for g in mains if g in _FICTION_OR_AUDIENCE]
     if "Non-Fiction" in mains and fiction:
         if main_votes["Non-Fiction"] > max(main_votes[g] for g in fiction):
-            mains = ["Non-Fiction"]
+            mains = [g for g in mains if g not in fiction]
         else:
             mains.remove("Non-Fiction")
         conflicts.append(_conflict(["Non-Fiction"], fiction, main_votes, mains))
