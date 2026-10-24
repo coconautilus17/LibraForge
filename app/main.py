@@ -6555,38 +6555,29 @@ def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/aud
     audible_results: dict[str, dict | None] = {}
     abs_results: dict[str, dict | None] = {}
 
-    # Phase 1: Direct Audible when an auth file exists; otherwise fall back to
-    # Audiobookshelf's provider search so Enrichment Forge can still compile.
-    auth_path = Path(auth_file)
-    if auth_path.exists():
-        try:
-            auth = audible.Authenticator.from_file(auth_file)
-            client = audible.Client(auth=auth)
-            # Reuse the real fixer search/lookup functions (including the ASIN
-            # keyword-search fallback in audible_lookup_by_asin), just bound to
-            # the enrichment-only expanded response groups instead of duplicating them.
-            audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-            audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-            audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
-            source_status["audible"] = {
-                "label": "Audible",
-                "state": "searched",
-                "searched": len(books),
-            }
-        except Exception as exc:
-            abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
-            source_status["audible"] = {
-                "label": "Audible",
-                "state": "searched",
-                "detail": f"Used ABS's Audible provider because direct auth failed: {exc}",
-                "searched": len(books),
-            }
-    else:
+    # Phase 1: Audible directly: the logged-in client when an auth file exists,
+    # else the public catalog (same products, categories and ratings, no login).
+    # Audiobookshelf's Audible provider is only the fallback when Audible fails.
+    try:
+        client = get_catalog_client(auth_file)
+        # Reuse the real fixer search/lookup functions (including the ASIN
+        # keyword-search fallback in audible_lookup_by_asin), just bound to
+        # the enrichment-only expanded response groups instead of duplicating them.
+        audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+        audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
+        audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
+        source_status["audible"] = {
+            "label": "Audible",
+            "state": "searched",
+            "searched": len(books),
+            **({} if Path(auth_file).exists() else {"detail": "Audible public catalog (no login)."}),
+        }
+    except Exception as exc:
         abs_results = search_series_abs(books, search_abs_candidates, provider="audible")
         source_status["audible"] = {
             "label": "Audible",
             "state": "searched",
-            "detail": "Used ABS's Audible provider because no direct Audible auth file is configured.",
+            "detail": f"Used ABS's Audible provider because Audible failed: {exc}",
             "searched": len(books),
         }
     phase1_results = audible_results or abs_results
