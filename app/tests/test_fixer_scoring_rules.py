@@ -46,6 +46,21 @@ class StrongIdentityOverrideTests(unittest.TestCase):
         self.assertIs(self.override(side_story(narrators=("Yan Z",))), True)
         self.assertIs(self.override(side_story(authors=("Zed Q",), narrators=("Yan Z",))), False)
 
+    def test_titles_differing_in_one_word_each_are_two_books(self):
+        # Hitchhiker's radio plays (#406): Secondary Phase is not Tertiary Phase,
+        # however similar the titles and close the runtimes.
+        clues = {"title": "The Hitchhiker's Guide to the Galaxy - The Secondary Phase", "author": "Douglas Adams",
+                 "narrator": "Geoffrey McGivern", "series": "Hitchhiker's Guide (radio plays)",
+                 "book_number": "2", "book_number_source": "path"}
+        tertiary = side_story(title="The Hitchhiker's Guide To The Galaxy: Tertiary Phase", seq="3", dur=192,
+                              authors=("Douglas Adams",), narrators=("Full Cast", "Geoffrey McGivern"),
+                              series="Hitchhiker's Guide (radio plays)")
+        self.assertIs(self.override(tertiary, clues, minutes=175.6), False)
+        self.assertEqual(s.score_product_for_metadata(clues, tertiary, 175.6), 0.0)
+
+    def test_a_subtitle_only_on_one_side_still_overrides(self):
+        self.assertIs(self.override(side_story(title="Dominion: A Saga Novella")), True)
+
 
 class AuthorIdentityConflictTests(unittest.TestCase):
     def conflict(self, local, *product_authors):
