@@ -1387,6 +1387,58 @@ def _publisher_matches(clues: dict, product: dict) -> bool:
     return bool(local_n and remote_n) and (local_n in remote_n or remote_n in local_n)
 
 
+# A runtime rival has to be a real candidate, not a scrap that only shares a title,
+# and match the audio closely enough to overrule the tags: the real cases sit
+# within 0.2%, while a same-cast file trimmed a little runs ~1% off another cast.
+RUNTIME_RIVAL_MIN_SCORE = 0.70
+RUNTIME_RIVAL_MAX_DIFF_PERCENT = 1.0
+
+
+def _runtime_rival(
+    clues: dict,
+    best_product: dict,
+    scored: list[tuple[float, dict]],
+    local_duration_minutes: float | None,
+) -> dict | None:
+    """An unresolved ambiguity when the tags and the audio name two recordings.
+
+    The winner's runtime is off (it won on the file's narrator tag or
+    embedded ASIN) while another listing of the same title and author matches
+    the runtime exactly: the tags describe one recording, the audio is the
+    other (Jack Reacher rips tagged as the Jeff Harding edition holding the
+    Scott Brick audio). Neither is safe to apply.
+    """
+    best_status = _candidate_duration(best_product, local_duration_minutes).get("status")
+    if best_status not in {"strong", "acceptable", "mismatch"}:
+        return None
+    title = normalize_for_match(best_product.get("title", ""))
+    authors = {normalize_for_match(a) for a in get_people(best_product, "authors")}
+    for score, product in scored:
+        diff = _candidate_duration(product, local_duration_minutes).get("diff_percent")
+        if (
+            product is not best_product
+            and score >= RUNTIME_RIVAL_MIN_SCORE
+            and normalize_for_match(product.get("title", "")) == title
+            and authors & {normalize_for_match(a) for a in get_people(product, "authors")}
+            and diff is not None
+            and diff <= RUNTIME_RIVAL_MAX_DIFF_PERCENT
+        ):
+            def label(p: dict) -> str:
+                return f"{p.get('title', '') or '?'} [{p.get('asin', '') or '?'}]"
+
+            return {
+                "count": 2,
+                "resolved": False,
+                "chosen": label(best_product),
+                "alternatives": [label(product)],
+                "reason": (
+                    f"the tags point to {label(best_product)} but the runtime "
+                    f"matches {label(product)}"
+                ),
+            }
+    return None
+
+
 @trace(CHOOSE, capture=["local_duration_minutes"], show_result=False)
 def pick_best_match_for_metadata(
     clues: dict,
@@ -1436,6 +1488,10 @@ def pick_best_match_for_metadata(
 
     top.sort(key=sort_key, reverse=True)
     best_score_value, best_product = top[0]
+
+    rival = _runtime_rival(clues, best_product, scored, local_duration_minutes)
+    if rival is not None:
+        return best_product, best_score_value, rival
 
     if len(top) == 1:
         return best_product, best_score_value, None
