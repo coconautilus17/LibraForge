@@ -1862,6 +1862,9 @@ def metadata_from_product(
         narrator_to_write = sanitize_tag(clues.get("narrator", ""))
         year_to_write = ""
         summary_to_write = ""
+        # The product is another book of the series: its subtitle ("A
+        # Schooled in Magic Novella", "The Hunger Games, Book 3") names it.
+        subtitle = sanitize_tag((clues.get("current") or {}).get("subtitle", ""))
     else:
         title = sanitize_tag(
             clues.get("title") or clues.get("raw_title") or audible_title
@@ -1909,9 +1912,13 @@ def metadata_from_product(
     asin = product.get("asin", "")
     isbn = product.get("_abs_isbn", "") or ""
     cover_url = get_cover_url(product)
-    if edition:
+    if edition or edit_mode == "series_only":
+        # Neither is this file's recording (a series_only product is another
+        # book of the series), so keep the file's own identifiers. A file
+        # still carrying this product's ASIN got it from an earlier
+        # series_only write, so that one is dropped too.
         local_asin = str(clues.get("existing_asin", "") or "").upper()
-        asin = "" if local_asin == "NOREALASIN" else local_asin
+        asin = "" if local_asin in {"NOREALASIN", asin.upper()} else local_asin
         isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
         cover_url = ""
 
@@ -1939,6 +1946,9 @@ def metadata_from_product(
         "edit_mode": edit_mode,
         "recommended_edit_mode": recommended_edit_mode,
         **({"different_edition": edition} if edition else {}),
+        # The series_only product's own ASIN (not written): which book of the
+        # series supplied the grouping fields.
+        **({"series_match_asin": product.get("asin", "")} if edit_mode == "series_only" else {}),
     }
 
 
