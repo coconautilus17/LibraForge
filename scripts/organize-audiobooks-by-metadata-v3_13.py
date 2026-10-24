@@ -4606,8 +4606,7 @@ def render_naming_template(
                 different = sorted(existing - {canonical_asin})
                 if different:
                     review_reasons.append(
-                        f"existing identifier {different[0]} in the source name "
-                        f"differs from the metadata ASIN {canonical_asin}"
+                        "an identifier in the source name differs from the metadata ASIN"
                     )
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
