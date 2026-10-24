@@ -217,7 +217,7 @@ class CachedAudibleSearchTests(unittest.TestCase):
         import threading
         cache = {} if cache is None else cache
         in_flight = {}
-        def fake(client, q, lim):
+        def fake(client, q, lim, **_structured):
             if error:
                 raise error
             return results
@@ -236,6 +236,34 @@ class CachedAudibleSearchTests(unittest.TestCase):
         sleeper.assert_called_once_with(0.25)
         _, _, _, _, sleeper = self.call(results=[], delay=0)
         sleeper.assert_not_called()
+
+    def test_a_structured_search_is_cached_apart_from_the_keyword_one(self):
+        import threading
+        cache = {("postwar - tony judt", 5): [{"asin": "KEYWORD"}]}
+        with mock.patch.object(search, "audible_search", return_value=[{"asin": "B078GVB8P3"}]) as searched:
+            out = search.cached_audible_search(object(), "Postwar - Tony Judt", 5, 0, cache, threading.Lock(), {},
+                                               title="Postwar", author="Tony Judt")
+        self.assertEqual(out, [{"asin": "B078GVB8P3"}])
+        searched.assert_called_once()
+        self.assertIn(("title+author", "postwar", "tony judt", 5), cache)
+
+
+class AudibleSearchParamsTests(unittest.TestCase):
+    def params(self, **kwargs):
+        client = mock.Mock()
+        client.get.return_value = {"products": []}
+        search.audible_search(client, "Postwar Tony Judt", 10, **kwargs)
+        return client.get.call_args.kwargs["params"]
+
+    def test_keywords_by_default(self):
+        params = self.params()
+        self.assertEqual(params["keywords"], "Postwar Tony Judt")
+        self.assertNotIn("title", params)
+
+    def test_title_and_author_replace_the_keywords(self):
+        params = self.params(title="Postwar", author="Tony Judt")
+        self.assertEqual((params["title"], params["author"]), ("Postwar", "Tony Judt"))
+        self.assertNotIn("keywords", params)
 
 if __name__ == "__main__":
     unittest.main()

@@ -161,6 +161,7 @@ try:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
@@ -301,6 +302,7 @@ except ModuleNotFoundError:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
@@ -4083,11 +4085,23 @@ def search_item(
                             match_ambiguity = candidate_ambiguity
                             asin_unconfirmed = False
 
-            for query in queries if not use_abs else []:
+            # Audible's structured title + author search first (it finds
+            # listings keyword search misses), then the keyword queries.
+            audible_searches = []
+            if queries and clues.get("title") and not use_abs:
+                author_names = split_credit_names(clues.get("author", ""))
+                if author_names:
+                    audible_searches.append(
+                        (f"{clues['title']} - {author_names[0]}", clues["title"], author_names[0])
+                    )
+            audible_searches += [(query, "", "") for query in queries]
+            for query, title_part, author_part in audible_searches if not use_abs else []:
                 if match_is_settled():
                     break
-                log.append(f"  Trying query: {query}")
-                cache_key = (query.lower(), args.limit)
+                log.append(
+                    f"  Trying title+author query: {query}" if title_part else f"  Trying query: {query}"
+                )
+                cache_key = audible_search_cache_key(query, args.limit, title_part, author_part)
                 with search_cache_lock:
                     already_cached = cache_key in search_cache
                 query_products = cached_audible_search(
@@ -4098,6 +4112,8 @@ def search_item(
                     search_cache,
                     search_cache_lock,
                     search_in_flight,
+                    title=title_part,
+                    author=author_part,
                 )
                 suffix = " (cached)" if already_cached else ""
                 log.append(f"  Results: {len(query_products)}{suffix}")

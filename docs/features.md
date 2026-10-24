@@ -28,6 +28,9 @@ Searches Audible (or another provider) and writes matched metadata to your files
   genre) are written. The file keeps its own title, narrator, number, ASIN, ISBN and
   subtitle, and the search keeps trying the remaining queries in case the book itself
   turns up. Later runs search a series-only book again instead of skipping it.
+- **Structured search:** Audible and ABS searches start with the book's title and first
+  author as separate fields, which finds listings a keyword search misses, then fall
+  back to keyword queries.
 - **Manual Review:** load any book or folder, search Audible manually, and apply per
   book with an explicit `Full metadata` or `Series only` mode. A filesystem search index
   (built in the background, shown as a persistent "Search index: N books" marker) lets
