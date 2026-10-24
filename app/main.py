@@ -116,6 +116,7 @@ from app.progress_phases import (
 )
 from app.title_noise_policy import load_title_noise_policy, save_title_noise_policy
 from app import install_state
+from app import store_genres
 from app.settings_paths import settings_dir, user_settings_file
 from app.author_names import load_author_policy, save_author_policy
 from app.manual_candidates import build_manual_candidate_row
@@ -142,6 +143,7 @@ REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "/app/reports")).resolve()
 AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve()
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+store_genres.configure(REPORTS_DIR / "audible-store-genres.json")
 
 
 
@@ -6543,6 +6545,8 @@ def _collect_extra_sources(
 def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
     """One unit's (series or standalone) full compile: every source, the
     vote, evidence. Shared by the series page and the whole-library run."""
+    # Foreign-store genre names, learned from Audible once a month (#442).
+    store_genres.refresh_in_background()
     review_module = load_review_module()
     items = _fetch_all_abs_book_items_cached()
     groups = group_items_by_series(items, review_module.normalize_series)
