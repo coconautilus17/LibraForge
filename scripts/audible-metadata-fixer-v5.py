@@ -2894,8 +2894,12 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # folder like _unorganized. Taken before the folder-name parse below, which
     # can read a "Title - Subtitle" folder as "Title - Author"
     # ("The X-Files - Cold Cases"); that parse still wins when the Author/
-    # folder doesn't look like a person.
-    if not clues.get("author"):
+    # folder doesn't look like a person. An author tag that is just the series
+    # or album name ("The Starsea Cycle" as artist) names no author either.
+    author_is_series = bool(clues.get("author")) and normalize_for_match(clues["author"]) in {
+        normalize_for_match(clues.get(key, "")) for key in ("series", "album")
+    } - {""}
+    if not clues.get("author") or author_is_series:
         folder_author = clean_author_value(library_author_folder(file_path.parent, LIBRARY_ROOTS))
         if folder_author and normalize_for_match(folder_author) not in GENERIC_TITLE_RECOVERY_FOLDER_NAMES:
             clues["author"] = folder_author
