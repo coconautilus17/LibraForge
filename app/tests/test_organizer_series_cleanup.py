@@ -151,8 +151,23 @@ class SeriesFromSubtitleTests(unittest.TestCase):
         self.assertEqual(ORGANIZER.series_from_subtitle("Blight, Book 1"), ("Blight", "1"))
         self.assertEqual(ORGANIZER.series_from_subtitle("Tower Mage, Volume 3"), ("Tower Mage", "3"))
 
+    def test_series_named_inside_a_longer_subtitle(self):
+        cases = {
+            "A LitRPG Fantasy (Last Light, Book 1)": ("Last Light", "1"),
+            "Volume 3 in the Kokoro Cat Clinic series for fans of THE TRAVELLING CAT CHRONICLES": ("Kokoro Cat Clinic", "3"),
+            "Book 2 of the Tower Mage series": ("Tower Mage", "2"),
+        }
+        for subtitle, expected in cases.items():
+            with self.subTest(subtitle):
+                self.assertEqual(ORGANIZER.series_from_subtitle(subtitle), expected)
+
     def test_non_series_subtitles_are_ignored(self):
-        for subtitle in ("", "LitRPG", "A Novel", "How to Change Your Mind"):
+        for subtitle in (
+            "", "LitRPG", "A Novel", "How to Change Your Mind",
+            "How Europe rebuilt and redefined itself after 1945",
+            "A Story (LitRPG, Book 1)",
+            "Book 2 of the series",
+        ):
             self.assertEqual(ORGANIZER.series_from_subtitle(subtitle), ("", ""), subtitle)
 
 

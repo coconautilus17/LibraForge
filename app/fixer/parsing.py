@@ -488,6 +488,38 @@ def is_never_series(value: str) -> bool:
     return not strip_publisher_noise(text)
 
 
+# The ways a publisher writes "this is book N of <series>" into a subtitle:
+#   "Blight, Book 1"                           the whole subtitle
+#   "A LitRPG Fantasy (Last Light, Book 1)"    a trailing parenthetical
+#   "Volume 3 in the Kokoro Cat Clinic series for fans of ..."
+_SUBTITLE_LABEL = r"(?:book|vol\.?|volume)"
+_SUBTITLE_SERIES_PATTERNS = (
+    re.compile(rf"^\s*(?P<series>[^,()]+?)\s*,\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s*$", re.IGNORECASE),
+    re.compile(rf"\(\s*(?P<series>[^,()]+?)\s*,\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s*\)\s*$", re.IGNORECASE),
+    re.compile(
+        rf"^\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s+(?:in|of)\s+the\s+(?P<series>.+?)\s+series\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def series_from_subtitle(subtitle: str) -> tuple[str, str]:
+    """Series and number a subtitle states outright, else ("", "").
+
+    Only an explicit "Book/Volume N" next to a name counts, and a name that is
+    never a series (a genre, a marketing phrase) is refused, so an ordinary
+    subtitle yields nothing.
+    """
+    text = clean_text(subtitle)
+    for pattern in _SUBTITLE_SERIES_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            series = match.group("series").strip(" -:;")
+            if series and not is_never_series(series):
+                return series, match.group("number")
+    return "", ""
+
+
 def is_descriptor_parenthetical(value: str) -> bool:
     """True when a parenthetical describes a series instead of naming one."""
     value = re.sub(

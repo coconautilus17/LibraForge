@@ -40,7 +40,7 @@ from typing import Any
 
 try:
     from app.epub_metadata import extract_epub_metadata
-    from app.fixer.parsing import remove_parenthetical
+    from app.fixer.parsing import remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -61,7 +61,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.epub_metadata import extract_epub_metadata
-    from app.fixer.parsing import remove_parenthetical
+    from app.fixer.parsing import remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -3072,20 +3072,6 @@ def parse_book_folder_name(name: str) -> dict[str, str]:
     if label:
         result["sequence_label"] = label
     return result
-
-_SUBTITLE_SERIES_RE = re.compile(
-    r"^\s*(?P<series>[^,]+?)\s*,\s*(?:book|vol\.?|volume)\s*(?P<number>\d{1,3})\s*$",
-    re.IGNORECASE,
-)
-
-
-def series_from_subtitle(subtitle: str) -> tuple[str, str]:
-    """Series and number from a 'Series, Book N' subtitle, else ("", "")."""
-    match = _SUBTITLE_SERIES_RE.match(subtitle or "")
-    if not match:
-        return "", ""
-    return match.group("series").strip(), match.group("number")
-
 
 def abs_metadata_as_sidecar_candidate(media: dict[str, Any], library_item_id: str) -> dict[str, Any]:
     """--trust-abs-metadata (opt-in): shape Audiobookshelf's current record
