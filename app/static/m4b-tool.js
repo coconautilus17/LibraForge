@@ -32,6 +32,7 @@ async function initProviderSelector() {
     const v = $('metaProvider').value;
     const isAbs = v === 'abs';
     const isAbsAgg = v === 'abs-agg';
+    if ($('audibleRegionLabel')) $('audibleRegionLabel').hidden = v !== 'audible-public';
     if ($('absProviderLabel')) $('absProviderLabel').hidden = !isAbs;
     if ($('absWarning')) $('absWarning').hidden = !isAbs;
     ['absAggProviderLabel', 'absAggParamsLabel', 'absAggUrlLabel'].forEach(id => {
@@ -46,6 +47,8 @@ async function initProviderSelector() {
   }
   $('metaProvider').addEventListener('change', toggleProviderFields);
   toggleProviderFields();
+  await window.LibraForgeAuth?.loadAudibleRegions($('audibleRegion'));
+  window.LibraForgeAuth?.preferPublicCatalog($('metaProvider'));
   $('absAggUrl').addEventListener('change', () => saveAbsAggUrl($('absAggUrl').value.trim()));
 
   function updateAbsAggParamHint() {
@@ -570,6 +573,7 @@ async function searchMetadata() {
       metadata: collectMetadata(),
       limit: 10,
       script_name: $('searchScript').value,
+      audible_region: provider === 'audible-public' ? ($('audibleRegion')?.value || 'us') : '',
     };
     res = await fetch('/api/m4b/search', {
       method: 'POST',

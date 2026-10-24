@@ -90,7 +90,11 @@ that when adding a write path (the same rule is in [CONTRIBUTING](../../CONTRIBU
 ## Providers
 
 Search providers sit behind `app/fixer/search.py` and `app/manual_candidates.py` (the shape
-every Manual Review result row shares). Audible is queried directly; Audiobookshelf,
+every Manual Review result row shares). Audible is queried directly: `get_catalog_client()`
+returns the logged-in `audible.Client` when an auth file exists, else `PublicAudibleClient`,
+which calls the same catalog endpoints with no login. The "Audible public catalog" provider
+forces the public client for one marketplace (`PUBLIC_AUDIBLE_DOMAINS`): the UI sends
+`audible_region`, and runs pass `--audible-public-region` to the fixer. Audiobookshelf,
 abs-agg and abs-tract are HTTP services whose responses are normalised to one metadata
 shape. Special publishers (GraphicAudio, SoundBooth Theater) are recognised by
 `detect_special_provider()` in `app/fixer/search.py`, using the catalog in

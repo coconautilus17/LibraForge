@@ -161,6 +161,7 @@ try:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
@@ -300,6 +301,7 @@ except ModuleNotFoundError:
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
+        PUBLIC_AUDIBLE_DOMAINS,
     )
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
@@ -5671,6 +5673,14 @@ def main():
     )
 
     parser.add_argument(
+        "--audible-public-region",
+        default="",
+        choices=["", *PUBLIC_AUDIBLE_DOMAINS],
+        help="Search this marketplace's public Audible catalog (us, uk, de, ...) "
+        "without logging in, even when an auth file exists",
+    )
+
+    parser.add_argument(
         "--ask-password",
         action="store_true",
         help="Ask for encrypted auth file password",
@@ -6000,6 +6010,12 @@ def main():
     global _exit_on_cancel
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
+    if args.audible_public_region:
+        # get_catalog_client falls back to PublicAudibleClient when there is no
+        # auth file; the client reads its marketplace from the environment.
+        args.auth_file = ""
+        os.environ["AUDIBLE_PUBLIC_REGION"] = args.audible_public_region
+
     if args.debug_trace:
         cats = None
         if args.debug_trace_categories:
@@ -6091,10 +6107,13 @@ def main():
     print(f"Minimum score: {args.min_score}")
     print(f"Writer: {args.writer}")
     if getattr(args, "provider", "audible") != "abs":
-        print(
-            "Audible: logged-in account" if Path(args.auth_file).is_file()
-            else "Audible: no login found, using the public Audible catalog"
-        )
+        if args.audible_public_region:
+            print(f"Audible: public catalog ({args.audible_public_region})")
+        else:
+            print(
+                "Audible: logged-in account" if Path(args.auth_file).is_file()
+                else "Audible: no login found, using the public Audible catalog"
+            )
     print(f"Search workers: {args.workers}")
     print(f"Write workers:  {args.write_workers}")
     if args.enable_goodreads_fallback:

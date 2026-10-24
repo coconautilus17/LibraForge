@@ -73,9 +73,10 @@
         <label class="advanced-run-setting"><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
-        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source for both Start run and Search For Selected Target. Audible: direct API, requires auth file. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads/Kindle: via abs-tract (configure its URL in Settings); Goodreads for metadata, Kindle for cover art only."></span></span>
+        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source for both Start run and Search For Selected Target. Audible public catalog: Audible's own catalog, no login needed; pick the marketplace. Audible (your account): the same catalog through your logged-in Audible account and its marketplace. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads/Kindle: via abs-tract (configure its URL in Settings); Goodreads for metadata, Kindle for cover art only."></span></span>
           <select id="manualProvider">
-            <option value="audible">Audible (direct)</option>
+            <option value="audible-public">Audible public catalog (no login)</option>
+            <option value="audible">Audible (your account)</option>
             <option value="abs">Audiobookshelf (ABS)</option>
             <option value="abs-agg">abs-agg</option>
             <option value="graphicaudio">GraphicAudio</option>
@@ -83,6 +84,9 @@
             <option value="goodreads">Goodreads (abs-tract)</option>
             <option value="kindle">Kindle cover (abs-tract)</option>
           </select>
+        </label>
+        <label id="manualAudibleRegionLabel" hidden><span class="field-label">Audible marketplace <span class="info-tip" data-tooltip="Which Audible store's catalog to search. Pick the store your books come from: titles, series and narrators can differ between marketplaces."></span></span>
+          <select id="manualAudibleRegion"></select>
         </label>
         <label id="manualAbsProviderLabel" hidden><span class="field-label">ABS source <span class="info-tip" data-tooltip="The metadata provider ABS will query on your behalf. Audible.com is the default and most complete for audiobooks."></span></span>
           <select id="manualAbsProvider"></select>
