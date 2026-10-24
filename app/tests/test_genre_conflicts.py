@@ -33,6 +33,24 @@ class GenreConflictTests(unittest.TestCase):
         unit = unit_of([vote("Fantasy", "Young Adult", "Children's")] * 2)
         self.assertEqual(unit["conflicts"][0]["genres"], ["Young Adult", "Children's"])
 
+    def test_one_books_disagreement_goes_to_the_side_with_more_evidence(self):
+        # The Billion Dollar Spy: Audible and the file tag say politics, Open
+        # Library's crowd subjects say spies.
+        from app.genre_voting import book_vote
+        vote = book_vote({"audible": ["politics & social sciences"], "file_tags": ["politics & social sciences"],
+                          "openlibrary": ["spies"], "goodreads": ["thriller"]})
+        self.assertEqual(vote["main"], {"Non-Fiction"})
+        self.assertEqual(vote["contested"], {"Non-Fiction": 4, "Thriller": 2})
+        unit = vote_unit([vote], series_labels=[], series_evidence=[], pf_progression=False, standalone=True)
+        self.assertEqual(unit["main"], ["Non-Fiction"])
+        self.assertEqual(unit["conflicts"], [{"genres": ["Non-Fiction", "Thriller"], "support": {"Non-Fiction": 1, "Thriller": 1},
+                                              "kept": ["Non-Fiction"]}])
+
+    def test_an_even_split_is_left_to_the_series_vote(self):
+        from app.genre_voting import book_vote
+        vote = book_vote({"audible": ["philosophy"], "file_tags": ["thriller"]})
+        self.assertEqual(vote["main"], {"Non-Fiction", "Thriller"})
+
     def test_the_batch_review_keeps_the_conflicts(self):
         conflict = {"genres": ["Non-Fiction", "Thriller"], "support": {"Non-Fiction": 2, "Thriller": 8}, "kept": ["Thriller"]}
         self.assertEqual(slim_result({"genre_conflicts": [conflict]})["conflicts"], [conflict])
