@@ -674,6 +674,17 @@ def strong_identity_overrides_number_conflict(
             except (ValueError, TypeError):
                 return False
 
+    # Each title has a word the other lacks: they name two books of the series
+    # ("... The Secondary Phase" vs "... Tertiary Phase"), however similar.
+    # Numbers are left to the number checks above.
+    def words(title: str) -> set[str]:
+        return {t for t in significant_title_tokens(title) if not t.isdigit()}
+
+    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
+    audible_tokens = words(product.get("title", "") or "")
+    if local_tokens - audible_tokens and audible_tokens - local_tokens:
+        return False
+
     duration = compare_duration(
         local_minutes=local_duration_minutes,
         audible_minutes=get_audible_duration_minutes(product),
