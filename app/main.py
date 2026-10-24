@@ -6380,6 +6380,9 @@ class EnrichmentCompileResponse(BaseModel):
     genre_evidence: dict[str, dict[str, int]] = Field(default_factory=dict)
     series_evidence: list[str] = []
     agreement: str = "ok"
+    # Genres that exclude each other (Non-Fiction and a fiction genre) that both
+    # reached the vote: {"genres", "support": {genre: books}, "kept"} (#436).
+    genre_conflicts: list[dict[str, Any]] = Field(default_factory=list)
     # Series-level explicit values as found (HaremLit "explicit_sex"); data only.
     series_explicit: dict[str, str] = Field(default_factory=dict)
     # The controlled main-genre names, so the UI can file a typed genre as main.
@@ -6774,7 +6777,7 @@ def enrichment_batch_status(summary_only: bool = False) -> dict[str, Any]:
             "coverage": result.get("coverage", 0), "current_genres": current,
             "explicit_suggested": sum(1 for b in books if (b.get("explicit") or {}).get("strength") == "authoritative"),
             "applied_genres": u.get("applied_genres") or [], "failures": u.get("failures") or [],
-            "degraded": result.get("degraded") or [],
+            "degraded": result.get("degraded") or [], "conflicts": result.get("conflicts") or [],
         })
     out["units"] = rows
     return out

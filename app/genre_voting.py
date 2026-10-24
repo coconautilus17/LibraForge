@@ -74,6 +74,12 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
             "sub_evidence": dict(sub_evidence), "other": set(votes) - main}
 
 
+def _conflict(side_a: list[str], side_b: list[str], votes: collections.Counter, kept: list[str]) -> dict[str, Any]:
+    """{"genres": both sides, "support": {genre: books}, "kept": the ones still main}."""
+    genres = side_a + side_b
+    return {"genres": genres, "support": {g: votes[g] for g in genres}, "kept": [g for g in genres if g in kept]}
+
+
 def place_pinned(name: str) -> tuple[list[str], list[str]]:
     """Where a user's own genre lands: its controlled main/sub names when the
     taxonomy knows it, else the user's own wording as a subgenre."""
@@ -134,12 +140,19 @@ def vote_unit(
         evidence[genre][SERIES_SOURCE] += 1
 
     mains = [g for g in MAIN_ORDER if main_votes[g] >= threshold]
+    # Genres that exclude each other but both reached the threshold: one is
+    # kept, and the disagreement is reported (#436), since it usually means a
+    # wrong match or a mislabelled source.
+    conflicts: list[dict[str, Any]] = []
     fiction = [g for g in mains if g != "Non-Fiction"]
     if "Non-Fiction" in mains and fiction:
         if main_votes["Non-Fiction"] > max(main_votes[g] for g in fiction):
             mains = ["Non-Fiction"]
         else:
             mains.remove("Non-Fiction")
+        conflicts.append(_conflict(["Non-Fiction"], fiction, main_votes, mains))
+    if "Young Adult" in mains and "Children's" in mains:
+        conflicts.append(_conflict(["Young Adult"], ["Children's"], main_votes, mains))
     if "Fantasy" in mains and "Sci-Fi" in mains:
         fantasy, scifi = main_votes["Fantasy"], main_votes["Sci-Fi"]
         if min(fantasy, scifi) < 0.5 * max(fantasy, scifi):
@@ -207,4 +220,5 @@ def vote_unit(
         "evidence": {**{g: dict(evidence[g]) for g in mains}, **{s: dict(sub_evidence[s]) for s in subs}},
         "series_evidence": list(series_evidence) if not standalone else [],
         "agreement": "ok" if mains or subs else "none",
+        "conflicts": conflicts,
     }
