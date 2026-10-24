@@ -25,6 +25,9 @@ _NON_FICTION_SUBS = {"History", "Biography", "Science", "Politics", "Psychology"
                      "True Crime", "Arts", "Language", "Writing", "Self-Help", "Literary Criticism",
                      "Philosophy", "Economics", "Mathematics", "Technology", "Law", "Health",
                      "Personal Development", "Finance", "Business", "Education", "Sports", "Travel"}
+# Genres that make a book fiction, or a book for children or teens. Classics,
+# Humor and Audio Drama can be either (Plato's Republic, humor essays).
+_FICTION_OR_AUDIENCE = set(MAIN_ORDER) - {"Non-Fiction", "Classics", "Humor", "Audio Drama"}
 _REAL_SF_SUBS = ("Space Opera", "Military Sci-Fi", "Post-Apocalyptic", "Hard Sci-Fi")
 # Sources are ranked, not counted equally. Editorial sources (the publisher's
 # own catalogue and copy, the file's embedded genre tag) carry weight 2; crowd
@@ -54,6 +57,12 @@ def book_vote(voters: dict[str, list[str]]) -> dict[str, Any]:
     sub_evidence: dict[str, set[str]] = collections.defaultdict(set)
     for source, labels in voters.items():
         mains, source_subs = classify([labels])
+        if "Non-Fiction" in mains and set(mains) & _FICTION_OR_AUDIENCE:
+            # One source calling a book a novel (or a children's book) and
+            # non-fiction is naming its subject: Audible shelves Dungeon
+            # Crawler Carl under Music and Hatchet under Mental Health. The
+            # subject stays a subgenre; only another source can say non-fiction.
+            mains = [g for g in mains if g != "Non-Fiction"]
         for genre in mains:
             votes[genre] += SOURCE_WEIGHTS.get(source, 1)
             evidence[genre].add(source)

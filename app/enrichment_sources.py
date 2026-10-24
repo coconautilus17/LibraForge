@@ -27,7 +27,7 @@ import urllib.request
 from typing import Any, Callable
 
 from app.abs_client import _is_real_asin
-from app.genre_taxonomy import LABEL_MAP, labels_from_genres, normalize_label
+from app.genre_taxonomy import LABEL_MAP, label_for_slug, labels_from_genres, normalize_label
 from app.goodreads_shelves import GoodreadsPacer, clean_query_title
 from app.source_matching import best_candidate, provider_product
 
@@ -105,7 +105,7 @@ def _audiosilo_labels(genres: Any) -> list[str]:
     for genre in genres or []:
         label = normalize_label(genre)
         if label not in LABEL_MAP:
-            label = normalize_label(str(genre).replace("-", " "))
+            label = label_for_slug(str(genre)) or normalize_label(str(genre).replace("-", " "))
         out.extend(labels_from_genres([label]))
     return list(dict.fromkeys(out))
 

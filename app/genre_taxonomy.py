@@ -139,6 +139,7 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
 # stores writes them: they vote as the English store category they are, and
 # stay foreign labels for Metadata Forge (app/abs_client.has_real_genres) and
 # are never taken for a genre the user set by hand.
+_ALIASES["parenting relationships"] = "relationships, parenting & personal development"  # AudioSilo's slug
 FOREIGN_STORE_ALIASES = {
  "fantasía":"fantasy","fantástico":"fantasy","ciencia ficción":"science fiction","acción y aventura":"action & adventure","aventura":"adventure",
  "postapocalíptica":"post-apocalyptic","epopeyas":"epic","militar":"military","cuentos de hadas":"fairy tales","literatura y ficción":"literature & fiction",
@@ -161,6 +162,18 @@ def _output_names() -> dict[str, str]:
     """Controlled genre names, lowercase -> canonical spelling."""
     names = set(MAIN_ORDER) | {n for m, sub in LABEL_MAP.values() for n in m + sub}
     return {n.lower(): n for n in names if not n.endswith("?")}
+
+
+def label_for_slug(slug: str) -> str | None:
+    """The table's label a URL slug stands for ("health-wellness" is Health &
+    Wellness, "lgbtq" is LGBTQ+): slugs drop "&", "+" and commas."""
+    def bare(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
+    wanted = bare(slug)
+    for label in list(LABEL_MAP) + list(_output_names()):
+        if bare(label) == wanted:
+            return label
+    return None
 
 
 def known_genre_names() -> set[str]:
