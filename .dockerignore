@@ -7,6 +7,10 @@
 **/__pycache__/
 **/*.py[cod]
 
+# The test suite runs from the checkout (make test bind-mounts ./app, CI
+# runs it on the runner); the shipped image never needs it.
+app/tests/
+
 archive/
 reports/
 config/title-noise.local.json
