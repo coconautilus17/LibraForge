@@ -103,10 +103,9 @@
   // below. Enrichment Forge is intentionally NOT here -- landing on that page
   // does nothing by itself; the redirect should only happen once the user
   // actually tries to search (gated live in enrichment-forge.js instead).
-  const _AUTH_PAGE_REQUIREMENTS = new Map([
-    ["fixer", "any"],
-    ["m4b-tool", "any"],
-  ]);
+  // Metadata Forge and M4B Tool are not listed: both search the public
+  // Audible catalog without any login.
+  const _AUTH_PAGE_REQUIREMENTS = new Map([]);
   const _page = document.body.dataset.page;
 
   const CONNECTION_NOTICE_KEY = "libraforge-connection-notice-shown";
@@ -219,25 +218,64 @@
     }
     return true;
   }
-  // Shared by every provider <select> that offers both "audible" and "abs":
-  // if "abs" is selected but Audiobookshelf isn't connected, switch to
-  // "audible" and tell the user why (via the shared styled notice, not a
-  // native alert). Covers Start run, m4b-tool search, and Search For Selected
-  // Target. Never the other way: Audible searches work without a login (the
-  // backend falls back to Audible's public catalog).
+  // Shared by every provider <select> that offers the Audible and ABS
+  // choices, at the moment of an action (Start run, m4b-tool search, Search
+  // For Selected Target): a pick that can't work is switched to one that can,
+  // and the user is told why (via the shared styled notice, not a native
+  // alert). "Audible (your account)" with no login becomes the public
+  // catalog; ABS that isn't connected becomes Audible (the account when
+  // logged in, else the public catalog, which always works).
   async function autoRouteProvider(selectEl, actionLabel) {
     const value = selectEl?.value;
-    if (value !== "abs") return false;
+    if (value !== "abs" && value !== "audible") return false;
     const state = await getConnectionState();
-    if (state.abs) return false;
+    if (value === "abs" ? state.abs : state.audible) return false;
 
-    selectEl.value = "audible";
+    const target = state.audible ? "audible" : "audible-public";
+    if (![...selectEl.options].some((opt) => opt.value === target)) return false;
+    selectEl.value = target;
     selectEl.dispatchEvent(new Event("change"));
+    const why = value === "abs" ? "Audiobookshelf isn't connected" : "No Audible account is logged in";
+    const where = target === "audible" ? "your Audible account" : "the public Audible catalog";
     await window.UiCommon.showNotice(
-      "Switched to Audible",
-      `Audiobookshelf isn't connected, so this ${actionLabel} has been routed through <strong>Audible</strong> instead.`,
+      target === "audible" ? "Switched to Audible" : "Switched to the public Audible catalog",
+      `${why}, so this ${actionLabel} has been routed through <strong>${where}</strong> instead.`,
     );
     return true;
+  }
+
+  // Page load: show "Audible (your account)" only to someone who has one, so
+  // the picker says what a run will actually use.
+  async function preferPublicCatalog(selectEl) {
+    if (selectEl?.value !== "audible") return;
+    const state = await getConnectionState();
+    if (state.audible || selectEl.value !== "audible") return;
+    selectEl.value = "audible-public";
+    selectEl.dispatchEvent(new Event("change"));
+  }
+
+  // The marketplace picker for the public catalog, remembered per browser.
+  const _AUDIBLE_REGION_KEY = "libraforge-audible-public-region";
+  async function loadAudibleRegions(selectEl) {
+    if (!selectEl) return;
+    let regions = { us: "audible.com" };
+    try {
+      const res = await fetch("/api/audible/public-regions");
+      regions = (await res.json()).regions || regions;
+    } catch {}
+    let saved = "";
+    try { saved = localStorage.getItem(_AUDIBLE_REGION_KEY) || ""; } catch {}
+    selectEl.innerHTML = "";
+    Object.entries(regions).forEach(([code, domain]) => {
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.textContent = `${code.toUpperCase()} (${domain})`;
+      selectEl.appendChild(opt);
+    });
+    selectEl.value = regions[saved] ? saved : "us";
+    selectEl.addEventListener("change", () => {
+      try { localStorage.setItem(_AUDIBLE_REGION_KEY, selectEl.value); } catch {}
+    });
   }
 
   // GraphicAudio and SoundBooth Theater are both abs-agg-backed; Goodreads
@@ -261,11 +299,16 @@
     // or neither is), fall through to the real "at least one" gate -- it
     // no-ops when already satisfied, and redirects when truly nothing works.
     await autoRouteProvider(selectEl, actionLabel);
-    if (selectEl?.value === "audible") return true;
+    // Both Audible choices work: the public catalog needs no login, and
+    // "your account" was routed to it above when there is none.
+    if (selectEl?.value === "audible" || selectEl?.value === "audible-public") return true;
     return ensureConnected("any");
   }
 
-  window.LibraForgeAuth = { ensureConnected, getConnectionState, autoRouteProvider, ensureProviderConnected };
+  window.LibraForgeAuth = {
+    ensureConnected, getConnectionState, autoRouteProvider, ensureProviderConnected,
+    preferPublicCatalog, loadAudibleRegions,
+  };
 
   const _pageRequire = _AUTH_PAGE_REQUIREMENTS.get(_page);
   if (_pageRequire && !sessionStorage.getItem("audible-skipped") && !_hasShownConnectionNotice()) {
