@@ -46,3 +46,6 @@ venv/
 docs/design/
 docs/superpowers/
 docs/release-drafts/
+
+# dev branch: the benchmark dataset is the library itself (titles, tags, paths)
+dev/benchmark/data/
