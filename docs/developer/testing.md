@@ -19,6 +19,10 @@ Python 3.12 runner with `requirements.txt` and ffmpeg installed, then byte-compi
 a few other modules and every file in `scripts/`. Use dotted module names (`app.tests.test_x`)
 when naming a single module.
 
+`app/tests/` is left out of the Docker image (`.dockerignore`): `make test` works because the
+development compose file bind-mounts `./app`, and a container running the published image has no
+tests to run.
+
 The Settings page JavaScript tests (`app/tests/test_settings_pattern_ui.py`) run the real UI
 code in QuickJS and are skipped when the optional `quickjs` package is not installed. It
 installs from a prebuilt wheel on the glibc-based `Dockerfile.unified` image
