@@ -44,6 +44,30 @@ class ExecutePlannedMoveTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue(target.exists())
 
+    def test_two_books_in_one_folder_share_a_sidecar_and_a_cover_without_failing(self):
+        # An audiobook and its ebook sit in one folder and are planned as two
+        # loose files that both list libraforge.json and the same-stem cover.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folder = root / "incoming" / "Some Book"
+            folder.mkdir(parents=True)
+            audio, ebook = folder / "Some Book.m4b", folder / "Some Book.epub"
+            sidecar, cover = folder / "libraforge.json", folder / "Some Book.jpg"
+            for path in (audio, ebook, sidecar, cover):
+                path.touch()
+            shared = [sidecar, cover]
+            moves = [
+                {"kind": "loose_file", "source": audio, "target": root / "lib" / "A" / "Some Book" / "Some Book.m4b", "companions": shared},
+                {"kind": "loose_file", "source": ebook, "target": root / "lib" / "A" / "Some Book - EBOOK" / "Some Book.epub", "companions": shared},
+            ]
+            for move in moves:
+                ORGANIZER.execute_planned_move(move, merge_existing_targets=False, remove_empty_dirs=True, root=root)
+
+            self.assertTrue(moves[0]["target"].exists())
+            self.assertTrue(moves[1]["target"].exists())
+            self.assertTrue((moves[0]["target"].parent / "libraforge.json").exists())
+            self.assertFalse(folder.exists(), "the emptied source folder is cleaned up after the last book")
+
     def test_raises_when_source_no_longer_exists(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
