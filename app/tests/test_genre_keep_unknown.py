@@ -72,6 +72,30 @@ class ForeignStoreGenresTests(unittest.TestCase):
         self.assertEqual(detect_manual_genres(["Fantasía", "Política y ciencias sociales"], [], False, None), [])
 
 
+class SubjectShelfTests(unittest.TestCase):
+    def test_a_novel_on_a_subject_shelf_is_not_non_fiction(self):
+        # Audible: Dungeon Crawler Carl under Music, Hatchet under Mental Health.
+        dcc = book_vote({"audible": ["music", "fantasy", "science fiction", "comedy & humor"]})
+        hatchet = book_vote({"audible": ["teen & young adult", "action & adventure", "mental health"]})
+        self.assertNotIn("Non-Fiction", dcc["main"])
+        self.assertNotIn("Non-Fiction", hatchet["main"])
+        self.assertIn("Psychology", hatchet["sub"])
+
+    def test_classics_with_a_subject_stay_non_fiction(self):
+        self.assertIn("Non-Fiction", book_vote({"audible": ["classics", "philosophy"]})["main"])
+
+    def test_another_source_can_still_say_non_fiction(self):
+        vote = book_vote({"audible": ["fantasy"], "file_tags": ["philosophy"]})
+        self.assertEqual(vote["main"], {"Fantasy", "Non-Fiction"})
+
+
+class AudioSiloSlugTests(unittest.TestCase):
+    def test_a_slug_finds_the_genre_it_stands_for(self):
+        from app.enrichment_sources import _audiosilo_labels
+        self.assertEqual(_audiosilo_labels(["health-wellness", "lgbtq", "writing-publishing"]),
+                         ["health & wellness", "lgbtq+", "writing & publishing"])
+
+
 class SeriesVoteTests(unittest.TestCase):
     def test_a_series_with_only_subgenres_still_has_an_answer(self):
         votes = [book_vote({"goodreads": ["folk tales & myths"]}) for _ in range(2)]
