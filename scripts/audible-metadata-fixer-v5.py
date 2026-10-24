@@ -3984,6 +3984,15 @@ def search_item(
             # product lookup before falling back to keyword searches.
             existing_asin = clues.get("existing_asin", "")
             asin_unconfirmed = False
+
+            def same_listing_contest(candidate: dict, ambiguity: dict | None) -> bool:
+                # Keyword search picked the listing already held (the embedded
+                # ASIN's) but found it contested, e.g. the runtime matching
+                # another recording: keep that doubt, it routes to review.
+                return bool(
+                    product and ambiguity and not ambiguity.get("resolved")
+                    and candidate.get("asin") == product.get("asin")
+                )
             if existing_asin:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
@@ -4061,6 +4070,8 @@ def search_item(
                             used_query = query
                             match_ambiguity = candidate_ambiguity
                             asin_unconfirmed = False
+                        elif same_listing_contest(candidate, candidate_ambiguity):
+                            match_ambiguity = candidate_ambiguity
 
             for query in queries if not use_abs else []:
                 if product and score >= args.min_score and not asin_unconfirmed:
@@ -4109,6 +4120,8 @@ def search_item(
                     used_query = query
                     match_ambiguity = candidate_ambiguity
                     asin_unconfirmed = False
+                elif same_listing_contest(candidate, candidate_ambiguity):
+                    match_ambiguity = candidate_ambiguity
 
                 if candidate_score >= args.min_score:
                     break
