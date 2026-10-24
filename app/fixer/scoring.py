@@ -1298,10 +1298,14 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
     if not match_narrator:
         return None
     authors = " ".join(get_people(product, "authors"))
+    # The file's own author tag names its author, even when spelled unlike
+    # the match ("Pegaz A" for Audible's "Pegaz"): never a reader.
+    local_authors = {normalize_for_match(n) for n in split_credit_names(clues.get("author", ""))}
 
     def readers(values) -> list[str]:
         return [name for value in values for name in split_credit_names(value)
-                if _authors_compatible(name, authors) is not True]
+                if _authors_compatible(name, authors) is not True
+                and normalize_for_match(name) not in local_authors]
 
     # The author can also narrate. Trust an explicit narrator tag unless another
     # local credit identifies the matched recording's reader.
