@@ -41,12 +41,16 @@ ENRICHMENT_RESPONSE_GROUPS = RESPONSE_GROUPS + ",rating"
 
 
 def audible_search(
-    client: audible.Client, query: str, limit: int, response_groups: str = RESPONSE_GROUPS
+    client: audible.Client, query: str, limit: int, response_groups: str = RESPONSE_GROUPS,
+    title: str = "", author: str = "",
 ) -> list[dict]:
+    """Keyword search, or with title (and author) Audible's structured search,
+    which finds listings keyword search doesn't return (Postwar, Tony Judt)."""
+    terms = {"title": title, "author": author} if title else {"keywords": query}
     response = client.get(
         "catalog/products",
         params={
-            "keywords": query,
+            **{k: v for k, v in terms.items() if v},
             "num_results": limit,
             "response_groups": response_groups,
         },
@@ -581,6 +585,12 @@ def get_thread_client(auth_file: str, password: str | None = None) -> audible.Cl
     return _thread_local.client
 
 
+def audible_search_cache_key(query: str, limit: int, title: str = "", author: str = "") -> tuple:
+    if title:
+        return ("title+author", title.lower(), author.lower(), limit)
+    return (query.lower(), limit)
+
+
 def cached_audible_search(
     client: audible.Client,
     query: str,
@@ -589,8 +599,10 @@ def cached_audible_search(
     cache: dict,
     cache_lock: threading.Lock,
     in_flight: dict,
+    title: str = "",
+    author: str = "",
 ) -> list[dict]:
-    key = (query.lower(), limit)
+    key = audible_search_cache_key(query, limit, title, author)
     while True:
         with cache_lock:
             if key in cache:
@@ -602,7 +614,7 @@ def cached_audible_search(
             event = in_flight[key]
         event.wait(timeout=60)
     try:
-        results = audible_search(client, query, limit)
+        results = audible_search(client, query, limit, title=title, author=author)
         if api_delay_ms > 0:
             time.sleep(api_delay_ms / 1000)
     except Exception:
