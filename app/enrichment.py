@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.genre_taxonomy import (
+    FOREIGN_STORE_ALIASES,
     MAIN_ORDER,
     NON_GENRES,
     labels_from_genres,
@@ -382,16 +383,18 @@ _EROTICA_ROOT = "erotica"
 # Audible's audience roots carry the only children's/teen signal, so they are
 # kept; every other root is a broad store section. Generic umbrella nodes are
 # dropped here (Enrichment Forge only -- Meta Forge's genre output is untouched).
-_AUDIENCE_ROOTS = {"children's audiobooks", "teen & young adult"}
-_UMBRELLA_NODES = {"literature & fiction", "genre fiction", "science fiction & fantasy"}
+# Mixed store roots: Arts & Entertainment holds both dramatizations and film
+# criticism, Mystery, Thriller & Suspense is named by its own children.
+_UMBRELLA_NODES = {"literature & fiction", "genre fiction", "science fiction & fantasy",
+                   "arts & entertainment", "mystery, thriller & suspense"}
 
 
 def audible_category_ladder_genres(product: dict[str, Any] | None) -> list[str]:
-    """Every level of each of a product's category_ladders below its root,
-    deduped in order (LibraForge #302), e.g. 'Science Fiction & Fantasy >
-    Science Fiction > Space Opera' gives Science Fiction and Space Opera.
-    Audience roots (Children's Audiobooks, Teen & Young Adult) are kept;
-    generic umbrella nodes are dropped.
+    """Every level of each of a product's category_ladders, deduped in order
+    (LibraForge #302), e.g. 'Science Fiction & Fantasy > Science Fiction >
+    Space Opera' gives Science Fiction and Space Opera. Store umbrella nodes
+    are dropped; every other level, the root too (History, Romance,
+    Religion & Spirituality), is a genre.
     """
     if not product:
         return []
@@ -402,8 +405,7 @@ def audible_category_ladder_genres(product: dict[str, Any] | None) -> list[str]:
         names = [n for n in names if n]
         if not names:
             continue
-        keep = names if names[0].lower() in _AUDIENCE_ROOTS else (names[1:] or names)
-        for name in keep:
+        for name in names:
             key = name.lower()
             if key in _UMBRELLA_NODES or key in seen:
                 continue
@@ -536,7 +538,10 @@ def detect_manual_genres(
     log recorded as the user's own stay pinned after Enrichment Forge rewrites
     them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
     older plain list of written genres."""
-    real = split_compound_genres([g for g in abs_genres or [] if str(g).strip() and normalize_label(g) not in NON_GENRES])
+    # A foreign-store label ("Fantasía") was written by an ABS match, not by hand.
+    real = [g for g in abs_genres or [] if str(g).strip() and normalize_label(g) not in NON_GENRES]
+    real = split_compound_genres([g for g in split_compound_genres(real, canonical=False)
+                                  if g.strip().lower() not in FOREIGN_STORE_ALIASES])
     if not real:
         return []
     if isinstance(enrichment_written, dict):
@@ -581,7 +586,9 @@ def build_book_voters(
         voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
     # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
     pinned = {g.lower() for g in book.get("manual_genres") or []}
-    existing = [g for g in split_compound_genres(book.get("existing_genres") or []) if g.lower() not in pinned]
+    # Store umbrellas go before splitting, or "Science Fiction & Fantasy" votes Fantasy (#431).
+    existing = [g for g in split_compound_genres([g for g in book.get("existing_genres") or [] if normalize_label(g) not in NON_GENRES])
+                if g.lower() not in pinned]
     voters["abs_existing"] = labels_from_genres(existing + list(book.get("existing_tags") or []))
     text = " ".join(str(x or "") for x in (
         (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),
