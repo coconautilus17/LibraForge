@@ -844,6 +844,14 @@ class LocalGenreTests(unittest.TestCase):
         self.assertEqual(out["pinned_genres"], ["Small Town"])
         self.assertEqual(out["genre_evidence"]["Small Town"], {"yours": 1})
 
+    def test_a_genre_the_books_own_listing_carries_is_not_pinned(self):
+        # An ABS match wrote Erotica and Romance from the Audible listing (#435).
+        listing = {"category_ladders": [{"ladder": [{"name": "Romance"}, {"name": "Erotica"}]}]}
+        books = [_vbook("a", existing_genres=["Erotica", "Romance", "Small Town"], manual_genres=["Erotica", "Romance", "Small Town"])]
+        out = enrichment.compile_series_enrichment(books, {"a": listing}, {}, lambda g: g, extra_results={}, series_sources=_NO_SERIES)
+        self.assertEqual(out["pinned_genres"], ["Small Town"])
+        self.assertIn("abs_existing", out["books"][0]["sources"])
+
 
 class CompileExplicitTests(unittest.TestCase):
     def test_rows_carry_explicit_evidence_and_the_series_summary(self):

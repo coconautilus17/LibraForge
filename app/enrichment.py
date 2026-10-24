@@ -558,6 +558,21 @@ def detect_manual_genres(
     return out
 
 
+def without_matcher_genres(book: dict[str, Any], product: dict | None, abs_product: dict | None) -> dict[str, Any]:
+    """The book with its hand-set genres minus the ones its own Audible listing
+    carries: an Audiobookshelf match writes exactly those (Erotica, Romance),
+    so they are the store's, not the user's, and vote instead of being pinned (#435)."""
+    pinned = book.get("manual_genres") or []
+    if not pinned:
+        return book
+    names = [str(n.get("name") or "") for ladder in ((product or {}).get("category_ladders") or [])
+             for n in (ladder.get("ladder") or [])]
+    names += _split_abs_genre((abs_product or {}).get("genre", ""))
+    listing = {normalize_label(n) for n in split_compound_genres(names, canonical=False) + names if n.strip()}
+    kept = [g for g in pinned if normalize_label(g) not in listing]
+    return book if kept == pinned else {**book, "manual_genres": kept}
+
+
 def build_book_voters(
     book: dict[str, Any],
     product: dict | None,
@@ -611,6 +626,7 @@ def compile_series_enrichment(
     ({"labels", "evidence", "pf_progression"}, app/enrichment_sources.py).
     """
     extra = extra_results or {}
+    books = [without_matcher_genres(b, audible_results.get(b["id"]), (abs_results or {}).get(b["id"])) for b in books]
     book_votes = []
     rows = []
     all_genres: list[str] = []
