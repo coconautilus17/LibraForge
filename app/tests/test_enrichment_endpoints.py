@@ -146,7 +146,7 @@ class EnrichmentItemsCacheTests(unittest.TestCase):
             with patch("app.main._get_abs_api_key", return_value="key"), \
                  patch("app.main._abs_request", side_effect=counting_abs_request), \
                  patch("app.main.load_review_module", return_value=_FakeReviewModule), \
-                 patch("app.main.search_series_abs", return_value={}), \
+                 patch("app.main.search_series_audible", return_value={}), \
                  patch("app.main.search_series_goodreads", return_value={}), \
                  patch("app.main._load_abs_tract_config", return_value={"url": "", "kindle_region": "us"}):
                 client.get("/api/enrichment/series?q=schol")
@@ -174,12 +174,36 @@ class EnrichmentCompileEndpointTests(unittest.TestCase):
         with patch.object(main, "_get_abs_api_key", return_value="key"), \
              patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
              patch.object(main, "_abs_request", side_effect=_abs_request), \
-             patch.object(main, "search_series_abs", return_value={}), \
+             patch.object(main, "search_series_audible", return_value={}), \
              patch.object(main, "search_series_goodreads", return_value={}):
             series = client.get("/api/enrichment/series").json()["series"]
             resp = client.post("/api/enrichment/compile", json={"series_key": series[0]["key"], "auth_file": "/nonexistent"})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual(len(resp.json()["books"]), series[0]["book_count"])
+
+    def _compile_without_login(self, **audible_patch):
+        with patch.object(main, "_get_abs_api_key", return_value="key"), \
+             patch.object(main, "load_review_module", return_value=_FakeReviewModule()), \
+             patch.object(main, "_abs_request", side_effect=_abs_request), \
+             patch.object(main, "search_series_audible", **audible_patch) as audible_search, \
+             patch.object(main, "search_series_abs", return_value={}) as abs_search, \
+             patch.object(main, "search_series_goodreads", return_value={}):
+            resp = client.post("/api/enrichment/compile",
+                               json={"series_name": "Scholomance", "auth_file": "/nonexistent/auth.json"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        return resp.json(), audible_search, abs_search
+
+    def test_no_login_searches_the_public_audible_catalog(self):
+        from app.fixer.search import PublicAudibleClient
+        data, audible_search, abs_search = self._compile_without_login(return_value={})
+        self.assertIsInstance(audible_search.call_args.args[3], PublicAudibleClient)
+        abs_search.assert_not_called()
+        self.assertEqual(data["source_status"]["audible"]["detail"], "Audible public catalog (no login).")
+
+    def test_audible_failing_falls_back_to_the_abs_provider(self):
+        data, _audible_search, abs_search = self._compile_without_login(side_effect=RuntimeError("503"))
+        abs_search.assert_called_once()
+        self.assertIn("Audible failed: 503", data["source_status"]["audible"]["detail"])
 
     def test_unknown_series_404s(self):
         with patch("app.main._get_abs_api_key", return_value="key"), \

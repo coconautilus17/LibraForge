@@ -131,7 +131,8 @@ whole series at once, instead of fixing each book one at a time.
 - **Series lookup is ABS-native:** searches series already in your Audiobookshelf
   library index (not a provider search), with tag variants normalized into one entry.
   Books with no series are listed too, marked Standalone.
-- **Sources:** per book, Audible (every level of its category path), Goodreads reader
+- **Sources:** per book, Audible (every level of its category path; through your login,
+  or the public Audible catalog when there is none), Goodreads reader
   shelves, AudioSilo (a community audiobook database), Open Library subjects (about a
   third of a series' books, at least three), keywords such as "LitRPG" or "cultivation" in the Audible summary
   and the book's description, and the book's current genres and tags. Per series,
