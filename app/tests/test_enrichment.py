@@ -246,6 +246,14 @@ class SearchSeriesAudibleTests(unittest.TestCase):
         result = enrichment.search_series_audible(books, search, lookup, client=None)
         self.assertEqual(result, {"1": {"asin": "B0BBB"}})
 
+    def test_an_asin_audible_no_longer_has_falls_back_to_text_search(self):
+        # Don Quixote's B00FOEREKG is gone from the catalog (#433).
+        books = [{"id": "1", "asin": "B00FOEREKG", "title": "Don Quixote", "author": "Miguel de Cervantes"}]
+        result = enrichment.search_series_audible(
+            books, lambda client, query, limit: [{"asin": "B0DQX"}], lambda client, asin: None, client=None
+        )
+        self.assertEqual(result, {"1": {"asin": "B0DQX"}})
+
     def test_no_title_or_author_yields_none(self):
         books = [{"id": "1", "asin": "", "title": "", "author": ""}]
         result = enrichment.search_series_audible(

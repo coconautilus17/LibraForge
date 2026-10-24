@@ -284,8 +284,9 @@ def search_series_audible(
 ) -> dict[str, dict | None]:
     """Search Audible for every book in a series, up to `workers` concurrently.
 
-    Books with a known ASIN use the direct lookup; otherwise falls back to a
-    text search on title + author and takes the first result (these books
+    Books with a known ASIN use the direct lookup; a book without one, or
+    whose ASIN Audible no longer has (#433), gets a text search on title +
+    author and takes the first result (these books
     are already organized/identified, so no scoring is needed here, unlike
     the fixer's raw-scan matching problem). Returns a dict keyed by book id
     -> Audible product dict, or None if nothing was found or the call failed.
@@ -295,7 +296,9 @@ def search_series_audible(
             return book["id"], None  # #301: never match placeholders/ebooks to audiobooks
         try:
             if book.get("asin"):
-                return book["id"], audible_lookup_by_asin_fn(client, book["asin"])
+                product = audible_lookup_by_asin_fn(client, book["asin"])
+                if product:
+                    return book["id"], product
             query = f"{book.get('title', '')} {book.get('author', '')}".strip()
             if not query:
                 return book["id"], None
