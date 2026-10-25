@@ -276,6 +276,39 @@ class SearchSeriesAudibleTests(unittest.TestCase):
         self.assertEqual(result, {"1": None, "2": {"asin": "B0BBB"}})
 
 
+class ScoredAudibleSearchTests(unittest.TestCase):
+    """#451: a book without an ASIN took Audible's first result, often
+    another book ("The Catcher in the Rye Enigma" for Salinger's novel)."""
+
+    BOOK = {"id": "1", "asin": "", "title": "The Catcher in the Rye", "author": "J.D. Salinger"}
+    ENIGMA = {"asin": "B0ENIGMA", "title": "The Catcher in the Rye Enigma"}
+    NOVEL = {"asin": "B0NOVEL", "title": "The Catcher in the Rye"}
+
+    @staticmethod
+    def score(book, product):
+        return 1.0 if product["title"] == book["title"] else 0.2
+
+    def test_the_best_scored_result_wins_over_the_first(self):
+        result = enrichment.search_series_audible([self.BOOK], lambda c, q, n, **k: [self.ENIGMA, self.NOVEL],
+                                                  lambda c, a: None, client=None, score_fn=self.score)
+        self.assertEqual(result["1"]["asin"], "B0NOVEL")
+
+    def test_no_result_at_the_minimum_means_no_audible_data(self):
+        result = enrichment.search_series_audible([self.BOOK], lambda c, q, n, **k: [self.ENIGMA],
+                                                  lambda c, a: None, client=None, score_fn=self.score)
+        self.assertIsNone(result["1"])
+
+    def test_title_and_author_search_follows_a_keyword_miss(self):
+        calls = []
+
+        def search(client, query, limit, title="", author=""):
+            calls.append(title)
+            return [self.NOVEL] if title else [self.ENIGMA]
+        result = enrichment.search_series_audible([self.BOOK], search, lambda c, a: None, client=None, score_fn=self.score)
+        self.assertEqual(calls, ["", "The Catcher in the Rye"])
+        self.assertEqual(result["1"]["asin"], "B0NOVEL")
+
+
 class SearchSeriesGoodreadsTests(unittest.TestCase):
     """Direct Goodreads shelves (app/goodreads_shelves.py), one result per book."""
 

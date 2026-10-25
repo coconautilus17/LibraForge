@@ -124,6 +124,10 @@ class ScrapIsNobodysGenreTests(unittest.TestCase):
         self.assertEqual(classify([drama])[0], ["Fantasy"])
         self.assertEqual(classify([labels_from_genres(["Arts & Entertainment:Music"])])[0], ["Non-Fiction"])
 
+    def test_a_glued_store_genre_is_never_pinned(self):
+        # Thinking Through Film (#450): an earlier match wrote it.
+        self.assertEqual(detect_manual_genres(["Arts & Entertainment Film Philosophy"], [], False, None), [])
+
     def test_a_non_fiction_subgenre_alone_votes_non_fiction(self):
         for genre in ("Society", "Self-Help", "Literary Criticism"):
             with self.subTest(genre=genre):

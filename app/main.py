@@ -6542,6 +6542,18 @@ def _collect_extra_sources(
     return extra, series, status
 
 
+def _enrichment_match_score(book: dict[str, Any], product: dict) -> float:
+    """Metadata Forge's score for an Audible search result against a book
+    Enrichment Forge searched by title and author (#451)."""
+    fixer_module = scan_fixer_module()
+    clues = build_context_clues(fixer_module, {
+        "title": book.get("title", ""), "author": book.get("author", ""), "narrator": book.get("existing_narrator", ""),
+        "series": book.get("series_name", ""), "sequence": book.get("sequence") or "",
+        "local_duration_minutes": book.get("duration_minutes"),
+    })
+    return fixer_module.score_product_for_metadata(clues, product, clues.get("local_duration_minutes"))
+
+
 def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
     """One unit's (series or standalone) full compile: every source, the
     vote, evidence. Shared by the series page and the whole-library run."""
@@ -6572,7 +6584,8 @@ def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/aud
         # the enrichment-only expanded response groups instead of duplicating them.
         audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-        audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
+        audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client,
+                                                score_fn=_enrichment_match_score)
         source_status["audible"] = {
             "label": "Audible",
             "state": "searched",

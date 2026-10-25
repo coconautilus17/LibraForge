@@ -36,6 +36,26 @@ class TaxonomyTests(unittest.TestCase):
         self.assertIn("Young Adult", mains)
         self.assertNotIn("Children's", mains)
 
+    def test_an_adult_leaf_named_like_a_childrens_one_votes_no_audience(self):
+        # Watchers (Koontz), Tom Lake, Invisible Man on Audible (#449).
+        for ladder, main in (("Literature & Fiction:Genre Fiction:Animals", "Children's"),
+                             ("Literature & Fiction:Genre Fiction:Family Life", "Young Adult"),
+                             ("Literature & Fiction:Genre Fiction:Friendship", "Young Adult"),
+                             ("Literature & Fiction:Genre Fiction:Psychological", "Thriller"),
+                             ("Religion & Spirituality:Occult", "Horror")):
+            with self.subTest(ladder=ladder):
+                self.assertNotIn(main, t.classify([t.labels_from_genres([ladder])])[0])
+        self.assertIn("Animals", t.classify([t.labels_from_genres(["Literature & Fiction:Genre Fiction:Animals"])])[1])
+
+    def test_the_top_category_still_gives_the_audience(self):
+        for ladder, main in (("Children's Audiobooks:Animals & Nature:Animals", "Children's"),
+                             ("Teen & Young Adult:Health, Lifestyle & Relationships:Relationships:Family Life", "Young Adult"),
+                             ("Mystery, Thriller & Suspense:Thriller & Suspense:Psychological", "Thriller"),
+                             ("Literature & Fiction:Horror:Occult", "Horror")):
+            with self.subTest(ladder=ladder):
+                self.assertIn(main, t.classify([t.labels_from_genres([ladder])])[0])
+        self.assertIn("Thriller", t.classify([t.labels_from_genres(["Psychological Thriller"])])[0])
+
     def test_litrpg_filed_under_cyberpunk_is_not_science_fiction(self):
         mains, subs = t.classify([["litrpg", "cyberpunk", "science fiction"]])
         self.assertEqual(mains, ["LitRPG"])

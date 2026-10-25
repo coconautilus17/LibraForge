@@ -18,6 +18,7 @@ from app.genre_taxonomy import (
     MAIN_ORDER,
     NON_GENRES,
     is_foreign_store_genre,
+    is_glued_store_genre,
     is_scrap_label,
     labels_from_genres,
     labels_from_text,
@@ -283,16 +284,26 @@ def search_series_audible(
     audible_lookup_by_asin_fn: Callable[[Any, str], dict | None],
     client: Any,
     workers: int = ENRICHMENT_SEARCH_WORKERS,
+    score_fn: Callable[[dict[str, Any], dict], float] | None = None,
+    min_score: float = 0.70,
 ) -> dict[str, dict | None]:
     """Search Audible for every book in a series, up to `workers` concurrently.
 
     Books with a known ASIN use the direct lookup; a book without one, or
-    whose ASIN Audible no longer has (#433), gets a text search on title +
-    author and takes the first result (these books
-    are already organized/identified, so no scoring is needed here, unlike
-    the fixer's raw-scan matching problem). Returns a dict keyed by book id
+    whose ASIN Audible no longer has (#433), gets a keyword search, then
+    Audible's title + author search, and takes the best result `score_fn`
+    (book, product) scores at `min_score` or more, the fixer's own scoring
+    and minimum: the first result is often another book (#451). Without
+    `score_fn` the first result is taken. Returns a dict keyed by book id
     -> Audible product dict, or None if nothing was found or the call failed.
     """
+    def _best(book: dict[str, Any], results: list[dict]) -> dict | None:
+        if score_fn is None:
+            return results[0] if results else None
+        scored = [(score_fn(book, product), product) for product in results]
+        score, product = max(scored, key=lambda pair: pair[0], default=(0.0, None))
+        return product if score >= min_score else None
+
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
         if not book.get("has_audio", True):
             return book["id"], None  # #301: never match placeholders/ebooks to audiobooks
@@ -301,11 +312,14 @@ def search_series_audible(
                 product = audible_lookup_by_asin_fn(client, book["asin"])
                 if product:
                     return book["id"], product
-            query = f"{book.get('title', '')} {book.get('author', '')}".strip()
+            title, author = book.get("title", ""), book.get("author", "")
+            query = f"{title} {author}".strip()
             if not query:
                 return book["id"], None
-            results = audible_search_fn(client, query, 3)
-            return book["id"], (results[0] if results else None)
+            product = _best(book, audible_search_fn(client, query, 10))
+            if product is None and score_fn is not None and title:
+                product = _best(book, audible_search_fn(client, query, 10, title=title, author=author))
+            return book["id"], product
         except Exception:
             return book["id"], None
 
@@ -542,10 +556,12 @@ def detect_manual_genres(
     log recorded as the user's own stay pinned after Enrichment Forge rewrites
     them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
     older plain list of written genres."""
-    # A foreign-store label ("Fantasía") was written by an ABS match, not by
-    # hand, and scrap ("Audbioook", a keyword string) is nobody's genre (#443).
+    # A foreign-store label ("Fantasía") or a glued store name (#450) was
+    # written by an ABS match, not by hand, and scrap ("Audbioook", a keyword
+    # string) is nobody's genre (#443).
     real = [g for g in abs_genres or []
-            if str(g).strip() and normalize_label(g) not in NON_GENRES and not is_foreign_store_genre(g)]
+            if str(g).strip() and normalize_label(g) not in NON_GENRES and not is_foreign_store_genre(g)
+            and not is_glued_store_genre(g)]
     real = split_compound_genres([g for g in split_compound_genres(real, canonical=False)
                                   if not is_scrap_label(g) and not is_foreign_store_genre(g)])
     if not real:
