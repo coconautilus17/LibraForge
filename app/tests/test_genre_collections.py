@@ -33,10 +33,10 @@ class CollectionsTests(unittest.TestCase):
 
     def test_apply_never_touches_unmanaged_and_reports_failures(self):
         calls = []
-        rows = [{"genre": "Explicit", "action": "name_taken", "collection_id": "c2", "add": [], "remove": [], "book_count": 0, "books": []},
-                {"genre": "Sci-Fi", "action": "create", "collection_id": None, "add": ["b"], "remove": [], "book_count": 1, "books": ["b"]},
-                {"genre": "Fantasy", "action": "update", "collection_id": "c1", "add": ["b"], "remove": ["z"], "book_count": 2, "books": ["a", "b"]},
-                {"genre": "Horror", "action": "create", "collection_id": None, "add": ["h"], "remove": [], "book_count": 1, "books": ["h"]}]
+        rows = [{"genre": "Explicit", "name": "Explicit", "action": "name_taken", "collection_id": "c2", "add": [], "remove": [], "book_count": 0, "books": []},
+                {"genre": "Sci-Fi", "name": "Sci-Fi", "action": "create", "collection_id": None, "add": ["b"], "remove": [], "book_count": 1, "books": ["b"]},
+                {"genre": "Fantasy", "name": "Fantasy", "action": "update", "collection_id": "c1", "add": ["b"], "remove": ["z"], "book_count": 2, "books": ["a", "b"]},
+                {"genre": "Horror", "name": "Horror", "action": "create", "collection_id": None, "add": ["h"], "remove": [], "book_count": 1, "books": ["h"]}]
 
         def post(path, body):
             calls.append(("post", path, body))
@@ -56,31 +56,41 @@ class CollectionsTests(unittest.TestCase):
         self.assertEqual(out["failed"], [{"genre": "Horror", "error": "ABS 500"}])
 
 
-class TooBigTests(unittest.TestCase):
+class LargeGenreTests(unittest.TestCase):
     """#454: ABS loads a collection's books all at once; a 2,664-book Fantasy
     collection was 49 MB and the Collections page couldn't open."""
 
-    def setUp(self):
-        n = gc.MAX_COLLECTION_BOOKS + 1
-        self.counts = {"Fantasy": [f"f{i}" for i in range(n)], "Sci-Fi": [f"s{i}" for i in range(n)],
-                       "Mine": [f"m{i}" for i in range(n)], "Horror": ["h"]}
-        self.existing = [{"id": "c1", "name": "Sci-Fi", "description": gc.MARKER, "books": [{"id": "s0"}]},
-                         {"id": "u1", "name": "Mine", "description": "my own", "books": []}]
+    def test_a_large_genre_becomes_numbered_parts_cut_between_authors(self):
+        books = [f"b{i}" for i in range(1300)]
+        # Ten authors of 130 books each.
+        order = {b: (f"author {i // 130:02d}", "", b) for i, b in enumerate(books)}
+        rows = gc.plan_collections(["Fantasy"], {"Fantasy": books}, [], order)
+        self.assertEqual([r["name"] for r in rows], ["Fantasy 1", "Fantasy 2", "Fantasy 3"])
+        self.assertTrue(all(r["book_count"] <= gc.MAX_COLLECTION_BOOKS for r in rows))
+        self.assertEqual(sum(r["book_count"] for r in rows), 1300)
+        authors = [{order[b][0] for b in r["books"]} for r in rows]
+        self.assertFalse(authors[0] & authors[1] or authors[1] & authors[2])  # no author in two parts
 
-    def test_a_genre_over_the_cap_is_never_written(self):
-        rows = {r["genre"]: r for r in gc.plan_collections(["Fantasy", "Sci-Fi", "Mine", "Horror"], self.counts, self.existing)}
-        self.assertEqual((rows["Fantasy"]["action"], rows["Fantasy"]["collection_id"]), ("too_big", None))
-        self.assertEqual((rows["Sci-Fi"]["action"], rows["Sci-Fi"]["collection_id"]), ("too_big", "c1"))
-        self.assertEqual(rows["Mine"]["action"], "name_taken")  # the user's own: never touched
-        self.assertEqual(rows["Horror"]["action"], "create")
+    def test_litrpg_and_cultivation_books_leave_fantasy_and_sci_fi(self):
+        counts = {"Fantasy": ["a", "b", "c"], "Sci-Fi": ["b", "d"], "LitRPG": ["b"], "Cultivation": ["c"]}
+        rows = {r["name"]: r for r in gc.plan_collections(["Fantasy", "Sci-Fi", "LitRPG"], counts, [])}
+        self.assertEqual((rows["Fantasy"]["books"], rows["Sci-Fi"]["books"], rows["LitRPG"]["books"]), (["a"], ["d"], ["b"]))
 
-    def test_applying_removes_only_an_existing_libraforge_collection(self):
-        rows = gc.plan_collections(["Fantasy", "Sci-Fi", "Mine"], self.counts, self.existing)
-        posted, deleted = [], []
-        out = gc.apply_collection_plan(rows, library_id="L", post_fn=lambda p, b: posted.append(p),
-                                       patch_fn=lambda p, b: None, delete_fn=deleted.append)
-        self.assertEqual((posted, deleted), ([], ["/api/collections/c1"]))
-        self.assertEqual((out["created"], out["removed"], out["skipped"]), (0, 1, 2))
+    def test_progression_fantasy_is_never_a_collection_and_an_old_one_retires(self):
+        existing = [{"id": "pf", "name": "Progression Fantasy", "description": gc.MARKER, "books": [{"id": "a"}]},
+                    {"id": "f", "name": "Fantasy", "description": gc.MARKER, "books": [{"id": "a"}]},
+                    {"id": "mine", "name": "Fantasy 2", "description": "my own", "books": []}]
+        counts = {"Progression Fantasy": ["a"], "Fantasy": [f"f{i}" for i in range(700)]}
+        rows = gc.plan_collections(["Progression Fantasy", "Fantasy"], counts, existing)
+        by_name = {r["name"]: r["action"] for r in rows}
+        self.assertEqual(by_name["Progression Fantasy"], "retire")
+        self.assertEqual(by_name["Fantasy"], "retire")  # the unsplit one, replaced by its parts
+        self.assertEqual((by_name["Fantasy 1"], by_name["Fantasy 2"]), ("create", "name_taken"))
+        deleted = []
+        out = gc.apply_collection_plan(rows, library_id="L", post_fn=lambda p, b: None, patch_fn=lambda p, b: None,
+                                       delete_fn=deleted.append)
+        self.assertEqual(sorted(deleted), ["/api/collections/f", "/api/collections/pf"])
+        self.assertEqual(out["removed"], 2)
 
 
 class UmbrellaTests(unittest.TestCase):
