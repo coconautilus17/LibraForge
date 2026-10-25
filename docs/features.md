@@ -52,11 +52,11 @@ Searches Audible (or another provider) and writes matched metadata to your files
   marketplace, US, UK, DE and so on), **Audible (your account)** (the same catalog through
   your logged-in account; with no login a run or search switches to the public catalog and
   says so), **Audiobookshelf** (via its own search API, which returns fewer candidates),
-  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads /
-  Kindle** (via `abs-tract`) as an opt-in fallback for no-match, series-only, or
-  low-score books. Goodreads rate-limits aggressively; a circuit breaker opens after
-  repeated failures and skips Goodreads/Kindle lookups for a cooldown window rather than
-  hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
+  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads**
+  (read directly, no extra service) as an opt-in fallback for no-match, series-only, or
+  low-score books, with **Kindle** (via `abs-tract`) for its cover art. Goodreads
+  rate-limits aggressively; a circuit breaker opens after repeated failures and skips
+  Goodreads/Kindle lookups for a cooldown window rather than hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup warns if you enabled the fallback with more than 5 search workers, since that's
   what usually trips it.
@@ -294,7 +294,7 @@ from the UI).
 GraphicAudio, SoundBooth Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD
 Audiothek and Die drei ???, plus Goodreads and Hardcover when the abs-agg service itself is
 configured with their keys. Storytel, Audioteka and BookBeat need a language, region or
-market value. abs-tract provides the Goodreads/Kindle fallback.
+market value. abs-tract provides Kindle cover art; Goodreads is read directly.
 
 **Danger zone, clean up sidecars:** permanently deletes the JSON files LibraForge writes
 next to your audio (`libraforge.json`, `*.libraforge.json` and related caches), optionally

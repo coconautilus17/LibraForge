@@ -3583,7 +3583,7 @@ def evaluate_goodreads_breaker_state(log: list[str]) -> bool:
     """
     if _abs_tract_breaker_is_open():
         log.append(
-            "  Goodreads fallback skipped (abs-tract circuit open) -> "
+            "  Goodreads fallback skipped (circuit open) -> "
             "not counted as a genuine no-match"
         )
         return True
@@ -3645,17 +3645,17 @@ def find_goodreads_match(
 
 
 def match_ebook(
-    clues: dict, abs_url: str, abs_api_key: str, abs_tract_url: str,
+    clues: dict, abs_url: str, abs_api_key: str, goodreads: bool,
     limit: int = 10, log: list[str] | None = None,
 ) -> dict:
     """Best Goodreads / Open Library match for an ebook, judged like an audiobook.
 
     Same clues, scoring and full-match gate as the audio fixer. Goodreads
-    first; Open Library (through ABS) last, only when Goodreads found
-    nothing, because it routinely takes its full timeout. An empty URL turns
-    that source off. When the abs-tract breaker is open Goodreads is skipped,
-    and if nothing else matches the result says so, so a rate-limited ebook
-    isn't reported as a genuine no-match.
+    first (when `goodreads`); Open Library (through ABS) last, only when
+    Goodreads found nothing, because it routinely takes its full timeout. An
+    empty ABS URL turns Open Library off. When the Goodreads breaker is open
+    Goodreads is skipped, and if nothing else matches the result says so, so
+    a rate-limited ebook isn't reported as a genuine no-match.
     """
     log = [] if log is None else log
     result = {"product": None, "score": 0.0, "query": "", "provider": "", "goodreads_rate_limited": False}
@@ -3664,10 +3664,10 @@ def match_ebook(
         return result
 
     rate_limited = False
-    if abs_tract_url:
+    if goodreads:
         rate_limited = evaluate_goodreads_breaker_state(log)
         if not rate_limited:
-            gr, gr_score, _, gr_query = find_goodreads_match(clues, abs_tract_url, limit, log)
+            gr, gr_score, _, gr_query = find_goodreads_match(clues, "", limit, log)
             if gr:
                 result.update(product=gr, score=gr_score, query=gr_query, provider="goodreads")
                 return result
@@ -4163,7 +4163,7 @@ def search_item(
                 if candidate_score >= args.min_score and debug_metadata.get("edit_mode") != "series_only":
                     break
 
-            # Goodreads fallback (abs-tract): fires whenever Audible + ASIN did
+            # Goodreads fallback: fires whenever Audible + ASIN did
             # not yield a confident *full* match. That covers three cases: no
             # match, a match below the score gate, and a match that only resolves
             # the series (series_only) without confidently identifying the book
@@ -4186,7 +4186,6 @@ def search_item(
             )
             if (
                 goodreads_fallback_enabled
-                and abs_tract_url
                 and clues.get("title")
                 and not audible_is_full
             ):
@@ -4196,10 +4195,10 @@ def search_item(
                     if product:
                         log.append(
                             f"  Audible match not full (score={score:.4f}, "
-                            f"mode={audible_edit_mode}) -> trying Goodreads (abs-tract)"
+                            f"mode={audible_edit_mode}) -> trying Goodreads"
                         )
                     else:
-                        log.append("  No Audible match -> trying Goodreads (abs-tract)")
+                        log.append("  No Audible match -> trying Goodreads")
                     gr_candidate, gr_score, gr_ambiguity, gr_query = find_goodreads_match(
                         clues, abs_tract_url, args.limit, log, local_duration_minutes,
                     )
@@ -4209,9 +4208,9 @@ def search_item(
                         # cover. Without a cover flag the Kindle scrape is
                         # wasted work (and an extra slow abs-tract round-trip),
                         # so skip it.
-                        if getattr(args, "cover_if_missing", False) or getattr(
+                        if abs_tract_url and (getattr(args, "cover_if_missing", False) or getattr(
                             args, "replace_cover", False
-                        ):
+                        )):
                             k_products = abs_tract_search(
                                 title=gr_query,
                                 author=clues.get("author", ""),
@@ -5981,9 +5980,8 @@ def main():
         default=os.environ.get("ABS_TRACT_URL", ""),
         dest="abs_tract_url",
         help=(
-            "Base URL of the abs-tract service (Goodreads/Kindle). Used only when "
-            "--enable-goodreads-fallback is set, or for Kindle cover enrichment "
-            "after a Goodreads match."
+            "Base URL of the abs-tract service, used only for Kindle cover "
+            "enrichment after a Goodreads match (Goodreads itself is read directly)."
         ),
     )
     parser.add_argument(
@@ -5991,7 +5989,7 @@ def main():
         action="store_true",
         dest="enable_goodreads_fallback",
         help=(
-            "Allow automatic Goodreads fallback via abs-tract when Audible does not "
+            "Allow automatic Goodreads fallback when Audible does not "
             "return a confident full match. Goodreads rate-limits aggressively; use "
             "--workers 5 or lower when enabling this."
         ),
@@ -6168,15 +6166,12 @@ def main():
     print(f"Search workers: {args.workers}")
     print(f"Write workers:  {args.write_workers}")
     if args.enable_goodreads_fallback:
-        if args.abs_tract_url:
-            print("Goodreads fallback: ENABLED via abs-tract")
-            if args.workers > 5:
-                print(
-                    "WARNING: Goodreads fallback is rate-limited; use 5 search "
-                    f"workers or fewer when enabling it (current: {args.workers})."
-                )
-        else:
-            print("Goodreads fallback: requested but disabled because --abs-tract-url is empty")
+        print("Goodreads fallback: ENABLED")
+        if args.workers > 5:
+            print(
+                "WARNING: Goodreads fallback is rate-limited; use 5 search "
+                f"workers or fewer when enabling it (current: {args.workers})."
+            )
     print()
 
     found = len(processing_items)

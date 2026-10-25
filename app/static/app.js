@@ -261,7 +261,7 @@ function buildGoodreadsBreakerDialog() {
   dlg.className = 'manual-apply-dialog org-confirm-dialog';
   dlg.innerHTML = `
     <h3 class="manual-apply-title org-confirm-danger-title">Goodreads rate limit hit</h3>
-    <p>This run tried the Goodreads (abs-tract) fallback and got blocked enough times in a
+    <p>This run tried the Goodreads fallback and got blocked enough times in a
     row that the circuit breaker opened, skipping Goodreads/Kindle lookups for the rest of
     the cooldown window. Books affected are marked with a "GR LIMITED" badge in the match
     report instead of being counted as genuine no-matches.</p>
@@ -425,8 +425,8 @@ function renderStats(stats, startedAt, finishedAt) {
     stat('Mode: none', mode.none, 'No safe edit selected.'),
     provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
-    provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads (abs-tract) fallback, used when Audible did not return a confident match.') : '',
-    stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads (abs-tract) circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
+    provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads fallback, used when Audible did not return a confident match.') : '',
+    stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
     matchReportItems.some((i) => i.author_initials_fixed) ? stat('Author initials fixed', matchReportItems.filter((i) => i.author_initials_fixed).length, 'Author names whose initials were unified by the author-name scheme (Settings, Author names). Filter the match report by Author Initials Fixed to list them.') : '',
     perfectNarratorCount ? stat('100%: narrator kept', perfectNarratorCount, 'Full matches scored 100%, but local narrator evidence differs from the selected recording. The book\'s own narrator was kept. Filter by Different edition to see these books.') : '',
     matchReportItems.some((i) => i.different_edition) ? stat('Different edition', matchReportItems.filter((i) => i.different_edition).length, 'Matched to another recording of the same book with a different narrator. The match\'s title, series and details were used, but the book\'s own narrator was kept. Filter the match report by Different edition to list them.') : '',
@@ -1725,7 +1725,7 @@ function buildMatchCard(item) {
       ${mode ? `<span class="match-mode-badge">${escapeHtml(mode)}</span>` : ''}
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
-      ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the abs-tract circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
+      ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
       ${item.author_initials_fixed ? `<span class="match-initials-badge" title="${escapeHtml(`The author initials were unified by the author-name scheme: ${local.author || ''} to ${m.author || ''}`)}">Initials Fixed</span>` : ''}
       ${edition ? `<span class="match-edition-badge" title="${escapeHtml(editionNote)}">${perfectNarratorMismatch ? '100% · Narrator kept' : 'Different edition'}</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}

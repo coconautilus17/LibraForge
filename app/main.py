@@ -81,7 +81,7 @@ from app.enrichment_sources import (
 from app.enrichment_batch import BatchStore, apply_batch, effective_status, mark_applied, run_batch
 from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
 from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
-from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
+from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves, search_books as search_goodreads_books
 from app.abs_client import (
     abs_get_json,
     abs_post_json,
@@ -427,26 +427,30 @@ def search_abs_tract_candidates(
     import urllib.error as _urlerror
     import urllib.parse as _urlparse
 
-    if provider == "kindle":
-        path = f"kindle/{kindle_region.strip('/')}/search"
+    if provider == "goodreads":
+        # Read directly (app/goodreads_shelves.py), as the fixer does: no abs-tract.
+        found = search_goodreads_books(query, author, pacer=_GOODREADS_PACER, limit=max(1, min(limit, 5)))
+        if found["status"] == "skipped":
+            raise HTTPException(status_code=503, detail="Goodreads is rate-limiting LibraForge. Try again in a few minutes.")
+        if found["status"] == "failed":
+            raise HTTPException(status_code=502, detail="Goodreads didn't answer. Try again in a moment.")
+        data = {"matches": found["matches"]}
     else:
-        path = f"{provider}/search"
-    qs = _urlparse.urlencode({"query": query, **({"author": author} if author else {})})
-    search_url = f"{base_url.rstrip('/')}/{path}?{qs}"
-
-    try:
-        req = urllib.request.Request(
-            search_url,
-            headers={"Accept": "application/json", "User-Agent": "LibraForge/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except _urlerror.URLError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"abs-tract unreachable at {base_url}: {exc}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"abs-tract search failed: {exc}") from exc
+        qs = _urlparse.urlencode({"query": query, **({"author": author} if author else {})})
+        search_url = f"{base_url.rstrip('/')}/kindle/{kindle_region.strip('/')}/search?{qs}"
+        try:
+            req = urllib.request.Request(
+                search_url,
+                headers={"Accept": "application/json", "User-Agent": "LibraForge/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except _urlerror.URLError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"abs-tract unreachable at {base_url}: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"abs-tract search failed: {exc}") from exc
 
     is_kindle = provider == "kindle"
     results: list[dict[str, Any]] = []
@@ -2199,8 +2203,8 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         # Always pass abs-agg URL so the fixer can auto-detect and search
         # GraphicAudio / SoundBooth Theater regardless of the selected provider.
         cmd += ["--abs-agg-url", _load_abs_agg_config().get("url", "http://abs-agg:3000")]
-        # abs-tract (Goodreads/Kindle): pass the URL when configured so the fixer
-        # can use it only when the explicit Goodreads fallback flag is set.
+        # abs-tract (Kindle cover only; Goodreads is read directly): pass the URL
+        # when configured.
         _abs_tract_cfg = _load_abs_tract_config()
         _abs_tract_url = (_abs_tract_cfg.get("url") or "").strip()
         if req.enable_goodreads_fallback:
@@ -6217,13 +6221,14 @@ class AbsTractSearchRequest(BaseModel):
 def abs_tract_search_endpoint(req: AbsTractSearchRequest) -> dict[str, Any]:
     cfg = _load_abs_tract_config()
     base_url = (cfg.get("url") or "").strip()
-    if not base_url:
-        raise HTTPException(
-            status_code=400,
-            detail="abs-tract URL not configured. Set it in Settings → Goodreads/Kindle fallback.",
-        )
-    base_url = require_http_base_url(base_url, field_name="abs-tract URL")
     provider = req.provider if req.provider in {"goodreads", "kindle"} else "goodreads"
+    if provider == "kindle":  # Goodreads is read directly
+        if not base_url:
+            raise HTTPException(
+                status_code=400,
+                detail="abs-tract URL not configured. Set it in Settings → Goodreads/Kindle fallback.",
+            )
+        base_url = require_http_base_url(base_url, field_name="abs-tract URL")
     return search_abs_tract_candidates(
         query=req.query,
         author=req.author,
@@ -7111,7 +7116,7 @@ def match_ebook_unit(
         clues,
         abs_url=_get_abs_url() if open_library else "",
         abs_api_key=_get_abs_api_key() if open_library else "",
-        abs_tract_url=_load_abs_tract_config().get("url", "") if goodreads else "",
+        goodreads=goodreads,
     )
     match: dict[str, Any] | None = None
     if found["product"]:

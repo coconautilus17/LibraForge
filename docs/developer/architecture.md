@@ -101,8 +101,11 @@ shape. Special publishers (GraphicAudio, SoundBooth Theater) are recognised by
 `app/publisher_policy.py`, and routed to the matching abs-agg endpoint. Some abs-agg
 providers need a path parameter (`ABS_AGG_REQUIRED_PARAMS` in `main.py`).
 
-abs-tract (Goodreads/Kindle) is rate-limited upstream, so the fixer wraps it in a circuit
-breaker (`_ABS_TRACT_BREAKER*` in the fixer script): after repeated failures it stops
+Goodreads is read directly from its public XML (`app/goodreads_shelves.py`, shared with
+Enrichment Forge's shelves): `abs_tract_search` routes the `goodreads` provider to its
+`search_books` (search, then up to 3 book pages) and only Kindle still goes through
+abs-tract. Goodreads is rate-limited upstream, so `abs_tract_search` wraps both in a
+circuit breaker (`_ABS_TRACT_BREAKER*` in `app/fixer/search.py`): after repeated failures it stops
 calling for a cooldown instead of hammering a blocked service.
 
 ## Where decisions live

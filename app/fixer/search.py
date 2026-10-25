@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 
@@ -16,6 +17,7 @@ import audible
 
 from app.debug_trace import trace, CHOOSE
 from app.fixer.scoring import clean_provider_genres
+from app.goodreads_shelves import GoodreadsPacer, search_books as goodreads_search_books
 from app.publisher_policy import special_provider_for
 
 # ---------------------------------------------------------------------------
@@ -310,6 +312,9 @@ _ABS_TRACT_BREAKER_COOLDOWN = 180.0   # seconds to stay open; measured recovery 
 _ABS_TRACT_THROTTLE_LOCK = threading.Lock()
 _ABS_TRACT_LAST_REQUEST_TIME: list[float] = [0.0]
 _ABS_TRACT_THROTTLE_DELAY = 0.5  # seconds between requests (global, across all workers)
+# A Goodreads search is up to 4 requests (search + 3 book pages): its pacer
+# keeps the same 0.5 s gap between them, and the breaker above decides.
+_GOODREADS_PACER = GoodreadsPacer(fail_threshold=sys.maxsize)
 
 
 def _abs_tract_breaker_is_open() -> bool:
@@ -376,12 +381,16 @@ def abs_tract_search(
     Kindle Store ASINs are *ebook* ASINs, not Audible audiobook ASINs, so the
     Kindle match's ASIN is never adopted as the book's ASIN (we keep any existing
     one). Kindle is useful here for its high-quality cover, not identity.
+
+    Goodreads is read directly from its public XML (app/goodreads_shelves.py,
+    shared with Enrichment Forge), so it needs no abs-tract URL; the
+    throttle, retries and breaker here still guard it.
     """
     import urllib.error as _urlerror
     import urllib.parse as _urlparse
     import urllib.request as _urlrequest
 
-    if not abs_tract_url:
+    if not abs_tract_url and provider != "goodreads":
         return []
 
     # If the breaker is open (upstream is blocking us), skip the call entirely
@@ -419,9 +428,15 @@ def abs_tract_search(
     last_err = ""
     for _attempt in range(max(1, retries)):
         try:
-            req = _urlrequest.Request(url, headers={"Accept": "application/json"})
-            with _urlrequest.urlopen(req, timeout=timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
+            if provider == "goodreads":
+                found = goodreads_search_books(title, author, pacer=_GOODREADS_PACER, limit=min(limit, 3), timeout=timeout)
+                if found["status"] == "failed":
+                    raise OSError("Goodreads request failed")
+                raw = {"matches": found["matches"]}
+            else:
+                req = _urlrequest.Request(url, headers={"Accept": "application/json"})
+                with _urlrequest.urlopen(req, timeout=timeout) as resp:
+                    raw = json.loads(resp.read().decode("utf-8"))
             break
         except _urlerror.HTTPError as exc:
             last_err = f"HTTP {exc.code}"

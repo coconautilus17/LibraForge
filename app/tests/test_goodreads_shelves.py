@@ -5,7 +5,8 @@ only the first 3, so LitRPG / progression / harem / YA / explicit evidence
 never reach Enrichment Forge. This module reads the same public XML endpoint
 directly (same public key abs-tract embeds) and keeps all shelves with vote
 counts, paced exactly like Meta Forge's Goodreads calls: 0.5 s global gap,
-breaker opens after 2 consecutive failures for 180 s.
+breaker opens after 2 consecutive failures for 180 s. Metadata Forge's Goodreads
+search (search_books) reads the same XML.
 """
 import unittest
 import urllib.error
@@ -195,3 +196,94 @@ class DragonsShelfTests(unittest.TestCase):
 
     def test_a_stray_dragons_shelving_is_not_enough(self):
         self.assertNotIn("Dragons", shelves_to_genres([("fantasy", 470), ("dragons", 6)]))    # The Primal Hunter
+
+
+def _work(book_id, title, author):
+    return (f"<work><best_book><id>{book_id}</id><title>{title}</title>"
+            f"<author><name>{author}</name></author></best_book></work>")
+
+
+def _search(*works):
+    return ("<GoodreadsResponse><search><results>" + "".join(works) + "</results></search></GoodreadsResponse>").encode()
+
+
+def _page(title, author, extra=""):
+    return (f"<GoodreadsResponse><book><title>{title}</title><authors><author><name>{author}</name><role></role></author>"
+            f"</authors>{extra}</book></GoodreadsResponse>").encode()
+
+
+class SearchBooksTests(unittest.TestCase):
+    """Goodreads search for Metadata Forge, ebooks and manual search, read directly."""
+
+    def run_search(self, responses, title="The Catcher in the Rye", author="J.D. Salinger", **kw):
+        from app.goodreads_shelves import search_books
+        urls = []
+
+        def get(url, timeout):
+            urls.append(url)
+            return responses.pop(0)
+        return search_books(title, author, pacer=GoodreadsPacer(gap_s=0, sleep=_no_sleep), http_get=get, **kw), urls
+
+    def test_another_authors_results_are_never_fetched(self):
+        # With the author in the query Goodreads ranks study guides first.
+        found, urls = self.run_search([
+            _search(_work(1, "Summary Edition: The Catcher in the Rye", "Jonathan Coupland"),
+                    _work(2, "The Catcher in the Rye", "J.D. Salinger")),
+            _page("The Catcher in the Rye", "J.D. Salinger"),
+        ])
+        self.assertIn("q=The+Catcher+in+the+Rye&", urls[0])
+        self.assertIn("book/show/2.xml", urls[1])
+        self.assertEqual(len(urls), 2)
+        self.assertEqual([m["title"] for m in found["matches"]], ["The Catcher in the Rye"])
+
+    def test_title_and_author_together_only_when_the_title_finds_nothing(self):
+        found, urls = self.run_search([_search(), _search(_work(2, "The Catcher in the Rye", "J.D. Salinger")),
+                                       _page("The Catcher in the Rye", "J.D. Salinger")])
+        self.assertIn("q=The+Catcher+in+the+Rye+J.D.+Salinger&", urls[1])
+        self.assertEqual(found["status"], "found")
+
+    def test_a_book_page_becomes_a_provider_match(self):
+        from app.goodreads_shelves import book_match
+        import xml.etree.ElementTree as ET
+        page = ET.fromstring(_page(
+            "Mistborn: The Final Empire (Mistborn, #1)", "Brandon Sanderson",
+            "<isbn13>9780765311788</isbn13><publication_year>2006</publication_year><language_code>eng</language_code>"
+            "<image_url>https://i.gr-assets.com/books/1617768316l/68428._SX98_.jpg</image_url>"
+            "<popular_shelves><shelf name=\"fantasy\" count=\"44948.0\"/></popular_shelves>")).find("book")
+        match = book_match(page)
+        self.assertEqual(match["title"], "Mistborn: The Final Empire")
+        self.assertEqual(match["series"], [{"series": "Mistborn", "sequence": "1"}])
+        self.assertEqual(match["cover"], "https://i.gr-assets.com/books/1617768316l/68428.jpg")
+        self.assertEqual((match["isbn"], match["publishedYear"], match["language"]), ("9780765311788", "2006", "english"))
+        self.assertEqual(match["genres"], ["Fantasy"])  # "44948.0": Goodreads now sends decimals
+
+    def test_series_works_when_the_title_names_none(self):
+        from app.goodreads_shelves import book_match
+        import xml.etree.ElementTree as ET
+        page = ET.fromstring(_page("Unsouled", "Will Wight", "<series_works><series_work><user_position>1</user_position>"
+                                   "<series><title> Cradle </title></series></series_work></series_works>")).find("book")
+        self.assertEqual(book_match(page)["series"], [{"series": "Cradle", "sequence": "1"}])
+
+    def test_a_blocked_search_is_failed_not_empty(self):
+        from app.goodreads_shelves import search_books
+
+        def get(url, timeout):
+            raise urllib.error.HTTPError(url, 503, "busy", {}, None)
+        found = search_books("T", "A", pacer=GoodreadsPacer(gap_s=0, sleep=_no_sleep), http_get=get)
+        self.assertEqual(found, {"status": "failed", "matches": []})
+
+
+class ManualGoodreadsSearchTests(unittest.TestCase):
+    def test_goodreads_needs_no_abs_tract_and_a_rate_limit_is_a_503(self):
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        from app import main
+        match = {"title": "Unsouled", "author": "Will Wight", "series": [{"series": "Cradle", "sequence": "1"}],
+                 "cover": "https://c/1.jpg", "isbn": "978", "publishedYear": "2016", "genres": ["Fantasy"]}
+        with patch.object(main, "search_goodreads_books", return_value={"status": "found", "matches": [match]}):
+            rows = main.search_abs_tract_candidates(query="Unsouled", author="Will Wight", base_url="", provider="goodreads")["results"]
+        self.assertEqual((rows[0]["title"], rows[0]["asin"], rows[0]["series"]), ("Unsouled", "", "Cradle"))
+        with patch.object(main, "search_goodreads_books", return_value={"status": "skipped", "matches": []}), \
+             self.assertRaises(HTTPException) as ctx:
+            main.search_abs_tract_candidates(query="Unsouled", base_url="", provider="goodreads")
+        self.assertEqual(ctx.exception.status_code, 503)

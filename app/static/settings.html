@@ -359,7 +359,7 @@
     <!-- abs-tract (Goodreads/Kindle) -->
     <section id="abs-tract" class="card side-nav-card">
       <h2>Goodreads / Kindle</h2>
-      <p>Optional. LibraForge can search Goodreads and Kindle via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Manual searches use this URL directly. Batch Goodreads fallback also requires enabling the fallback checkbox on the run screen; use only 5 search workers when enabling it because Goodreads rate-limits aggressively. Kindle is used only for high-quality cover art and its ebook ASIN is never written.</p>
+      <p>Optional. LibraForge can search Kindle via <a href="https://github.com/ahobsonsayers/abs-tract" target="_blank" rel="noopener" style="color:var(--accent)">abs-tract</a> (a separate service). Kindle is used only for high-quality cover art and its ebook ASIN is never written. Goodreads needs no service: LibraForge reads it directly. Batch Goodreads fallback requires enabling the fallback checkbox on the run screen; use only 5 search workers when enabling it because Goodreads rate-limits aggressively.</p>
       <div class="grid" style="--grid-cols:1;margin-top:14px">
         <label>
           <span class="field-label">abs-tract URL</span>

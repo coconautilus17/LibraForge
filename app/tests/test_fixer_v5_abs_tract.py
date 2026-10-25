@@ -1,4 +1,4 @@
-"""abs-tract (Goodreads/Kindle) client + Goodreads edit-mode gate in v5."""
+"""abs_tract_search (Goodreads read directly, Kindle via abs-tract) + Goodreads edit-mode gate in v5."""
 import json
 import time
 import unittest
@@ -62,7 +62,7 @@ class AbsTractRetryTests(unittest.TestCase):
         with patch("time.sleep", lambda *_a: None), \
                 patch("urllib.request.urlopen", flaky):
             products = fixer.abs_tract_search(
-                "T", "A", "goodreads", "http://abs-tract:5555", 10, retries=3,
+                "T", "A", "kindle", "http://abs-tract:5555", 10, retries=3,
             )
         self.assertEqual(calls["n"], 3)
         self.assertEqual(len(products), 1)
@@ -75,7 +75,7 @@ class AbsTractRetryTests(unittest.TestCase):
         with patch("time.sleep", lambda *_a: None), \
                 patch("urllib.request.urlopen", always_fail):
             products = fixer.abs_tract_search(
-                "T", "A", "goodreads", "http://abs-tract:5555", 10,
+                "T", "A", "kindle", "http://abs-tract:5555", 10,
                 retries=3, log=log,
             )
         self.assertEqual(products, [])
@@ -85,7 +85,7 @@ class AbsTractRetryTests(unittest.TestCase):
         log: list[str] = []
         with patch("urllib.request.urlopen", fake_urlopen_for({"matches": []}, {})):
             products = fixer.abs_tract_search(
-                "T", "A", "goodreads", "http://abs-tract:5555", 10, log=log,
+                "T", "A", "kindle", "http://abs-tract:5555", 10, log=log,
             )
         self.assertEqual(products, [])
         self.assertEqual(log, [])  # genuine no-result, no error line
@@ -101,7 +101,7 @@ class AbsTractRetryTests(unittest.TestCase):
         with patch("time.sleep", lambda *_a: None), \
                 patch("urllib.request.urlopen", http404):
             products = fixer.abs_tract_search(
-                "T", "A", "goodreads", "http://abs-tract:5555", 10, retries=3,
+                "T", "A", "kindle", "http://abs-tract:5555", 10, retries=3,
             )
         self.assertEqual(products, [])
         self.assertEqual(calls["n"], 1)  # 404 is not retried
@@ -125,12 +125,12 @@ class AbsTractBreakerTests(unittest.TestCase):
                 patch("urllib.request.urlopen", always_fail):
             # Two persistent failures (threshold=2) trip the breaker.
             for _ in range(fixer._ABS_TRACT_BREAKER_THRESHOLD):
-                fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+                fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10)
             calls_after_trip = calls["n"]
             # Next call must short-circuit without hitting the network.
             log: list[str] = []
             out = fixer.abs_tract_search(
-                "t", "a", "goodreads", "http://x:5555", 10, log=log
+                "t", "a", "kindle", "http://x:5555", 10, log=log
             )
         self.assertEqual(out, [])
         self.assertEqual(calls["n"], calls_after_trip)  # no new network call
@@ -150,8 +150,8 @@ class AbsTractBreakerTests(unittest.TestCase):
                 patch("urllib.request.urlopen", flaky):
             # retries=1 so the first call is a single persistent failure,
             # the second call succeeds and resets the counter.
-            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10, retries=1)
-            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10, retries=1)
+            fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10, retries=1)
+            fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10, retries=1)
         self.assertEqual(fixer._ABS_TRACT_BREAKER["consecutive_failures"], 0)
         self.assertFalse(fixer._abs_tract_breaker_is_open())
 
@@ -164,21 +164,21 @@ class AbsTractBreakerTests(unittest.TestCase):
         with patch("time.sleep", lambda *_a: None), \
                 patch("urllib.request.urlopen", always_fail):
             for _ in range(fixer._ABS_TRACT_BREAKER_THRESHOLD):
-                fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+                fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10)
         self.assertTrue(fixer.abs_tract_breaker_ever_opened())
 
         # Cooldown elapses and a later call succeeds -- consecutive_failures and
         # logged_open reset, but ever_opened must stay True for run-level reporting.
         fixer._ABS_TRACT_BREAKER["open_until"] = 0.0
         with patch("urllib.request.urlopen", fake_urlopen_for(payload, {})):
-            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+            fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10)
         self.assertEqual(fixer._ABS_TRACT_BREAKER["consecutive_failures"], 0)
         self.assertTrue(fixer.abs_tract_breaker_ever_opened())
 
     def test_ever_opened_flag_false_when_never_tripped(self):
         payload = {"matches": [{"title": "T", "author": "A"}]}
         with patch("urllib.request.urlopen", fake_urlopen_for(payload, {})):
-            fixer.abs_tract_search("t", "a", "goodreads", "http://x:5555", 10)
+            fixer.abs_tract_search("t", "a", "kindle", "http://x:5555", 10)
         self.assertFalse(fixer.abs_tract_breaker_ever_opened())
 
 
@@ -223,30 +223,47 @@ class AbsTractClientTests(unittest.TestCase):
     def setUp(self):
         _reset_breaker()
 
-    def test_goodreads_url_and_normalization(self):
-        payload = {"matches": [{
-            "title": "The Primal Talisman", "author": "Dante King",
-            "series": [{"series": "Beast Shifter", "sequence": "3"}],
-            "genres": ["Audiobook", "Fantasy", "LitRPG"],
-            "isbn": "9781", "cover": "http://gr/cover.jpg",
-            "description": "A book.", "publishedYear": "2024",
-        }]}
+    def test_goodreads_is_read_directly_and_normalized(self):
+        # No abs-tract URL: Goodreads' own search and book page XML.
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?><GoodreadsResponse><book>
+          <title>The Primal Talisman (Beast Shifter, #3)</title>
+          <isbn13>9781</isbn13><image_url>http://gr/cover.jpg</image_url>
+          <description>A book.</description>
+          <work><original_publication_year>2024</original_publication_year></work>
+          <authors><author><name>Dante King</name></author></authors>
+          <popular_shelves><shelf name="fantasy" count="900.0"/><shelf name="litrpg" count="400"/></popular_shelves>
+        </book></GoodreadsResponse>"""
         cap = {}
-        with patch("urllib.request.urlopen", fake_urlopen_for(payload, cap)):
+
+        class _Xml(_FakeResp):
+            def read(self):
+                return xml
+
+        search_xml = (b"<GoodreadsResponse><search><results><work><best_book><id>7</id>"
+                      b"<author><name>Dante King</name></author></best_book></work></results></search></GoodreadsResponse>")
+
+        def _open(req, timeout=15):
+            cap.setdefault("urls", []).append(req.full_url)
+            if "search/index.xml" in req.full_url:
+                return type("S", (_FakeResp,), {"read": lambda self: search_xml})(None)
+            return _Xml(None)
+
+        with patch("urllib.request.urlopen", _open):
             products = fixer.abs_tract_search(
                 title="The Primal Talisman", author="Dante King",
-                provider="goodreads", abs_tract_url="http://abs-tract:5555", limit=10,
+                provider="goodreads", abs_tract_url="", limit=10,
             )
-        self.assertIn("/goodreads/search?", cap["url"])
-        self.assertIn("query=The+Primal+Talisman", cap["url"])
+        self.assertIn("goodreads.com/search/index.xml?q=The+Primal+Talisman", cap["urls"][0])
+        self.assertIn("goodreads.com/book/show/7.xml", cap["urls"][1])
         self.assertEqual(len(products), 1)
         p = products[0]
         self.assertEqual(p["title"], "The Primal Talisman")
         self.assertEqual(p["authors"][0]["name"], "Dante King")
-        self.assertEqual(p["series"][0]["title"], "Beast Shifter")
+        self.assertEqual(p["series"], [{"title": "Beast Shifter", "sequence": "3"}])
         self.assertEqual(p["_abs_provider"], "goodreads")
         self.assertEqual(p["_abs_isbn"], "9781")
-        self.assertEqual(p["_abs_genres"], ["Fantasy", "LitRPG"])
+        self.assertEqual(p["product_images"]["500"], "http://gr/cover.jpg")
+        self.assertIn("LitRPG", p["_abs_genres"])  # "900.0": Goodreads sends decimal counts
         self.assertIsNone(p["runtime_length_min"])
 
     def test_goodreads_metadata_includes_real_genre_and_isbn_only(self):

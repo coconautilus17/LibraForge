@@ -78,11 +78,11 @@ class MatchEbookTests(unittest.TestCase):
         with fixer_search._ABS_TRACT_BREAKER_LOCK:
             fixer_search._ABS_TRACT_BREAKER.update(consecutive_failures=0, open_until=0.0, logged_open=False)
 
-    def match(self, clues, ol=(), gr=None, abs_tract_url="http://abs-tract:5555", abs_url="http://abs"):
-        # An empty URL means that source is off (not opted in, or not configured).
+    def match(self, clues, ol=(), gr=None, goodreads=True, abs_url="http://abs"):
+        # goodreads=False or an empty ABS URL means that source is off.
         with patch.object(FIXER, "abs_search", return_value=list(ol)) as ol_mock, \
              patch.object(FIXER, "abs_tract_search", side_effect=gr or (lambda **_: [])) as gr_mock:
-            result = FIXER.match_ebook(clues, abs_url=abs_url, abs_api_key="k", abs_tract_url=abs_tract_url)
+            result = FIXER.match_ebook(clues, abs_url=abs_url, abs_api_key="k", goodreads=goodreads)
         return result, ol_mock, gr_mock
 
     def test_padded_volume_matches_through_the_unpadded_query(self):
@@ -131,7 +131,7 @@ class MatchEbookTests(unittest.TestCase):
 
     def test_goodreads_off_goes_straight_to_open_library(self):
         ol = product("The Guns of August", "Barbara W. Tuchman", provider="openlibrary")
-        result, _, gr_mock = self.match({"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}, ol=[ol], abs_tract_url="")
+        result, _, gr_mock = self.match({"title": "The Guns of August", "author": "Barbara W. Tuchman", "series": "", "book_number": ""}, ol=[ol], goodreads=False)
         gr_mock.assert_not_called()
         self.assertEqual(result["provider"], "openlibrary")
 

@@ -278,13 +278,14 @@
     });
   }
 
-  // GraphicAudio and SoundBooth Theater are both abs-agg-backed; Goodreads
-  // and Kindle cover are both abs-tract-backed. Selecting any of these has no
+  // GraphicAudio and SoundBooth Theater are both abs-agg-backed; Kindle cover
+  // is abs-tract-backed (Goodreads is read directly, no service needed).
+  // Selecting any of these has no
   // sensible "other provider" to auto-swap to (unlike audible/abs), so these
   // just redirect to the relevant settings section via ensureConnected --
   // same "stop and explain" behavior, no silent switch.
   const _ABS_AGG_PROVIDER_VALUES = new Set(["abs-agg", "graphicaudio", "soundbooththeater"]);
-  const _ABS_TRACT_PROVIDER_VALUES = new Set(["goodreads", "kindle"]);
+  const _ABS_TRACT_PROVIDER_VALUES = new Set(["kindle"]);
 
   // Single entry point for every provider <select> (Start run, m4b-tool
   // search, Search For Selected Target): dispatches to the right check for
