@@ -167,7 +167,8 @@ whole series at once, instead of fixing each book one at a time.
   as the English category and its top-level one (Health & Wellness), and they are
   never kept as your own genres. Spain, Italy and Japan only answer in their own
   language: Spain's names are matched to the US store's Spanish ones, and Italian and
-  Japanese names are recognised but not translated. Goodreads
+  Japanese names are recognised but not translated, so they are left out of the vote
+  and never written. Goodreads
   shelves and Open Library subjects are free-form reader tags, so only the ones that name
   a known genre count.
 - **Disagreeing sources are flagged:** when genres that exclude each other both reach the

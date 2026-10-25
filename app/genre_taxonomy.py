@@ -89,7 +89,9 @@ LABEL_MAP.update({
  "religion & spirituality":(["Non-Fiction"],["Religion"]), "spirituality":(["Non-Fiction"],["Religion"]), "memoir":(["Non-Fiction"],["Biography"]),
  "music":(["Non-Fiction"],["Arts"]), "art":(["Non-Fiction"],["Arts"]), "words":(["Non-Fiction"],["Language"]), "language & grammar":(["Non-Fiction"],["Language"]),
  "language learning":(["Non-Fiction"],["Language"]), "writing & publishing":(["Non-Fiction"],["Writing"]), "literary history & criticism":(["Non-Fiction"],["Literary Criticism"]),
- "arts & entertainment":(["Non-Fiction"],["Arts"]), "entertainment & performing arts":(["Non-Fiction"],["Arts"]), "performing arts":(["Non-Fiction"],["Arts"]), "personal success":(["Non-Fiction"],["Self-Help"]),
+ # Audible files radio and audio dramas under these two as well: only their
+ # children (Art, Music, Film) say Non-Fiction.
+ "arts & entertainment":([],["Arts"]), "entertainment & performing arts":([],["Arts"]), "performing arts":(["Non-Fiction"],["Arts"]), "personal success":(["Non-Fiction"],["Self-Help"]),
  "death & dying":(["Non-Fiction"],[]), "unexplained mysteries":(["Non-Fiction"],["Paranormal"]), "ministry & evangelism":(["Non-Fiction"],["Religion"]),
 })
 NF = "Non-Fiction"
@@ -224,8 +226,13 @@ def split_compound_genres(genres: Any, canonical: bool = True) -> list[str]:
     seen: set[str] = set()
     for genre in genres or []:
         text = str(genre or "").strip()
+        joined = _joined_prefix(text.lower())
         parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(text) if p.strip()]
-        if len(parts) > 1:
+        if joined:
+            # A store name glued to more words ("Arts & Entertainment Film
+            # Philosophy"): the store genre, then the rest.
+            parts = [text[:len(joined)], text[len(joined):].strip()]
+        elif len(parts) > 1:
             joined = _canonical(" ".join(parts)) if canonical else None
             if joined and not _COMPOUND_SPLIT_RE.search(joined):
                 # A mangled single genre ("Science & Fiction"), not a merge.
@@ -289,6 +296,15 @@ def is_foreign_store_genre(label: Any) -> bool:
     return text in FOREIGN_STORE_ALIASES or (store_genres.is_store_genre(text) and not _is_english_vocabulary(text))
 
 
+def _unreadable_store_genre(label: str) -> bool:
+    """A foreign store genre with no English ("叙事詩" from Japan, Italy's
+    names): it can't vote, and written as is it would put a foreign genre in
+    the library."""
+    text = label.strip().lower()
+    return (is_foreign_store_genre(text) and text not in _ALIASES
+            and not store_genres.english_for(text))
+
+
 def labels_from_genres(values: Any) -> list[str]:
     """Split genre strings / Audible ladder paths into normalized labels."""
     out: list[str] = []
@@ -306,7 +322,7 @@ def labels_from_genres(values: Any) -> list[str]:
             without_format = _FORMAT_WORD_RE.sub(" ", label).strip()
             if without_format != label:
                 label = without_format if _is_known_genre(without_format) else ""
-            if not label or is_scrap_label(label):
+            if not label or is_scrap_label(label) or _unreadable_store_genre(part):
                 continue
             if label == part.lower():
                 _SPELLING.setdefault(label, part)

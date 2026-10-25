@@ -8,7 +8,7 @@ from pathlib import Path
 from app import store_genres
 from app.abs_client import has_real_genres
 from app.enrichment import detect_manual_genres
-from app.genre_taxonomy import classify, is_foreign_store_genre, labels_from_genres, normalize_label
+from app.genre_taxonomy import classify, is_foreign_store_genre, labels_from_genres, normalize_label, split_compound_genres
 
 
 def tree(*nodes):
@@ -70,6 +70,9 @@ class StoreTableTests(unittest.TestCase):
         self.assertEqual(mains, ["Non-Fiction"])
         self.assertIn("Health", subs)
 
+    def test_a_genre_without_english_never_votes(self):
+        self.assertEqual(labels_from_genres(["Fantascienza e fantasy", "Fantasía"]), ["fantasy"])
+
     def test_it_is_never_the_users_own_genre(self):
         self.assertEqual(detect_manual_genres(["Enfermedad física y trastornos, Abenteuer"], [], False, None), [])
         self.assertFalse(has_real_genres(["Abenteuer"]))
@@ -114,6 +117,12 @@ class ScrapIsNobodysGenreTests(unittest.TestCase):
 
     def test_a_store_name_glued_to_more_words_is_split(self):
         self.assertEqual(labels_from_genres(["Arts & Entertainment Film Philosophy"]), ["arts & entertainment", "film philosophy"])
+        self.assertEqual(split_compound_genres(["Arts & Entertainment Film Philosophy"])[-1], "Film Philosophy")
+
+    def test_a_radio_drama_under_arts_is_not_non_fiction(self):
+        drama = labels_from_genres(["Arts & Entertainment:Entertainment & Performing Arts:Radio, Science Fiction & Fantasy:Fantasy"])
+        self.assertEqual(classify([drama])[0], ["Fantasy"])
+        self.assertEqual(classify([labels_from_genres(["Arts & Entertainment:Music"])])[0], ["Non-Fiction"])
 
     def test_a_non_fiction_subgenre_alone_votes_non_fiction(self):
         for genre in ("Society", "Self-Help", "Literary Criticism"):
