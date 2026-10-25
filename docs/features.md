@@ -234,9 +234,10 @@ whole series at once, instead of fixing each book one at a time.
   Collections page the collections on screen with all their books, so: a genre over 600
   books becomes numbered parts ("LitRPG 1", "LitRPG 2"), split by author so a series stays
   in one part; LitRPG and Cultivation books are left out of the Fantasy and Sci-Fi
-  collections; Progression Fantasy is a subgenre, never a collection; and the specific
-  genres (LitRPG, Cultivation, Harem, Audio Drama, Classics, Young Adult, Children's,
-  Non-Fiction) are the ones ticked to start with. Audiobookshelf's Genre filter shows a
+  collections; Progression Fantasy is a subgenre, never a collection; Non-Fiction is listed
+  with the subgenres; and the specific genres (LitRPG, Cultivation, Harem, Audio Drama,
+  Classics, Young Adult, Children's) and Non-Fiction's subjects (History, Politics,
+  Philosophy, Health, Biography, Psychology) are the ones ticked to start with. Audiobookshelf's Genre filter shows a
   broad genre's books at any size. A collection LibraForge replaced (an unsplit genre, an
   old Progression Fantasy one) is deleted when you apply, and any collection LibraForge
   created can be deleted from the list; yours are never touched.

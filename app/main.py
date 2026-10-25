@@ -84,6 +84,7 @@ from app.genre_collections import (
     MARKER as COLLECTION_MARKER,
     MAX_COLLECTION_BOOKS,
     NEVER_COLLECTIONS,
+    SUBGENRE_COLLECTIONS,
     SUGGESTED as SUGGESTED_COLLECTIONS,
     apply_collection_plan,
     book_order,
@@ -6863,7 +6864,7 @@ def _collections_plan(genres: list[str] | None) -> list[dict[str, Any]]:
 def enrichment_collections_plan() -> dict[str, Any]:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-    main = set(MAIN_ORDER) - NEVER_COLLECTIONS
+    main = set(MAIN_ORDER) - NEVER_COLLECTIONS - SUBGENRE_COLLECTIONS
     return {"rows": [{"genre": r["genre"], "name": r["name"], "part": r["part"], "parts": r["parts"],
                       "action": r["action"], "book_count": r["book_count"], "current_count": r["current_count"],
                       "collection_id": r["collection_id"], "add_count": len(r["add"]), "remove_count": len(r["remove"]),

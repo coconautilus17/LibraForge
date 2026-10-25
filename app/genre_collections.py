@@ -14,7 +14,8 @@ was 49 MB and the page 184 MB, which ABS couldn't open. So:
   "LitRPG 2"), split by author so a series stays in one part;
 - a book in a specific genre (LitRPG, Cultivation) isn't also put in the
   broad one it belongs to (Fantasy, Sci-Fi): those are its collections;
-- Progression Fantasy is a subgenre, never a collection;
+- Progression Fantasy is a subgenre, never a collection, and Non-Fiction is
+  listed with the subgenres: its subjects are the useful shelves;
 - SUGGESTED genres are the specific ones; ABS's Genre filter (paged) suits
   the broad ones at any size.
 """
@@ -30,7 +31,11 @@ from app.genre_taxonomy import NON_GENRES, normalize_label, split_compound_genre
 MARKER = "Managed by LibraForge (genre collection)"
 MAX_COLLECTION_BOOKS = 600  # ~12 MB for ABS to open
 NEVER_COLLECTIONS = {"Progression Fantasy"}  # a subgenre: LitRPG and Cultivation are its collections
-SUGGESTED = ("LitRPG", "Cultivation", "Harem", "Audio Drama", "Classics", "Young Adult", "Children's", "Non-Fiction")
+# Too broad to browse as one shelf: listed with the subgenres, its own
+# subjects (History, Philosophy...) are the collections.
+SUBGENRE_COLLECTIONS = {"Non-Fiction"}
+SUGGESTED = ("LitRPG", "Cultivation", "Harem", "Audio Drama", "Classics", "Young Adult", "Children's",
+             "History", "Politics", "Philosophy", "Health", "Biography", "Psychology")
 # Broad genre -> the specific genres whose books it leaves out.
 SPECIFIC_FIRST = {"Fantasy": ("LitRPG", "Cultivation"), "Sci-Fi": ("LitRPG", "Cultivation")}
 

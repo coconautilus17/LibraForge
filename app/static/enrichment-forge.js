@@ -474,7 +474,7 @@ function collectionRowHtml(r, { pick, indent }) {
 
 function renderCollections() {
   const showAll = $("collectionsAllGenres").checked;
-  const groups = collectionGroups(collectionRows).filter((g) => showAll || g.rows.some((r) => r.main || r.collection_id));
+  const groups = collectionGroups(collectionRows).filter((g) => showAll || g.rows.some((r) => r.main || r.suggested || r.collection_id));
   $("collectionsTable").innerHTML = groups.length ? `
     <table class="collections-table">
       <thead><tr><th></th><th>Genre</th><th>Books</th><th>Status</th><th></th></tr></thead>

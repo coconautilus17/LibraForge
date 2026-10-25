@@ -749,6 +749,8 @@ class EnrichmentCollectionsEndpointTests(unittest.TestCase):
         self.assertEqual(plan["max_books"], 600)
         rows = {r["name"]: r for r in plan["rows"]}
         self.assertEqual((rows["Fantasy"]["suggested"], rows["Fantasy"]["parts"]), (False, 1))
+        self.assertNotIn("Non-Fiction", main.SUGGESTED_COLLECTIONS)
+        self.assertIn("Non-Fiction", main.SUBGENRE_COLLECTIONS)
 
     def test_delete_refuses_a_collection_libraforge_did_not_create(self):
         with patch.object(main, "abs_get_json", return_value={"id": "u1", "name": "Mine", "description": "my own"}), \
