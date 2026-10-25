@@ -79,11 +79,19 @@ from app.enrichment_sources import (
     summarize_status,
 )
 from app.enrichment_batch import BatchStore, apply_batch, effective_status, mark_applied, run_batch
-from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
+from app.genre_collections import (
+    MARKER as COLLECTION_MARKER,
+    MAX_COLLECTION_BOOKS,
+    TOTAL_WARN_BOOKS,
+    apply_collection_plan,
+    genre_counts,
+    plan_collections,
+)
 from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves
 from app.abs_client import (
     abs_get_json,
+    abs_delete_json,
     abs_post_json,
     abs_patch_json,
     build_item_index,
@@ -6825,10 +6833,12 @@ class EnrichmentCollectionsApplyRequest(BaseModel):
     genres: list[str]
 
 
-def _collections_plan(genres: list[str] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _collections_plan(genres: list[str] | None) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Plan genre collections per book library from ABS's current genres (a
     fresh read, not the search cache, so a plan right after an apply is
-    accurate). Without `genres`, every genre present is planned."""
+    accurate). Without `genres`, every genre present is planned. Also returns
+    per library the books in collections LibraForge doesn't manage: ABS's
+    Collections page loads those too (#454)."""
     abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
     items = fetch_all_abs_book_items(_abs_request)
     existing = (abs_get_json("/api/collections", {}, abs_url, abs_api_key) or {}).get("collections") or []
@@ -6836,29 +6846,32 @@ def _collections_plan(genres: list[str] | None) -> tuple[list[dict[str, Any]], l
     for item in items:
         by_library.setdefault(str(item.get("libraryId") or ""), []).append(item)
     rows: list[dict[str, Any]] = []
-    totals: dict[str, int] = {}
+    other_books: dict[str, int] = {}
     for library_id, library_items in by_library.items():
         counts = genre_counts(library_items)
-        for genre, ids in counts.items():
-            totals[genre] = totals.get(genre, 0) + len(ids)
         wanted = genres if genres is not None else sorted(counts, key=lambda g: (-len(counts[g]), g))
         library_existing = [c for c in existing if c.get("libraryId") == library_id]
+        sizes = {c.get("id"): len(c.get("books") or []) for c in library_existing}
         for row in plan_collections(wanted, counts, library_existing):
             row["library_id"] = library_id
+            row["current_count"] = sizes.get(row["collection_id"], 0)
             rows.append(row)
-    available = [{"genre": g, "count": n} for g, n in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))]
-    return rows, available
+        other_books[library_id] = sum(len(c.get("books") or []) for c in library_existing
+                                      if COLLECTION_MARKER not in str(c.get("description") or ""))
+    return rows, other_books
 
 
 @app.get("/api/enrichment/collections/plan")
 def enrichment_collections_plan() -> dict[str, Any]:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-    rows, _available = _collections_plan(None)
+    rows, other_books = _collections_plan(None)
     main = set(MAIN_ORDER)
     return {"rows": [{"genre": r["genre"], "action": r["action"], "book_count": r["book_count"],
+                      "current_count": r["current_count"], "exists": bool(r["collection_id"]),
                       "add_count": len(r["add"]), "remove_count": len(r["remove"]),
-                      "main": r["genre"] in main, "library_id": r["library_id"]} for r in rows]}
+                      "main": r["genre"] in main, "library_id": r["library_id"]} for r in rows],
+            "other_books": other_books, "max_books": MAX_COLLECTION_BOOKS, "warn_total_books": TOTAL_WARN_BOOKS}
 
 
 @app.post("/api/enrichment/collections/apply")
@@ -6866,8 +6879,8 @@ def enrichment_collections_apply(req: EnrichmentCollectionsApplyRequest) -> dict
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
     abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
-    rows, _available = _collections_plan(req.genres)
-    out: dict[str, Any] = {"created": 0, "updated": 0, "skipped": 0, "failed": []}
+    rows, _other_books = _collections_plan(req.genres)
+    out: dict[str, Any] = {"created": 0, "updated": 0, "removed": 0, "skipped": 0, "failed": []}
     by_library: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_library.setdefault(row["library_id"], []).append(row)
@@ -6876,8 +6889,9 @@ def enrichment_collections_apply(req: EnrichmentCollectionsApplyRequest) -> dict
             library_rows, library_id=library_id,
             post_fn=lambda path, body: abs_post_json(path, body, abs_url, abs_api_key),
             patch_fn=lambda path, body: abs_patch_json(path, body, abs_url, abs_api_key),
+            delete_fn=lambda path: abs_delete_json(path, abs_url, abs_api_key),
         )
-        for key in ("created", "updated", "skipped"):
+        for key in ("created", "updated", "removed", "skipped"):
             out[key] += result[key]
         out["failed"].extend(result["failed"])
     return out

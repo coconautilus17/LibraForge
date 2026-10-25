@@ -5,6 +5,14 @@ it (merged store names split, one spelling per genre, "Audiobook" never
 counted). LibraForge marks the collections it creates in their description
 and only ever changes those: a user's own collection with the same name is
 reported as taken and left alone.
+
+Audiobookshelf has no paging inside a collection: opening one loads every book
+in full (~20 KB each), and the Collections page loads every collection at once
+(#454). A 2,664-book Fantasy collection was 49 MB, the page 184 MB, and ABS
+couldn't open it. So a collection over MAX_COLLECTION_BOOKS is never created or
+refreshed, an existing LibraForge one over it can be removed, and the plan
+warns when all collections together pass TOTAL_WARN_BOOKS. ABS's Genre filter
+(paged) shows the same books at any size.
 """
 from __future__ import annotations
 
@@ -14,6 +22,8 @@ from app.fixer.scoring import GENRE_BLOCKLIST
 from app.genre_taxonomy import NON_GENRES, normalize_label, split_compound_genres
 
 MARKER = "Managed by LibraForge (genre collection)"
+MAX_COLLECTION_BOOKS = 300   # ~6 MB for ABS to load
+TOTAL_WARN_BOOKS = 1000      # ~20 MB for the Collections page, all collections together
 
 
 def genre_counts(items: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -38,8 +48,10 @@ def _book_ids(collection: dict[str, Any]) -> list[str]:
 
 
 def plan_collections(genres: list[str], counts: dict[str, list[str]], existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Per genre: create / update / in_sync / name_taken / empty, with the
-    books to add and remove and the full target list."""
+    """Per genre: create / update / in_sync / name_taken / empty / too_big,
+    with the books to add and remove and the full target list. too_big: over
+    MAX_COLLECTION_BOOKS, so never written; `collection_id` is set when it is
+    an existing LibraForge collection, which applying it removes."""
     by_name = {str(c.get("name") or "").strip().lower(): c for c in existing}
     rows = []
     for genre in genres:
@@ -51,6 +63,8 @@ def plan_collections(genres: list[str], counts: dict[str, list[str]], existing: 
             row["action"] = "name_taken"
         elif not books:
             row["action"] = "empty"
+        elif len(books) > MAX_COLLECTION_BOOKS:
+            row["action"] = "too_big"
         elif not current:
             row["action"], row["add"] = "create", books
         else:
@@ -68,10 +82,12 @@ def apply_collection_plan(
     library_id: str,
     post_fn: Callable[[str, dict], Any],
     patch_fn: Callable[[str, dict], Any],
+    delete_fn: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
-    """Create and update LibraForge-managed collections; everything else is
-    skipped. One failure never stops the rest."""
-    out: dict[str, Any] = {"created": 0, "updated": 0, "skipped": 0, "failed": []}
+    """Create and update LibraForge-managed collections, and remove ones too
+    big for ABS to open; everything else is skipped. One failure never stops
+    the rest."""
+    out: dict[str, Any] = {"created": 0, "updated": 0, "removed": 0, "skipped": 0, "failed": []}
     for row in rows:
         try:
             if row["action"] == "create":
@@ -86,6 +102,9 @@ def apply_collection_plan(
                 if row["remove"]:
                     post_fn(f"/api/collections/{row['collection_id']}/batch/remove", {"books": row["remove"]})
                 out["updated"] += 1
+            elif row["action"] == "too_big" and row.get("collection_id") and delete_fn:
+                delete_fn(f"/api/collections/{row['collection_id']}")
+                out["removed"] += 1
             else:
                 out["skipped"] += 1
         except Exception as exc:

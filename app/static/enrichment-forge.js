@@ -423,33 +423,72 @@ $("explicitSelect").addEventListener("change", () => {
   });
 });
 
-// Collections from genres.
+// Collections from genres. Audiobookshelf loads a whole collection at once,
+// and its Collections page every collection at once (#454): a collection over
+// the cap is never written, and the total is warned about as boxes are ticked.
 const COLLECTION_STATUS = {
   create: () => "new collection",
   update: (r) => `refresh: +${r.add_count} / -${r.remove_count}`,
   in_sync: () => "in sync",
   name_taken: () => "one of your collections has this name; left alone",
   empty: () => "no books",
+  too_big: (r) => r.exists
+    ? `too big for Audiobookshelf to open (over ${collectionLimits.max_books} books); tick to remove it`
+    : `too big for Audiobookshelf to open (over ${collectionLimits.max_books} books); use its Genre filter`,
 };
 let collectionRows = [];
+let collectionLimits = { max_books: 300, warn_total_books: 1000, other_books: {} };
+
+function collectionActionable(r) {
+  return r.action === "create" || r.action === "update" || (r.action === "too_big" && r.exists);
+}
+
+// Books in all collections after applying what is ticked, per library: what
+// Audiobookshelf's Collections page will have to load.
+function collectionTotals() {
+  const picked = new Set(Array.from(document.querySelectorAll(".collection-pick:checked")).map((el) => el.dataset.genre));
+  const totals = { ...collectionLimits.other_books };
+  for (const r of collectionRows) {
+    const ticked = picked.has(r.genre);
+    let books = 0;
+    if (r.action === "create") books = ticked ? r.book_count : 0;
+    else if (r.action === "update") books = ticked ? r.book_count : r.current_count;
+    else if (r.action === "in_sync") books = r.current_count;
+    else if (r.action === "too_big" && r.exists) books = ticked ? 0 : r.current_count;
+    totals[r.library_id] = (totals[r.library_id] || 0) + books;
+  }
+  return Math.max(0, ...Object.values(totals));
+}
+
+function renderCollectionWarning() {
+  const total = collectionTotals();
+  const warn = total > collectionLimits.warn_total_books;
+  $("collectionsWarning").hidden = !warn;
+  if (warn) {
+    $("collectionsWarning").textContent = `Your collections would hold ${total.toLocaleString()} books together. Audiobookshelf's Collections page loads every collection with every book at once (about 20 KB a book), so above about ${collectionLimits.warn_total_books.toLocaleString()} it gets slow or won't open. Tick fewer, or browse genres with Audiobookshelf's Genre filter instead.`;
+  }
+}
 
 function renderCollections() {
   const showAll = $("collectionsAllGenres").checked;
-  const rows = collectionRows.filter((r) => showAll || r.main);
+  const rows = collectionRows.filter((r) => showAll || r.main || (r.action === "too_big" && r.exists));
   $("collectionsTable").innerHTML = rows.length ? `
     <table class="collections-table">
       <thead><tr><th></th><th>Genre</th><th>Books</th><th>Status</th></tr></thead>
       <tbody>${rows.map((r) => {
-        const actionable = r.action === "create" || r.action === "update";
+        const actionable = collectionActionable(r);
+        const ticked = actionable && (r.main || r.action === "too_big");
         return `<tr class="collection-row ${r.action}">
-          <td><input type="checkbox" class="collection-pick" data-genre="${escapeHtml(r.genre)}"${actionable ? "" : " disabled"}${actionable && r.main ? " checked" : ""} aria-label="Create or refresh ${escapeHtml(r.genre)}" /></td>
+          <td><input type="checkbox" class="collection-pick" data-genre="${escapeHtml(r.genre)}"${actionable ? "" : " disabled"}${ticked ? " checked" : ""} aria-label="${r.action === "too_big" ? "Remove" : "Create or refresh"} ${escapeHtml(r.genre)}" /></td>
           <td>${escapeHtml(r.genre)}</td>
           <td>${r.book_count}</td>
           <td>${escapeHtml((COLLECTION_STATUS[r.action] || (() => r.action))(r))}</td>
         </tr>`;
       }).join("")}</tbody>
     </table>` : '<p class="section-note">No genres found in your library yet.</p>';
-  $("collectionsApplyRow").hidden = !rows.some((r) => r.action === "create" || r.action === "update");
+  $("collectionsApplyRow").hidden = !rows.some(collectionActionable);
+  document.querySelectorAll(".collection-pick").forEach((el) => el.addEventListener("change", renderCollectionWarning));
+  renderCollectionWarning();
 }
 
 async function loadCollections() {
@@ -460,7 +499,9 @@ async function loadCollections() {
     $("collectionsResult").textContent = `Could not read collections${detail ? `: ${detail}` : "."}`;
     return;
   }
-  collectionRows = (await res.json()).rows || [];
+  const data = await res.json();
+  collectionRows = data.rows || [];
+  collectionLimits = { max_books: data.max_books, warn_total_books: data.warn_total_books, other_books: data.other_books || {} };
   $("collectionsResult").textContent = "";
   renderCollections();
 }
@@ -482,7 +523,7 @@ async function applyCollections() {
     return;
   }
   const data = await res.json();
-  const parts = [`Created ${data.created}, refreshed ${data.updated}.`];
+  const parts = [`Created ${data.created}, refreshed ${data.updated}${data.removed ? `, removed ${data.removed}` : ""}.`];
   if (data.failed && data.failed.length) {
     parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.genre} (${f.error})`).join("; ")}`);
   }

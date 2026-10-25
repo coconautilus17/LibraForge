@@ -56,6 +56,33 @@ class CollectionsTests(unittest.TestCase):
         self.assertEqual(out["failed"], [{"genre": "Horror", "error": "ABS 500"}])
 
 
+class TooBigTests(unittest.TestCase):
+    """#454: ABS loads a collection's books all at once; a 2,664-book Fantasy
+    collection was 49 MB and the Collections page couldn't open."""
+
+    def setUp(self):
+        n = gc.MAX_COLLECTION_BOOKS + 1
+        self.counts = {"Fantasy": [f"f{i}" for i in range(n)], "Sci-Fi": [f"s{i}" for i in range(n)],
+                       "Mine": [f"m{i}" for i in range(n)], "Horror": ["h"]}
+        self.existing = [{"id": "c1", "name": "Sci-Fi", "description": gc.MARKER, "books": [{"id": "s0"}]},
+                         {"id": "u1", "name": "Mine", "description": "my own", "books": []}]
+
+    def test_a_genre_over_the_cap_is_never_written(self):
+        rows = {r["genre"]: r for r in gc.plan_collections(["Fantasy", "Sci-Fi", "Mine", "Horror"], self.counts, self.existing)}
+        self.assertEqual((rows["Fantasy"]["action"], rows["Fantasy"]["collection_id"]), ("too_big", None))
+        self.assertEqual((rows["Sci-Fi"]["action"], rows["Sci-Fi"]["collection_id"]), ("too_big", "c1"))
+        self.assertEqual(rows["Mine"]["action"], "name_taken")  # the user's own: never touched
+        self.assertEqual(rows["Horror"]["action"], "create")
+
+    def test_applying_removes_only_an_existing_libraforge_collection(self):
+        rows = gc.plan_collections(["Fantasy", "Sci-Fi", "Mine"], self.counts, self.existing)
+        posted, deleted = [], []
+        out = gc.apply_collection_plan(rows, library_id="L", post_fn=lambda p, b: posted.append(p),
+                                       patch_fn=lambda p, b: None, delete_fn=deleted.append)
+        self.assertEqual((posted, deleted), ([], ["/api/collections/c1"]))
+        self.assertEqual((out["created"], out["removed"], out["skipped"]), (0, 1, 2))
+
+
 class UmbrellaTests(unittest.TestCase):
     def test_store_umbrella_shelves_are_not_collection_genres(self):
         items = [{"id": "x", "media": {"metadata": {"genres": ["Science Fiction & Fantasy", "Literature & Fiction", "Fantasy"]}}}]

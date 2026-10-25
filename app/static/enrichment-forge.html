@@ -162,12 +162,13 @@
     </section>
     <section class="card" id="collectionsCard">
       <div class="card-title"><span class="step-n">4</span><h2>Collections from genres</h2></div>
-      <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone.</p>
+      <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone. Audiobookshelf loads a collection's books all at once, so a genre with more than 300 books isn't made into a collection: its Genre filter shows the same books.</p>
       <div class="actions collections-actions">
         <label class="collections-toggle"><input id="collectionsAllGenres" type="checkbox" /> Show subgenres too</label>
         <button id="collectionsLoadBtn" type="button" class="secondary">Check collections</button>
       </div>
       <div id="collectionsTable"></div>
+      <p id="collectionsWarning" class="inline-warning" hidden></p>
       <p id="collectionsResult" class="section-note"></p>
       <div class="actions" id="collectionsApplyRow" hidden>
         <button id="collectionsApplyBtn" type="button">Create / refresh selected</button>

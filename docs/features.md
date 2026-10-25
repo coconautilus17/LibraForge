@@ -230,6 +230,11 @@ whole series at once, instead of fixing each book one at a time.
   genre from the genres currently in Audiobookshelf (store category shelves like
   "Science Fiction & Fantasy" never count). LibraForge marks the collections it creates
   and only ever changes those; a collection of yours with the same name is left alone.
+  Audiobookshelf loads a collection's books all at once (about 20 KB a book) and its
+  Collections page every collection at once, so a genre with more than 300 books is never
+  made into a collection (an existing LibraForge one that size can be removed from the same
+  list), and the page warns when all collections together would pass 1,000 books.
+  Audiobookshelf's Genre filter shows the same books at any size.
 - **Clearing old metadata.json files library-wide:** `scripts/migrate-legacy-metadata-json.py`
   does the same compare-then-remove for every book at once. It is a dry run by default
   (writes a JSON report of what it would do); add `--apply` to perform it. `--apply` first

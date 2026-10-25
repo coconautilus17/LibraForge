@@ -743,6 +743,13 @@ class EnrichmentCollectionsEndpointTests(unittest.TestCase):
         self.assertEqual(rows["Explicit"]["action"], "name_taken")
         self.assertNotIn("Audiobook", rows)
 
+    def test_plan_reports_the_size_limits_and_the_users_own_collections(self):
+        # #454: ABS's Collections page loads every collection at once.
+        plan = client.get("/api/enrichment/collections/plan").json()
+        self.assertEqual((plan["max_books"], plan["warn_total_books"]), (300, 1000))
+        self.assertEqual(plan["other_books"], {"lib1": 0})
+        self.assertEqual({r["genre"]: r["current_count"] for r in plan["rows"]}["Fantasy"], 0)
+
     def test_apply_creates_only_chosen_free_genres_and_reports_failures(self):
         body = client.post("/api/enrichment/collections/apply", json={"genres": ["Fantasy", "Explicit", "Sci-Fi"]}).json()
         self.assertEqual([p["name"] for p in self.posted], ["Fantasy"])
