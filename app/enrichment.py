@@ -286,6 +286,7 @@ def search_series_audible(
     workers: int = ENRICHMENT_SEARCH_WORKERS,
     score_fn: Callable[[dict[str, Any], dict], float] | None = None,
     min_score: float = 0.70,
+    same_author_fn: Callable[[dict[str, Any], dict], bool] | None = None,
 ) -> dict[str, dict | None]:
     """Search Audible for every book in a series, up to `workers` concurrently.
 
@@ -293,8 +294,12 @@ def search_series_audible(
     whose ASIN Audible no longer has (#433), gets a keyword search, then
     Audible's title + author search, and takes the best result `score_fn`
     (book, product) scores at `min_score` or more, the fixer's own scoring
-    and minimum: the first result is often another book (#451). Without
-    `score_fn` the first result is taken. Returns a dict keyed by book id
+    and minimum: the first result is often another book (#451). When none
+    passes, the first result `same_author_fn` says is by the book's author
+    is taken: for genres an author's other book is close, and it rescues
+    books whose library title or credit is too poor to score ("Volume 5", a
+    blank title, "BBC - Douglas Adams"). Without `score_fn` the first result
+    is taken. Returns a dict keyed by book id
     -> Audible product dict, or None if nothing was found or the call failed.
     """
     def _best(book: dict[str, Any], results: list[dict]) -> dict | None:
@@ -316,9 +321,14 @@ def search_series_audible(
             query = f"{title} {author}".strip()
             if not query:
                 return book["id"], None
-            product = _best(book, audible_search_fn(client, query, 10))
+            results = audible_search_fn(client, query, 10)
+            product = _best(book, results)
             if product is None and score_fn is not None and title:
-                product = _best(book, audible_search_fn(client, query, 10, title=title, author=author))
+                structured = audible_search_fn(client, query, 10, title=title, author=author)
+                product = _best(book, structured)
+                results = results + structured
+            if product is None and same_author_fn is not None:
+                product = next((p for p in results if same_author_fn(book, p)), None)
             return book["id"], product
         except Exception:
             return book["id"], None

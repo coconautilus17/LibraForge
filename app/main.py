@@ -6556,6 +6556,14 @@ def _enrichment_match_score(book: dict[str, Any], product: dict) -> float:
     return fixer_module.score_product_for_metadata(clues, product, clues.get("local_duration_minutes"))
 
 
+def _enrichment_same_author(book: dict[str, Any], product: dict) -> bool:
+    """Metadata Forge's author check: is this result by the book's author?"""
+    from app.fixer.parsing import _authors_compatible
+    from app.fixer.scoring import get_people
+
+    return bool(book.get("author")) and _authors_compatible(book["author"], ", ".join(get_people(product, "authors"))) is True
+
+
 def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
     """One unit's (series or standalone) full compile: every source, the
     vote, evidence. Shared by the series page and the whole-library run."""
@@ -6587,7 +6595,7 @@ def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/aud
         audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client,
-                                                score_fn=_enrichment_match_score)
+                                                score_fn=_enrichment_match_score, same_author_fn=_enrichment_same_author)
         source_status["audible"] = {
             "label": "Audible",
             "state": "searched",

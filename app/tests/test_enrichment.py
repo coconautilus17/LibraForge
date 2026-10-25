@@ -298,6 +298,17 @@ class ScoredAudibleSearchTests(unittest.TestCase):
                                                   lambda c, a: None, client=None, score_fn=self.score)
         self.assertIsNone(result["1"])
 
+    def test_without_a_passing_score_the_authors_own_book_is_taken(self):
+        # Plato's dialogues have blank titles in one library; any Plato hit
+        # votes Non-Fiction, while a study guide by someone else never counts.
+        book = {"id": "1", "asin": "", "title": "", "author": "Plato"}
+        guide = {"asin": "B0G", "title": "Study Guide", "authors": [{"name": "Course Hero"}]}
+        dialogue = {"asin": "B0P", "title": "Meno", "authors": [{"name": "Plato"}]}
+        result = enrichment.search_series_audible(
+            [book], lambda c, q, n, **k: [guide, dialogue], lambda c, a: None, client=None,
+            score_fn=lambda b, p: 0.1, same_author_fn=lambda b, p: p["authors"][0]["name"] == b["author"])
+        self.assertEqual(result["1"]["asin"], "B0P")
+
     def test_title_and_author_search_follows_a_keyword_miss(self):
         calls = []
 
