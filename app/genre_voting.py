@@ -117,6 +117,8 @@ def place_pinned(name: str) -> tuple[list[str], list[str]]:
     label = normalize_label(name)
     mains, subs = LABEL_MAP.get(label, ([], []))
     subs = [s for s in subs if not s.endswith("?")]
+    if "Progression Fantasy" in mains:  # a subgenre only, as in the vote
+        mains, subs = [g for g in mains if g != "Progression Fantasy"], ["Progression Fantasy"] + subs
     if mains or subs:
         return list(mains), subs
     return [], [str(name).strip()]
@@ -212,8 +214,15 @@ def vote_unit(
 
     # No cap on main genres: every genre the evidence supports is kept.
     progression_kind = any(g in mains for g in PROGRESSION_KINDS)
-    if progression_kind and "Progression Fantasy" in mains:
+    # Progression Fantasy is a subgenre only: LitRPG and Cultivation are its
+    # main genres, and a progression book with neither is Fantasy with the
+    # subgenre (Mage Errant).
+    progression = "Progression Fantasy" in mains
+    if progression:
         mains.remove("Progression Fantasy")
+        if not mains:
+            mains.append("Fantasy")
+            evidence["Fantasy"]["implied"] = 1
 
     if "Non-Fiction" in mains:
         # Fiction subgenres go; non-fiction ones and genres the table doesn't
@@ -225,9 +234,9 @@ def vote_unit(
         sub_votes = collections.Counter({k: v for k, v in sub_votes.items() if k not in _NON_FICTION_SUBS})
     subs = [s for s, c in sorted(sub_votes.items(), key=lambda kv: (-kv[1], kv[0]))
             if c >= threshold and s not in mains and not s.endswith("?")][:MAX_SUBS]
-    if progression_kind:
-        # LitRPG and Cultivation are progression fantasy: keep the umbrella as
-        # a subgenre so a Progression Fantasy collection still gathers them.
+    if progression_kind or progression:
+        # LitRPG and Cultivation are progression fantasy: the umbrella is
+        # always kept as a subgenre.
         subs = ["Progression Fantasy"] + [s for s in subs if s != "Progression Fantasy"]
         sub_evidence["Progression Fantasy"].update(evidence.get("Progression Fantasy", {}))
         if not sub_evidence["Progression Fantasy"]:

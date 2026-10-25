@@ -1,7 +1,7 @@
 """Per-book and per-series genre voting across sources (Enrichment Forge v2)."""
 import unittest
 
-from app.genre_voting import book_vote, vote_unit
+from app.genre_voting import book_vote, place_pinned, vote_unit
 
 
 def unit(votes, **kw):
@@ -37,7 +37,7 @@ class VotingTests(unittest.TestCase):
         votes = [book_vote({"audible": ["mystery", "fantasy"], "audiosilo": ["mystery", "urban fantasy"]}) for _ in range(4)]
         self.assertNotIn("Progression Fantasy", unit(votes, pf_progression=True)["main"])
         clean = [book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"]}) for _ in range(4)]
-        self.assertIn("Progression Fantasy", unit(clean, pf_progression=True)["main"])
+        self.assertIn("Progression Fantasy", unit(clean, pf_progression=True)["sub"])
 
     def test_series_source_counts_as_full_support_and_is_recorded(self):
         votes = [book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"]}) for _ in range(6)]
@@ -133,9 +133,13 @@ class ProgressionHierarchyTests(unittest.TestCase):
         self.assertEqual(r["main"], ["Fantasy", "Cultivation"])
         self.assertIn("Progression Fantasy", r["sub"])
 
-    def test_plain_progression_stays_main_without_litrpg_or_cultivation(self):
+    def test_progression_is_a_subgenre_even_without_litrpg_or_cultivation(self):
         r = unit([book_vote({"audible": ["fantasy"], "audiosilo": ["fantasy"], "keywords": ["progression fantasy"]})])
-        self.assertEqual(r["main"], ["Fantasy", "Progression Fantasy"])
+        self.assertEqual((r["main"], r["sub"][:1]), (["Fantasy"], ["Progression Fantasy"]))
+        # Nothing else named a main genre: progression fantasy is fantasy.
+        r = unit([book_vote({"audiosilo": ["progression fantasy"], "goodreads": ["progression fantasy"]})])
+        self.assertEqual((r["main"], r["sub"][:1]), (["Fantasy"], ["Progression Fantasy"]))
+        self.assertEqual(place_pinned("Progression Fantasy")[0], [])
 
     def test_pf_non_litrpg_listing_confirms_goodreads_cultivation(self):
         # Cradle: Goodreads shelves it as cultivation; progressionfantasy.co.uk
