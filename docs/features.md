@@ -158,9 +158,16 @@ whole series at once, instead of fixing each book one at a time.
   Audiobookshelf that the controlled list doesn't name is kept as a subgenre under the
   source's own spelling ("Folk Tales & Myths", "LGBTQ+"). Only scrap is dropped: format
   words ("Audiobook", "Hörbuch"), store umbrellas ("Science Fiction & Fantasy", "Literature
-  & Fiction") and keyword lists stuffed into a genre tag. Audible's top-level category
-  votes too (History, Romance, Religion & Spirituality), and Audible's Spanish and French
-  store categories ("Fantasía", "Ciencia e ingeniería") count as the English ones. Goodreads
+  & Fiction"), keyword lists stuffed into a genre tag, and pieces of a genre a source cut
+  apart ("Men&#8217"). Scrap that Audiobookshelf holds is never taken for a genre you set.
+  Audible's top-level category votes too (History, Romance, Religion & Spirituality).
+- **Genres in other languages:** an Audiobookshelf match against another Audible store
+  writes that store's category names ("Fantasía", "Enfermedad física y trastornos").
+  LibraForge learns every store's names from Audible itself, once a month, so they vote
+  as the English category and its top-level one (Health & Wellness), and they are
+  never kept as your own genres. Spain, Italy and Japan only answer in their own
+  language: Spain's names are matched to the US store's Spanish ones, and Italian and
+  Japanese names are recognised but not translated. Goodreads
   shelves and Open Library subjects are free-form reader tags, so only the ones that name
   a known genre count.
 - **Disagreeing sources are flagged:** when genres that exclude each other both reach the

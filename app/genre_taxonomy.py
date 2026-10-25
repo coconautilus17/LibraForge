@@ -18,6 +18,8 @@ import math
 import re
 from typing import Any
 
+from app import store_genres
+
 MAIN_ORDER = ["Fantasy","Sci-Fi","LitRPG","Progression Fantasy","Cultivation","Harem","Thriller","Mystery","Horror","Romance","Humor",
             "Historical Fiction","Young Adult","Children's","Classics","Literary Fiction","Non-Fiction","Audio Drama"]
 # source label (lowercase) -> (main genres, subgenres)
@@ -87,7 +89,7 @@ LABEL_MAP.update({
  "religion & spirituality":(["Non-Fiction"],["Religion"]), "spirituality":(["Non-Fiction"],["Religion"]), "memoir":(["Non-Fiction"],["Biography"]),
  "music":(["Non-Fiction"],["Arts"]), "art":(["Non-Fiction"],["Arts"]), "words":(["Non-Fiction"],["Language"]), "language & grammar":(["Non-Fiction"],["Language"]),
  "language learning":(["Non-Fiction"],["Language"]), "writing & publishing":(["Non-Fiction"],["Writing"]), "literary history & criticism":(["Non-Fiction"],["Literary Criticism"]),
- "entertainment & performing arts":(["Non-Fiction"],["Arts"]), "performing arts":(["Non-Fiction"],["Arts"]), "personal success":(["Non-Fiction"],["Self-Help"]),
+ "arts & entertainment":(["Non-Fiction"],["Arts"]), "entertainment & performing arts":(["Non-Fiction"],["Arts"]), "performing arts":(["Non-Fiction"],["Arts"]), "personal success":(["Non-Fiction"],["Self-Help"]),
  "death & dying":(["Non-Fiction"],[]), "unexplained mysteries":(["Non-Fiction"],["Paranormal"]), "ministry & evangelism":(["Non-Fiction"],["Religion"]),
 })
 NF = "Non-Fiction"
@@ -138,7 +140,9 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
 # Audible's Spanish and French store categories, as an ABS match against those
 # stores writes them: they vote as the English store category they are, and
 # stay foreign labels for Metadata Forge (app/abs_client.has_real_genres) and
-# are never taken for a genre the user set by hand.
+# are never taken for a genre the user set by hand. The full set, every store
+# and language, is learned from Audible (app/store_genres.py); this table is
+# its fallback before the first fetch.
 _ALIASES["parenting relationships"] = "relationships, parenting & personal development"  # AudioSilo's slug
 FOREIGN_STORE_ALIASES = {
  "fantasía":"fantasy","fantástico":"fantasy","ciencia ficción":"science fiction","acción y aventura":"action & adventure","aventura":"adventure",
@@ -257,17 +261,41 @@ _COMPOSITES = ("Mystery, Thriller & Suspense", "Movie, TV & Video Game Tie-Ins",
 
 
 def normalize_label(label: Any) -> str:
-    """Lowercase, drop AudioSilo's '(g)'/'(t)' suffix, apply aliases."""
+    """Lowercase, drop AudioSilo's '(g)'/'(t)' suffix, apply aliases, and turn
+    a foreign store genre into its English one."""
     text = re.sub(r"\((g|t)\)$", "", str(label or "").lower()).strip()
-    return _ALIASES.get(text, text)
+    if text in _ALIASES:
+        return _ALIASES[text]
+    english = None if _is_english_vocabulary(text) else store_genres.english_for(text)
+    return _ALIASES.get(english[0], english[0]) if english else text
+
+
+_ENGLISH_VOCABULARY: set[str] = set()
+
+
+def _is_english_vocabulary(text: str) -> bool:
+    """A name this table knows in English: never taken for a foreign one,
+    though a foreign store may use it too ("Thriller", "Epic Fantasy")."""
+    if not _ENGLISH_VOCABULARY:
+        _ENGLISH_VOCABULARY.update(LABEL_MAP, _output_names(), NON_GENRES,
+                                   (k for k in _ALIASES if k not in FOREIGN_STORE_ALIASES))
+    return text in _ENGLISH_VOCABULARY
+
+
+def is_foreign_store_genre(label: Any) -> bool:
+    """A category name of a foreign Audible store ("Fantasía", "Fantascienza
+    e fantasy"): an ABS match wrote it, never the user."""
+    text = str(label or "").strip().lower()
+    return text in FOREIGN_STORE_ALIASES or (store_genres.is_store_genre(text) and not _is_english_vocabulary(text))
 
 
 def labels_from_genres(values: Any) -> list[str]:
     """Split genre strings / Audible ladder paths into normalized labels."""
     out: list[str] = []
+    composites = _COMPOSITES + tuple(store_genres.composites())
     for value in values or []:
         text = html.unescape(str(value))  # "Men&#8217;s Adventure" is one genre
-        for comp in _COMPOSITES:
+        for comp in composites:
             text = text.replace(comp, comp.replace(",", "\u00a7"))
         for part in re.split(r"\s*[,:;/]\s*", text):
             part = part.replace("\u00a7", ",").strip()
@@ -282,13 +310,34 @@ def labels_from_genres(values: Any) -> list[str]:
                 continue
             if label == part.lower():
                 _SPELLING.setdefault(label, part)
-            if label not in LABEL_MAP and _COMPOUND_SPLIT_RE.search(label):
+            joined = _joined_prefix(label)
+            if joined:
+                # A store name glued to more words ("Arts & Entertainment Film
+                # Philosophy"): the store genre, then the rest on its own.
+                if not is_scrap_label(joined):
+                    out.append(joined)
+                out.extend(labels_from_genres([(part if label == part.lower() else label)[len(joined):]]))
+            elif label not in LABEL_MAP and _COMPOUND_SPLIT_RE.search(label):
                 # A merged label the table doesn't know ("Sci-Fi & Fantasy"):
                 # map its parts instead.
                 out.extend(normalize_label(p) for p in split_compound_genres([part]))
             else:
                 out.append(label)
+            # A foreign store genre also names its root, as an English
+            # Audible path would ("Enfermedad f\u00edsica" is under Health & Wellness).
+            english = None if _is_english_vocabulary(part.lower()) else store_genres.english_for(part.lower())
+            root = normalize_label(english[1]) if english and english[1] else ""
+            if root and root != label and not is_scrap_label(root):
+                out.append(root)
     return out
+
+
+def _joined_prefix(label: str) -> str:
+    """The "&"-joined store genre `label` starts with, when more words follow."""
+    if label in LABEL_MAP:
+        return ""
+    names = store_genres.joined_names() or [k for k in LABEL_MAP if " & " in k]
+    return max((n for n in names if label.startswith(n + " ")), key=len, default="")
 
 
 def labels_from_text(text: str) -> list[str]:
@@ -316,8 +365,13 @@ _SPELLING: dict[str, str] = {}
 
 
 def is_scrap_label(label: Any) -> bool:
-    label = normalize_label(label)
+    label = normalize_label(html.unescape(str(label or "")).strip())
     if not label or label in NON_GENRES or label in _SCRAP_LABELS or not re.search(r"[^\W\d_]", label):
+        return True
+    # Pieces of a genre a source cut apart: "Men&#8217" (of "Men&#8217;s
+    # Adventure" split at its ";") and the "s Adventure" after it, and
+    # descriptions rather than genres ("A Dungeon Core Experience").
+    if re.search(r"['’]$|&#?\d*$", label) or re.match(r"s\s|(?:a|an)\s", label):
         return True
     # A tag stuffed with keywords ("dragon shapeshifter dinosaur tamer king
     # quest fae"), not one genre: real genre names that long join their parts.
@@ -334,6 +388,19 @@ def display_name(label: str) -> str:
 
 _SF_SUBGENRES = ("Space Opera", "Hard Sci-Fi", "Military Sci-Fi", "Post-Apocalyptic", "Dystopian",
                  "First Contact", "Space Exploration", "Alien Invasion", "Time Travel")
+
+
+def _non_fiction_subs() -> set[str]:
+    """Subgenres the table files under Non-Fiction and nothing else ("Society",
+    "Self-Help"): on their own they still say Non-Fiction."""
+    under: dict[str, set[str]] = {}
+    for mains, subs in LABEL_MAP.values():
+        for sub in subs:
+            under.setdefault(sub, set()).update(mains or [""])
+    return {sub for sub, mains in under.items() if mains == {"Non-Fiction"}}
+
+
+_NON_FICTION_ONLY_SUBS = _non_fiction_subs()
 
 
 def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int = 5) -> tuple[list[str], list[str]]:
@@ -357,6 +424,8 @@ def classify(books_labels: list[list[str]], extra_labels: Any = (), cap_sub: int
                 book_subs.update(LABEL_MAP[label][1])
             elif label in names:  # a genre the vote itself names ("Historical Fantasy")
                 (book_mains if names[label] in MAIN_ORDER else book_subs).add(names[label])
+                if names[label] in _NON_FICTION_ONLY_SUBS:
+                    book_mains.add("Non-Fiction")
             elif not is_scrap_label(label):
                 # Not in the table but a real genre (Audible's "Contemporary",
                 # "Folk Tales & Myths"): kept under its own name.

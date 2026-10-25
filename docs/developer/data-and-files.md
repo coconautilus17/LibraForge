@@ -48,6 +48,7 @@ sidecar the first time it reads them.
 | `<run id>.report.json` | Structured result of one run (`schema_version` 2): status, phases, stats, per-file items, categories, manual-review items. |
 | `m4b-discovery-cache.json` | M4B Tool discovery results, keyed by (root path, fixer script name) and invalidated when the script file's modification time changes. |
 | `folder-scan-cache.json` | Start Here scan results, keyed by path and ignored folders (`FOLDER_SCAN_CACHE_VERSION`). |
+| `audible-store-genres.json` | Audible's foreign-store genre names with their English names and top-level category (`app/store_genres.py`), built from each store's category tree and refetched monthly by Enrichment Forge. Safe to delete. |
 | `organizer-structure-cache.json` | Folder Forge's picture of the destination library (`DEFAULT_STRUCTURE_CACHE`). It is stamped with the naming template that built it. |
 | `.disk-asin-cache.json` | Each file's embedded ASIN, keyed by path and modification time, so the library-wide duplicate-ASIN guard only re-probes new or changed files. Override the path with `DISK_ASIN_CACHE_PATH`. |
 | `enrichment-batch.json` | Enrichment Forge whole-library run: compiled results, saved after every unit so it can be resumed. |

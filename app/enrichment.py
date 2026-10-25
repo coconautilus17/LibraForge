@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.genre_taxonomy import (
-    FOREIGN_STORE_ALIASES,
     MAIN_ORDER,
     NON_GENRES,
+    is_foreign_store_genre,
+    is_scrap_label,
     labels_from_genres,
     labels_from_text,
     normalize_label,
@@ -541,10 +542,12 @@ def detect_manual_genres(
     log recorded as the user's own stay pinned after Enrichment Forge rewrites
     them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
     older plain list of written genres."""
-    # A foreign-store label ("Fantasía") was written by an ABS match, not by hand.
-    real = [g for g in abs_genres or [] if str(g).strip() and normalize_label(g) not in NON_GENRES]
+    # A foreign-store label ("Fantasía") was written by an ABS match, not by
+    # hand, and scrap ("Audbioook", a keyword string) is nobody's genre (#443).
+    real = [g for g in abs_genres or []
+            if str(g).strip() and normalize_label(g) not in NON_GENRES and not is_foreign_store_genre(g)]
     real = split_compound_genres([g for g in split_compound_genres(real, canonical=False)
-                                  if g.strip().lower() not in FOREIGN_STORE_ALIASES])
+                                  if not is_scrap_label(g) and not is_foreign_store_genre(g)])
     if not real:
         return []
     if isinstance(enrichment_written, dict):
