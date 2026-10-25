@@ -543,6 +543,15 @@ def _genre_key_set(genres: list[str]) -> set[str]:
     return {normalize_label(g) for g in split_compound_genres(real)}
 
 
+def enrichment_written_genres(enrichment_written: Any) -> list[str]:
+    """The genres a write-log entry says Enrichment Forge wrote, minus the
+    user's own it kept pinned. Takes {"written", "pinned"} or an older list."""
+    if isinstance(enrichment_written, dict):
+        pinned = _genre_key_set(enrichment_written.get("pinned") or [])
+        return [g for g in enrichment_written.get("written") or [] if normalize_label(g) not in pinned]
+    return list(enrichment_written or [])
+
+
 def detect_manual_genres(
     abs_genres: list[str],
     file_genres: list[str],
@@ -621,11 +630,14 @@ def build_book_voters(
     # file's own editorial genre, so it doesn't vote a second time.
     if not book.get("file_genres_written_by_libraforge"):
         voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
-    # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
+    # Pinned (hand-set) genres are not a vote, nor what Enrichment Forge itself
+    # wrote last time (#453: a second run would vote for its own output); the
+    # rest of what ABS holds is.
     pinned = {g.lower() for g in book.get("manual_genres") or []}
+    own = {normalize_label(g) for g in book.get("enrichment_written") or []}
     # Store umbrellas go before splitting, or "Science Fiction & Fantasy" votes Fantasy (#431).
     existing = [g for g in split_compound_genres([g for g in book.get("existing_genres") or [] if normalize_label(g) not in NON_GENRES])
-                if g.lower() not in pinned]
+                if g.lower() not in pinned and normalize_label(g) not in own]
     voters["abs_existing"] = labels_from_genres(existing + list(book.get("existing_tags") or []))
     text = " ".join(str(x or "") for x in (
         (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),

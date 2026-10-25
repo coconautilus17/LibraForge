@@ -55,6 +55,7 @@ from app.enrichment import (
     STANDALONE_KEY_PREFIX,
     compile_series_enrichment,
     detect_manual_genres,
+    enrichment_written_genres,
     file_tag_genres,
     fetch_all_abs_book_items,
     get_series_books,
@@ -6465,6 +6466,7 @@ def _attach_local_genres(books: list[dict[str, Any]]) -> None:
         book["file_genres_written_by_libraforge"] = wrote_genre
         book["manual_genres"] = detect_manual_genres(
             book.get("existing_genres") or [], book["file_genres"], wrote_genre, written_log.get(book["id"]))
+        book["enrichment_written"] = enrichment_written_genres(written_log.get(book["id"]))
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(one, books))

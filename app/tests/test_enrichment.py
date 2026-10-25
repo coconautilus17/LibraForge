@@ -796,6 +796,15 @@ class BuildBookVotersTests(unittest.TestCase):
     def test_no_audio_book_has_no_voters(self):
         self.assertEqual(enrichment.build_book_voters(_vbook("p", has_audio=False, existing_tags=["Horror"]), _EPIC, None, {}, None, None), {})
 
+    def test_what_enrichment_forge_wrote_does_not_vote_again(self):
+        # #453: a second run voted for its own earlier output.
+        written = enrichment.enrichment_written_genres(
+            {"written": ["Fantasy", "Progression Fantasy", "Gaslamp Fantasy"], "pinned": ["Gaslamp Fantasy"]})
+        self.assertEqual(written, ["Fantasy", "Progression Fantasy"])
+        book = _vbook("b", existing_genres=["Fantasy", "Progression Fantasy", "Horror"], enrichment_written=written)
+        self.assertEqual(enrichment.build_book_voters(book, None, None, {}, None, None)["abs_existing"], ["horror"])
+        self.assertEqual(enrichment.enrichment_written_genres(["Fantasy"]), ["Fantasy"])
+
 
 class CompileVotingTests(unittest.TestCase):
     def test_votes_evidence_and_chip_prefill(self):
