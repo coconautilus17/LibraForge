@@ -96,7 +96,8 @@ def _book_ids(collection: dict[str, Any]) -> list[str]:
     return [b.get("id") if isinstance(b, dict) else str(b) for b in collection.get("books") or []]
 
 
-def _managed(collection: dict[str, Any] | None) -> bool:
+def is_managed(collection: dict[str, Any] | None) -> bool:
+    """A collection LibraForge created (its marker is in the description)."""
     return bool(collection) and MARKER in str(collection.get("description") or "")
 
 
@@ -133,7 +134,7 @@ def plan_collections(
                 row = {"genre": genre, "name": name, "part": number, "parts": len(parts),
                        "collection_id": current.get("id") if current else None,
                        "books": part, "book_count": len(part), "add": [], "remove": []}
-                if current and not _managed(current):
+                if current and not is_managed(current):
                     row["action"] = "name_taken"
                 elif not part:
                     row["action"] = "empty"
@@ -147,7 +148,7 @@ def plan_collections(
                 rows.append(row)
         for collection in existing:
             name = str(collection.get("name") or "").strip()
-            if _managed(collection) and _names_genre(name, genre) and name.lower() not in planned:
+            if is_managed(collection) and _names_genre(name, genre) and name.lower() not in planned:
                 rows.append({"genre": genre, "name": name, "part": 0, "parts": 0, "action": "retire",
                              "collection_id": collection.get("id"), "books": [],
                              "book_count": len(_book_ids(collection)), "add": [], "remove": []})

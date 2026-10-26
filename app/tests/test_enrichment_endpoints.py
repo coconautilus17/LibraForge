@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app import main
+from app import genre_collections, main
 
 client = TestClient(main.app)
 
@@ -758,7 +758,7 @@ class EnrichmentCollectionsEndpointTests(unittest.TestCase):
             resp = client.post("/api/enrichment/collections/delete", json={"collection_id": "u1"})
         self.assertEqual(resp.status_code, 403)
         delete.assert_not_called()
-        with patch.object(main, "abs_get_json", return_value={"id": "c1", "name": "LitRPG 2", "description": main.COLLECTION_MARKER}), \
+        with patch.object(main, "abs_get_json", return_value={"id": "c1", "name": "LitRPG 2", "description": genre_collections.MARKER}), \
              patch.object(main, "abs_delete_json") as delete:
             resp = client.post("/api/enrichment/collections/delete", json={"collection_id": "c1"})
         self.assertEqual(resp.json(), {"deleted": "c1", "name": "LitRPG 2"})

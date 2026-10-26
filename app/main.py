@@ -81,7 +81,6 @@ from app.enrichment_sources import (
 )
 from app.enrichment_batch import BatchStore, apply_batch, effective_status, mark_applied, run_batch
 from app.genre_collections import (
-    MARKER as COLLECTION_MARKER,
     MAX_COLLECTION_BOOKS,
     NEVER_COLLECTIONS,
     SUBGENRE_COLLECTIONS,
@@ -89,6 +88,7 @@ from app.genre_collections import (
     apply_collection_plan,
     book_order,
     genre_counts,
+    is_managed as is_managed_collection,
     plan_collections,
 )
 from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
@@ -6910,7 +6910,7 @@ def enrichment_collection_delete(req: EnrichmentCollectionDeleteRequest) -> dict
         collection = abs_get_json(f"/api/collections/{urllib.parse.quote(collection_id)}", {}, abs_url, abs_api_key) or {}
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Collection not found: {exc}") from exc
-    if COLLECTION_MARKER not in str(collection.get("description") or ""):
+    if not is_managed_collection(collection):
         raise HTTPException(status_code=403, detail="LibraForge only deletes collections it created.")
     abs_delete_json(f"/api/collections/{urllib.parse.quote(collection_id)}", abs_url, abs_api_key)
     return {"deleted": collection_id, "name": collection.get("name", "")}
