@@ -6544,16 +6544,18 @@ def _collect_extra_sources(
     return extra, series, status
 
 
-def _enrichment_match_score(book: dict[str, Any], product: dict) -> float:
-    """Metadata Forge's score for an Audible search result against a book
-    Enrichment Forge searched by title and author (#451)."""
+def _enrichment_pick(book: dict[str, Any], results: list[dict]) -> dict | None:
+    """Metadata Forge's pick among Audible search results for a book
+    Enrichment Forge searched by title and author, at its default minimum
+    score (--min-score 0.70) (#451)."""
     fixer_module = scan_fixer_module()
     clues = build_context_clues(fixer_module, {
         "title": book.get("title", ""), "author": book.get("author", ""), "narrator": book.get("existing_narrator", ""),
         "series": book.get("series_name", ""), "sequence": book.get("sequence") or "",
         "local_duration_minutes": book.get("duration_minutes"),
     })
-    return fixer_module.score_product_for_metadata(clues, product, clues.get("local_duration_minutes"))
+    product, score, _ambiguity = fixer_module.pick_best_match_for_metadata(clues, results, clues.get("local_duration_minutes"))
+    return product if product is not None and score >= 0.70 else None
 
 
 def _enrichment_same_author(book: dict[str, Any], product: dict) -> bool:
@@ -6561,7 +6563,7 @@ def _enrichment_same_author(book: dict[str, Any], product: dict) -> bool:
     from app.fixer.parsing import _authors_compatible
     from app.fixer.scoring import get_people
 
-    return bool(book.get("author")) and _authors_compatible(book["author"], ", ".join(get_people(product, "authors"))) is True
+    return bool(book.get("author")) and _authors_compatible(book["author"], " ".join(get_people(product, "authors"))) is True
 
 
 def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
@@ -6595,7 +6597,7 @@ def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/aud
         audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client,
-                                                score_fn=_enrichment_match_score, same_author_fn=_enrichment_same_author)
+                                                pick_fn=_enrichment_pick, same_author_fn=_enrichment_same_author)
         source_status["audible"] = {
             "label": "Audible",
             "state": "searched",

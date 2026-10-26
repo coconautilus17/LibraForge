@@ -284,31 +284,23 @@ def search_series_audible(
     audible_lookup_by_asin_fn: Callable[[Any, str], dict | None],
     client: Any,
     workers: int = ENRICHMENT_SEARCH_WORKERS,
-    score_fn: Callable[[dict[str, Any], dict], float] | None = None,
-    min_score: float = 0.70,
+    pick_fn: Callable[[dict[str, Any], list[dict]], dict | None] | None = None,
     same_author_fn: Callable[[dict[str, Any], dict], bool] | None = None,
 ) -> dict[str, dict | None]:
     """Search Audible for every book in a series, up to `workers` concurrently.
 
     Books with a known ASIN use the direct lookup; a book without one, or
     whose ASIN Audible no longer has (#433), gets a keyword search, then
-    Audible's title + author search, and takes the best result `score_fn`
-    (book, product) scores at `min_score` or more, the fixer's own scoring
-    and minimum: the first result is often another book (#451). When none
-    passes, the first result `same_author_fn` says is by the book's author
-    is taken: for genres an author's other book is close, and it rescues
-    books whose library title or credit is too poor to score ("Volume 5", a
-    blank title, "BBC - Douglas Adams"). Without `score_fn` the first result
-    is taken. Returns a dict keyed by book id
-    -> Audible product dict, or None if nothing was found or the call failed.
+    Audible's title + author search, and takes the result `pick_fn` (book,
+    results) chooses, the fixer's own pick and minimum score: the first
+    result is often another book (#451). When it chooses none, the first
+    result `same_author_fn` says is by the book's author is taken: for genres
+    an author's other book is close, and it rescues books whose library title
+    or credit is too poor to score ("Volume 5", a blank title, "BBC - Douglas
+    Adams"). Without `pick_fn` the first result is taken. Returns a dict
+    keyed by book id -> Audible product dict, or None if nothing was found or
+    the call failed.
     """
-    def _best(book: dict[str, Any], results: list[dict]) -> dict | None:
-        if score_fn is None:
-            return results[0] if results else None
-        scored = [(score_fn(book, product), product) for product in results]
-        score, product = max(scored, key=lambda pair: pair[0], default=(0.0, None))
-        return product if score >= min_score else None
-
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
         if not book.get("has_audio", True):
             return book["id"], None  # #301: never match placeholders/ebooks to audiobooks
@@ -322,10 +314,12 @@ def search_series_audible(
             if not query:
                 return book["id"], None
             results = audible_search_fn(client, query, 10)
-            product = _best(book, results)
-            if product is None and score_fn is not None and title:
+            if pick_fn is None:
+                return book["id"], (results[0] if results else None)
+            product = pick_fn(book, results) if results else None
+            if product is None and title:
                 structured = audible_search_fn(client, query, 10, title=title, author=author)
-                product = _best(book, structured)
+                product = pick_fn(book, structured) if structured else None
                 results = results + structured
             if product is None and same_author_fn is not None:
                 product = next((p for p in results if same_author_fn(book, p)), None)
@@ -553,13 +547,20 @@ def _genre_key_set(genres: list[str]) -> set[str]:
     return {normalize_label(g) for g in split_compound_genres(real)}
 
 
+def _write_log_entry(enrichment_written: Any) -> tuple[list[str], list[str]]:
+    """(written, pinned) from an Enrichment Forge write-log entry:
+    {"written", "pinned"}, or an older plain list of written genres."""
+    if isinstance(enrichment_written, dict):
+        return list(enrichment_written.get("written") or []), list(enrichment_written.get("pinned") or [])
+    return list(enrichment_written or []), []
+
+
 def enrichment_written_genres(enrichment_written: Any) -> list[str]:
     """The genres a write-log entry says Enrichment Forge wrote, minus the
-    user's own it kept pinned. Takes {"written", "pinned"} or an older list."""
-    if isinstance(enrichment_written, dict):
-        pinned = _genre_key_set(enrichment_written.get("pinned") or [])
-        return [g for g in enrichment_written.get("written") or [] if normalize_label(g) not in pinned]
-    return list(enrichment_written or [])
+    user's own it kept pinned."""
+    written, pinned = _write_log_entry(enrichment_written)
+    pinned_keys = _genre_key_set(pinned)
+    return [g for g in written if normalize_label(g) not in pinned_keys]
 
 
 def detect_manual_genres(
@@ -585,10 +586,7 @@ def detect_manual_genres(
                                   if not is_scrap_label(g) and not is_foreign_store_genre(g)])
     if not real:
         return []
-    if isinstance(enrichment_written, dict):
-        written, pinned_before = enrichment_written.get("written") or [], enrichment_written.get("pinned") or []
-    else:
-        written, pinned_before = enrichment_written or [], []
+    written, pinned_before = _write_log_entry(enrichment_written)
     written_keys, pinned_keys = _genre_key_set(written), _genre_key_set(pinned_before)
     file_keys = _genre_key_set(file_genres or [])
     out = []
