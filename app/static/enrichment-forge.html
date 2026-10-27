@@ -162,12 +162,14 @@
     </section>
     <section class="card" id="collectionsCard">
       <div class="card-title"><span class="step-n">4</span><h2>Collections from genres</h2></div>
-      <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone.</p>
+      <p class="section-note">One Audiobookshelf collection per genre, holding every book whose genres include it, as they are in Audiobookshelf right now: apply genres (per series, or with the whole-library run) first for good collections. LibraForge only changes collections it created; a collection of yours with the same name is left alone. A genre with more than 600 books becomes numbered parts, split by author so a series stays together. LitRPG and Cultivation books are left out of the Fantasy and Sci-Fi collections (those are their collections), and Progression Fantasy is a subgenre, never a collection. Non-Fiction is listed with the subgenres, and its subjects (History, Politics, Philosophy, Health, Biography, Psychology) are suggested instead. The specific genres are ticked to start with; for broad ones like Fantasy, Audiobookshelf's Genre filter shows the same books at any size.</p>
+      <p class="inline-warning">Handle with care: Audiobookshelf's Collections page loads the collections on screen with all their books at once (about 20 KB a book). Many large collections make it slow, or stop it opening.</p>
       <div class="actions collections-actions">
         <label class="collections-toggle"><input id="collectionsAllGenres" type="checkbox" /> Show subgenres too</label>
         <button id="collectionsLoadBtn" type="button" class="secondary">Check collections</button>
       </div>
       <div id="collectionsTable"></div>
+      <p id="collectionsTotal" class="section-note"></p>
       <p id="collectionsResult" class="section-note"></p>
       <div class="actions" id="collectionsApplyRow" hidden>
         <button id="collectionsApplyBtn" type="button">Create / refresh selected</button>

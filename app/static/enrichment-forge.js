@@ -423,33 +423,95 @@ $("explicitSelect").addEventListener("change", () => {
   });
 });
 
-// Collections from genres.
+// Collections from genres. Audiobookshelf loads a collection's books all at
+// once, and its Collections page the collections on screen with all their
+// books (#454): a genre over the cap becomes numbered parts, and the page
+// says how much the ticked collections hold.
 const COLLECTION_STATUS = {
   create: () => "new collection",
   update: (r) => `refresh: +${r.add_count} / -${r.remove_count}`,
   in_sync: () => "in sync",
   name_taken: () => "one of your collections has this name; left alone",
   empty: () => "no books",
+  retire: (r) => r.genre === "Progression Fantasy"
+    ? "a subgenre, not a collection: LitRPG and Cultivation hold its books; deleted when you apply"
+    : "replaced by the parts above; deleted when you apply",
 };
 let collectionRows = [];
+let collectionMaxBooks = 600;
+
+const collectionActionable = (r) => r.action === "create" || r.action === "update" || r.action === "retire";
+
+function collectionGroups(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.library_id}\u0000${r.genre}`;
+    if (!groups.has(key)) groups.set(key, { genre: r.genre, rows: [] });
+    groups.get(key).rows.push(r);
+  }
+  return [...groups.values()];
+}
+
+function renderCollectionTotal() {
+  const picked = new Set(Array.from(document.querySelectorAll(".collection-pick:checked")).map((el) => el.dataset.genre));
+  const kept = collectionRows.filter((r) => picked.has(r.genre) && r.action !== "retire" && r.book_count);
+  const books = kept.reduce((n, r) => n + r.book_count, 0);
+  $("collectionsTotal").textContent = kept.length
+    ? `Ticked: ${kept.length} collection${kept.length === 1 ? "" : "s"} holding ${books.toLocaleString()} books.`
+    : "";
+}
+
+function collectionRowHtml(r, { pick, indent }) {
+  const deletable = r.collection_id && r.action !== "name_taken";
+  return `<tr class="collection-row ${r.action}${indent ? " collection-part" : ""}">
+    <td>${pick}</td>
+    <td>${indent ? "&nbsp;&nbsp;" : ""}${escapeHtml(indent ? r.name : r.genre)}</td>
+    <td>${r.action === "retire" ? r.current_count : r.book_count}</td>
+    <td>${escapeHtml((COLLECTION_STATUS[r.action] || (() => r.action))(r))}</td>
+    <td>${deletable ? `<button type="button" class="secondary collection-delete" data-id="${escapeHtml(r.collection_id)}" data-name="${escapeHtml(r.name)}">Delete</button>` : ""}</td>
+  </tr>`;
+}
 
 function renderCollections() {
   const showAll = $("collectionsAllGenres").checked;
-  const rows = collectionRows.filter((r) => showAll || r.main);
-  $("collectionsTable").innerHTML = rows.length ? `
+  const groups = collectionGroups(collectionRows).filter((g) => showAll || g.rows.some((r) => r.main || r.suggested || r.collection_id));
+  $("collectionsTable").innerHTML = groups.length ? `
     <table class="collections-table">
-      <thead><tr><th></th><th>Genre</th><th>Books</th><th>Status</th></tr></thead>
-      <tbody>${rows.map((r) => {
-        const actionable = r.action === "create" || r.action === "update";
-        return `<tr class="collection-row ${r.action}">
-          <td><input type="checkbox" class="collection-pick" data-genre="${escapeHtml(r.genre)}"${actionable ? "" : " disabled"}${actionable && r.main ? " checked" : ""} aria-label="Create or refresh ${escapeHtml(r.genre)}" /></td>
-          <td>${escapeHtml(r.genre)}</td>
-          <td>${r.book_count}</td>
-          <td>${escapeHtml((COLLECTION_STATUS[r.action] || (() => r.action))(r))}</td>
-        </tr>`;
+      <thead><tr><th></th><th>Genre</th><th>Books</th><th>Status</th><th></th></tr></thead>
+      <tbody>${groups.map((g) => {
+        const actionable = g.rows.some(collectionActionable);
+        const ticked = actionable && g.rows.some((r) => r.suggested || (r.action === "retire" && r.genre === "Progression Fantasy"));
+        const pick = `<input type="checkbox" class="collection-pick" data-genre="${escapeHtml(g.genre)}"${actionable ? "" : " disabled"}${ticked ? " checked" : ""} aria-label="Create, refresh or replace ${escapeHtml(g.genre)}" />`;
+        if (g.rows.length === 1 && g.rows[0].parts <= 1) return collectionRowHtml(g.rows[0], { pick, indent: false });
+        const books = g.rows.filter((r) => r.action !== "retire").reduce((n, r) => n + r.book_count, 0);
+        const parts = g.rows.filter((r) => r.action !== "retire").length;
+        const head = `<tr class="collection-row collection-genre">
+          <td>${pick}</td><td>${escapeHtml(g.genre)}</td><td>${books}</td>
+          <td>${parts > 1 ? `${parts} parts of up to ${collectionMaxBooks} books, split by author` : ""}</td><td></td></tr>`;
+        return head + g.rows.map((r) => collectionRowHtml(r, { pick: "", indent: true })).join("");
       }).join("")}</tbody>
     </table>` : '<p class="section-note">No genres found in your library yet.</p>';
-  $("collectionsApplyRow").hidden = !rows.some((r) => r.action === "create" || r.action === "update");
+  $("collectionsApplyRow").hidden = !groups.some((g) => g.rows.some(collectionActionable));
+  document.querySelectorAll(".collection-pick").forEach((el) => el.addEventListener("change", renderCollectionTotal));
+  document.querySelectorAll(".collection-delete").forEach((el) => el.addEventListener("click", deleteCollection));
+  renderCollectionTotal();
+}
+
+async function deleteCollection(event) {
+  const { id, name } = event.currentTarget.dataset;
+  if (!window.confirm(`Delete the collection "${name}" from Audiobookshelf? Its books stay in your library.`)) return;
+  const res = await fetch("/api/enrichment/collections/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ collection_id: id }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    const detail = res ? await res.json().then((d) => d.detail).catch(() => "") : "";
+    $("collectionsResult").textContent = `Could not delete "${name}"${detail ? `: ${detail}` : "."}`;
+    return;
+  }
+  await loadCollections();
+  $("collectionsResult").textContent = `Deleted "${name}".`;
 }
 
 async function loadCollections() {
@@ -460,7 +522,9 @@ async function loadCollections() {
     $("collectionsResult").textContent = `Could not read collections${detail ? `: ${detail}` : "."}`;
     return;
   }
-  collectionRows = (await res.json()).rows || [];
+  const data = await res.json();
+  collectionRows = data.rows || [];
+  collectionMaxBooks = data.max_books || collectionMaxBooks;
   $("collectionsResult").textContent = "";
   renderCollections();
 }
@@ -482,7 +546,7 @@ async function applyCollections() {
     return;
   }
   const data = await res.json();
-  const parts = [`Created ${data.created}, refreshed ${data.updated}.`];
+  const parts = [`Created ${data.created}, refreshed ${data.updated}${data.removed ? `, removed ${data.removed}` : ""}.`];
   if (data.failed && data.failed.length) {
     parts.push(`${data.failed.length} failed: ${data.failed.map((f) => `${f.genre} (${f.error})`).join("; ")}`);
   }

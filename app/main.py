@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -79,11 +80,22 @@ from app.enrichment_sources import (
     summarize_status,
 )
 from app.enrichment_batch import BatchStore, apply_batch, effective_status, mark_applied, run_batch
-from app.genre_collections import apply_collection_plan, genre_counts, plan_collections
+from app.genre_collections import (
+    MAX_COLLECTION_BOOKS,
+    NEVER_COLLECTIONS,
+    SUBGENRE_COLLECTIONS,
+    SUGGESTED as SUGGESTED_COLLECTIONS,
+    apply_collection_plan,
+    book_order,
+    genre_counts,
+    is_managed as is_managed_collection,
+    plan_collections,
+)
 from app.genre_taxonomy import MAIN_ORDER, NON_GENRES, normalize_label, split_compound_genres
 from app.goodreads_shelves import GoodreadsPacer, fetch_book_shelves, search_books as search_goodreads_books
 from app.abs_client import (
     abs_get_json,
+    abs_delete_json,
     abs_post_json,
     abs_patch_json,
     build_item_index,
@@ -6830,7 +6842,7 @@ class EnrichmentCollectionsApplyRequest(BaseModel):
     genres: list[str]
 
 
-def _collections_plan(genres: list[str] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _collections_plan(genres: list[str] | None) -> list[dict[str, Any]]:
     """Plan genre collections per book library from ABS's current genres (a
     fresh read, not the search cache, so a plan right after an apply is
     accurate). Without `genres`, every genre present is planned."""
@@ -6841,29 +6853,29 @@ def _collections_plan(genres: list[str] | None) -> tuple[list[dict[str, Any]], l
     for item in items:
         by_library.setdefault(str(item.get("libraryId") or ""), []).append(item)
     rows: list[dict[str, Any]] = []
-    totals: dict[str, int] = {}
     for library_id, library_items in by_library.items():
         counts = genre_counts(library_items)
-        for genre, ids in counts.items():
-            totals[genre] = totals.get(genre, 0) + len(ids)
         wanted = genres if genres is not None else sorted(counts, key=lambda g: (-len(counts[g]), g))
         library_existing = [c for c in existing if c.get("libraryId") == library_id]
-        for row in plan_collections(wanted, counts, library_existing):
+        sizes = {c.get("id"): len(c.get("books") or []) for c in library_existing}
+        for row in plan_collections(wanted, counts, library_existing, book_order(library_items)):
             row["library_id"] = library_id
+            row["current_count"] = sizes.get(row["collection_id"], 0)
             rows.append(row)
-    available = [{"genre": g, "count": n} for g, n in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))]
-    return rows, available
+    return rows
 
 
 @app.get("/api/enrichment/collections/plan")
 def enrichment_collections_plan() -> dict[str, Any]:
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
-    rows, _available = _collections_plan(None)
-    main = set(MAIN_ORDER)
-    return {"rows": [{"genre": r["genre"], "action": r["action"], "book_count": r["book_count"],
-                      "add_count": len(r["add"]), "remove_count": len(r["remove"]),
-                      "main": r["genre"] in main, "library_id": r["library_id"]} for r in rows]}
+    main = set(MAIN_ORDER) - NEVER_COLLECTIONS - SUBGENRE_COLLECTIONS
+    return {"rows": [{"genre": r["genre"], "name": r["name"], "part": r["part"], "parts": r["parts"],
+                      "action": r["action"], "book_count": r["book_count"], "current_count": r["current_count"],
+                      "collection_id": r["collection_id"], "add_count": len(r["add"]), "remove_count": len(r["remove"]),
+                      "main": r["genre"] in main, "suggested": r["genre"] in SUGGESTED_COLLECTIONS,
+                      "library_id": r["library_id"]} for r in _collections_plan(None)],
+            "max_books": MAX_COLLECTION_BOOKS}
 
 
 @app.post("/api/enrichment/collections/apply")
@@ -6871,21 +6883,42 @@ def enrichment_collections_apply(req: EnrichmentCollectionsApplyRequest) -> dict
     if not _get_abs_api_key():
         raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
     abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
-    rows, _available = _collections_plan(req.genres)
-    out: dict[str, Any] = {"created": 0, "updated": 0, "skipped": 0, "failed": []}
+    out: dict[str, Any] = {"created": 0, "updated": 0, "removed": 0, "skipped": 0, "failed": []}
     by_library: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
+    for row in _collections_plan(req.genres):
         by_library.setdefault(row["library_id"], []).append(row)
     for library_id, library_rows in by_library.items():
         result = apply_collection_plan(
             library_rows, library_id=library_id,
             post_fn=lambda path, body: abs_post_json(path, body, abs_url, abs_api_key),
             patch_fn=lambda path, body: abs_patch_json(path, body, abs_url, abs_api_key),
+            delete_fn=lambda path: abs_delete_json(path, abs_url, abs_api_key),
         )
-        for key in ("created", "updated", "skipped"):
+        for key in ("created", "updated", "removed", "skipped"):
             out[key] += result[key]
         out["failed"].extend(result["failed"])
     return out
+
+
+class EnrichmentCollectionDeleteRequest(BaseModel):
+    collection_id: str
+
+
+@app.post("/api/enrichment/collections/delete")
+def enrichment_collection_delete(req: EnrichmentCollectionDeleteRequest) -> dict[str, Any]:
+    """Delete one collection LibraForge created; anyone else's is refused."""
+    if not _get_abs_api_key():
+        raise HTTPException(status_code=400, detail="Audiobookshelf is not configured. Set it up in Settings first.")
+    abs_url, abs_api_key = _get_abs_url(), _get_abs_api_key()
+    collection_id = req.collection_id.strip()
+    try:
+        collection = abs_get_json(f"/api/collections/{urllib.parse.quote(collection_id)}", {}, abs_url, abs_api_key) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Collection not found: {exc}") from exc
+    if not is_managed_collection(collection):
+        raise HTTPException(status_code=403, detail="LibraForge only deletes collections it created.")
+    abs_delete_json(f"/api/collections/{urllib.parse.quote(collection_id)}", abs_url, abs_api_key)
+    return {"deleted": collection_id, "name": collection.get("name", "")}
 
 
 def _apply_book_via_abs(book_id: str, path: str, genres: list[str], narrators: list[str], explicit: bool | None,

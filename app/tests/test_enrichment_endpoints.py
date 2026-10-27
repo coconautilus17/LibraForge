@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from app import main
+from app import genre_collections, main
 
 client = TestClient(main.app)
 
@@ -742,6 +742,27 @@ class EnrichmentCollectionsEndpointTests(unittest.TestCase):
         self.assertEqual((rows["Fantasy"]["book_count"], rows["Fantasy"]["action"]), (2, "create"))
         self.assertEqual(rows["Explicit"]["action"], "name_taken")
         self.assertNotIn("Audiobook", rows)
+
+    def test_plan_reports_the_cap_and_suggests_specific_genres(self):
+        # #454: Audiobookshelf loads a collection's books all at once.
+        plan = client.get("/api/enrichment/collections/plan").json()
+        self.assertEqual(plan["max_books"], 600)
+        rows = {r["name"]: r for r in plan["rows"]}
+        self.assertEqual((rows["Fantasy"]["suggested"], rows["Fantasy"]["parts"]), (False, 1))
+        self.assertNotIn("Non-Fiction", main.SUGGESTED_COLLECTIONS)
+        self.assertIn("Non-Fiction", main.SUBGENRE_COLLECTIONS)
+
+    def test_delete_refuses_a_collection_libraforge_did_not_create(self):
+        with patch.object(main, "abs_get_json", return_value={"id": "u1", "name": "Mine", "description": "my own"}), \
+             patch.object(main, "abs_delete_json") as delete:
+            resp = client.post("/api/enrichment/collections/delete", json={"collection_id": "u1"})
+        self.assertEqual(resp.status_code, 403)
+        delete.assert_not_called()
+        with patch.object(main, "abs_get_json", return_value={"id": "c1", "name": "LitRPG 2", "description": genre_collections.MARKER}), \
+             patch.object(main, "abs_delete_json") as delete:
+            resp = client.post("/api/enrichment/collections/delete", json={"collection_id": "c1"})
+        self.assertEqual(resp.json(), {"deleted": "c1", "name": "LitRPG 2"})
+        self.assertEqual(delete.call_args[0][0], "/api/collections/c1")
 
     def test_apply_creates_only_chosen_free_genres_and_reports_failures(self):
         body = client.post("/api/enrichment/collections/apply", json={"genres": ["Fantasy", "Explicit", "Sci-Fi"]}).json()
