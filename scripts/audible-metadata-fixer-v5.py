@@ -94,6 +94,7 @@ try:
     )
     from app.fixer.scoring import (
         AGGRESSIVE_SCORE_THRESHOLD,
+        MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
         metadata_from_product,
@@ -235,6 +236,7 @@ except ModuleNotFoundError:
     )
     from app.fixer.scoring import (
         AGGRESSIVE_SCORE_THRESHOLD,
+        MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
         metadata_from_product,
@@ -5789,7 +5791,7 @@ def main():
     parser.add_argument(
         "--min-score",
         type=float,
-        default=0.70,
+        default=MIN_MATCH_SCORE,
         help="Minimum match score required to apply metadata",
     )
 

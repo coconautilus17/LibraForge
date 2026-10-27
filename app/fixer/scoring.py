@@ -50,6 +50,8 @@ from app.fixer.parsing import (
 # ---------------------------------------------------------------------------
 
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
+# The fixer's default --min-score: the score a match needs to be applied.
+MIN_MATCH_SCORE = 0.70
 # Format labels, never genres ("Audiobook" is not a genre: PR #105, #306).
 GENRE_BLOCKLIST = {"audiobook", "audiobooks", "audio book", "audio books"}
 

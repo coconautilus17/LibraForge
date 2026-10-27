@@ -95,7 +95,7 @@ from app.abs_client import (
     sync_book_metadata,
     upsert_bootstrapped_file,
 )
-from app.fixer.scoring import GENRE_BLOCKLIST, clean_provider_genres, split_series_trailing_number
+from app.fixer.scoring import GENRE_BLOCKLIST, MIN_MATCH_SCORE, clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
@@ -1202,7 +1202,7 @@ class RunRequest(BaseModel):
     trust_abs_metadata: bool = False
     weight_abs_metadata: bool = False
 
-    min_score: float | None = 0.70
+    min_score: float | None = MIN_MATCH_SCORE
     limit: int | None = 50
     max_files: int | None = 0
     duration_review_threshold: float | None = 10.0
@@ -6547,7 +6547,7 @@ def _collect_extra_sources(
 def _enrichment_pick(book: dict[str, Any], results: list[dict]) -> dict | None:
     """Metadata Forge's pick among Audible search results for a book
     Enrichment Forge searched by title and author, at its default minimum
-    score (--min-score 0.70) (#451)."""
+    score (#451)."""
     fixer_module = scan_fixer_module()
     clues = build_context_clues(fixer_module, {
         "title": book.get("title", ""), "author": book.get("author", ""), "narrator": book.get("existing_narrator", ""),
@@ -6555,7 +6555,7 @@ def _enrichment_pick(book: dict[str, Any], results: list[dict]) -> dict | None:
         "local_duration_minutes": book.get("duration_minutes"),
     })
     product, score, _ambiguity = fixer_module.pick_best_match_for_metadata(clues, results, clues.get("local_duration_minutes"))
-    return product if product is not None and score >= 0.70 else None
+    return product if product is not None and score >= MIN_MATCH_SCORE else None
 
 
 def _enrichment_same_author(book: dict[str, Any], product: dict) -> bool:
