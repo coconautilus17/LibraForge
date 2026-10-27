@@ -56,6 +56,7 @@ from app.enrichment import (
     STANDALONE_KEY_PREFIX,
     compile_series_enrichment,
     detect_manual_genres,
+    enrichment_written_genres,
     file_tag_genres,
     fetch_all_abs_book_items,
     get_series_books,
@@ -106,7 +107,7 @@ from app.abs_client import (
     sync_book_metadata,
     upsert_bootstrapped_file,
 )
-from app.fixer.scoring import GENRE_BLOCKLIST, clean_provider_genres, split_series_trailing_number
+from app.fixer.scoring import GENRE_BLOCKLIST, MIN_MATCH_SCORE, clean_provider_genres, split_series_trailing_number
 from app.fixer.search import (
     ENRICHMENT_RESPONSE_GROUPS,
     abs_tract_search,
@@ -1217,7 +1218,7 @@ class RunRequest(BaseModel):
     trust_abs_metadata: bool = False
     weight_abs_metadata: bool = False
 
-    min_score: float | None = 0.70
+    min_score: float | None = MIN_MATCH_SCORE
     limit: int | None = 50
     max_files: int | None = 0
     duration_review_threshold: float | None = 10.0
@@ -6482,6 +6483,7 @@ def _attach_local_genres(books: list[dict[str, Any]]) -> None:
         book["file_genres_written_by_libraforge"] = wrote_genre
         book["manual_genres"] = detect_manual_genres(
             book.get("existing_genres") or [], book["file_genres"], wrote_genre, written_log.get(book["id"]))
+        book["enrichment_written"] = enrichment_written_genres(written_log.get(book["id"]))
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(one, books))
@@ -6559,6 +6561,28 @@ def _collect_extra_sources(
     return extra, series, status
 
 
+def _enrichment_pick(book: dict[str, Any], results: list[dict]) -> dict | None:
+    """Metadata Forge's pick among Audible search results for a book
+    Enrichment Forge searched by title and author, at its default minimum
+    score (#451)."""
+    fixer_module = scan_fixer_module()
+    clues = build_context_clues(fixer_module, {
+        "title": book.get("title", ""), "author": book.get("author", ""), "narrator": book.get("existing_narrator", ""),
+        "series": book.get("series_name", ""), "sequence": book.get("sequence") or "",
+        "local_duration_minutes": book.get("duration_minutes"),
+    })
+    product, score, _ambiguity = fixer_module.pick_best_match_for_metadata(clues, results, clues.get("local_duration_minutes"))
+    return product if product is not None and score >= MIN_MATCH_SCORE else None
+
+
+def _enrichment_same_author(book: dict[str, Any], product: dict) -> bool:
+    """Metadata Forge's author check: is this result by the book's author?"""
+    from app.fixer.parsing import _authors_compatible
+    from app.fixer.scoring import get_people
+
+    return bool(book.get("author")) and _authors_compatible(book["author"], " ".join(get_people(product, "authors"))) is True
+
+
 def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/audible-metadata.json") -> dict[str, Any]:
     """One unit's (series or standalone) full compile: every source, the
     vote, evidence. Shared by the series page and the whole-library run."""
@@ -6589,7 +6613,8 @@ def _compile_unit(series_key: str, series_name: str, auth_file: str = "/auth/aud
         # the enrichment-only expanded response groups instead of duplicating them.
         audible_search_fn = functools.partial(fixer_audible_search, response_groups=ENRICHMENT_RESPONSE_GROUPS)
         audible_lookup_by_asin_fn = functools.partial(audible_lookup_by_asin, response_groups=ENRICHMENT_RESPONSE_GROUPS)
-        audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client)
+        audible_results = search_series_audible(books, audible_search_fn, audible_lookup_by_asin_fn, client,
+                                                pick_fn=_enrichment_pick, same_author_fn=_enrichment_same_author)
         source_status["audible"] = {
             "label": "Audible",
             "state": "searched",

@@ -151,9 +151,9 @@ whole series at once, instead of fixing each book one at a time.
   series of fewer than four books that have a vote), with no limit on main genres, and up
   to five subgenres. The series-level lists count as
   support for the whole series, but progressionfantasy.co.uk's broad progression list
-  only counts when something else agrees or nothing contradicts it. LitRPG and
-  cultivation are kinds of progression fantasy, so when either is a main genre,
-  Progression Fantasy is kept as a subgenre.
+  only counts when something else agrees or nothing contradicts it. Progression
+  Fantasy is always a subgenre: LitRPG and Cultivation are its main genres, and a
+  progression book with neither is Fantasy with the Progression Fantasy subgenre.
 - **No genre is thrown away:** a genre from Audible, AudioSilo, the file's tag or
   Audiobookshelf that the controlled list doesn't name is kept as a subgenre under the
   source's own spelling ("Folk Tales & Myths", "LGBTQ+"). Only scrap is dropped: format

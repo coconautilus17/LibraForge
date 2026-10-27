@@ -89,6 +89,20 @@ def is_technical_label_block(value: str) -> bool:
 
 
 @trace(ALTER, capture=["value"])
+def strip_publisher_affixes(value: str) -> str:
+    """Drop a leading or trailing " - " part that is only a catalog publisher:
+    "BBC - Terry Jones" -> "Terry Jones". Only whole parts, so a surname that
+    is also an alias ("Stella Blackstone") stays, and never at a colon, so
+    "Blackstone: A Novel" stays a title."""
+    parts = re.split(r"(\s+[-–—|]\s+)", value or "")
+    if len(parts) >= 3 and not strip_publisher_noise(parts[0]):
+        parts = parts[2:]
+    if len(parts) >= 3 and not strip_publisher_noise(parts[-1]):
+        parts = parts[:-2]
+    return "".join(parts)
+
+
+@trace(ALTER, capture=["value"])
 def sanitize_technical_labels(value: str) -> str:
     """Remove codec/release noise without deleting ambiguous title words."""
     value = clean_text(value)
@@ -120,7 +134,7 @@ def sanitize_technical_labels(value: str) -> str:
     parts = re.split(r"(\s+[-–—|:]\s+)", value)
     while len(parts) >= 3 and is_technical_label_block(parts[-1]):
         parts = parts[:-2]
-    value = "".join(parts)
+    value = strip_publisher_affixes("".join(parts))
 
     value = re.sub(r"\s+", " ", value)
     return value.strip(" -_.:,")
@@ -193,9 +207,10 @@ def remove_parenthetical(value: str) -> str:
 def clean_author_value(value: str) -> str:
     """Remove series hints from author-like tags, e.g. 'Aaron Crash (American Dragons)' -> 'Aaron Crash'.
 
-    Square-bracketed release tags ("[PZG]") are never a name either.
+    Square-bracketed release tags ("[PZG]") and a publisher prefix or suffix
+    ("BBC - Terry Jones") are never a name either.
     """
-    return remove_parenthetical(re.sub(r"\[[^\]]*\]", " ", value or ""))
+    return strip_publisher_affixes(remove_parenthetical(re.sub(r"\[[^\]]*\]", " ", value or "")))
 
 
 # "Kimberly A. Blessing et al.": one named person plus unnamed others.

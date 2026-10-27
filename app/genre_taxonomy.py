@@ -30,7 +30,7 @@ MAIN_ORDER = ["Fantasy","Sci-Fi","LitRPG","Progression Fantasy","Cultivation","H
 LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
  "fantasy":(["Fantasy"],[]), "epic":([],["Epic Fantasy?"]), "epic fantasy":(["Fantasy"],["Epic Fantasy"]), "high fantasy":(["Fantasy"],["Epic Fantasy"]),
  "urban":(["Fantasy"],["Urban Fantasy"]), "urban fantasy":(["Fantasy"],["Urban Fantasy"]), "paranormal & urban":(["Fantasy"],["Urban Fantasy"]),
- "paranormal":([],["Paranormal"]), "supernatural":([],["Paranormal"]), "occult":(["Horror"],["Occult"]),
+ "paranormal":([],["Paranormal"]), "supernatural":([],["Paranormal"]), "occult":([],["Occult"]),
  "sword & sorcery":(["Fantasy"],["Sword & Sorcery"]), "dragons & mythical creatures":(["Fantasy"],[]), "dragons":(["Fantasy"],["Dragons"]),
  "dark fantasy":(["Fantasy"],["Dark Fantasy"]), "gaslamp":(["Fantasy"],["Gaslamp Fantasy"]), "fairy tales":(["Fantasy"],["Fairy Tales"]),
  "myths & legends":(["Fantasy"],["Mythology"]), "arthurian":(["Fantasy"],["Arthurian"]), "coming of age":([],["Coming of Age"]),
@@ -65,15 +65,22 @@ LABEL_MAP: dict[str, tuple[list[str], list[str]]] = {
 _HAREM_NEGATION = r"\b(no|not an?|non-|without an?|isn't an?|never an?)\s*harem"
 
 YA=(["Young Adult"],[])
+# Audible files adult books under leaves of the same name too ("Literature &
+# Fiction > Genre Fiction > Family Life / Friendship / Animals / Psychological",
+# "Religion & Spirituality > Occult"), so those leaves are subgenres only:
+# the top category ("Teen & Young Adult", "Children's Audiobooks", "Mystery,
+# Thriller & Suspense > Thriller & Suspense") gives the main genre.
 LABEL_MAP.update({
- "fantasy & magic":(["Fantasy","Young Adult"],[]), "growing up & facts of life":YA, "social & life skills":YA, "family life":YA, "friendship":YA,
- "self esteem & self image":YA, "self-esteem":YA, "difficult situations":YA, "physical & emotional abuse":YA,
- "animals":(["Children's"],[]), "animal fiction":(["Children's"],[]), "mice":(["Children's"],[]), "hamsters":(["Children's"],[]), "guinea pigs & squirrels":(["Children's"],[]),
+ "fantasy & magic":(["Fantasy","Young Adult"],[]), "growing up & facts of life":YA, "social & life skills":YA,
+ "family life":([],["Family Life"]), "friendship":([],["Friendship"]),
+ "self esteem & self image":YA, "self-esteem":([],["Self-Esteem"]), "difficult situations":YA, "physical & emotional abuse":YA,
+ "animals":([],["Animals"]), "animal fiction":([],["Animals"]), "mice":(["Children's"],[]), "hamsters":(["Children's"],[]), "guinea pigs & squirrels":(["Children's"],[]),
  "bedtime & dreaming":(["Children's"],[]), "explore the world":(["Children's"],[]), "holidays":([],[]),
  "humorous fiction":(["Humor"],[]), "comedy & humor":(["Humor"],[]), "comic":([],["Graphic Novel"]), "manga":([],["Graphic Novel"]), "graphic novel":([],["Graphic Novel"]),
- "legal":(["Thriller"],["Legal"]), "law & crime":(["Mystery"],["Crime"]), "psychological":(["Thriller"],["Psychological"]),
- "thrillers & suspense":(["Thriller"],[]), "domestic thrillers":(["Thriller"],["Domestic"]), "serial killers":(["Thriller"],["Crime"]), "terrorism":(["Thriller"],[]),
- "medical & forensic":(["Thriller"],["Medical"]), "medical":(["Thriller"],["Medical"]),
+ "legal":(["Thriller"],["Legal"]), "law & crime":(["Mystery"],["Crime"]), "psychological":([],["Psychological"]),
+ "psychological thriller":(["Thriller"],["Psychological"]),
+ "thrillers & suspense":(["Thriller"],[]), "domestic thrillers":(["Thriller"],["Domestic"]), "serial killers":(["Thriller"],["Crime"]), "terrorism":([],["Terrorism"]),
+ "medical & forensic":(["Thriller"],["Medical"]), "medical":([],["Medical"]),
  "mysteries":(["Mystery"],[]), "amateur sleuths":(["Mystery"],["Amateur Sleuth"]), "mysteries & detectives":(["Mystery"],[]), "noir":(["Mystery"],["Noir"]),
  "magical realism":(["Literary Fiction"],["Magical Realism"]), "metaphysical & visionary":(["Literary Fiction"],[]), "women's fiction":(["Literary Fiction"],[]),
  "sagas":([],["Family Saga"]), "scary stories":(["Horror"],[]), "gothic":(["Horror"],["Gothic"]),
@@ -134,7 +141,7 @@ _ALIASES = {"juvenile fiction":"young adult","juvenile literature":"young adult"
  "action adventure":"action & adventure","sword sorcery":"sword & sorcery","post apocalyptic":"post-apocalyptic","cozy mystery":"cozy","paranormal romance":"romance",
  "womens fiction":"women's fiction","historical romance":"romance","true crime":"criminology","biography memoir":"memoir","religion spirituality":"religion",
  "self help":"personal success","ghost stories":"ghosts","fairy tales folklore":"fairy tales","military history":"history","war military fiction":"war & military",
- "police procedural":"police procedurals","psychological thriller":"psychological","hard boiled":"hard-boiled","arts entertainment":"art","social sciences":"sociology",
+ "police procedural":"police procedurals","hard boiled":"hard-boiled","arts entertainment":"art","social sciences":"sociology",
  "fiction, fantasy, general":"fantasy","fiction, science fiction, general":"science fiction","fiction, mystery & detective, general":"mystery","horror tales":"horror",
  "erotic fiction":"erotica","science fiction":"science fiction","fantasy fiction":"fantasy","thrillers (fiction)":"thriller","detective and mystery fiction":"mystery",
  "non-fiction":"non fiction","sci-fi":"science fiction","scifi":"science fiction","sci fi":"science fiction",
@@ -354,6 +361,12 @@ def _joined_prefix(label: str) -> str:
         return ""
     names = store_genres.joined_names() or [k for k in LABEL_MAP if " & " in k]
     return max((n for n in names if label.startswith(n + " ")), key=len, default="")
+
+
+def is_glued_store_genre(genre: Any) -> bool:
+    """A store genre with more words glued on ("Arts & Entertainment Film
+    Philosophy"): an earlier match wrote it, nobody types that (#450)."""
+    return bool(_joined_prefix(str(genre or "").strip().lower()))
 
 
 def labels_from_text(text: str) -> list[str]:

@@ -18,6 +18,7 @@ from app.genre_taxonomy import (
     MAIN_ORDER,
     NON_GENRES,
     is_foreign_store_genre,
+    is_glued_store_genre,
     is_scrap_label,
     labels_from_genres,
     labels_from_text,
@@ -283,15 +284,22 @@ def search_series_audible(
     audible_lookup_by_asin_fn: Callable[[Any, str], dict | None],
     client: Any,
     workers: int = ENRICHMENT_SEARCH_WORKERS,
+    pick_fn: Callable[[dict[str, Any], list[dict]], dict | None] | None = None,
+    same_author_fn: Callable[[dict[str, Any], dict], bool] | None = None,
 ) -> dict[str, dict | None]:
     """Search Audible for every book in a series, up to `workers` concurrently.
 
     Books with a known ASIN use the direct lookup; a book without one, or
-    whose ASIN Audible no longer has (#433), gets a text search on title +
-    author and takes the first result (these books
-    are already organized/identified, so no scoring is needed here, unlike
-    the fixer's raw-scan matching problem). Returns a dict keyed by book id
-    -> Audible product dict, or None if nothing was found or the call failed.
+    whose ASIN Audible no longer has (#433), gets a keyword search, then
+    Audible's title + author search, and takes the result `pick_fn` (book,
+    results) chooses, the fixer's own pick and minimum score: the first
+    result is often another book (#451). When it chooses none, the first
+    result `same_author_fn` says is by the book's author is taken: for genres
+    an author's other book is close, and it rescues books whose library title
+    or credit is too poor to score ("Volume 5", a blank title, "BBC - Douglas
+    Adams"). Without `pick_fn` the first result is taken. Returns a dict
+    keyed by book id -> Audible product dict, or None if nothing was found or
+    the call failed.
     """
     def _search_one(book: dict[str, Any]) -> tuple[str, dict | None]:
         if not book.get("has_audio", True):
@@ -301,11 +309,21 @@ def search_series_audible(
                 product = audible_lookup_by_asin_fn(client, book["asin"])
                 if product:
                     return book["id"], product
-            query = f"{book.get('title', '')} {book.get('author', '')}".strip()
+            title, author = book.get("title", ""), book.get("author", "")
+            query = f"{title} {author}".strip()
             if not query:
                 return book["id"], None
-            results = audible_search_fn(client, query, 3)
-            return book["id"], (results[0] if results else None)
+            results = audible_search_fn(client, query, 10)
+            if pick_fn is None:
+                return book["id"], (results[0] if results else None)
+            product = pick_fn(book, results) if results else None
+            if product is None and title:
+                structured = audible_search_fn(client, query, 10, title=title, author=author)
+                product = pick_fn(book, structured) if structured else None
+                results = results + structured
+            if product is None and same_author_fn is not None:
+                product = next((p for p in results if same_author_fn(book, p)), None)
+            return book["id"], product
         except Exception:
             return book["id"], None
 
@@ -529,6 +547,22 @@ def _genre_key_set(genres: list[str]) -> set[str]:
     return {normalize_label(g) for g in split_compound_genres(real)}
 
 
+def _write_log_entry(enrichment_written: Any) -> tuple[list[str], list[str]]:
+    """(written, pinned) from an Enrichment Forge write-log entry:
+    {"written", "pinned"}, or an older plain list of written genres."""
+    if isinstance(enrichment_written, dict):
+        return list(enrichment_written.get("written") or []), list(enrichment_written.get("pinned") or [])
+    return list(enrichment_written or []), []
+
+
+def enrichment_written_genres(enrichment_written: Any) -> list[str]:
+    """The genres a write-log entry says Enrichment Forge wrote, minus the
+    user's own it kept pinned."""
+    written, pinned = _write_log_entry(enrichment_written)
+    pinned_keys = _genre_key_set(pinned)
+    return [g for g in written if normalize_label(g) not in pinned_keys]
+
+
 def detect_manual_genres(
     abs_genres: list[str],
     file_genres: list[str],
@@ -542,18 +576,17 @@ def detect_manual_genres(
     log recorded as the user's own stay pinned after Enrichment Forge rewrites
     them. `enrichment_written` is the log entry: {"written", "pinned"}, or an
     older plain list of written genres."""
-    # A foreign-store label ("Fantasía") was written by an ABS match, not by
-    # hand, and scrap ("Audbioook", a keyword string) is nobody's genre (#443).
+    # A foreign-store label ("Fantasía") or a glued store name (#450) was
+    # written by an ABS match, not by hand, and scrap ("Audbioook", a keyword
+    # string) is nobody's genre (#443).
     real = [g for g in abs_genres or []
-            if str(g).strip() and normalize_label(g) not in NON_GENRES and not is_foreign_store_genre(g)]
+            if str(g).strip() and normalize_label(g) not in NON_GENRES and not is_foreign_store_genre(g)
+            and not is_glued_store_genre(g)]
     real = split_compound_genres([g for g in split_compound_genres(real, canonical=False)
                                   if not is_scrap_label(g) and not is_foreign_store_genre(g)])
     if not real:
         return []
-    if isinstance(enrichment_written, dict):
-        written, pinned_before = enrichment_written.get("written") or [], enrichment_written.get("pinned") or []
-    else:
-        written, pinned_before = enrichment_written or [], []
+    written, pinned_before = _write_log_entry(enrichment_written)
     written_keys, pinned_keys = _genre_key_set(written), _genre_key_set(pinned_before)
     file_keys = _genre_key_set(file_genres or [])
     out = []
@@ -605,11 +638,14 @@ def build_book_voters(
     # file's own editorial genre, so it doesn't vote a second time.
     if not book.get("file_genres_written_by_libraforge"):
         voters["file_tags"] = labels_from_genres(book.get("file_genres") or [])
-    # Pinned (hand-set) genres are not a vote; the rest of what ABS holds is.
+    # Pinned (hand-set) genres are not a vote, nor what Enrichment Forge itself
+    # wrote last time (#453: a second run would vote for its own output); the
+    # rest of what ABS holds is.
     pinned = {g.lower() for g in book.get("manual_genres") or []}
+    own = {normalize_label(g) for g in book.get("enrichment_written") or []}
     # Store umbrellas go before splitting, or "Science Fiction & Fantasy" votes Fantasy (#431).
     existing = [g for g in split_compound_genres([g for g in book.get("existing_genres") or [] if normalize_label(g) not in NON_GENRES])
-                if g.lower() not in pinned]
+                if g.lower() not in pinned and normalize_label(g) not in own]
     voters["abs_existing"] = labels_from_genres(existing + list(book.get("existing_tags") or []))
     text = " ".join(str(x or "") for x in (
         (product or {}).get("title"), (product or {}).get("subtitle"), (product or {}).get("publisher_summary"),

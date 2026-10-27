@@ -57,6 +57,13 @@ class TitleNoiseTests(unittest.TestCase):
             "Dark Age (3 of 3) [Dramatized Adaptation]",
         )
 
+    def test_publisher_prefix_or_suffix_is_removed(self):
+        self.assertEqual(sanitize_book_title("BBC Radio - The Lord of the Rings"), "The Lord of the Rings")
+        self.assertEqual(sanitize_book_title("Starship Titanic - BBC"), "Starship Titanic")
+        # Never at a colon, and only a part that is all publisher.
+        self.assertEqual(sanitize_book_title("Blackstone: A Novel"), "Blackstone: A Novel")
+        self.assertEqual(sanitize_book_title("Ghost Story - Podium Live"), "Ghost Story - Podium Live")
+
 
 class AuthorNoiseTests(unittest.TestCase):
     def test_release_group_bracket_is_not_an_author(self):
@@ -64,6 +71,14 @@ class AuthorNoiseTests(unittest.TestCase):
 
     def test_series_hint_parenthetical_still_removed(self):
         self.assertEqual(clean_author_value("Aaron Crash (American Dragons)"), "Aaron Crash")
+
+    def test_publisher_prefix_or_suffix_is_not_an_author(self):
+        # Douglas Adams' Starship Titanic, tagged "BBC - Terry Jones".
+        self.assertEqual(clean_author_value("BBC - Terry Jones"), "Terry Jones")
+        self.assertEqual(clean_author_value("Douglas Adams - BBC Radio"), "Douglas Adams")
+        # A surname that is also a publisher alias is a person.
+        self.assertEqual(clean_author_value("Stella Blackstone"), "Stella Blackstone")
+        self.assertEqual(clean_author_value("Christopher Rowe - translator"), "Christopher Rowe - translator")
 
 
 class SeriesNoiseTests(unittest.TestCase):

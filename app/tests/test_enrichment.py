@@ -276,6 +276,73 @@ class SearchSeriesAudibleTests(unittest.TestCase):
         self.assertEqual(result, {"1": None, "2": {"asin": "B0BBB"}})
 
 
+class ScoredAudibleSearchTests(unittest.TestCase):
+    """#451: a book without an ASIN took Audible's first result, often
+    another book ("The Catcher in the Rye Enigma" for Salinger's novel)."""
+
+    BOOK = {"id": "1", "asin": "", "title": "The Catcher in the Rye", "author": "J.D. Salinger"}
+    ENIGMA = {"asin": "B0ENIGMA", "title": "The Catcher in the Rye Enigma"}
+    NOVEL = {"asin": "B0NOVEL", "title": "The Catcher in the Rye"}
+
+    @staticmethod
+    def pick(book, results):
+        return next((p for p in results if p["title"] == book["title"]), None)
+
+    def test_the_picked_result_wins_over_the_first(self):
+        result = enrichment.search_series_audible([self.BOOK], lambda c, q, n, **k: [self.ENIGMA, self.NOVEL],
+                                                  lambda c, a: None, client=None, pick_fn=self.pick)
+        self.assertEqual(result["1"]["asin"], "B0NOVEL")
+
+    def test_no_picked_result_means_no_audible_data(self):
+        result = enrichment.search_series_audible([self.BOOK], lambda c, q, n, **k: [self.ENIGMA],
+                                                  lambda c, a: None, client=None, pick_fn=self.pick)
+        self.assertIsNone(result["1"])
+
+    def test_without_a_pick_the_authors_own_book_is_taken(self):
+        # Plato's dialogues have blank titles in one library; any Plato hit
+        # votes Non-Fiction, while a study guide by someone else never counts.
+        book = {"id": "1", "asin": "", "title": "", "author": "Plato"}
+        guide = {"asin": "B0G", "title": "Study Guide", "authors": [{"name": "Course Hero"}]}
+        dialogue = {"asin": "B0P", "title": "Meno", "authors": [{"name": "Plato"}]}
+        result = enrichment.search_series_audible(
+            [book], lambda c, q, n, **k: [guide, dialogue], lambda c, a: None, client=None,
+            pick_fn=lambda b, r: None, same_author_fn=lambda b, p: p["authors"][0]["name"] == b["author"])
+        self.assertEqual(result["1"]["asin"], "B0P")
+
+    def test_title_and_author_search_follows_a_keyword_miss(self):
+        calls = []
+
+        def search(client, query, limit, title="", author=""):
+            calls.append(title)
+            return [self.NOVEL] if title else [self.ENIGMA]
+        result = enrichment.search_series_audible([self.BOOK], search, lambda c, a: None, client=None, pick_fn=self.pick)
+        self.assertEqual(calls, ["", "The Catcher in the Rye"])
+        self.assertEqual(result["1"]["asin"], "B0NOVEL")
+
+
+class EnrichmentPickTests(unittest.TestCase):
+    """The pick is Metadata Forge's own (pick_best_match_for_metadata) at its
+    default minimum score."""
+
+    # Library books carry their runtime: without one the fixer caps a score at 0.29.
+    BOOK = {"id": "1", "title": "The Catcher in the Rye", "author": "J.D. Salinger", "duration_minutes": 413}
+
+    @staticmethod
+    def product(asin, title, author):
+        return {"asin": asin, "title": title, "authors": [{"name": author}], "narrators": [], "series": [],
+                "runtime_length_min": 413}
+
+    def test_the_book_itself_beats_a_title_lookalike_listed_first(self):
+        from app import main
+        enigma = self.product("B0ENIGMA", "The Catcher in the Rye Enigma", "Pierre Bayard")
+        novel = self.product("B0NOVEL", "The Catcher in the Rye", "J.D. Salinger")
+        self.assertEqual(main._enrichment_pick(self.BOOK, [enigma, novel])["asin"], "B0NOVEL")
+
+    def test_nothing_at_the_minimum_is_no_pick(self):
+        from app import main
+        self.assertIsNone(main._enrichment_pick(self.BOOK, [self.product("B0X", "Franny and Zooey", "J.D. Salinger")]))
+
+
 class SearchSeriesGoodreadsTests(unittest.TestCase):
     """Direct Goodreads shelves (app/goodreads_shelves.py), one result per book."""
 
@@ -762,6 +829,15 @@ class BuildBookVotersTests(unittest.TestCase):
 
     def test_no_audio_book_has_no_voters(self):
         self.assertEqual(enrichment.build_book_voters(_vbook("p", has_audio=False, existing_tags=["Horror"]), _EPIC, None, {}, None, None), {})
+
+    def test_what_enrichment_forge_wrote_does_not_vote_again(self):
+        # #453: a second run voted for its own earlier output.
+        written = enrichment.enrichment_written_genres(
+            {"written": ["Fantasy", "Progression Fantasy", "Gaslamp Fantasy"], "pinned": ["Gaslamp Fantasy"]})
+        self.assertEqual(written, ["Fantasy", "Progression Fantasy"])
+        book = _vbook("b", existing_genres=["Fantasy", "Progression Fantasy", "Horror"], enrichment_written=written)
+        self.assertEqual(enrichment.build_book_voters(book, None, None, {}, None, None)["abs_existing"], ["horror"])
+        self.assertEqual(enrichment.enrichment_written_genres(["Fantasy"]), ["Fantasy"])
 
 
 class CompileVotingTests(unittest.TestCase):
