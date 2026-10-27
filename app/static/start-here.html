@@ -61,7 +61,7 @@
           <li><strong>Audible public catalog (no login)</strong>: Audible's own catalog, searched directly with no account. Pick the marketplace (US, UK, DE, ...) your books come from, since titles, series and narrators can differ between stores. This is the most accurate choice for most libraries.</li>
           <li><strong>Audible (your account)</strong>: the same catalog through your logged-in Audible account and its marketplace. With no login, a run or search switches to the public catalog and tells you so.</li>
           <li><strong>Audiobookshelf (ABS)</strong>: asks your Audiobookshelf server to search a provider on your behalf. It returns fewer candidates per search than Audible directly, so it finds fewer books.</li>
-          <li><strong>Goodreads fallback</strong> (opt-in, via abs-tract) is tried only when Audible finds no confident match.</li>
+          <li><strong>Goodreads fallback</strong> (opt-in) is tried only when Audible finds no confident match.</li>
         </ul>
       </div>
 
@@ -157,7 +157,7 @@
             </tr>
             <tr>
               <td><span class="match-gr-limited-badge">GR LIMITED</span></td>
-              <td>Goodreads (abs-tract) was tried for this book but the circuit breaker was open (Goodreads was rate-limiting us), so the lookup was skipped rather than counted as a genuine no-match. A warning explains this and suggests a lower search-worker count when a run trips the breaker.</td>
+              <td>Goodreads was tried for this book but the circuit breaker was open (Goodreads was rate-limiting us), so the lookup was skipped rather than counted as a genuine no-match. A warning explains this and suggests a lower search-worker count when a run trips the breaker.</td>
             </tr>
             <tr>
               <td><span class="match-initials-badge">Initials Fixed</span></td>

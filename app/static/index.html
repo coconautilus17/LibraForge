@@ -73,7 +73,7 @@
         <label class="advanced-run-setting"><span class="field-label">Script <span class="info-tip" data-tooltip="Selects the metadata fixer implementation to run. The current recommended default is selected automatically."></span></span>
           <select id="script"></select>
         </label>
-        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source for both Start run and Search For Selected Target. Audible public catalog: Audible's own catalog, no login needed; pick the marketplace. Audible (your account): the same catalog through your logged-in Audible account and its marketplace. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads/Kindle: via abs-tract (configure its URL in Settings); Goodreads for metadata, Kindle for cover art only."></span></span>
+        <label><span class="field-label">Metadata provider <span class="info-tip" data-tooltip="Selects the metadata source for both Start run and Search For Selected Target. Audible public catalog: Audible's own catalog, no login needed; pick the marketplace. Audible (your account): the same catalog through your logged-in Audible account and its marketplace. ABS: searches via your Audiobookshelf instance, no Audible auth needed, supports multiple providers. abs-agg: separate abs-agg service. Goodreads: read directly, for metadata. Kindle: via abs-tract (configure its URL in Settings), for cover art only."></span></span>
           <select id="manualProvider">
             <option value="audible-public">Audible public catalog (no login)</option>
             <option value="audible">Audible (your account)</option>
@@ -81,7 +81,7 @@
             <option value="abs-agg">abs-agg</option>
             <option value="graphicaudio">GraphicAudio</option>
             <option value="soundbooththeater">SoundBooth Theater</option>
-            <option value="goodreads">Goodreads (abs-tract)</option>
+            <option value="goodreads">Goodreads</option>
             <option value="kindle">Kindle cover (abs-tract)</option>
           </select>
         </label>
@@ -210,7 +210,7 @@
         </div>
         <div class="goodreads-fallback-row">
           <div class="checks goodreads-fallback-check">
-            <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads via abs-tract when Audible does not return a confident full match. Also the first source for ebooks."></span></label>
+            <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads when Audible does not return a confident full match. Also the first source for ebooks."></span></label>
           </div>
           <div class="inline-warning">Goodreads rate-limits aggressively. Use only 5 search workers when enabling this fallback.</div>
         </div>

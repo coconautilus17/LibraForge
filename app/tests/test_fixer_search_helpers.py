@@ -64,7 +64,8 @@ class AbsTractTests(unittest.TestCase):
         return mock.patch("urllib.request.urlopen", fake)
 
     def search(self, **kw):
-        args = dict(title="Unsouled", author="Will Wight", provider="goodreads", abs_tract_url="http://tract:5555/", limit=3)
+        # Kindle: the provider still read through abs-tract (Goodreads is read directly).
+        args = dict(title="Unsouled", author="Will Wight", provider="kindle", abs_tract_url="http://tract:5555/", limit=3)
         args.update(kw)
         return search.abs_tract_search(**args)
 

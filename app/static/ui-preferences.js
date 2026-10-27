@@ -365,7 +365,7 @@
       : require === "abs-tract"
       ? {
         title: "Connect abs-tract to continue",
-        body: 'This action needs an <strong>abs-tract</strong> URL configured, the service LibraForge uses to search Goodreads and Kindle. Set it below.',
+        body: 'This action needs an <strong>abs-tract</strong> URL configured, the service LibraForge uses to search Kindle. Set it below.',
       }
       : {
         title: "Connect a metadata provider to continue",

@@ -64,7 +64,7 @@ provider, and setting - this is the short version.
 **Providers:** the Audible public catalog (no login, any marketplace), Audible through
 your logged-in account, Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
 Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???,
-and Goodreads or Hardcover when abs-agg has their keys), Goodreads/Kindle via abs-tract,
+and Goodreads or Hardcover when abs-agg has their keys), Goodreads (read directly), Kindle covers via abs-tract,
 and Pocket FM as a Manual Review source. Open Library is used by Enrichment Forge and for
 ebooks.
 
@@ -208,7 +208,7 @@ LIBRAFORGE_IMAGE_TAG=latest-chaptering AUDIOBOOKS_PATH=/path/to/your/audiobooks 
 |---|---|---|
 | [Audiobookshelf](https://www.audiobookshelf.org/) | Metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and add it under Settings → Accounts. | No |
 | [abs-agg](https://github.com/Vito0912/abs-agg) | Aggregates metadata from LibriVox, Storytel, BookBeat, Big Finish, and others. Deploy on the same Docker network; set the URL in provider settings. | No |
-| [abs-tract](https://github.com/ahobsonsayers/abs-tract) | Goodreads/Kindle metadata fallback for no-match, series-only, or low-score books. Deploy on the same Docker network; set its URL in provider settings. | No |
+| [abs-tract](https://github.com/ahobsonsayers/abs-tract) | Kindle cover art after a Goodreads match (Goodreads itself is read directly). Deploy on the same Docker network; set its URL in provider settings. | No |
 
 ### Container paths
 
@@ -274,7 +274,7 @@ LibraForge wraps and builds on:
 - **[abs-agg](https://github.com/Vito0912/abs-agg)** (Vito0912) - the optional companion
   service behind the LibriVox / Storytel / BookBeat / Big Finish and other providers.
 - **[abs-tract](https://github.com/ahobsonsayers/abs-tract)** (ahobsonsayers) - the
-  optional companion service behind the Goodreads/Kindle metadata fallback.
+  optional companion service behind Kindle cover art.
 
 Full dependency list and license details: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
