@@ -639,6 +639,22 @@ class MissingCandidateSequenceTests(unittest.TestCase):
         score = FIXER.score_product_for_metadata(clues, p, 634.0)
         self.assertGreaterEqual(score, 0.80)
 
+    def test_number_without_a_series_is_not_guarded(self):
+        # "Snow Crash; Book 01" (#460): a standalone's number belongs to no series,
+        # so an exact title, author and runtime match is the book.
+        clues = {
+            "title": "Snow Crash",
+            "raw_title": "Snow Crash",
+            "author": "Neal Stephenson",
+            "narrator": "",
+            "series": "",
+            "book_number": "1",
+            "book_number_source": "path",
+        }
+        p = product(asin="B002UUKWCY", title="Snow Crash", authors=("Neal Stephenson",), minutes=1023.0)
+        score = FIXER.score_product_for_metadata(clues, p, 1024.26)
+        self.assertGreaterEqual(score, 0.90)
+
     def test_weak_track_derived_number_is_not_guarded(self):
         """Track-derived numbers are weak metadata; do not gate on them."""
         clues = {
