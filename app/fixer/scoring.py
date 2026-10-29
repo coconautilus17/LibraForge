@@ -52,6 +52,10 @@ from app.fixer.parsing import (
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
 # The fixer's default --min-score: the score a match needs to be applied.
 MIN_MATCH_SCORE = 0.70
+
+# Placeholder author values (normalize_for_match form) that name no real author.
+GENERIC_AUTHORS = {"unknown", "unknown author", "various", "various authors", "anonymous", "misc", "n a", "na"}
+
 # Format labels, never genres ("Audiobook" is not a genre: PR #105, #306).
 GENRE_BLOCKLIST = {"audiobook", "audiobooks", "audio book", "audio books"}
 
@@ -880,16 +884,7 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
     if not local_author or not product_author:
         return False
 
-    generic = {
-        "unknown",
-        "unknown author",
-        "various",
-        "various authors",
-        "anonymous",
-        "n a",
-        "na",
-    }
-    if local_author in generic or product_author in generic:
+    if local_author in GENERIC_AUTHORS or product_author in GENERIC_AUTHORS:
         return False
 
     # "Audio Versee", "Audio Version", etc. are garbled production-format labels

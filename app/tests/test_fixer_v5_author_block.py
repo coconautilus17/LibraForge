@@ -32,9 +32,11 @@ class AuthorIdentityConflictTests(unittest.TestCase):
                 self.assertIs(FIXER.has_author_identity_conflict(clues, product(title, product_authors)), expected)
 
     def test_generic_author_no_conflict(self):
-        clues = {"title": "Cradle", "author": "Unknown"}
         prod = product("Cradle", ["Will Wight"])
-        self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
+        for author in ("Unknown", "Misc"):
+            with self.subTest(author=author):
+                clues = {"title": "Cradle", "author": author}
+                self.assertFalse(FIXER.has_author_identity_conflict(clues, prod))
 
 
 class AuthorHardBlockScoringTests(unittest.TestCase):
