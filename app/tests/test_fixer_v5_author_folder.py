@@ -73,6 +73,16 @@ class FolderAuthorClueTests(unittest.TestCase):
         self.assertEqual(clues["author"], "Frank Herbert")
         self.assertNotEqual(clues.get("author_source"), "folder")
 
+    def test_numbered_book_folder_does_not_make_the_author_folder_a_series(self):
+        # Author/"Author; Title; Book 01" (#459): the folder above is the author's.
+        clues = clues_for("Neal Stephenson/Neal Stephenson; Snow Crash; Book 01/Neal Stephenson; Snow Crash; Book 01.m4b",
+                          {"title": "Snow Crash", "album": "Snow Crash", "artist": "Neal Stephenson"})
+        self.assertNotEqual(clues.get("series"), "Neal Stephenson")
+
+    def test_numbered_book_folder_below_a_series_folder_still_names_the_series(self):
+        clues = clues_for("Will Wight/Cradle/Book 1 - Unsouled/Unsouled.m4b", {"title": "Unsouled", "artist": "Will Wight"})
+        self.assertEqual(clues["series"], "Cradle")
+
     def test_staging_folder_is_not_an_author(self):
         clues = clues_for("_unorganized/Poetics/Poetics.m4b", {"title": "Poetics"})
         self.assertEqual(clues.get("author", ""), "")
