@@ -64,7 +64,7 @@ provider, and setting - this is the short version.
 **Providers:** the Audible public catalog (no login, any marketplace), Audible through
 your logged-in account, Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
 Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???,
-and Goodreads or Hardcover when abs-agg has their keys), Goodreads (read directly), Kindle covers via abs-tract,
+and Goodreads or Hardcover when abs-agg has their keys), Goodreads (read directly), Audiobook Guild (first, for the authors it sells), Kindle covers via abs-tract,
 and Pocket FM as a Manual Review source. Open Library is used by Enrichment Forge and for
 ebooks.
 

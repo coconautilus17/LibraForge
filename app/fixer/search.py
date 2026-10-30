@@ -15,6 +15,7 @@ import time
 
 import audible
 
+from app import audiobook_guild
 from app.debug_trace import trace, CHOOSE
 from app.fixer.scoring import clean_provider_genres
 from app.goodreads_shelves import GoodreadsPacer, search_books as goodreads_search_books
@@ -467,6 +468,29 @@ def abs_tract_search(
         else:
             asin = match.get("asin", "") or existing_asin
         products.append(_abs_match_to_product(match, provider, asin))
+    return products
+
+
+def audiobook_guild_search(
+    title: str,
+    author: str,
+    limit: int,
+    existing_asin: str = "",
+    log: list | None = None,
+    series: str = "",
+    number: str = "",
+) -> list[dict]:
+    """Search Audiobook Guild (app/audiobook_guild.py) and normalize its books
+    to the Audible product shape. The store has no ASIN, so the file's own is
+    kept; unlike Goodreads, it lists each book's runtime."""
+    found = audiobook_guild.search_books(title, author, series=series, number=number, limit=min(limit, 3))
+    if found["status"] == "failed" and log is not None:
+        log.append("  Audiobook Guild request failed -> treated as no result")
+    products = []
+    for match in found["matches"]:
+        product = _abs_match_to_product(match, "audiobookguild", existing_asin)
+        product["runtime_length_min"] = match.get("runtime_minutes")
+        products.append(product)
     return products
 
 

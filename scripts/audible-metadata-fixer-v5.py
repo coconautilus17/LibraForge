@@ -159,12 +159,14 @@ try:
         _abs_tract_breaker_is_open,
         abs_tract_breaker_ever_opened,
         abs_tract_search,
+        audiobook_guild_search,
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
+    from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
@@ -301,12 +303,14 @@ except ModuleNotFoundError:
         _abs_tract_breaker_is_open,
         abs_tract_breaker_ever_opened,
         abs_tract_search,
+        audiobook_guild_search,
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
+    from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
@@ -3898,12 +3902,47 @@ def search_item(
             used_query = ""
             match_ambiguity = None
 
+            # Audiobook Guild lists its authors' books with series, narrators
+            # and runtime, many of them missing from Audible: a book by one of
+            # them is matched there first, and a full match there is final.
+            guild_settled = False
+            if clues.get("title") and is_store_author(clues.get("author", "")):
+                log.append("  Trying Audiobook Guild (the author sells there)")
+                _guild_products = audiobook_guild_search(
+                    title=clues["title"],
+                    author=clues.get("author", ""),
+                    limit=args.limit,
+                    existing_asin=clues.get("existing_asin", ""),
+                    log=log,
+                    series=clues.get("series", ""),
+                    number=clues.get("book_number", ""),
+                )
+                log.append(f"  Audiobook Guild results: {len(_guild_products)}")
+                if _guild_products:
+                    _guild_candidate, _guild_score, _guild_ambiguity = pick_best_match_for_metadata(
+                        clues, _guild_products, local_duration_minutes
+                    )
+                    if _guild_candidate:
+                        _guild_mode = metadata_from_product(_guild_candidate, clues, _guild_score).get("edit_mode")
+                        log.append(
+                            f"  Audiobook Guild candidate: score={_guild_score} "
+                            f"title={_guild_candidate.get('title')} mode={_guild_mode}"
+                        )
+                        if _guild_score >= args.min_score and _guild_mode == "full":
+                            product = _guild_candidate
+                            score = _guild_score
+                            used_query = f"audiobookguild:{clues['title']}"
+                            match_ambiguity = _guild_ambiguity
+                            queries = []  # final: no Audible search
+                            result.source_provider = "audiobookguild"
+                            guild_settled = True
+
             # Special provider search (GraphicAudio, SoundBooth Theater via abs-agg).
             # Triggered by publisher policy, series name, composer tag, or dramatized subtitle.
             # Result competes with Audible: whichever scores higher wins.
             _abs_agg_url = getattr(args, "abs_agg_url", "")
             _detected_provider = detect_special_provider(clues)
-            if _detected_provider and _abs_agg_url:
+            if _detected_provider and _abs_agg_url and not guild_settled:
                 _sp_label = SPECIAL_PROVIDERS.get(_detected_provider, _detected_provider)
                 log.append(f"  Trying {_sp_label} source (abs-agg/{_detected_provider})")
                 _sp_products = abs_agg_search(
@@ -4018,7 +4057,7 @@ def search_item(
                     and candidate.get("asin") == product.get("asin")
                 )
 
-            if existing_asin:
+            if existing_asin and not guild_settled:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
                 if asin_product:
@@ -4682,6 +4721,10 @@ def compare_tags_for_write(
                 ("narrator", cur(["composer"]),                      metadata.get("narrator", "")),
                 ("year",     cur(["date", "year"]),                  metadata.get("year", "")),
             ]
+        # Audiobook Guild lists no ASIN or release year: a blank one there
+        # is not asserted either.
+        if source_provider == "audiobookguild":
+            checks = [c for c in checks if c[0] not in {"asin", "year"} or str(c[2] or "").strip()]
 
     changed = [
         field for field, current, planned in checks
@@ -5052,6 +5095,7 @@ def print_plan(
 
     _match_header = {
         "goodreads": "GOODREADS MATCH:",
+        "audiobookguild": "AUDIOBOOK GUILD MATCH:",
         "graphicaudio": "GRAPHICAUDIO MATCH:",
         "soundbooththeater": "SOUNDBOOTH THEATER MATCH:",
     }.get(source_provider, "AUDIBLE MATCH:")

@@ -60,6 +60,13 @@ Searches Audible (or another provider) and writes matched metadata to your files
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup warns if you enabled the fallback with more than 5 search workers, since that's
   what usually trips it.
+- **Audiobook Guild first for its authors:** a book by an author that
+  [Audiobook Guild](https://audiobookguild.com) sells (Eric Vall, Logan Jacobs,
+  Michael-Scott Earle and others) is matched there first, with the same title, author,
+  number, narrator and runtime checks as an Audible match. A full match there is final, so
+  Audible isn't searched for that book; the store has no ASIN or release year, so the
+  file's own are kept. When the store can't be read, the book is matched at Audible as
+  usual. The author list is read from the store and refreshed weekly.
 
 ## M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
