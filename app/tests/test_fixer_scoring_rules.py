@@ -150,6 +150,19 @@ class DetermineEditModeTests(unittest.TestCase):
         ranged = edit_prod(title="Cradle", series=[{"title": "Cradle", "sequence": "1-2"}])
         self.assertEqual(self.mode(ranged, {"title": "Unsouled"}, duration="acceptable"), "series_only")
 
+    def test_titles_each_with_words_the_other_lacks_name_two_books(self):
+        # "Mistborn - Collected Tales" holds "Secret History"; sharing the
+        # series word and a strong runtime does not make them one book.
+        secret_history = edit_prod(title="Mistborn: Secret History", authors=[{"name": "Brandon Sanderson"}],
+                                   series=[{"title": "The Mistborn Saga", "sequence": "3.5"}])
+        clues = {"title": "Mistborn - Collected Tales", "author": "Brandon Sanderson",
+                 "series": "The Mistborn Saga", "book_number": ""}
+        self.assertEqual(self.mode(secret_history, clues, score=0.82, duration="strong"), "series_only")
+        # A subtitle on one side only is the same book.
+        self.assertEqual(self.mode(edit_prod(title="Mistborn: The Final Empire", authors=[{"name": "Brandon Sanderson"}],
+                                             series=[{"title": "The Mistborn Saga", "sequence": "1"}]),
+                                   {**clues, "title": "The Final Empire", "book_number": "1"}), "full")
+
 
 class SpecialProviderEditModeTests(unittest.TestCase):
     def mode(self, tags, title="Dragon Emperor", author="Eric Vall", provider="graphicaudio"):

@@ -629,6 +629,18 @@ def has_cross_series_folder_identity(
     )["status"] == "perfect"
 
 
+def titles_name_different_books(clues: dict, product: dict) -> bool:
+    """Each title has a word the other lacks: they name two books, however
+    similar ("... The Secondary Phase" vs "... Tertiary Phase", "Mistborn -
+    Collected Tales" vs "Mistborn: Secret History"). Numbers are not words."""
+    def words(title: str) -> set[str]:
+        return {t for t in significant_title_tokens(title) if not t.isdigit()}
+
+    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
+    audible_tokens = words(product.get("title", "") or "")
+    return bool(local_tokens - audible_tokens and audible_tokens - local_tokens)
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def strong_identity_overrides_number_conflict(
     clues: dict,
@@ -687,15 +699,8 @@ def strong_identity_overrides_number_conflict(
             except (ValueError, TypeError):
                 return False
 
-    # Each title has a word the other lacks: they name two books of the series
-    # ("... The Secondary Phase" vs "... Tertiary Phase"), however similar.
     # Numbers are left to the number checks above.
-    def words(title: str) -> set[str]:
-        return {t for t in significant_title_tokens(title) if not t.isdigit()}
-
-    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
-    audible_tokens = words(product.get("title", "") or "")
-    if local_tokens - audible_tokens and audible_tokens - local_tokens:
+    if titles_name_different_books(clues, product):
         return False
 
     duration = compare_duration(
@@ -1196,16 +1201,6 @@ def score_product_for_metadata(
 
     # Title evidence.
     title_score = title_evidence_score(clues, product)
-    local_title = normalize_for_match(clues.get("title", ""))
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
-
-    title_matches_audible = (
-        title_score >= 0.55
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
     score += title_score * 0.12
 
     # Strong identity bonus.
@@ -1722,8 +1717,10 @@ def determine_edit_mode(
     audible_title = normalize_for_match(product.get("title", "") or "")
     audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
 
+    # A loose title score is a match only when neither title names a book
+    # the other doesn't ("Mistborn - Collected Tales" vs "... Secret History").
     title_matches_audible = (
-        title_score >= 0.55
+        (title_score >= 0.85 or (title_score >= 0.55 and not titles_name_different_books(clues, product)))
         or (local_title and local_title in audible_title)
         or (local_title and local_title in audible_subtitle)
         or is_generic_series_number_title(clues)
