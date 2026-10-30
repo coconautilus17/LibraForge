@@ -253,6 +253,30 @@ def id3_set_txxx(tags, name: str, value: str, aliases: tuple[str, ...] = ()) -> 
         tags.add(TXXX(encoding=3, desc=name, text=[value]))
 
 
+# "NOREALASIN" is a placeholder some tools wrote into the asin tag for a book
+# with no Audible listing. It is never an ASIN, so a write removes it even
+# when the match brings no ASIN of its own.
+ASIN_PLACEHOLDER = "NOREALASIN"
+
+
+def mp4_has_asin_placeholder(tags) -> bool:
+    return any(
+        bytes(value).decode("utf-8", "ignore").strip().upper() == ASIN_PLACEHOLDER
+        for key, values in tags.items()
+        if key.lower() == f"{_FREEFORM_PREFIX}asin".lower()
+        for value in values
+    )
+
+
+def id3_has_asin_placeholder(tags) -> bool:
+    return any(
+        str(text).strip().upper() == ASIN_PLACEHOLDER
+        for frame in tags.getall("TXXX")
+        if frame.desc.lower() == "asin"
+        for text in frame.text
+    )
+
+
 def id3_set_track(tags, value: str) -> None:
     value = clean_sequence(value)
     tags.delall("TRCK")

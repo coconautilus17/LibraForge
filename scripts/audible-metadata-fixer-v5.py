@@ -140,8 +140,10 @@ try:
         mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
+        mp4_has_asin_placeholder,
         id3_set_text,
         id3_set_txxx,
+        id3_has_asin_placeholder,
         id3_set_track,
         id3_set_genre_list,
         should_write_field,
@@ -282,8 +284,10 @@ except ModuleNotFoundError:
         mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
+        mp4_has_asin_placeholder,
         id3_set_text,
         id3_set_txxx,
+        id3_has_asin_placeholder,
         id3_set_track,
         id3_set_genre_list,
         should_write_field,
@@ -1493,7 +1497,7 @@ def mutagen_write_mp4_tags(
     if should_write_field(subtitle, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "subtitle", subtitle, aliases=("SUBTITLE",))
 
-    if should_write_field(asin, field_policy, legacy_conditional=True):
+    if should_write_field(asin, field_policy, legacy_conditional=True) or mp4_has_asin_placeholder(tags):
         mp4_set_freeform(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
@@ -1625,7 +1629,7 @@ def mutagen_write_mp3_tags(
         id3_set_txxx(tags, "mvin", sequence)
         id3_set_txxx(tags, "series-part", sequence, aliases=("SERIES-PART",))
 
-    if should_write_field(asin, field_policy, legacy_conditional=True):
+    if should_write_field(asin, field_policy, legacy_conditional=True) or id3_has_asin_placeholder(tags):
         id3_set_txxx(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
@@ -2984,6 +2988,8 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
     # because it removes noise rather than extracting for validation.
     existing_asin = first_existing_tag(tags or {}, ["asin", "audible_asin"]).upper()
+    if existing_asin == "NOREALASIN":  # a placeholder for "no ASIN", not one
+        existing_asin = ""
     if not existing_asin:
         # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
         # The tighter pattern avoids false matches on other bracket tokens in filenames.
