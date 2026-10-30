@@ -14,6 +14,7 @@ from app.debug_trace import trace, ALTER, CHOOSE
 from app.publisher_policy import match_canonical_publisher, strip_publisher_noise
 from app.fixer.parsing import (
     normalize_for_match,
+    drop_publisher_credits,
     sequence_values_equal,
     parse_structured_book_from_path,
     extract_author_from_title,
@@ -244,6 +245,10 @@ def capture_publisher_clue(clues: dict, tags: dict) -> dict:
     if raw_publisher:
         clues["publisher"] = raw_publisher
         clues["publisher_verified"] = bool(canonical)
+
+    # A narrator credit that is only the studio names no narrator.
+    if clues.get("narrator"):
+        clues["narrator"] = drop_publisher_credits(clues["narrator"])
 
     # Strip any leaked publisher token from author/narrator without losing real data.
     for field in ("author", "narrator"):

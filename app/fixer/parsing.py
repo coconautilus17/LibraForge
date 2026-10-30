@@ -225,6 +225,18 @@ def split_credit_names(value: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def drop_publisher_credits(value: str) -> str:
+    """The credit without names that are only a publisher or studio
+    ("GraphicAudio [Dramatized Adaptation]"): a publisher is never a narrator.
+    Unchanged when every name is a person."""
+    names = split_credit_names(value)
+    people = [
+        name for name in names
+        if strip_publisher_noise(re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", name)).strip()
+    ]
+    return value if len(people) == len(names) else ", ".join(people)
+
+
 def _split_author_names(value: str) -> list[str]:
     """Split a credit string into individual normalized author names."""
     return [n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n]
