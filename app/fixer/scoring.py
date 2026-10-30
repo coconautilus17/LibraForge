@@ -662,12 +662,8 @@ def strong_identity_overrides_number_conflict(
     audible_title_number = extract_title_identity_number(
         product.get("title", "") or ""
     )
-    if (
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    ):
-        # Both titles carry explicit series numbers and they disagree -- not a
+    if title_numbers_another_book(clues, product):
+        # The candidate's own title numbers another book -- not a
         # parallel-series case (e.g. local "Series 4" vs Audible "Series 6").
         return False
 
@@ -751,6 +747,19 @@ def local_number_unconfirmed_by_candidate(clues: dict, product: dict) -> bool:
     return not str(audible_sequence).strip()
 
 
+def title_numbers_another_book(clues: dict, product: dict) -> bool:
+    """The candidate's own title numbers a book ("Scholomance 6: The Devil's
+    Academy") other than the local one: the local title's number, or else a
+    book number from the local title or folder."""
+    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
+    if not audible_title_number:
+        return False
+    local_number = extract_title_identity_number(clues.get("title", "") or clues.get("raw_title", ""))
+    if not local_number and has_strong_local_number(clues):
+        local_number = str(clues.get("book_number", "")).strip()
+    return bool(local_number) and not sequence_values_equal(local_number, audible_title_number)
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def has_sequence_conflict(
     clues: dict,
@@ -796,20 +805,13 @@ def has_sequence_conflict(
     if has_cross_series_folder_identity(clues, product, local_duration_minutes):
         return False
 
-    # When both the local title and the Audible title carry explicit, differing
-    # trailing numbers (e.g. local "Power Mage 5" vs Audible "Power Mage 6"),
-    # the numbers ARE the identity of two different books in the same series.
-    # High title similarity (they share the base series name) must not be allowed
-    # to mask this as a parallel-numbering case.
-    local_title_number = extract_title_identity_number(
-        clues.get("title", "") or clues.get("raw_title", "")
-    )
-    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
-    explicit_title_number_conflict = bool(
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    )
+    # When the Audible title carries a number other than the local book's
+    # (e.g. local "Power Mage 5", or "Book 5 - The Devil's Academy", vs Audible
+    # "Power Mage 6", "Scholomance 6: The Devil's Academy"), the numbers ARE the
+    # identity of two different books in the same series. High title similarity
+    # (a shared series name or subtitle) must not be allowed to mask this as a
+    # parallel-numbering case.
+    explicit_title_number_conflict = title_numbers_another_book(clues, product)
 
     # If the title is a strong match and duration confirms it,
     # do not reject only because the local folder numbering differs from

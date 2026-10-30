@@ -202,6 +202,28 @@ class SequenceLeniencyTests(unittest.TestCase):
         )
         self.assertFalse(FIXER.has_sequence_conflict(clues, par, 600.0))
 
+    def test_a_listing_whose_own_title_numbers_another_book_is_that_book(self):
+        # Every book of the series shares the subtitle the file is titled by:
+        # "Scholomance 6" names book 6, whatever the runtime.
+        clues = {
+            "title": "The Devil's Academy",
+            "raw_title": "Book 5 - The Devil's Academy",
+            "series": "Scholomance",
+            "author": "Logan Jacobs",
+            "narrator": "JD Tanner",
+            "book_number": "5",
+            "book_number_source": "path",
+        }
+        for minutes in (624, 654):
+            with self.subTest(minutes=minutes):
+                six = product(asin="B06", title="Scholomance 6: The Devil's Academy", series="Scholomance",
+                              sequence="6", authors=("Logan Jacobs",), narrators=("JD Tanner",), minutes=minutes)
+                self.assertTrue(FIXER.has_sequence_conflict(clues, six, 654.16))
+                self.assertEqual(FIXER.score_product_for_metadata(clues, six, 654.16), 0.0)
+        five = product(asin="B05", title="Scholomance 5: The Devil's Academy", series="Scholomance",
+                       sequence="5", authors=("Logan Jacobs",), narrators=("JD Tanner",), minutes=654)
+        self.assertGreaterEqual(FIXER.score_product_for_metadata(clues, five, 654.16), 0.70)
+
 
 class OmnibusRangeTests(unittest.TestCase):
     def setUp(self):
