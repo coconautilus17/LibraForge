@@ -36,6 +36,8 @@ from app.fixer.parsing import (
     sequence_values_equal,
     normalize_book_label_for_match,
     _authors_compatible,
+    _other_person_same_surname,
+    _split_author_names,
     canonicalize_author_credits,
     is_invalid_local_title,
     strip_title_search_noise,
@@ -911,11 +913,20 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
 
     # Any shared meaningful name token (>= 3 chars, skipping initials) means we
     # cannot be sure the authors differ -- shared co-author, alternate spelling,
-    # etc. Only block when there is zero overlap.
+    # etc. -- unless every name sharing one is a surname under another given
+    # name (Frank Herbert vs Brian Herbert). Only block when there is no overlap.
     def name_tokens(value: str) -> set[str]:
         return {token for token in value.split() if len(token) >= 3}
 
-    if name_tokens(local_author) & name_tokens(product_author):
+    sharing = [
+        (local_name, product_name)
+        for local_name in _split_author_names(clean_author_value(clues.get("author", "")))
+        for product_name in _split_author_names(", ".join(get_people(product, "authors")))
+        if name_tokens(local_name) & name_tokens(product_name)
+    ]
+    if name_tokens(local_author) & name_tokens(product_author) and not (
+        sharing and all(_other_person_same_surname(*pair) for pair in sharing)
+    ):
         return False
 
     # No similarity, no containment, no shared name token: confidently different.
