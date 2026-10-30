@@ -2855,6 +2855,18 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # This is intentionally narrow and does not change the matching/scoring model.
     clues = apply_structured_path_override(clues, file_path)
 
+    # A bare number ending the title ("Fahrenheit 451") names no book on its
+    # own, but the book folder repeating it does ("The Riyria Revelations 06"),
+    # whatever the file name ("Percepliquis 01", a part) says.
+    title_number = extract_title_identity_number(clues.get("raw_title", ""))
+    if (
+        title_number
+        and clues.get("book_number_source") in {"", "track"}
+        and title_number == extract_title_identity_number(file_path.parent.name)
+    ):
+        clues["book_number"] = title_number
+        clues["book_number_source"] = "path"
+
     # Path-derived book numbers are stronger than embedded track numbers.
     # This handles cases where the file tag track is stale, but the folder says Book 8.
     path_book_number = extract_book_number_from_path(file_path)
