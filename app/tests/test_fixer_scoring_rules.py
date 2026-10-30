@@ -163,6 +163,17 @@ class DetermineEditModeTests(unittest.TestCase):
                                              series=[{"title": "The Mistborn Saga", "sequence": "1"}]),
                                    {**clues, "title": "The Final Empire", "book_number": "1"}), "full")
 
+    def test_a_series_number_title_names_a_book_of_that_series_only(self):
+        # "The Riyria Revelations 02" is book 2 of the Revelations, not book 2
+        # of the Riyria Chronicles.
+        clues = {"title": "The Riyria Revelations 02", "author": "Michael J. Sullivan",
+                 "series": "The Riyria Revelations", "book_number": "2"}
+        def book_two(series):
+            return edit_prod(title="A Book Title", authors=[{"name": "Michael J. Sullivan"}],
+                             series=[{"title": series, "sequence": "2"}])
+        self.assertNotEqual(self.mode(book_two("The Riyria Chronicles"), clues, score=0.72, duration="strong"), "full")
+        self.assertEqual(self.mode(book_two("The Riyria Revelations"), clues, score=0.72, duration="strong"), "full")
+
 
 class SpecialProviderEditModeTests(unittest.TestCase):
     def mode(self, tags, title="Dragon Emperor", author="Eric Vall", provider="graphicaudio"):

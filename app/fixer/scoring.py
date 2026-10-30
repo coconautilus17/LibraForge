@@ -1717,15 +1717,6 @@ def determine_edit_mode(
     audible_title = normalize_for_match(product.get("title", "") or "")
     audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
 
-    # A loose title score is a match only when neither title names a book
-    # the other doesn't ("Mistborn - Collected Tales" vs "... Secret History").
-    title_matches_audible = (
-        (title_score >= 0.85 or (title_score >= 0.55 and not titles_name_different_books(clues, product)))
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
-
     local_author = normalize_for_match(clues.get("author", ""))
     audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
     local_series = normalize_for_match(clues.get("series", ""))
@@ -1749,6 +1740,16 @@ def determine_edit_mode(
             or local_series in audible_series
             or SequenceMatcher(None, local_series, audible_series).ratio() >= 0.88
         )
+    )
+
+    # A loose title score is a match only when neither title names a book
+    # the other doesn't ("Mistborn - Collected Tales" vs "... Secret History").
+    title_matches_audible = (
+        (title_score >= 0.85 or (title_score >= 0.55 and not titles_name_different_books(clues, product)))
+        or (local_title and local_title in audible_title)
+        or (local_title and local_title in audible_subtitle)
+        # "The Riyria Revelations 02" names book 2 of that series only.
+        or (is_generic_series_number_title(clues) and series_identity_match)
     )
 
     def safe_series_only() -> str:
