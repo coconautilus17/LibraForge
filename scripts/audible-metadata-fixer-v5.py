@@ -97,7 +97,7 @@ try:
         MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
-        with_local_series_name,
+        local_series_name,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -242,7 +242,7 @@ except ModuleNotFoundError:
         MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
-        with_local_series_name,
+        local_series_name,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -3931,8 +3931,7 @@ def search_item(
                             f"title={_guild_candidate.get('title')} mode={_guild_mode}"
                         )
                         if _guild_score >= args.min_score and _guild_mode == "full":
-                            # The store names series its own way: the file's name is kept.
-                            product = with_local_series_name(_guild_candidate, clues)
+                            product = _guild_candidate
                             score = _guild_score
                             used_query = f"audiobookguild:{clues['title']}"
                             match_ambiguity = _guild_ambiguity
@@ -4309,6 +4308,10 @@ def search_item(
 
         metadata = metadata_from_product(product, clues, score)
         metadata["file_type"] = get_file_type(file_path)
+        if result.source_provider == "audiobookguild" and metadata.get("series"):
+            # The store names series its own way: the file's name is written,
+            # once every decision is made on the store's own.
+            metadata["series"] = local_series_name(clues) or metadata["series"]
 
         buf = io.StringIO()
         with _print_plan_lock:

@@ -10,7 +10,7 @@ from unittest import mock
 
 from app import audiobook_guild as guild
 from app.fixer import search
-from app.fixer.scoring import metadata_from_product, pick_best_match_for_metadata, with_local_series_name
+from app.fixer.scoring import metadata_from_product, pick_best_match_for_metadata, local_series_name
 from app.goodreads_shelves import GoodreadsPacer
 from app.tests.script_loader import load_module
 
@@ -274,18 +274,19 @@ class MatchingTests(GuildTestCase):
         self.assertEqual(metadata["narrator"], "Brian Kozak, Charlie K James")
         self.assertEqual(metadata["year"], "")  # the store has no release year
 
-    def test_the_files_series_name_is_kept_with_the_stores_number(self):
-        store_book = {"title": "Monster Girl Islands 2", "series": [{"title": "Monster Girl Islands", "sequence": "2"}]}
+    def test_the_series_is_written_as_the_file_names_it(self):
         for file_series, number, kept in (
             ("Monster Girl Islands Series", "2", "Monster Girl Islands Series"),
             ("Summoner 6", "6", "Summoner"),  # the file's series carries the book's number
+            ("Adam and His Eves #7", "7", "Adam and His Eves"),
             ("Okay, But Try Not to Murder Anyone, Book #8", "8", "Okay, But Try Not to Murder Anyone"),
             ("Warhammer 40000", "2", "Warhammer 40000"),  # a number of its own is the name
-            ("", "2", "Monster Girl Islands"),  # nothing in the file: the store's name
+            ("J.A. Cipriano", "1", ""),  # the author's folder segment is no series
+            ("", "2", ""),  # nothing in the file: the store's name is written
         ):
             with self.subTest(file_series):
-                renamed = with_local_series_name(store_book, {"series": file_series, "book_number": number})
-                self.assertEqual(renamed["series"], [{"title": kept, "sequence": "2"}])
+                clues = {"series": file_series, "book_number": number, "author": "J.A. Cipriano"}
+                self.assertEqual(local_series_name(clues), kept)
 
     def test_unlisted_asin_and_year_do_not_count_as_a_change(self):
         current = {"title": "Eidolon Master 2", "artist": "Eric Vall", "grouping": "Eidolon Master",

@@ -996,20 +996,21 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
     return product
 
 
-def with_local_series_name(product: dict, clues: dict) -> dict:
-    """The product with its series named as the file names it, the number
-    kept: for a source that names a series its own way (Audiobook Guild's
-    "Monster Girl Islands" for the library's "Monster Girl Islands Series").
-    A file series that carries the book's own number ("Summoner 6", "Okay, But
-    Try Not to Murder Anyone, Book #8") is read without it."""
-    series = product.get("series") or []
+def local_series_name(clues: dict) -> str:
+    """The series as the file names it, for a source that names a series its
+    own way (Audiobook Guild's "Monster Girl Islands" for the library's
+    "Monster Girl Islands Series"); "" when the file names none. A file series
+    that carries the book's own number ("Summoner 6", "Adam and His Eves #7",
+    "Okay, But Try Not to Murder Anyone, Book #8") is read without it, and one
+    that is the book's author ("J.A. Cipriano; The Pen Is Mightier; Book 01")
+    is a folder segment, not a series."""
     name, _ = split_series_trailing_number(clean_series_value(clues.get("series", "") or ""), "")
-    bare, number = parse_series_sequence_segment(name, require_label=False)
+    bare, number = parse_series_sequence_segment(re.sub(r"\s*#\s*(?=\d+$)", " ", name), require_label=False)
     if bare and sequence_values_equal(number, clues.get("book_number", "")):
         name = bare
-    if not series or not name:
-        return product
-    return {**product, "series": [{**(series[0] or {}), "title": name}] + series[1:]}
+    if name and _authors_compatible(name, clues.get("author", "") or "") is True:
+        return ""
+    return name
 
 
 @trace(SCORE, capture=["local_duration_minutes"])

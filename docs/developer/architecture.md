@@ -118,8 +118,8 @@ a book is searched there locally (its author's books, ranked with the matcher's
 product page once and kept in the same file until the store changes that book. A book by
 one of those authors is matched there before any other source (`audiobook_guild_search`
 in `app/fixer/search.py`, scored like any candidate), and a full match there skips the
-ASIN lookup and Audible search, with the file's own series name kept
-(`with_local_series_name` in `app/fixer/scoring.py`). Its requests go through
+ASIN lookup and Audible search, with the file's own series name written once every
+decision is made (`local_series_name` in `app/fixer/scoring.py`). Its requests go through
 httpx: the store answers urllib with 429 "local_rate_limited" however paced. Even httpx
 gets the odd 429, so a failed request is tried once more; a product page that still fails
 fails the whole search (a candidate without its runtime can lose to the wrong book), and
