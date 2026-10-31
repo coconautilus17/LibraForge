@@ -19,7 +19,6 @@ a refused request is tried again once after a wait before it counts.
 """
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -194,9 +193,11 @@ def _runtime_minutes(page: str) -> int | None:
 def _description(body_html: str) -> str:
     """The product description without its "OVERVIEW:" heading or the
     "Looking for the ebook?" link to the author's own store."""
+    from app.fixer.parsing import clean_text  # lazy: keep this module light
+
     text = re.sub(r"<h\d[^>]*>.*?</h\d>", " ", body_html or "", flags=re.IGNORECASE | re.DOTALL)
     paragraphs = re.split(r"</p>|<br\s*/?>", text, flags=re.IGNORECASE)
-    kept = [re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", p))).strip() for p in paragraphs]
+    kept = [clean_text(p) for p in paragraphs]
     return "\n\n".join(p for p in kept if p and not p.lower().startswith("looking for the ebook"))
 
 
