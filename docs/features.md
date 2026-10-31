@@ -31,6 +31,10 @@ Searches Audible (or another provider) and writes matched metadata to your files
 - **Structured search:** Audible and ABS searches start with the book's title and first
   author as separate fields, which finds listings a keyword search misses, then fall
   back to keyword queries.
+- **Placeholder titles:** when a file's title tag only names the series and number
+  ("The Riyria Revelations 03"), the title in its file name ("Nyphron Rising 01.m4b") is
+  searched instead, without author or narrator names or a part number. A file name that
+  also names the series is left alone.
 - **Manual Review:** load any book or folder, search Audible manually, and apply per
   book with an explicit `Full metadata` or `Series only` mode. A filesystem search index
   (built in the background, shown as a persistent "Search index: N books" marker) lets

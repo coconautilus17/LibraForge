@@ -90,6 +90,7 @@ try:
         group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        recover_title_behind_series_placeholder,
         read_current_book_metadata,
     )
     from app.fixer.scoring import (
@@ -232,6 +233,7 @@ except ModuleNotFoundError:
         group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        recover_title_behind_series_placeholder,
         read_current_book_metadata,
     )
     from app.fixer.scoring import (
@@ -3007,6 +3009,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     capture_publisher_clue(clues, tags or {})
     capture_sku_clue(clues, tags or {})
 
+    clues = recover_title_behind_series_placeholder(clues, file_path)
     return recover_invalid_local_title(clues, file_path)
 
 @trace(CHOOSE, capture=["file_path"])

@@ -1162,6 +1162,74 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(recovered["title"], "some-book")
 
 
+class SeriesPlaceholderTitleTests(unittest.TestCase):
+    """A title tag that only names the series and number ("The Riyria
+    Revelations 03") hides the book's own title in the file name."""
+
+    CLUES = {
+        "title": "The Riyria Revelations 05",
+        "series": "The Riyria Revelations",
+        "book_number": "5",
+        "author": "Michael J. Sullivan",
+        "narrator": "Tim Gerard Reynolds",
+    }
+
+    def recover(self, stem: str, **clues) -> str:
+        path = Path(f"/audiobooks/Michael J. Sullivan/The Riyria Revelations/The Riyria Revelations 05/{stem}.m4b")
+        return FIXER.recover_title_behind_series_placeholder({**self.CLUES, **clues}, path)["title"]
+
+    def test_the_file_names_own_title_is_the_title(self):
+        for stem in (
+            "Wintertide",
+            "Wintertide 01",
+            "Wintertide Part 2",
+            "05 - Wintertide",
+            "Wintertide 5",
+            "Michael J. Sullivan - Wintertide",
+            "Wintertide - Michael J. Sullivan",
+            "Wintertide by Michael J. Sullivan",
+            "Wintertide (Tim Gerard Reynolds)",
+            "Wintertide [Read by Tim Gerard Reynolds]",
+            "Michael J. Sullivan - Wintertide - Tim Gerard Reynolds",
+        ):
+            with self.subTest(stem=stem):
+                self.assertEqual(self.recover(stem), "Wintertide")
+
+    def test_a_file_name_naming_the_series_holds_no_other_title(self):
+        for stem in (
+            "The Riyria Revelations 05",
+            "Riyria Revelations 5",
+            "Michael J. Sullivan - [Riyria 5] - Wintertide",
+            "TheRiyriaRevelations05",
+            "Michael J. Sullivan",
+            "05",
+        ):
+            with self.subTest(stem=stem):
+                self.assertEqual(self.recover(stem), "The Riyria Revelations 05")
+
+    def test_a_subtitle_beside_the_series_is_not_the_title(self):
+        title = FIXER.recover_title_behind_series_placeholder(
+            {"title": "Path of the Berserker 4", "series": "Path of the Berserker", "book_number": "4", "author": "Rick Scott"},
+            Path("/audiobooks/Book 4/Path of the Berserker 4_ A Daopocalypse Progression Fantasy.m4b"),
+        )["title"]
+        self.assertEqual(title, "Path of the Berserker 4")
+
+    def test_two_unknown_parts_are_left_alone(self):
+        self.assertEqual(self.recover("Wintertide - Some Reader", narrator=""), "The Riyria Revelations 05")
+
+    def test_a_real_title_is_left_alone(self):
+        self.assertEqual(self.recover("Percepliquis", title="Wintertide"), "Wintertide")
+
+    def test_the_clue_builder_searches_by_the_file_names_title(self):
+        tags = {"title": "The Riyria Revelations 03", "album": "The Riyria Revelations", "artist": "Michael J. Sullivan"}
+        path = Path("/audiobooks/Michael J. Sullivan/The Riyria Revelations/The Riyria Revelations 03/Nyphron Rising.m4b")
+        with patch.object(FIXER, "read_file_tags", return_value=tags):
+            clues = FIXER.build_search_clues_from_file(path)
+        self.assertEqual(clues["title"], "Nyphron Rising")
+        self.assertEqual(clues["book_number"], "3")
+        self.assertEqual(clues["title_recovery"], {"applied": True, "source": "file_name"})
+
+
 class DanglingTitleBracketTests(unittest.TestCase):
     def test_fixer_sanitizer_closes_a_bracket_lost_upstream(self):
         self.assertEqual(FIXER.sanitize_book_title("Critias (Atlantis"), "Critias (Atlantis)")
