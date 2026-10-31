@@ -29,7 +29,7 @@ except Exception:
     TXXX = None
     TRCK = None
 
-from app.fixer.parsing import sanitize_tag, clean_sequence
+from app.fixer.parsing import ASIN_PLACEHOLDER, sanitize_tag, clean_sequence
 
 # ---------------------------------------------------------------------------
 # Extension constants
@@ -251,12 +251,6 @@ def id3_set_txxx(tags, name: str, value: str, aliases: tuple[str, ...] = ()) -> 
 
     if value:
         tags.add(TXXX(encoding=3, desc=name, text=[value]))
-
-
-# "NOREALASIN" is a placeholder some tools wrote into the asin tag for a book
-# with no Audible listing. It is never an ASIN, so a write removes it even
-# when the match brings no ASIN of its own.
-ASIN_PLACEHOLDER = "NOREALASIN"
 
 
 def mp4_has_asin_placeholder(tags) -> bool:

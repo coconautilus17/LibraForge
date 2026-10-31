@@ -39,6 +39,7 @@ try:
     from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
     from app.fixer.parsing import (
+        ASIN_PLACEHOLDER,
         # text normalization
         clean_text, is_technical_label_block,
         sanitize_technical_labels, sanitize_book_title,
@@ -183,6 +184,7 @@ except ModuleNotFoundError:
     from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
     from app.fixer.parsing import (
+        ASIN_PLACEHOLDER,
         # text normalization
         clean_text, is_technical_label_block,
         sanitize_technical_labels, sanitize_book_title,
@@ -542,7 +544,7 @@ def read_book_sidecar(source: Path) -> dict | None:
                 "summary": marker_audible.get("summary", ""),
                 "genre": marker_audible.get("genre", ""),
                 "isbn": marker_audible.get("isbn", ""),
-                "asin": raw_asin if raw_asin != "NOREALASIN" else "",
+                "asin": raw_asin if raw_asin != ASIN_PLACEHOLDER else "",
             }
     except (json.JSONDecodeError, OSError):
         pass
@@ -1828,7 +1830,7 @@ FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asi
 def marker_real_asin(marker: dict) -> str:
     """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
     asin = str((marker.get("audible") or {}).get("asin") or "").strip().upper()
-    return "" if (not asin or asin == "NOREALASIN") else asin
+    return "" if (not asin or asin == ASIN_PLACEHOLDER) else asin
 
 @trace(ALTER, capture=[])
 def metadata_from_marker(marker: dict) -> dict:
@@ -2086,8 +2088,8 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     )
     asin_to_write = (
         existing_asin
-        if existing_asin and existing_asin != "NOREALASIN"
-        else "NOREALASIN"
+        if existing_asin and existing_asin != ASIN_PLACEHOLDER
+        else ASIN_PLACEHOLDER
     )
     payload["marker"] = {
         **payload.get("marker", {}),
@@ -2988,7 +2990,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
     # because it removes noise rather than extracting for validation.
     existing_asin = first_existing_tag(tags or {}, ["asin", "audible_asin"]).upper()
-    if existing_asin == "NOREALASIN":  # a placeholder for "no ASIN", not one
+    if existing_asin == ASIN_PLACEHOLDER:  # a placeholder for "no ASIN", not one
         existing_asin = ""
     if not existing_asin:
         # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
@@ -5554,7 +5556,7 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
                 return key, mtime, m.group(1).upper()
             try:
                 sidecar_asin = str((load_marker(fp).get("audible") or {}).get("asin") or "").strip().upper()
-                if sidecar_asin and sidecar_asin != "NOREALASIN":
+                if sidecar_asin and sidecar_asin != ASIN_PLACEHOLDER:
                     return key, mtime, sidecar_asin
             except Exception:
                 pass

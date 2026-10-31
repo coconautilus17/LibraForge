@@ -18,6 +18,7 @@ from typing import Any
 from app.debug_trace import trace, ALTER, CHOOSE, SCORE
 from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
+    ASIN_PLACEHOLDER,
     is_never_series,
     series_from_subtitle,
     normalize_for_match,
@@ -2022,7 +2023,7 @@ def metadata_from_product(
         # still carrying this product's ASIN got it from an earlier
         # series_only write, so that one is dropped too.
         local_asin = str(clues.get("existing_asin", "") or "").upper()
-        asin = "" if local_asin in {"NOREALASIN", asin.upper()} else local_asin
+        asin = "" if local_asin in {ASIN_PLACEHOLDER, asin.upper()} else local_asin
         isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
         cover_url = ""
 
