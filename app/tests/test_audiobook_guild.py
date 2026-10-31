@@ -10,7 +10,7 @@ from unittest import mock
 
 from app import audiobook_guild as guild
 from app.fixer import search
-from app.fixer.scoring import metadata_from_product, pick_best_match_for_metadata
+from app.fixer.scoring import metadata_from_product, pick_best_match_for_metadata, with_local_series_name
 from app.goodreads_shelves import GoodreadsPacer
 from app.tests.script_loader import load_module
 
@@ -24,10 +24,12 @@ BODY = (
 )
 
 
-def product(title, vendor="Eric Vall", series="Eidolon Master", handle=None):
+def product(title, vendor="Eric Vall", series="Eidolon Master", handle=None, updated_at="2026-01-01"):
+    """A products.json product."""
     return {
-        "title": title, "vendor": vendor, "type": series, "handle": handle or title.lower().replace(" ", "-"),
-        "body": BODY, "image": "https://cdn.shopify.com/s/files/em2.jpg?v=1",
+        "title": title, "vendor": vendor, "product_type": series, "handle": handle or title.lower().replace(" ", "-"),
+        "body_html": BODY, "images": [{"src": "https://cdn.shopify.com/s/files/em2.jpg?v=1"}],
+        "updated_at": updated_at, "variants": [{"price": "13.95"}],
         "tags": [f"Author_{vendor}", "Genre_Fantasy", "Genre_Portal/Isekai", "Harem_Yes Please",
                  "Narrator_Brian Kozak", "Narrator_Charlie K James", f"Series_{series}"],
     }
@@ -37,25 +39,32 @@ def page(duration):
     return f"<p><strong>Narration By:</strong> Brian Kozak<br><strong>Duration:</strong> {duration}\n</p>".encode()
 
 
-class FakeStore:
-    """Answers the store's URLs from canned products; records every request."""
+def refused(url):
+    return urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
 
-    def __init__(self, found=(), catalog=(), durations=None, fail=False):
-        self.found, self.catalog, self.durations, self.fail = list(found), list(catalog), durations or {}, fail
+
+class FakeStore:
+    """Answers the store's URLs from a canned catalog; records every request."""
+
+    def __init__(self, catalog=(), durations=None, fail=False, refuse=()):
+        self.catalog, self.durations, self.fail, self.refuse = list(catalog), durations or {}, fail, set(refuse)
         self.urls = []
 
     def __call__(self, url, timeout):
         self.urls.append(url)
         if self.fail:
-            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
-        if "/search/suggest.json" in url:
-            return json.dumps({"resources": {"results": {"products": self.found}}}).encode()
+            raise refused(url)
         if "/products.json" in url:
             page_no = int(url.rsplit("page=", 1)[1])
             chunk = self.catalog[(page_no - 1) * guild.PAGE_SIZE:page_no * guild.PAGE_SIZE]
             return json.dumps({"products": chunk}).encode()
         handle = url.rsplit("/products/", 1)[1]
+        if handle in self.refuse:
+            raise refused(url)
         return page(self.durations.get(handle, "9 Hours, 43 Minutes"))
+
+    def pages(self):
+        return [u.rsplit("/products/", 1)[1] for u in self.urls if "/products/" in u]
 
 
 def setUpModule():
@@ -69,54 +78,74 @@ def pacer():
     return GoodreadsPacer(gap_s=0, sleep=lambda _s: None)
 
 
-class StoreAuthorsTests(unittest.TestCase):
-    def setUp(self):
-        guild._AUTHORS = None
-        self.addCleanup(setattr, guild, "_AUTHORS", None)
-        self.cache = Path(tempfile.mkdtemp()) / "authors.json"
+class GuildTestCase(unittest.TestCase):
+    """A fresh catalog in a temporary cache file for each test."""
 
-    def test_every_vendor_across_the_catalog_pages_except_the_store_itself(self):
+    def setUp(self):
+        guild._CATALOG = None
+        self.addCleanup(setattr, guild, "_CATALOG", None)
+        self.cache = Path(tempfile.mkdtemp()) / "catalog.json"
+
+    def search(self, store, title, author="Eric Vall", **kwargs):
+        return guild.search_books(title, author, pacer=pacer(), http_get=store, cache_path=self.cache, **kwargs)
+
+
+class StoreCatalogTests(GuildTestCase):
+    def catalog(self, store, **kwargs):
+        return guild.store_catalog(pacer=pacer(), http_get=store, cache_path=self.cache, **kwargs)
+
+    def test_every_book_across_the_catalog_pages_except_the_stores_own(self):
         catalog = [product(f"Book {i}", vendor="Eric Vall") for i in range(guild.PAGE_SIZE)]
         catalog += [product("Arena", vendor="Logan Jacobs"), product("Gift Card", vendor="Audiobook Guild")]
         store = FakeStore(catalog=catalog)
-        authors = guild.store_authors(pacer=pacer(), http_get=store, cache_path=self.cache)
-        self.assertEqual(authors, ["Eric Vall", "Logan Jacobs"])
+        self.assertEqual(guild.store_authors(pacer=pacer(), http_get=store, cache_path=self.cache),
+                         ["Eric Vall", "Logan Jacobs"])
         self.assertEqual(sum("/products.json" in u for u in store.urls), 2)
-        self.assertEqual(json.loads(self.cache.read_text())["authors"], ["Eric Vall", "Logan Jacobs"])
+        kept = json.loads(self.cache.read_text())["products"]
+        self.assertEqual(len(kept), guild.PAGE_SIZE + 1)
+        self.assertNotIn("variants", kept[0])  # only what the matcher reads
 
-    def test_a_list_under_a_week_old_is_used_without_asking_the_store(self):
-        self.cache.write_text(json.dumps({"read_at": 1000.0, "authors": ["Eric Vall"]}))
+    def test_a_catalog_under_a_week_old_is_used_without_asking_the_store(self):
+        self.cache.write_text(json.dumps({"read_at": 1000.0, "products": [guild._slim(product("Eidolon Master"))]}))
         store = FakeStore()
-        authors = guild.store_authors(pacer=pacer(), http_get=store, cache_path=self.cache,
-                                      clock=lambda: 1000.0 + 6 * 24 * 3600)
-        self.assertEqual((authors, store.urls), (["Eric Vall"], []))
+        found = self.catalog(store, clock=lambda: 1000.0 + 6 * 24 * 3600)
+        self.assertEqual(([p["title"] for p in found["products"]], store.urls), (["Eidolon Master"], []))
 
-    def test_an_old_list_is_kept_when_the_store_cannot_be_read(self):
-        self.cache.write_text(json.dumps({"read_at": 0.0, "authors": ["Eric Vall"]}))
+    def test_an_old_catalog_is_kept_when_the_store_cannot_be_read(self):
+        self.cache.write_text(json.dumps({"read_at": 0.0, "products": [guild._slim(product("Eidolon Master"))]}))
         store = FakeStore(fail=True)
-        authors = guild.store_authors(pacer=pacer(), http_get=store, cache_path=self.cache,
-                                      clock=lambda: 30 * 24 * 3600.0)
-        self.assertEqual(authors, ["Eric Vall"])
+        found = self.catalog(store, clock=lambda: 30 * 24 * 3600.0)
+        self.assertEqual([p["title"] for p in found["products"]], ["Eidolon Master"])
         self.assertTrue(store.urls)
 
-    def test_no_list_at_all_is_no_author(self):
-        with mock.patch.object(guild, "AUTHORS_CACHE", self.cache), mock.patch.object(guild, "PACER", pacer()):
+    def test_a_refresh_keeps_the_runtimes_of_the_books_the_store_has_not_changed(self):
+        old = [product("Metal Mage 1", series="Metal Mage"), product("Metal Mage 2", series="Metal Mage")]
+        self.cache.write_text(json.dumps({
+            "read_at": 0.0, "products": [guild._slim(p) for p in old],
+            "runtimes": {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500},
+                         "metal-mage-2": {"updated_at": "2026-01-01", "minutes": 400}}}))
+        store = FakeStore(catalog=[old[0], product("Metal Mage 2", series="Metal Mage", updated_at="2026-02-01")])
+        found = self.catalog(store, clock=lambda: 30 * 24 * 3600.0)
+        self.assertEqual(found["runtimes"], {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500}})
+
+    def test_no_catalog_at_all_is_no_author(self):
+        with mock.patch.object(guild, "CATALOG_CACHE", self.cache), mock.patch.object(guild, "PACER", pacer()):
             with mock.patch.object(guild, "_default_http_get", FakeStore(fail=True)):
                 self.assertFalse(guild.is_store_author("Eric Vall"))
-        self.assertIsNone(guild._AUTHORS)  # the next book asks again
+        self.assertIsNone(guild._CATALOG)  # the next book asks again
 
     def test_is_store_author_reads_names_the_way_the_matcher_does(self):
-        guild._AUTHORS = ["Eric Vall", "Michael-Scott Earle"]
+        guild._CATALOG = {"products": [guild._slim(product("A", vendor="Eric Vall")),
+                                       guild._slim(product("B", vendor="Michael-Scott Earle"))], "runtimes": {}}
         self.assertTrue(guild.is_store_author("Eric Vall"))
         self.assertTrue(guild.is_store_author("Michael Scott Earle"))
         self.assertFalse(guild.is_store_author("Brandon Sanderson"))
         self.assertFalse(guild.is_store_author(""))
 
 
-class SearchBooksTests(unittest.TestCase):
+class SearchBooksTests(GuildTestCase):
     def test_a_product_becomes_a_match_with_its_series_number_narrators_and_runtime(self):
-        store = FakeStore(found=[product("Eidolon Master 2")])
-        found = guild.search_books("Eidolon Master 2", "Eric Vall", pacer=pacer(), http_get=store)
+        found = self.search(FakeStore(catalog=[product("Eidolon Master 2")]), "Eidolon Master 2")
         self.assertEqual(found["status"], "found")
         m = found["matches"][0]
         self.assertEqual((m["title"], m["author"]), ("Eidolon Master 2", "Eric Vall"))
@@ -138,54 +167,62 @@ class SearchBooksTests(unittest.TestCase):
     def test_a_series_named_with_its_books_shared_subtitle_is_the_name_alone(self):
         def scholomance(title):
             return product(title, vendor="Logan Jacobs", series="Scholomance: The Devil's Academy")
-        store = FakeStore(found=[scholomance("Scholomance: The Devil's Academy"),
-                                 scholomance("Scholomance 6: The Devil's Academy"),
-                                 product("Tamer: King of Dinosaurs 11", vendor="Logan Jacobs",
-                                         series="Tamer: King of Dinosaurs")])
-        found = guild.search_books("Devil", "Logan Jacobs", pacer=pacer(), http_get=store)
+        store = FakeStore(catalog=[scholomance("Scholomance: The Devil's Academy"),
+                                   scholomance("Scholomance 6: The Devil's Academy"),
+                                   product("Tamer: King of Dinosaurs 11", vendor="Logan Jacobs",
+                                           series="Tamer: King of Dinosaurs")])
+        found = self.search(store, "Devil's Academy", author="Logan Jacobs")
         self.assertEqual([m["series"] for m in found["matches"]],
                          [[{"series": "Scholomance", "sequence": "1"}],
-                          [{"series": "Scholomance", "sequence": "6"}],
-                          [{"series": "Tamer: King of Dinosaurs", "sequence": "11"}]])
+                          [{"series": "Scholomance", "sequence": "6"}]])
 
     def test_a_series_whose_books_carry_no_subtitle_is_the_name_alone(self):
-        names = guild.series_names([{"title": "Werepanther 2", "type": "Werepanther: Paranormal Hunter"},
-                                    {"title": "The OP MC 11", "type": "The OP MC: God of Winning"}])
+        names = guild.series_names([{"title": "Werepanther 2", "product_type": "Werepanther: Paranormal Hunter"},
+                                    {"title": "The OP MC 11", "product_type": "The OP MC: God of Winning"}])
         self.assertEqual(names, {"Werepanther: Paranormal Hunter": "Werepanther", "The OP MC: God of Winning": "The OP MC"})
 
     def test_the_books_own_number_is_fetched_first(self):
         # Every book of the series shares the title searched for.
-        found = [product(f"Scholomance {n}: The Devil's Academy", vendor="Logan Jacobs",
-                         series="Scholomance: The Devil's Academy") for n in (6, 11, 12, 5)]
-        store = FakeStore(found=found)
-        result = guild.search_books("The Devil's Academy", "Logan Jacobs", number="5", pacer=pacer(),
-                                    http_get=store, limit=1)
-        self.assertEqual([m["title"] for m in result["matches"]], ["Scholomance 5: The Devil's Academy"])
+        store = FakeStore(catalog=[product(f"Scholomance {n}: The Devil's Academy", vendor="Logan Jacobs",
+                                           series="Scholomance: The Devil's Academy") for n in (6, 11, 12, 5)])
+        found = self.search(store, "The Devil's Academy", author="Logan Jacobs", number="5", limit=1)
+        self.assertEqual([m["title"] for m in found["matches"]], ["Scholomance 5: The Devil's Academy"])
+        self.assertEqual(store.pages(), ["scholomance-5%3A-the-devil%27s-academy"])
 
-    def test_series_and_number_are_searched_before_the_title(self):
-        # The store returns 10 results: "Dragon Emperor" alone can miss book 8.
-        class ByQuery(FakeStore):
-            def __call__(self, url, timeout):
-                if "/search/suggest.json" in url:
-                    self.found = [product("Dragon Emperor 8", series="Dragon Emperor")] if "8" in url else \
-                        [product(f"Dragon Emperor {n}", series="Dragon Emperor") for n in (15, 14, 13)]
-                return super().__call__(url, timeout)
-        store = ByQuery()
-        found = guild.search_books("Dragon Emperor", "Eric Vall", series="Dragon Emperor", number="8",
-                                   pacer=pacer(), http_get=store)
+    def test_the_whole_series_is_searched_not_the_first_ten_results(self):
+        store = FakeStore(catalog=[product(f"Dragon Emperor {n}", series="Dragon Emperor") for n in range(22, 0, -1)])
+        found = self.search(store, "Dragon Emperor", series="Dragon Emperor", number="8")
         self.assertEqual([m["title"] for m in found["matches"]], ["Dragon Emperor 8"])
-        self.assertIn("q=Dragon+Emperor+8", store.urls[0])
-        self.assertEqual(sum("/search/suggest.json" in u for u in store.urls), 1)
 
-    def test_another_authors_results_are_never_fetched(self):
-        store = FakeStore(found=[product("Eidolon", vendor="Warren Ellis"), product("Eidolon Master 2")])
-        found = guild.search_books("Eidolon", "Eric Vall", pacer=pacer(), http_get=store)
+    def test_the_series_finds_a_book_its_title_does_not(self):
+        store = FakeStore(catalog=[product("Protect. Procreate. Prevail", series="The Alpha"),
+                                   product("Dungeon Master 2", series="Dungeon Master")])
+        found = self.search(store, "The Alpha", series="The Alpha", number="1")
+        self.assertEqual([m["title"] for m in found["matches"]], ["Protect. Procreate. Prevail"])
+
+    def test_another_authors_books_and_unrelated_titles_are_never_fetched(self):
+        store = FakeStore(catalog=[product("Eidolon", vendor="Warren Ellis", series="Eidolon"),
+                                   product("Eidolon Master 2"), product("Succubus Lord 3", series="Succubus Lord")])
+        found = self.search(store, "Eidolon Master 2")
         self.assertEqual([m["title"] for m in found["matches"]], ["Eidolon Master 2"])
-        self.assertFalse(any("/products/eidolon" == u.rsplit("audiobookguild.com", 1)[1] for u in store.urls))
+        self.assertEqual(store.pages(), ["eidolon-master-2"])
+
+    def test_nothing_close_is_not_found_without_a_page_read(self):
+        store = FakeStore(catalog=[product("Succubus Lord 3", series="Succubus Lord")])
+        self.assertEqual(self.search(store, "Eidolon Master 2"), {"status": "not_found", "matches": []})
+        self.assertEqual(store.pages(), [])
+
+    def test_a_runtime_is_read_once_and_kept_with_the_catalog(self):
+        store = FakeStore(catalog=[product("Eidolon Master 2")])
+        self.search(store, "Eidolon Master 2")
+        guild._CATALOG = None  # a new run reads the cache file
+        again = FakeStore(catalog=[product("Eidolon Master 2")])
+        found = self.search(again, "Eidolon Master 2")
+        self.assertEqual((found["matches"][0]["runtime_minutes"], again.urls), (583, []))
 
     def test_a_request_the_store_refuses_once_is_tried_again(self):
-        store = FakeStore(found=[product("Eidolon Master 2")])
-        answers = iter([urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)])
+        store = FakeStore(catalog=[product("Eidolon Master 2")])
+        answers = iter([refused("u")])
 
         def flaky(url, timeout):
             failure = next(answers, None)
@@ -194,25 +231,19 @@ class SearchBooksTests(unittest.TestCase):
                 raise failure
             return store(url, timeout)
 
-        found = guild.search_books("Eidolon Master 2", "Eric Vall", pacer=pacer(), http_get=flaky)
+        found = self.search(flaky, "Eidolon Master 2")
         self.assertEqual([m["title"] for m in found["matches"]], ["Eidolon Master 2"])
-        self.assertEqual(sum("/search/suggest.json" in u for u in store.urls), 2)
+        self.assertEqual(sum("/products.json" in u for u in store.urls), 2)
 
-    def test_a_failed_search_is_failed_not_not_found(self):
-        found = guild.search_books("Eidolon Master 2", "Eric Vall", pacer=pacer(), http_get=FakeStore(fail=True))
-        self.assertEqual(found, {"status": "failed", "matches": []})
+    def test_an_unreadable_catalog_fails_the_search(self):
+        self.assertEqual(self.search(FakeStore(fail=True), "Eidolon Master 2"), {"status": "failed", "matches": []})
 
     def test_a_book_page_that_cannot_be_read_fails_the_search(self):
         # Without its runtime the right book ("Summoner 6") loses to another
         # series' book 6 that the runtime would have ruled out.
-        def refuse_summoner_6(url, timeout):
-            if url.endswith("/products/summoner-6"):
-                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
-            return store(url, timeout)
-        store = FakeStore(found=[product("Summoner 6", series="Summoner"),
-                                 product("Summoner School 6", series="Summoner School")])
-        found = guild.search_books("Summoner", "Eric Vall", series="Summoner", number="6", pacer=pacer(),
-                                   http_get=refuse_summoner_6)
+        store = FakeStore(catalog=[product("Summoner 6", series="Summoner"),
+                                   product("Summoner School 6", series="Summoner School")], refuse={"summoner-6"})
+        found = self.search(store, "Summoner", series="Summoner", number="6")
         self.assertEqual(found, {"status": "failed", "matches": []})
 
     def test_runtime_in_hours_or_minutes_only(self):
@@ -221,12 +252,13 @@ class SearchBooksTests(unittest.TestCase):
         self.assertIsNone(guild._runtime_minutes("<p>no runtime here</p>"))
 
 
-class MatchingTests(unittest.TestCase):
+class MatchingTests(GuildTestCase):
     """The store's books go through the matcher's own scoring, runtime included."""
 
     def products(self, durations):
-        store = FakeStore(found=[product("Eidolon Master 2"), product("Eidolon Master")], durations=durations)
-        with mock.patch.object(guild, "_default_http_get", store), mock.patch.object(guild, "PACER", pacer()):
+        store = FakeStore(catalog=[product("Eidolon Master 2"), product("Eidolon Master")], durations=durations)
+        with mock.patch.object(guild, "_default_http_get", store), mock.patch.object(guild, "PACER", pacer()), \
+                mock.patch.object(guild, "CATALOG_CACHE", self.cache):
             return search.audiobook_guild_search("Eidolon Master 2", "Eric Vall", limit=10, existing_asin="")
 
     def test_book_two_matches_book_two_in_full_with_the_store_fields(self):
@@ -241,6 +273,19 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual((metadata["series"], metadata["sequence"]), ("Eidolon Master", "2"))
         self.assertEqual(metadata["narrator"], "Brian Kozak, Charlie K James")
         self.assertEqual(metadata["year"], "")  # the store has no release year
+
+    def test_the_files_series_name_is_kept_with_the_stores_number(self):
+        store_book = {"title": "Monster Girl Islands 2", "series": [{"title": "Monster Girl Islands", "sequence": "2"}]}
+        for file_series, number, kept in (
+            ("Monster Girl Islands Series", "2", "Monster Girl Islands Series"),
+            ("Summoner 6", "6", "Summoner"),  # the file's series carries the book's number
+            ("Okay, But Try Not to Murder Anyone, Book #8", "8", "Okay, But Try Not to Murder Anyone"),
+            ("Warhammer 40000", "2", "Warhammer 40000"),  # a number of its own is the name
+            ("", "2", "Monster Girl Islands"),  # nothing in the file: the store's name
+        ):
+            with self.subTest(file_series):
+                renamed = with_local_series_name(store_book, {"series": file_series, "book_number": number})
+                self.assertEqual(renamed["series"], [{"title": kept, "sequence": "2"}])
 
     def test_unlisted_asin_and_year_do_not_count_as_a_change(self):
         current = {"title": "Eidolon Master 2", "artist": "Eric Vall", "grouping": "Eidolon Master",

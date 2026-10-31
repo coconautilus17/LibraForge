@@ -65,8 +65,9 @@ Searches Audible (or another provider) and writes matched metadata to your files
   Michael-Scott Earle and others) is matched there first, with the same title, author,
   number, narrator and runtime checks as an Audible match. A full match there is final, so
   Audible isn't searched for that book; the store has no ASIN or release year, so the
-  file's own are kept. When the store can't be read, the book is matched at Audible as
-  usual. The author list is read from the store and refreshed weekly.
+  file's own are kept, and so is the file's series name (the store names some series its
+  own way). When the store can't be read, the book is matched at Audible as usual. The
+  store's catalog (about 1.3 MB) is kept locally and refreshed weekly.
 
 ## M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,

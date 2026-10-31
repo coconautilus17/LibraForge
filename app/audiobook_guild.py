@@ -8,6 +8,10 @@ book's author (the product vendor), series (the product type) and tags
 9 Hours, 43 Minutes"). There is no ASIN, ISBN or release year: the product
 dates are when the store listed the book.
 
+The whole catalog (about 800 books, 1.3 MB) is kept locally and searched
+there: four products.json requests a week, and a book page only for a
+candidate's runtime, read once and kept with the catalog.
+
 Pacing: one shared 2 s minimum gap and the Goodreads breaker settings,
 through the same pacer class. Measured on 2026-10-30: the store refuses the
 odd request with 429 whatever the pace (3 of 100 at 2 s, 4 of 100 at 3 s), so
@@ -40,13 +44,18 @@ PACER = GoodreadsPacer(gap_s=GAP_S)
 # The store's own vendor for gift cards and bundles, not an author.
 _NOT_AUTHORS = {"audiobook guild"}
 
-# The author list changes when the store adds an author, rarely: it is read
-# from the store at most weekly and kept with the app's other caches.
-AUTHORS_CACHE = Path(os.environ.get("REPORTS_DIR", "/app/reports")) / "audiobook-guild-authors.json"
-AUTHORS_MAX_AGE_S = 7 * 24 * 3600
+# The catalog is read from the store at most weekly and kept with the app's
+# other caches, with the runtimes read so far.
+CATALOG_CACHE = Path(os.environ.get("REPORTS_DIR", "/app/reports")) / "audiobook-guild-catalog.json"
+CATALOG_MAX_AGE_S = 7 * 24 * 3600
 
-_AUTHORS_LOCK = threading.Lock()
-_AUTHORS: list[str] | None = None
+# A store book is a search result when the matcher's title evidence for the
+# title searched, or for the series against its series, reaches this: a
+# title search, not every book by the author (each costs a page read once).
+MIN_RELEVANCE = 0.6
+
+_CATALOG_LOCK = threading.Lock()
+_CATALOG: dict[str, Any] | None = None
 
 
 def _default_http_get(url: str, timeout: float) -> bytes:
@@ -77,56 +86,88 @@ def _fetch(url: str, pacer: GoodreadsPacer, http_get: Callable[[str, float], byt
     return None
 
 
-def _read_store_authors(pacer: GoodreadsPacer, http_get: Callable[[str, float], bytes],
-                        timeout: float) -> list[str] | None:
-    """Every product vendor in the store (four requests for its ~800 books),
-    or None when the store can't be read."""
-    authors: set[str] = set()
+def _slim(product: dict[str, Any]) -> dict[str, Any]:
+    """The products.json fields the matcher reads."""
+    return {
+        "title": (product.get("title") or "").strip(),
+        "handle": product.get("handle") or "",
+        "vendor": (product.get("vendor") or "").strip(),
+        "product_type": (product.get("product_type") or "").strip(),
+        "tags": product.get("tags") or [],
+        "body_html": product.get("body_html") or "",
+        "image": next(iter(product.get("images") or []), {}).get("src") or "",
+        "updated_at": product.get("updated_at") or "",
+    }
+
+
+def _read_store_catalog(pacer: GoodreadsPacer, http_get: Callable[[str, float], bytes],
+                        timeout: float) -> list[dict[str, Any]] | None:
+    """Every book in the store (four requests for its ~800), or None when the
+    store can't be read."""
+    products: list[dict[str, Any]] = []
     page = 1
     while True:
         body = _fetch(f"{STORE_URL}/products.json?limit={PAGE_SIZE}&page={page}", pacer, http_get, timeout)
         if body is None:
             return None
         try:
-            products = json.loads(body).get("products") or []
+            chunk = json.loads(body).get("products") or []
         except ValueError:
             return None
-        authors |= {p["vendor"].strip() for p in products
-                    if (p.get("vendor") or "").strip() and p["vendor"].strip().lower() not in _NOT_AUTHORS}
-        if len(products) < PAGE_SIZE:
-            return sorted(authors)
+        products += [_slim(p) for p in chunk
+                     if p.get("handle") and (p.get("vendor") or "").strip().lower() not in _NOT_AUTHORS]
+        if len(chunk) < PAGE_SIZE:
+            return products
         page += 1
 
 
-def store_authors(*, pacer: GoodreadsPacer | None = None, http_get: Callable[[str, float], bytes] | None = None,
+def _save_catalog(catalog: dict[str, Any], cache_path: Path) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp = cache_path.with_name(cache_path.name + ".tmp")
+        temp.write_text(json.dumps(catalog), encoding="utf-8")
+        os.replace(temp, cache_path)
+    except OSError:
+        pass
+
+
+def store_catalog(*, pacer: GoodreadsPacer | None = None, http_get: Callable[[str, float], bytes] | None = None,
                   timeout: float = 20, cache_path: Path | None = None,
-                  clock: Callable[[], float] = time.time) -> list[str]:
-    """The authors the store sells: the cached list while it is under a week
-    old, else read from the store (the old list when that fails). Empty when
-    neither is available."""
-    global _AUTHORS
-    pacer, cache_path = pacer or PACER, cache_path or AUTHORS_CACHE
-    with _AUTHORS_LOCK:
-        if _AUTHORS is not None:
-            return _AUTHORS
+                  clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """{"read_at", "products": [_slim()], "runtimes": {handle: {"updated_at",
+    "minutes"}}}: the cached catalog while it is under a week old, else read
+    from the store (the old one when that fails), keeping the runtime of each
+    book the store hasn't changed since. No products when neither is
+    available."""
+    global _CATALOG
+    pacer, cache_path = pacer or PACER, cache_path or CATALOG_CACHE
+    with _CATALOG_LOCK:
+        if _CATALOG is not None:
+            return _CATALOG
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cached = {}
-        authors = cached.get("authors") if isinstance(cached, dict) else None
-        if not isinstance(authors, list) or clock() - float(cached.get("read_at") or 0) > AUTHORS_MAX_AGE_S:
-            fresh = _read_store_authors(pacer, http_get or _default_http_get, timeout)
+        if not isinstance(cached, dict) or not isinstance(cached.get("products"), list):
+            cached = {}
+        if not cached or clock() - float(cached.get("read_at") or 0) > CATALOG_MAX_AGE_S:
+            fresh = _read_store_catalog(pacer, http_get or _default_http_get, timeout)
             if fresh:
-                authors = fresh
-                try:
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(json.dumps({"read_at": clock(), "authors": fresh}), encoding="utf-8")
-                except OSError:
-                    pass
-        if not isinstance(authors, list):
-            return []  # not kept: the next book tries the store again
-        _AUTHORS = authors
-        return _AUTHORS
+                updated = {p["handle"]: p["updated_at"] for p in fresh}
+                runtimes = {handle: r for handle, r in (cached.get("runtimes") or {}).items()
+                            if isinstance(r, dict) and updated.get(handle) == r.get("updated_at")}
+                cached = {"read_at": clock(), "products": fresh, "runtimes": runtimes}
+                _save_catalog(cached, cache_path)
+        if not cached:
+            return {"products": [], "runtimes": {}}  # not kept: the next book tries the store again
+        cached.setdefault("runtimes", {})
+        _CATALOG = cached
+        return _CATALOG
+
+
+def store_authors(**kwargs: Any) -> list[str]:
+    """The authors the store sells."""
+    return sorted({p["vendor"] for p in store_catalog(**kwargs)["products"] if p.get("vendor")})
 
 
 def is_store_author(author: str, **kwargs: Any) -> bool:
@@ -174,7 +215,7 @@ def _sequence(title: str, series: str) -> str:
 def _series(product: dict[str, Any]) -> str:
     tags = product.get("tags") or []
     tagged = [t[len("Series_"):].strip() for t in tags if isinstance(t, str) and t.startswith("Series_")]
-    return (product.get("type") or product.get("product_type") or "").strip() or next(iter(tagged), "")
+    return (product.get("product_type") or "").strip() or next(iter(tagged), "")
 
 
 def series_names(products: list[dict[str, Any]]) -> dict[str, str]:
@@ -208,7 +249,7 @@ def book_match(product: dict[str, Any], runtime: int | None, series: str | None 
 
     title = (product.get("title") or "").strip()
     series = _series(product) if series is None else series
-    image = product.get("image") or (product.get("featured_image") or {}).get("url") or ""
+    image = product.get("image") or ""
     return {
         "title": title,
         "author": (product.get("vendor") or "").strip(),
@@ -216,11 +257,32 @@ def book_match(product: dict[str, Any], runtime: int | None, series: str | None 
         # A first book is titled by the store's own series name, before or after cleanup.
         "series": [{"series": series, "sequence": _sequence(title, series) or _sequence(title, _series(product))}]
         if series else [],
-        "description": _description(product.get("body") or product.get("body_html") or ""),
+        "description": _description(product.get("body_html") or ""),
         "cover": image.split("?", 1)[0],
         "genres": tagged("Genre_"),
         "runtime_minutes": runtime,
     }
+
+
+_UNREAD = object()
+
+
+def _runtime(product: dict[str, Any], catalog: dict[str, Any], pacer: GoodreadsPacer,
+             http_get: Callable[[str, float], bytes], timeout: float, cache_path: Path) -> Any:
+    """The book's runtime from its page, read once while the store leaves the
+    book unchanged (None for a page without one), or _UNREAD."""
+    handle = product["handle"]
+    kept = catalog["runtimes"].get(handle)
+    if isinstance(kept, dict) and kept.get("updated_at") == product.get("updated_at"):
+        return kept.get("minutes")
+    page = _fetch(STORE_URL + "/products/" + urllib.parse.quote(handle), pacer, http_get, timeout)
+    if page is None:
+        return _UNREAD
+    minutes = _runtime_minutes(page.decode("utf-8", "replace"))
+    with _CATALOG_LOCK:
+        catalog["runtimes"][handle] = {"updated_at": product.get("updated_at"), "minutes": minutes}
+        _save_catalog(catalog, cache_path)
+    return minutes
 
 
 def search_books(
@@ -233,42 +295,39 @@ def search_books(
     limit: int = 3,
     http_get: Callable[[str, float], bytes] | None = None,
     timeout: float = 20,
+    cache_path: Path | None = None,
 ) -> dict[str, Any]:
-    """The store's search, then the product page (for its runtime) of each of
-    the first `limit` results by `author`, only those numbered `number` when
-    there are any: every book of a series can share the title searched for.
-    "Series N" is searched first (the store returns 10 results, so "Dragon
-    Emperor" alone can miss book 8), then `title`. A request that fails, a
-    book page included, fails the whole search. Returns
+    """The `author`'s books in the catalog whose title is close to `title` or
+    whose series is close to `series`, only those numbered `number` when there
+    are any (every book of a series can share the title searched for), the
+    closest first, with the runtime of the first `limit`. A request that
+    fails, the catalog or a book page, fails the whole search: without its
+    runtime the right book can lose to one the runtime rules out. Returns
     {"status": "found" | "not_found" | "failed", "matches": [book_match()]}."""
     from app.fixer.parsing import _authors_compatible, sequence_values_equal  # lazy: keep this module light
+    from app.fixer.scoring import title_evidence_score
 
-    pacer, http_get = pacer or PACER, http_get or _default_http_get
-    queries = [f"{series} {number}"] if series.strip() and number else []
-    queries = list(dict.fromkeys(q.strip() for q in queries + [title] if q.strip()))
-    products: list[dict[str, Any]] = []
-    numbered: list[dict[str, Any]] = []
-    for query in queries:
-        params = urllib.parse.urlencode({"q": query, "resources[type]": "product", "resources[limit]": 10})
-        body = _fetch(f"{STORE_URL}/search/suggest.json?{params}", pacer, http_get, timeout)
-        if body is None:
-            return {"status": "failed", "matches": []}
-        try:
-            found = json.loads(body)["resources"]["results"]["products"]
-        except (ValueError, KeyError, TypeError):
-            return {"status": "failed", "matches": []}
-        products = [p for p in found if not author or _authors_compatible(author, p.get("vendor") or "") is not False]
-        numbered = [p for p in products if number and sequence_values_equal(_sequence(p.get("title") or "", _series(p)), number)]
-        if numbered:
-            break
-    names = series_names(products)
-    products = numbered or products  # its own number's books alone, when the store has them
+    pacer, http_get, cache_path = pacer or PACER, http_get or _default_http_get, cache_path or CATALOG_CACHE
+    catalog = store_catalog(pacer=pacer, http_get=http_get, timeout=timeout, cache_path=cache_path)
+    if not catalog["products"]:
+        return {"status": "failed", "matches": []}
+    books = [p for p in catalog["products"] if _authors_compatible(author, p["vendor"]) is True]
+    names = series_names(books)
+
+    def relevance(product: dict[str, Any]) -> float:
+        evidence = title_evidence_score({"title": title, "author": author}, {"title": product["title"]})
+        if series.strip():
+            name = names.get(_series(product), _series(product))
+            evidence = max(evidence, title_evidence_score({"title": series, "author": author}, {"title": name}))
+        return evidence
+
+    scored = sorted(((relevance(p), p) for p in books), key=lambda item: -item[0])
+    found = [p for score, p in scored if score >= MIN_RELEVANCE]
+    numbered = [p for p in found if number and sequence_values_equal(_sequence(p["title"], _series(p)), number)]
     matches = []
-    for product in products[:limit]:
-        page = _fetch(STORE_URL + "/products/" + urllib.parse.quote(product.get("handle") or ""), pacer, http_get, timeout)
-        if page is None:
-            # Without its runtime the right book can lose to one the runtime rules out.
+    for product in (numbered or found)[:limit]:  # its own number's books alone, when the store has them
+        runtime = _runtime(product, catalog, pacer, http_get, timeout, cache_path)
+        if runtime is _UNREAD:
             return {"status": "failed", "matches": []}
-        matches.append(book_match(product, _runtime_minutes(page.decode("utf-8", "replace")),
-                                  names.get(_series(product), _series(product))))
+        matches.append(book_match(product, runtime, names.get(_series(product), _series(product))))
     return {"status": "found" if matches else "not_found", "matches": matches}

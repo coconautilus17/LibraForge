@@ -110,11 +110,16 @@ circuit breaker (`_ABS_TRACT_BREAKER*` in `app/fixer/search.py`): after repeated
 calling for a cooldown instead of hammering a blocked service.
 
 Audiobook Guild, a store selling a short list of self-published authors, is read from its
-public Shopify storefront (`app/audiobook_guild.py`): the author list from its product
-list (cached a week in the reports folder), search from `search/suggest.json`, the runtime
-from each product page. A book by one of those authors is matched there before any other
-source (`audiobook_guild_search` in `app/fixer/search.py`, scored like any candidate), and
-a full match there skips the ASIN lookup and Audible search. Its requests go through
+public Shopify storefront (`app/audiobook_guild.py`). Its whole catalog (about 800 books,
+1.3 MB) is read from `products.json` in four requests at most weekly and kept as
+`audiobook-guild-catalog.json` in the reports folder; the author list comes from it, and
+a book is searched there locally (its author's books, ranked with the matcher's
+`title_evidence_score`, its own number first). A candidate's runtime is read from its
+product page once and kept in the same file until the store changes that book. A book by
+one of those authors is matched there before any other source (`audiobook_guild_search`
+in `app/fixer/search.py`, scored like any candidate), and a full match there skips the
+ASIN lookup and Audible search, with the file's own series name kept
+(`with_local_series_name` in `app/fixer/scoring.py`). Its requests go through
 httpx: the store answers urllib with 429 "local_rate_limited" however paced. Even httpx
 gets the odd 429, so a failed request is tried once more; a product page that still fails
 fails the whole search (a candidate without its runtime can lose to the wrong book), and

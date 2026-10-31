@@ -42,6 +42,8 @@ from app.fixer.parsing import (
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
+    clean_series_value,
+    parse_series_sequence_segment,
     ET_AL_RE,
 )
 
@@ -992,6 +994,22 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
         if normalize_for_match(name) == local:
             return {**product, "series": [entry] + series[:index] + series[index + 1:], "_series_from_clues": True}
     return product
+
+
+def with_local_series_name(product: dict, clues: dict) -> dict:
+    """The product with its series named as the file names it, the number
+    kept: for a source that names a series its own way (Audiobook Guild's
+    "Monster Girl Islands" for the library's "Monster Girl Islands Series").
+    A file series that carries the book's own number ("Summoner 6", "Okay, But
+    Try Not to Murder Anyone, Book #8") is read without it."""
+    series = product.get("series") or []
+    name, _ = split_series_trailing_number(clean_series_value(clues.get("series", "") or ""), "")
+    bare, number = parse_series_sequence_segment(name, require_label=False)
+    if bare and sequence_values_equal(number, clues.get("book_number", "")):
+        name = bare
+    if not series or not name:
+        return product
+    return {**product, "series": [{**(series[0] or {}), "title": name}] + series[1:]}
 
 
 @trace(SCORE, capture=["local_duration_minutes"])
