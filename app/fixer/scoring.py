@@ -45,6 +45,8 @@ from app.fixer.parsing import (
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
+    clean_series_value,
+    parse_series_sequence_segment,
     ET_AL_RE,
 )
 
@@ -1008,6 +1010,23 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
         if normalize_for_match(name) == local:
             return {**product, "series": [entry] + series[:index] + series[index + 1:], "_series_from_clues": True}
     return product
+
+
+def local_series_name(clues: dict) -> str:
+    """The series as the file names it, for a source that names a series its
+    own way (Audiobook Guild's "Monster Girl Islands" for the library's
+    "Monster Girl Islands Series"); "" when the file names none. A file series
+    that carries the book's own number ("Summoner 6", "Adam and His Eves #7",
+    "Okay, But Try Not to Murder Anyone, Book #8") is read without it, and one
+    that is the book's author ("J.A. Cipriano; The Pen Is Mightier; Book 01")
+    is a folder segment, not a series."""
+    name, _ = split_series_trailing_number(clean_series_value(clues.get("series", "") or ""), "")
+    bare, number = parse_series_sequence_segment(re.sub(r"\s*#\s*(?=\d+$)", " ", name), require_label=False)
+    if bare and sequence_values_equal(number, clues.get("book_number", "")):
+        name = bare
+    if name and _authors_compatible(name, clues.get("author", "") or "") is True:
+        return ""
+    return name
 
 
 @trace(SCORE, capture=["local_duration_minutes"])
