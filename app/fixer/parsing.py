@@ -277,6 +277,18 @@ def _same_person_middle_names(a: str, b: str) -> bool:
     return all(x.startswith(y) or y.startswith(x) for x, y in zip(a_mid, b_mid))
 
 
+def _other_person_same_surname(a: str, b: str) -> bool:
+    """Same surname, given names starting with different letters: "frank
+    herbert" / "brian herbert". "lev"/"leo" or "jon"/"john" may be spellings
+    of one name, so only a different first letter counts."""
+    a_tokens, b_tokens = a.replace(".", " ").split(), b.replace(".", " ").split()
+    return (
+        len(a_tokens) >= 2 and len(b_tokens) >= 2
+        and a_tokens[-1] == b_tokens[-1]
+        and a_tokens[0][0] != b_tokens[0][0]
+    )
+
+
 def _initials_dedup_key(name: str) -> str:
     """Dedup key that collapses initial-format variants.
     'L.M. Kerr', 'L. M. Kerr', 'L M Kerr' all map to 'l m kerr'."""

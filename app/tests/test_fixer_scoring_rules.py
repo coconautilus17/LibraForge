@@ -75,10 +75,18 @@ class AuthorIdentityConflictTests(unittest.TestCase):
 
     def test_formatting_variants_containment_and_shared_tokens_never_conflict(self):
         for local, remote in (("J R R Tolkien", "J.R.R. Tolkien"), ("Clarke", "Arthur C. Clarke"),
-                              ("Arthur C. Clarke", "Arthur C. Clarke, Gentry Lee"), ("Ann Marie Lee", "Zed Lee"),
-                              ("Will Wight", "Will Wight")):
+                              ("Arthur C. Clarke", "Arthur C. Clarke, Gentry Lee"), ("Ann Marie Lee", "Ann Lee"),
+                              ("Will Wight", "Will Wight"), ("Leo Tolstoy", "Lev Tolstoy"), ("Jon Smith", "John Smith")):
             with self.subTest(local=local, remote=remote):
                 self.assertIs(self.conflict(local, remote), False)
+
+    def test_a_shared_surname_with_another_given_name_is_another_person(self):
+        # Dune: Frank Herbert's novel is not Brian Herbert and Kevin J.
+        # Anderson's "Dune: The Butlerian Jihad", whatever the title and runtime.
+        for local, remote in (("Frank Herbert", ("Brian Herbert", "Kevin J. Anderson")), ("Ann Marie Lee", ("Zed Lee",)),
+                              ("Brian Herbert, Kevin J. Anderson", ("Frank Herbert",))):
+            with self.subTest(local=local, remote=remote):
+                self.assertIs(self.conflict(local, *remote), True)
 
 
 UNRELATED = {"title": "Totally Different", "author": "", "narrator": "", "series": "", "book_number": ""}
