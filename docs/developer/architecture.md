@@ -38,6 +38,7 @@ browser ──HTTP──> app/main.py (FastAPI, uvicorn)
 | `app/fixer/` | Logic extracted from the Metadata Forge script so it can be unit-tested: `parsing` (text and number parsing), `clues` (search clue building), `scoring` (candidate scoring and metadata assembly), `search` (Audible / ABS / abs-agg / abs-tract clients), `tagging` (tag-writing primitives). |
 | `app/chaptering.py`, `chaptering_runner.py` | Chapter Forge detection (silence, keyword and speech-recognition passes) and the subprocess entry point. |
 | `app/enrichment*.py`, `genre_*.py`, `goodreads_shelves.py`, `explicit_evidence.py`, `source_matching.py` | Enrichment Forge: source lookups, the genre vocabulary, voting, collections, explicit evidence. |
+| `app/audiobook_guild.py` | Metadata Forge's Audiobook Guild source: the store's authors, search and runtimes. |
 | `app/abs_client.py` | Direct Audiobookshelf API sync (used by the fixer and by Enrichment Forge). |
 | `app/*_policy.py`, `author_names.py` | User-editable pattern sets (title noise, publishers, author-name scheme) and the code that applies them. |
 | `app/library_index.py`, `folder_scan_cache.py`, `conversion_*.py` | Library walking and the caches built on it. |
@@ -107,6 +108,22 @@ Enrichment Forge's shelves): `abs_tract_search` routes the `goodreads` provider 
 abs-tract. Goodreads is rate-limited upstream, so `abs_tract_search` wraps both in a
 circuit breaker (`_ABS_TRACT_BREAKER*` in `app/fixer/search.py`): after repeated failures it stops
 calling for a cooldown instead of hammering a blocked service.
+
+Audiobook Guild, a store selling a short list of self-published authors, is read from its
+public Shopify storefront (`app/audiobook_guild.py`). Its whole catalog (about 800 books,
+1.3 MB) is read from `products.json` in four requests at most weekly and kept as
+`audiobook-guild-catalog.json` in the reports folder; the author list comes from it, and
+a book is searched there locally (its author's books, ranked with the matcher's
+`title_evidence_score`, its own number first). A candidate's runtime is read from its
+product page once and kept in the same file until the store changes that book. A book by
+one of those authors is matched there before any other source (`audiobook_guild_search`
+in `app/fixer/search.py`, scored like any candidate), and a full match there skips the
+ASIN lookup and Audible search, with the file's own series name written once every
+decision is made (`local_series_name` in `app/fixer/scoring.py`). Its requests go through
+httpx: the store answers urllib with 429 "local_rate_limited" however paced. Even httpx
+gets the odd 429, so a failed request is tried once more; a product page that still fails
+fails the whole search (a candidate without its runtime can lose to the wrong book), and
+the book goes on to Audible.
 
 ## Where decisions live
 

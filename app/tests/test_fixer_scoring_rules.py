@@ -75,10 +75,18 @@ class AuthorIdentityConflictTests(unittest.TestCase):
 
     def test_formatting_variants_containment_and_shared_tokens_never_conflict(self):
         for local, remote in (("J R R Tolkien", "J.R.R. Tolkien"), ("Clarke", "Arthur C. Clarke"),
-                              ("Arthur C. Clarke", "Arthur C. Clarke, Gentry Lee"), ("Ann Marie Lee", "Zed Lee"),
-                              ("Will Wight", "Will Wight")):
+                              ("Arthur C. Clarke", "Arthur C. Clarke, Gentry Lee"), ("Ann Marie Lee", "Ann Lee"),
+                              ("Will Wight", "Will Wight"), ("Leo Tolstoy", "Lev Tolstoy"), ("Jon Smith", "John Smith")):
             with self.subTest(local=local, remote=remote):
                 self.assertIs(self.conflict(local, remote), False)
+
+    def test_a_shared_surname_with_another_given_name_is_another_person(self):
+        # Dune: Frank Herbert's novel is not Brian Herbert and Kevin J.
+        # Anderson's "Dune: The Butlerian Jihad", whatever the title and runtime.
+        for local, remote in (("Frank Herbert", ("Brian Herbert", "Kevin J. Anderson")), ("Ann Marie Lee", ("Zed Lee",)),
+                              ("Brian Herbert, Kevin J. Anderson", ("Frank Herbert",))):
+            with self.subTest(local=local, remote=remote):
+                self.assertIs(self.conflict(local, *remote), True)
 
 
 UNRELATED = {"title": "Totally Different", "author": "", "narrator": "", "series": "", "book_number": ""}
@@ -149,6 +157,30 @@ class DetermineEditModeTests(unittest.TestCase):
         self.assertEqual(self.mode(stand_in, {"title": "Unsouled"}, duration="unknown"), "series_only")
         ranged = edit_prod(title="Cradle", series=[{"title": "Cradle", "sequence": "1-2"}])
         self.assertEqual(self.mode(ranged, {"title": "Unsouled"}, duration="acceptable"), "series_only")
+
+    def test_titles_each_with_words_the_other_lacks_name_two_books(self):
+        # "Mistborn - Collected Tales" holds "Secret History"; sharing the
+        # series word and a strong runtime does not make them one book.
+        secret_history = edit_prod(title="Mistborn: Secret History", authors=[{"name": "Brandon Sanderson"}],
+                                   series=[{"title": "The Mistborn Saga", "sequence": "3.5"}])
+        clues = {"title": "Mistborn - Collected Tales", "author": "Brandon Sanderson",
+                 "series": "The Mistborn Saga", "book_number": ""}
+        self.assertEqual(self.mode(secret_history, clues, score=0.82, duration="strong"), "series_only")
+        # A subtitle on one side only is the same book.
+        self.assertEqual(self.mode(edit_prod(title="Mistborn: The Final Empire", authors=[{"name": "Brandon Sanderson"}],
+                                             series=[{"title": "The Mistborn Saga", "sequence": "1"}]),
+                                   {**clues, "title": "The Final Empire", "book_number": "1"}), "full")
+
+    def test_a_series_number_title_names_a_book_of_that_series_only(self):
+        # "The Riyria Revelations 02" is book 2 of the Revelations, not book 2
+        # of the Riyria Chronicles.
+        clues = {"title": "The Riyria Revelations 02", "author": "Michael J. Sullivan",
+                 "series": "The Riyria Revelations", "book_number": "2"}
+        def book_two(series):
+            return edit_prod(title="A Book Title", authors=[{"name": "Michael J. Sullivan"}],
+                             series=[{"title": series, "sequence": "2"}])
+        self.assertNotEqual(self.mode(book_two("The Riyria Chronicles"), clues, score=0.72, duration="strong"), "full")
+        self.assertEqual(self.mode(book_two("The Riyria Revelations"), clues, score=0.72, duration="strong"), "full")
 
 
 class SpecialProviderEditModeTests(unittest.TestCase):

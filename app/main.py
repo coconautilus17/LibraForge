@@ -117,7 +117,7 @@ from app.fixer.search import (
     PUBLIC_AUDIBLE_DOMAINS,
 )
 from app.fixer.search import audible_search as fixer_audible_search
-from app.fixer.parsing import library_author_folder
+from app.fixer.parsing import ASIN_PLACEHOLDER, library_author_folder
 from app.m4b_naming import canonical_m4b_title
 from app.manual_review import build_sidecar_multipart_context
 from app.progress_phases import (
@@ -5052,9 +5052,6 @@ _FIXER_SIDECAR_SUFFIX = ".audible-metadata-fixer.json"
 _FIXER_LEGACY_MARKER = ".audible-metadata-fixer.json"
 
 
-_NOREALASIN = "NOREALASIN"
-
-
 def _asin_from_libraforge_json(path: Path) -> bool | None:
     """Read ASIN from a libraforge.json sidecar.
 
@@ -5069,7 +5066,7 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
         # never by the fixer or organizer, so safe to read for scan purposes.
         scan_asin = str((data.get("scan_cache") or {}).get("asin") or "").strip()
         if scan_asin:
-            return scan_asin != _NOREALASIN
+            return scan_asin != ASIN_PLACEHOLDER
         # Fixer / M4B tool fields
         asin = str(
             ((data.get("marker") or {}).get("audible") or {}).get("asin")
@@ -5078,7 +5075,7 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
         ).strip()
         if not asin:
             return None
-        return asin != _NOREALASIN
+        return asin != ASIN_PLACEHOLDER
     except Exception:
         return None
 
@@ -5235,7 +5232,7 @@ def _ensure_scan_sidecar(
         mtime = None
     payload["scan_cache"] = {
         **(payload.get("scan_cache") or {}),
-        "asin": asin or _NOREALASIN,
+        "asin": asin or ASIN_PLACEHOLDER,
         "fields": fields,
         "mtime": mtime,
     }
@@ -5252,7 +5249,7 @@ def _marker_says_no_asin(data: dict) -> bool:
     here (the embedded tag is the source of truth for a real ASIN), so a book
     whose marker claims an ASIN it never wrote stays Incomplete."""
     asin = str(((data.get("marker") or {}).get("audible") or {}).get("asin") or "").strip().upper()
-    return asin == _NOREALASIN
+    return asin == ASIN_PLACEHOLDER
 
 
 def _sidecar_marker_no_asin(audio_file: Path, book_dir: Path) -> bool:
@@ -5299,7 +5296,7 @@ def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, di
             cur_mtime = None
         if sc.get("mtime") != cur_mtime:
             return None  # file changed since cached -- re-probe
-        asin_embedded = str(sc.get("asin") or "").strip() not in ("", _NOREALASIN)
+        asin_embedded = str(sc.get("asin") or "").strip() not in ("", ASIN_PLACEHOLDER)
         asin_satisfied = asin_embedded or _marker_says_no_asin(data)
         return asin_satisfied, {f: bool(fields.get(f)) for f in _CORE_FIELDS}
     return None
@@ -5318,7 +5315,7 @@ def _book_metadata_state(book_dir: Path, audio_files: list[Path]) -> tuple[bool,
     if cached is not None:
         return cached
     probe = _probe_book_metadata(audio_file)
-    asin_embedded = bool(probe["asin"]) and probe["asin"] != _NOREALASIN
+    asin_embedded = bool(probe["asin"]) and probe["asin"] != ASIN_PLACEHOLDER
     asin_satisfied = asin_embedded or _sidecar_marker_no_asin(audio_file, book_dir)
     _ensure_scan_sidecar(audio_files, book_dir, audio_file, probe["asin"], probe["fields"])
     return asin_satisfied, probe["fields"]
@@ -7794,7 +7791,7 @@ def _asin_string_from_libraforge_json(path: Path) -> str:
         (data.get("audible") or {}).get("asin"),
     ):
         asin = str(candidate or "").strip()
-        if asin and asin != _NOREALASIN:
+        if asin and asin != ASIN_PLACEHOLDER:
             return asin.upper()
     return ""
 

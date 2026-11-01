@@ -39,6 +39,7 @@ try:
     from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
     from app.fixer.parsing import (
+        ASIN_PLACEHOLDER,
         # text normalization
         clean_text, is_technical_label_block,
         sanitize_technical_labels, sanitize_book_title,
@@ -90,6 +91,7 @@ try:
         group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        recover_title_behind_series_placeholder,
         read_current_book_metadata,
     )
     from app.fixer.scoring import (
@@ -97,6 +99,7 @@ try:
         MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
+        local_series_name,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -140,8 +143,10 @@ try:
         mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
+        mp4_has_asin_placeholder,
         id3_set_text,
         id3_set_txxx,
+        id3_has_asin_placeholder,
         id3_set_track,
         id3_set_genre_list,
         should_write_field,
@@ -159,12 +164,14 @@ try:
         _abs_tract_breaker_is_open,
         abs_tract_breaker_ever_opened,
         abs_tract_search,
+        audiobook_guild_search,
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
+    from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 except ModuleNotFoundError:
@@ -181,6 +188,7 @@ except ModuleNotFoundError:
     from app.debug_trace import trace, trace_block, log as trace_log, subject as trace_subject, set_subject as trace_set_subject
     from app.debug_trace import ALTER, CHOOSE, SCORE
     from app.fixer.parsing import (
+        ASIN_PLACEHOLDER,
         # text normalization
         clean_text, is_technical_label_block,
         sanitize_technical_labels, sanitize_book_title,
@@ -232,6 +240,7 @@ except ModuleNotFoundError:
         group_numbers_are_part_indices,
         infer_group_identity_from_path,
         clean_group_folder_title,
+        recover_title_behind_series_placeholder,
         read_current_book_metadata,
     )
     from app.fixer.scoring import (
@@ -239,6 +248,7 @@ except ModuleNotFoundError:
         MIN_MATCH_SCORE,
         score_product_for_metadata,
         pick_best_match_for_metadata,
+        local_series_name,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -282,8 +292,10 @@ except ModuleNotFoundError:
         mp4_set_movement_index,
         mp4_set_freeform,
         mp4_set_genre_list,
+        mp4_has_asin_placeholder,
         id3_set_text,
         id3_set_txxx,
+        id3_has_asin_placeholder,
         id3_set_track,
         id3_set_genre_list,
         should_write_field,
@@ -301,12 +313,14 @@ except ModuleNotFoundError:
         _abs_tract_breaker_is_open,
         abs_tract_breaker_ever_opened,
         abs_tract_search,
+        audiobook_guild_search,
         detect_special_provider,
         get_thread_client,
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
     )
+    from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
 
@@ -538,7 +552,7 @@ def read_book_sidecar(source: Path) -> dict | None:
                 "summary": marker_audible.get("summary", ""),
                 "genre": marker_audible.get("genre", ""),
                 "isbn": marker_audible.get("isbn", ""),
-                "asin": raw_asin if raw_asin != "NOREALASIN" else "",
+                "asin": raw_asin if raw_asin != ASIN_PLACEHOLDER else "",
             }
     except (json.JSONDecodeError, OSError):
         pass
@@ -1493,7 +1507,7 @@ def mutagen_write_mp4_tags(
     if should_write_field(subtitle, field_policy, legacy_conditional=True):
         mp4_set_freeform(tags, "subtitle", subtitle, aliases=("SUBTITLE",))
 
-    if should_write_field(asin, field_policy, legacy_conditional=True):
+    if should_write_field(asin, field_policy, legacy_conditional=True) or mp4_has_asin_placeholder(tags):
         mp4_set_freeform(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
@@ -1625,7 +1639,7 @@ def mutagen_write_mp3_tags(
         id3_set_txxx(tags, "mvin", sequence)
         id3_set_txxx(tags, "series-part", sequence, aliases=("SERIES-PART",))
 
-    if should_write_field(asin, field_policy, legacy_conditional=True):
+    if should_write_field(asin, field_policy, legacy_conditional=True) or id3_has_asin_placeholder(tags):
         id3_set_txxx(tags, "asin", asin, aliases=("ASIN",))
 
     if should_write_field(isbn, field_policy, legacy_conditional=True):
@@ -1824,7 +1838,7 @@ FILL_FIELDS = ("title", "author", "series", "sequence", "narrator", "year", "asi
 def marker_real_asin(marker: dict) -> str:
     """Return the marker's stored real ASIN (upper), or '' for none/NOREALASIN."""
     asin = str((marker.get("audible") or {}).get("asin") or "").strip().upper()
-    return "" if (not asin or asin == "NOREALASIN") else asin
+    return "" if (not asin or asin == ASIN_PLACEHOLDER) else asin
 
 @trace(ALTER, capture=[])
 def metadata_from_marker(marker: dict) -> dict:
@@ -2082,8 +2096,8 @@ def write_skip_marker(source: Path, clues: dict | None = None, alone: bool = Fal
     )
     asin_to_write = (
         existing_asin
-        if existing_asin and existing_asin != "NOREALASIN"
-        else "NOREALASIN"
+        if existing_asin and existing_asin != ASIN_PLACEHOLDER
+        else ASIN_PLACEHOLDER
     )
     payload["marker"] = {
         **payload.get("marker", {}),
@@ -2855,6 +2869,18 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # This is intentionally narrow and does not change the matching/scoring model.
     clues = apply_structured_path_override(clues, file_path)
 
+    # A bare number ending the title ("Fahrenheit 451") names no book on its
+    # own, but the book folder repeating it does ("The Riyria Revelations 06"),
+    # whatever the file name ("Percepliquis 01", a part) says.
+    title_number = extract_title_identity_number(clues.get("raw_title", ""))
+    if (
+        title_number
+        and clues.get("book_number_source") in {"", "track"}
+        and title_number == extract_title_identity_number(file_path.parent.name)
+    ):
+        clues["book_number"] = title_number
+        clues["book_number_source"] = "path"
+
     # Path-derived book numbers are stronger than embedded track numbers.
     # This handles cases where the file tag track is stale, but the folder says Book 8.
     path_book_number = extract_book_number_from_path(file_path)
@@ -2881,8 +2907,12 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         }
         current_series_norm = normalize_for_match(clues.get("series", ""))
         current_title_norm = normalize_for_match(clues.get("title", ""))
+        # The folder above the book is the series only below the author level;
+        # in Author/"Author; Title; Book 01" it is the author folder.
+        is_author_folder = file_path.parent.parent.name == library_author_folder(file_path.parent, LIBRARY_ROOTS)
         if (
             hierarchy_series
+            and not is_author_folder
             and normalize_for_match(hierarchy_series) not in generic_series
             and (
                 not current_series_norm
@@ -2984,6 +3014,8 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     # tokens that happen to be 10 characters. The separate title-cleaning strip regex stays broad
     # because it removes noise rather than extracting for validation.
     existing_asin = first_existing_tag(tags or {}, ["asin", "audible_asin"]).upper()
+    if existing_asin == ASIN_PLACEHOLDER:  # a placeholder for "no ASIN", not one
+        existing_asin = ""
     if not existing_asin:
         # Audible ASINs always start with B0 followed by 8 alphanumeric characters.
         # The tighter pattern avoids false matches on other bracket tokens in filenames.
@@ -3007,6 +3039,7 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     capture_publisher_clue(clues, tags or {})
     capture_sku_clue(clues, tags or {})
 
+    clues = recover_title_behind_series_placeholder(clues, file_path)
     return recover_invalid_local_title(clues, file_path)
 
 @trace(CHOOSE, capture=["file_path"])
@@ -3898,12 +3931,47 @@ def search_item(
             used_query = ""
             match_ambiguity = None
 
+            # Audiobook Guild lists its authors' books with series, narrators
+            # and runtime, many of them missing from Audible: a book by one of
+            # them is matched there first, and a full match there is final.
+            guild_settled = False
+            if clues.get("title") and is_store_author(clues.get("author", "")):
+                log.append("  Trying Audiobook Guild (the author sells there)")
+                _guild_products = audiobook_guild_search(
+                    title=clues["title"],
+                    author=clues.get("author", ""),
+                    limit=args.limit,
+                    existing_asin=clues.get("existing_asin", ""),
+                    log=log,
+                    series=clues.get("series", ""),
+                    number=clues.get("book_number", ""),
+                )
+                log.append(f"  Audiobook Guild results: {len(_guild_products)}")
+                if _guild_products:
+                    _guild_candidate, _guild_score, _guild_ambiguity = pick_best_match_for_metadata(
+                        clues, _guild_products, local_duration_minutes
+                    )
+                    if _guild_candidate:
+                        _guild_mode = metadata_from_product(_guild_candidate, clues, _guild_score).get("edit_mode")
+                        log.append(
+                            f"  Audiobook Guild candidate: score={_guild_score} "
+                            f"title={_guild_candidate.get('title')} mode={_guild_mode}"
+                        )
+                        if _guild_score >= args.min_score and _guild_mode == "full":
+                            product = _guild_candidate
+                            score = _guild_score
+                            used_query = f"audiobookguild:{clues['title']}"
+                            match_ambiguity = _guild_ambiguity
+                            queries = []  # final: no Audible search
+                            result.source_provider = "audiobookguild"
+                            guild_settled = True
+
             # Special provider search (GraphicAudio, SoundBooth Theater via abs-agg).
             # Triggered by publisher policy, series name, composer tag, or dramatized subtitle.
             # Result competes with Audible: whichever scores higher wins.
             _abs_agg_url = getattr(args, "abs_agg_url", "")
             _detected_provider = detect_special_provider(clues)
-            if _detected_provider and _abs_agg_url:
+            if _detected_provider and _abs_agg_url and not guild_settled:
                 _sp_label = SPECIAL_PROVIDERS.get(_detected_provider, _detected_provider)
                 log.append(f"  Trying {_sp_label} source (abs-agg/{_detected_provider})")
                 _sp_products = abs_agg_search(
@@ -4018,7 +4086,7 @@ def search_item(
                     and candidate.get("asin") == product.get("asin")
                 )
 
-            if existing_asin:
+            if existing_asin and not guild_settled:
                 log.append(f"  Trying ASIN direct lookup: {existing_asin}")
                 asin_product = lookup_asin(existing_asin)
                 if asin_product:
@@ -4267,6 +4335,10 @@ def search_item(
 
         metadata = metadata_from_product(product, clues, score)
         metadata["file_type"] = get_file_type(file_path)
+        if result.source_provider == "audiobookguild" and metadata.get("series"):
+            # The store names series its own way: the file's name is written,
+            # once every decision is made on the store's own.
+            metadata["series"] = local_series_name(clues) or metadata["series"]
 
         buf = io.StringIO()
         with _print_plan_lock:
@@ -4682,6 +4754,10 @@ def compare_tags_for_write(
                 ("narrator", cur(["composer"]),                      metadata.get("narrator", "")),
                 ("year",     cur(["date", "year"]),                  metadata.get("year", "")),
             ]
+        # Audiobook Guild lists no ASIN or release year: a blank one there
+        # is not asserted either.
+        if source_provider == "audiobookguild":
+            checks = [c for c in checks if c[0] not in {"asin", "year"} or str(c[2] or "").strip()]
 
     changed = [
         field for field, current, planned in checks
@@ -5052,6 +5128,7 @@ def print_plan(
 
     _match_header = {
         "goodreads": "GOODREADS MATCH:",
+        "audiobookguild": "AUDIOBOOK GUILD MATCH:",
         "graphicaudio": "GRAPHICAUDIO MATCH:",
         "soundbooththeater": "SOUNDBOOTH THEATER MATCH:",
     }.get(source_provider, "AUDIBLE MATCH:")
@@ -5548,7 +5625,7 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
                 return key, mtime, m.group(1).upper()
             try:
                 sidecar_asin = str((load_marker(fp).get("audible") or {}).get("asin") or "").strip().upper()
-                if sidecar_asin and sidecar_asin != "NOREALASIN":
+                if sidecar_asin and sidecar_asin != ASIN_PLACEHOLDER:
                     return key, mtime, sidecar_asin
             except Exception:
                 pass

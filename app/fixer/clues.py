@@ -14,6 +14,7 @@ from app.debug_trace import trace, ALTER, CHOOSE
 from app.publisher_policy import match_canonical_publisher, strip_publisher_noise
 from app.fixer.parsing import (
     normalize_for_match,
+    drop_publisher_credits,
     sequence_values_equal,
     parse_structured_book_from_path,
     extract_author_from_title,
@@ -32,7 +33,13 @@ from app.fixer.parsing import (
     first_existing_tag,
     parse_title_series_number_from_metadata,
     is_generic_chapter_title,
+    clean_text,
+    split_credit_names,
+    _authors_compatible,
+    is_invalid_local_title,
+    _READ_BY_RE,
 )
+from app.fixer.scoring import is_generic_series_number_title, significant_title_tokens
 
 
 def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
@@ -245,6 +252,10 @@ def capture_publisher_clue(clues: dict, tags: dict) -> dict:
         clues["publisher"] = raw_publisher
         clues["publisher_verified"] = bool(canonical)
 
+    # A narrator credit that is only the studio names no narrator.
+    if clues.get("narrator"):
+        clues["narrator"] = drop_publisher_credits(clues["narrator"])
+
     # Strip any leaked publisher token from author/narrator without losing real data.
     for field in ("author", "narrator"):
         value = str(clues.get(field, "") or "")
@@ -422,3 +433,50 @@ def clean_group_folder_title(value: str, author: str) -> str:
             flags=re.IGNORECASE,
         ).strip(" -_.:,")
     return sanitize_book_title(cleaned)
+
+
+@trace(ALTER, capture=["file_path"])
+def recover_title_behind_series_placeholder(clues: dict, file_path: Path) -> dict:
+    """The book's own title from its file name when the title tag only names the
+    series and number ("The Riyria Revelations 03" for "Nyphron Rising 01.m4b").
+
+    The file name is split into its " - " and bracketed parts; the author's and
+    narrator's names, "Read by" credits, a leading sequence and a trailing part
+    number are dropped. Exactly one part must remain, and no part may share a
+    word with the series: a file name that names the series ("Path of the
+    Berserker 4_ A Daopocalypse Progression Fantasy") holds no other title.
+    """
+    if not is_generic_series_number_title(clues):
+        return clues
+    author = clues.get("author", "") or ""
+    names = [
+        name
+        for value in [author, clues.get("narrator", ""), *(clues.get("credit_names") or [])]
+        for name in split_credit_names(value or "")
+    ]
+    series = clues.get("series", "")
+    series_words = set(significant_title_tokens(series))
+    series_compact = re.sub(r"[^a-z0-9]+", "", normalize_for_match(series))
+    number = normalize_book_number(clues.get("book_number", ""))
+    kept = []
+    for segment in re.split(r"\s+-\s+|[\[\]()]|_\s+|;", _READ_BY_RE.sub("", file_path.stem)):
+        segment = clean_text(segment)
+        if set(significant_title_tokens(segment)) & series_words or (
+            series_compact and series_compact in re.sub(r"[^a-z0-9]+", "", segment.lower())
+        ):
+            return clues
+        segment = clean_group_folder_title(segment, author)
+        segment = re.sub(r"\s+(?:(?:part|pt\.?)\s*\d{1,3}|0\d{1,2})$", "", segment, flags=re.IGNORECASE)
+        if number:
+            segment = re.sub(rf"\s+0*{re.escape(number)}$", "", segment)
+        if not re.search(r"[^\W\d_]", segment) or any(
+            _authors_compatible(name, segment) is True for name in names
+        ):
+            continue
+        kept.append(segment)
+    if len(kept) != 1 or is_invalid_local_title(kept[0], author):
+        return clues
+    clues["raw_title"] = kept[0]
+    clues["title"] = kept[0]
+    clues["title_recovery"] = {"applied": True, "source": "file_name"}
+    return clues

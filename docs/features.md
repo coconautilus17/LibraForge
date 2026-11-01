@@ -31,6 +31,10 @@ Searches Audible (or another provider) and writes matched metadata to your files
 - **Structured search:** Audible and ABS searches start with the book's title and first
   author as separate fields, which finds listings a keyword search misses, then fall
   back to keyword queries.
+- **Placeholder titles:** when a file's title tag only names the series and number
+  ("The Riyria Revelations 03"), the title in its file name ("Nyphron Rising 01.m4b") is
+  searched instead, without author or narrator names or a part number. A file name that
+  also names the series is left alone.
 - **Manual Review:** load any book or folder, search Audible manually, and apply per
   book with an explicit `Full metadata` or `Series only` mode. A filesystem search index
   (built in the background, shown as a persistent "Search index: N books" marker) lets
@@ -60,6 +64,14 @@ Searches Audible (or another provider) and writes matched metadata to your files
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup warns if you enabled the fallback with more than 5 search workers, since that's
   what usually trips it.
+- **Audiobook Guild first for its authors:** a book by an author that
+  [Audiobook Guild](https://audiobookguild.com) sells (Eric Vall, Logan Jacobs,
+  Michael-Scott Earle and others) is matched there first, with the same title, author,
+  number, narrator and runtime checks as an Audible match. A full match there is final, so
+  Audible isn't searched for that book; the store has no ASIN or release year, so the
+  file's own are kept, and so is the file's series name (the store names some series its
+  own way). When the store can't be read, the book is matched at Audible as usual. The
+  store's catalog (about 1.3 MB) is kept locally and refreshed weekly.
 
 ## M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
