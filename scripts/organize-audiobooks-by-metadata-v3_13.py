@@ -40,7 +40,7 @@ from typing import Any
 
 try:
     from app.epub_metadata import extract_epub_metadata
-    from app.fixer.parsing import remove_parenthetical, series_from_subtitle
+    from app.fixer.parsing import GENERIC_AUTHORS, remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -61,7 +61,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.epub_metadata import extract_epub_metadata
-    from app.fixer.parsing import remove_parenthetical, series_from_subtitle
+    from app.fixer.parsing import GENERIC_AUTHORS, remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
         close_dangling_bracket,
         contains_title_noise,
@@ -4829,7 +4829,7 @@ def authors_compatible(local_author: str, other_author: str) -> bool:
     other_norm = normalize_for_compare(other_author)
     if not local_norm or not other_norm:
         return True
-    generic = {"unknown", "unknownauthor", "various", "variousauthors", "anonymous"}
+    generic = {normalize_for_compare(name) for name in GENERIC_AUTHORS}
     if local_norm in generic or other_norm in generic:
         return True
     local_keys = people_keys(local_author)
