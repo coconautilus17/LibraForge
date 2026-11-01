@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.publisher_policy import match_canonical_publisher
+from app.json_files import write_json_atomic
 from app.settings_paths import user_settings_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -113,10 +114,7 @@ def save_author_policy(disabled_defaults: list[str], custom_names: list[dict[str
                         "label": str(item.get("label") or spelling).strip(), "description": str(item.get("description") or "").strip(),
                         "name": name, "spelling": spelling, "enabled": bool(item.get("enabled", True))})
     payload = {"schema_version": 1, "disabled_defaults": sorted({str(x) for x in disabled_defaults}), "custom_names": cleaned}
-    LOCAL_POLICY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temp = LOCAL_POLICY_FILE.with_name(LOCAL_POLICY_FILE.name + ".tmp")
-    temp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(temp, LOCAL_POLICY_FILE)
+    write_json_atomic(LOCAL_POLICY_FILE, payload, indent=2)
     return load_author_policy()
 
 
