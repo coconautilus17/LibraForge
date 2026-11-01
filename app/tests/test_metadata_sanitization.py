@@ -781,6 +781,15 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(FIXER.extract_book_number_from_path(path), "3")
         self.assertEqual(FIXER.extract_folder_book_number("Book 12"), "12")
 
+    def test_a_title_number_its_folder_repeats_beats_the_file_name_number(self):
+        # Title and folder "The Riyria Revelations 06", file "Percepliquis 01"
+        # (GraphicAudio's part 01): the file's 01 made it book 1 of the series.
+        path = Path("/books/Michael J. Sullivan/The Riyria Revelations/The Riyria Revelations 06/Percepliquis 01.m4b")
+        tags = {"title": "The Riyria Revelations 06", "album": "The Riyria Revelations 06",
+                "artist": "Michael J. Sullivan"}
+        clues = FIXER.build_search_clues_from_file(path, tags=tags)
+        self.assertEqual((clues["book_number"], clues["book_number_source"]), ("6", "path"))
+
     def test_audible_subtitle_number_fills_missing_series_sequence(self):
         product = {
             "title": "Shade's First Rule",
