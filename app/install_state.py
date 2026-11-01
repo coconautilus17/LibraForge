@@ -2,12 +2,12 @@
 author-naming notice? Stored in the reports volume (a dotfile, never touched by report
 pruning), because that volume persists across image upgrades in every compose file."""
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 from app import author_names
+from app.json_files import write_json_atomic
 
 
 def _has_entries(directory: Path, ignore: tuple[str, ...] = ()) -> bool:
@@ -42,10 +42,7 @@ def _read(state_file: Path) -> dict[str, Any] | None:
 
 
 def _write(state: dict[str, Any], state_file: Path) -> None:
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    temp = state_file.with_name(state_file.name + ".tmp")
-    temp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-    os.replace(temp, state_file)
+    write_json_atomic(state_file, state, indent=2)
 
 
 def init_install_state(version: str, reports_dir: Path, auth_dir: Path, config_dirs: list[Path],

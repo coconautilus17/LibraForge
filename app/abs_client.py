@@ -27,6 +27,7 @@ from typing import Any, Callable
 from app.enrichment import extract_series_sequence, strip_series_sequence_suffix
 from app.fixer.parsing import is_never_series, is_single_numeric_sequence
 from app.fixer.scoring import GENRE_BLOCKLIST, split_genre_string, split_series_trailing_number
+from app.json_files import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -775,10 +776,7 @@ def load_bootstrap_registry(reports_dir: Path) -> dict[str, dict[str, Any]]:
 def save_bootstrap_registry(reports_dir: Path, registry: dict[str, dict[str, Any]]) -> None:
     path = bootstrap_registry_path(reports_dir)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        write_json_atomic(path, registry, indent=2)
     except OSError:
         pass
 

@@ -118,6 +118,7 @@ from app.fixer.search import (
 )
 from app.fixer.search import audible_search as fixer_audible_search
 from app.fixer.parsing import ASIN_PLACEHOLDER, library_author_folder
+from app.json_files import write_json_atomic
 from app.m4b_naming import canonical_m4b_title
 from app.manual_review import build_sidecar_multipart_context
 from app.progress_phases import (
@@ -6435,9 +6436,7 @@ def _record_enrichment_genre_writes(written: dict[str, dict[str, list[str]]]) ->
         log.update(written)
         path = REPORTS_DIR / _ENRICHMENT_GENRE_LOG_NAME
         try:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(log, indent=1, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            write_json_atomic(path, log, indent=1)
         except OSError:
             pass  # the log only refines manual-edit detection; never fail an apply over it
 
@@ -7931,10 +7930,7 @@ def _store_owned_asins(root: Path, asins: set[str], fingerprint: str) -> None:
         return  # unchanged -- skip the disk write
     index[str(root)] = record
     try:
-        _OWNED_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _OWNED_INDEX_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(_OWNED_INDEX_PATH)
+        write_json_atomic(_OWNED_INDEX_PATH, index)
     except Exception:
         pass
 

@@ -29,10 +29,12 @@ from typing import Callable
 try:
     from app.abs_client import abs_delete_json, abs_get_json, abs_patch_json
     from app.author_names import format_author_credit, format_person_name, scheme_enabled
+    from app.json_files import write_json_atomic
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.abs_client import abs_delete_json, abs_get_json, abs_patch_json
     from app.author_names import format_author_credit, format_person_name, scheme_enabled
+    from app.json_files import write_json_atomic
 
 SERVICE_PREFIXES = ("_", "#", "@", ".")
 
@@ -116,9 +118,7 @@ def apply_sidecar_edits(edits: list[dict], reverse: bool = False) -> None:
         data = json.loads(target.read_text(encoding="utf-8"))
         for edit in group:
             _set_json_field(data, edit["field"], edit["old"] if reverse else edit["new"])
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        os.replace(tmp, target)
+        write_json_atomic(target, data, indent=2)
 
 
 def plan_tag_changes(root: Path) -> list[dict]:

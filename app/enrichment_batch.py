@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from app.json_files import write_json_atomic
+
 _DONE_STATES = ("compiled", "applied")
 
 
@@ -38,10 +40,7 @@ class BatchStore:
 
     def save(self, data: dict[str, Any]) -> None:
         data["updated_at"] = time.time()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        write_json_atomic(self.path, data)
 
 
 def effective_status(data: dict[str, Any], *, thread_alive: bool, stop_requested: bool = False) -> str:

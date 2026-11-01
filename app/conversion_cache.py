@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from app.json_files import write_json_atomic
+
 
 CACHE_VERSION = 3
 
@@ -37,13 +39,7 @@ def load_discovery_cache(cache_path: Path) -> dict[str, Any]:
 
 
 def save_discovery_cache(cache_path: Path, cache: dict[str, Any]) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(cache, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(cache_path)
+    write_json_atomic(cache_path, cache, indent=2)
 
 
 def utc_timestamp() -> str:
