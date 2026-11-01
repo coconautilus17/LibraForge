@@ -33,6 +33,9 @@ from app.debug_trace import trace, ALTER, CHOOSE
 # marker records it, and some tools wrote it into the asin tag. It is never an ASIN.
 ASIN_PLACEHOLDER = "NOREALASIN"
 
+# Placeholder author values (normalize_for_match form) that name no real author.
+GENERIC_AUTHORS = {"unknown", "unknown author", "various", "various authors", "anonymous", "misc", "n a", "na"}
+
 # ---------------------------------------------------------------------------
 # Text normalization
 # ---------------------------------------------------------------------------
