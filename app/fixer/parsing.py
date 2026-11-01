@@ -29,6 +29,10 @@ from app.publisher_policy import (
 )
 from app.debug_trace import trace, ALTER, CHOOSE
 
+# "NOREALASIN" is a placeholder for "this book has no Audible listing": LibraForge's
+# marker records it, and some tools wrote it into the asin tag. It is never an ASIN.
+ASIN_PLACEHOLDER = "NOREALASIN"
+
 # ---------------------------------------------------------------------------
 # Text normalization
 # ---------------------------------------------------------------------------
