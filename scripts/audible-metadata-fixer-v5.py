@@ -2881,8 +2881,12 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         }
         current_series_norm = normalize_for_match(clues.get("series", ""))
         current_title_norm = normalize_for_match(clues.get("title", ""))
+        # The folder above the book is the series only below the author level;
+        # in Author/"Author; Title; Book 01" it is the author folder.
+        is_author_folder = file_path.parent.parent.name == library_author_folder(file_path.parent, LIBRARY_ROOTS)
         if (
             hierarchy_series
+            and not is_author_folder
             and normalize_for_match(hierarchy_series) not in generic_series
             and (
                 not current_series_norm
