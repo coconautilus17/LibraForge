@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.main import (
-    _NOREALASIN,
+    ASIN_PLACEHOLDER,
     _asin_from_libraforge_json,
     _asin_string_from_libraforge_json,
     _scan_owned_asins,
@@ -93,10 +93,10 @@ class WriteScanAsinCacheTests(unittest.TestCase):
             sidecar = folder / "libraforge.json"
             sidecar.write_text(json.dumps({}), encoding="utf-8")
 
-            _write_scan_asin_cache(folder, audio, _NOREALASIN)
+            _write_scan_asin_cache(folder, audio, ASIN_PLACEHOLDER)
 
             data = json.loads(sidecar.read_text())
-            self.assertEqual(data["scan_cache"]["asin"], _NOREALASIN)
+            self.assertEqual(data["scan_cache"]["asin"], ASIN_PLACEHOLDER)
 
     def test_does_not_create_new_sidecar(self):
         with tempfile.TemporaryDirectory() as d:
@@ -166,7 +166,7 @@ class AsinStringFromLibraforgeJsonTests(unittest.TestCase):
 
     def test_norealasin_and_missing_return_empty(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(_asin_string_from_libraforge_json(self._write(Path(d), {"scan_cache": {"asin": _NOREALASIN}})), "")
+            self.assertEqual(_asin_string_from_libraforge_json(self._write(Path(d), {"scan_cache": {"asin": ASIN_PLACEHOLDER}})), "")
             self.assertEqual(_asin_string_from_libraforge_json(self._write(Path(d), {"marker": {}})), "")
 
 
