@@ -119,6 +119,29 @@ class AlbumIsNotASeriesTests(unittest.TestCase):
             with self.subTest(title=title, album=album):
                 self.assertEqual(self.parse(title=title, album=album)["series"], "")
 
+    def test_an_album_the_title_numbers_is_the_series(self):
+        # "King of Superheroes 2" in album "King of Superheroes": the title is
+        # the series and its number, not a title the album echoes.
+        self.assertEqual(
+            self.parse(title="King of Superheroes 2", album="King of Superheroes")["series"],
+            "King of Superheroes",
+        )
+
+    def test_book_two_does_not_take_the_series_first_listing(self):
+        # With the series dropped, the Book 2 folder's name replaced the title
+        # and its number, so Book 1's listing (the only one on Audible, 1.6%
+        # off in runtime) was applied at 1.0.
+        path = Path("/audiobooks/Eric Vall/King of Superheroes/Book 2/Book 2 - King of Superheroes.m4b")
+        clues = FIXER.build_search_clues_from_file(
+            path, tags={"title": "King of Superheroes 2", "album": "King of Superheroes", "artist": "Eric Vall"})
+        book_one = {
+            "asin": "B0CTD1Z3VH", "title": "King of Superheroes", "runtime_length_min": 455,
+            "authors": [{"name": "Eric Vall"}],
+            "series": [{"title": "King of Superheroes", "sequence": "1"}],
+        }
+        self.assertEqual(FIXER.score_product_for_metadata(clues, book_one, 447.83), 0.0)
+
+
 class ParentheticalSeriesInTitleTests(unittest.TestCase):
     """Reforged's title tag ends "(The Tower Series, Book 2)", its real series."""
 

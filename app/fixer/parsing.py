@@ -29,6 +29,10 @@ from app.publisher_policy import (
 )
 from app.debug_trace import trace, ALTER, CHOOSE
 
+# "NOREALASIN" is a placeholder for "this book has no Audible listing": LibraForge's
+# marker records it, and some tools wrote it into the asin tag. It is never an ASIN.
+ASIN_PLACEHOLDER = "NOREALASIN"
+
 # ---------------------------------------------------------------------------
 # Text normalization
 # ---------------------------------------------------------------------------
@@ -225,6 +229,18 @@ def split_credit_names(value: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def drop_publisher_credits(value: str) -> str:
+    """The credit without names that are only a publisher or studio
+    ("GraphicAudio [Dramatized Adaptation]"): a publisher is never a narrator.
+    Unchanged when every name is a person."""
+    names = split_credit_names(value)
+    people = [
+        name for name in names
+        if strip_publisher_noise(re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", name)).strip()
+    ]
+    return value if len(people) == len(names) else ", ".join(people)
+
+
 def _split_author_names(value: str) -> list[str]:
     """Split a credit string into individual normalized author names."""
     return [n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n]
@@ -275,6 +291,18 @@ def _same_person_middle_names(a: str, b: str) -> bool:
         return False
     a_mid, b_mid = a_tokens[1:-1], b_tokens[1:-1]
     return all(x.startswith(y) or y.startswith(x) for x, y in zip(a_mid, b_mid))
+
+
+def _other_person_same_surname(a: str, b: str) -> bool:
+    """Same surname, given names starting with different letters: "frank
+    herbert" / "brian herbert". "lev"/"leo" or "jon"/"john" may be spellings
+    of one name, so only a different first letter counts."""
+    a_tokens, b_tokens = a.replace(".", " ").split(), b.replace(".", " ").split()
+    return (
+        len(a_tokens) >= 2 and len(b_tokens) >= 2
+        and a_tokens[-1] == b_tokens[-1]
+        and a_tokens[0][0] != b_tokens[0][0]
+    )
 
 
 def _initials_dedup_key(name: str) -> str:
@@ -1544,12 +1572,14 @@ def parse_title_series_number_from_metadata(tags: dict) -> dict:
     # An album that is the book's own title ("Sapiens"), or its opening
     # ("Intra Mundum: Reforged" for "Intra Mundum: Reforged: ..."), is not a
     # series clue. A "Series N" echo ("Pocket Dungeon 4") still is; a year
-    # ("... Since 1945") is not a book number.
+    # ("... Since 1945") is not a book number. An album the title only numbers
+    # ("King of Superheroes" for "King of Superheroes 2") is the series.
     album_norm, title_norm = normalize_for_match(album), normalize_for_match(raw_title)
     if (
         not grouping and album_norm and title_norm
         and title_norm.startswith(album_norm)
         and not re.search(r"(?<!\d)\d{1,3}\s*$", album_norm)
+        and not re.fullmatch(r"\s*\d{1,3}", title_norm[len(album_norm):])
     ):
         series = ""
     # Only a dedicated series-like tag (or a series name parsed out of the

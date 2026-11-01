@@ -151,7 +151,7 @@
       : (state.audible || state.abs);
   }
 
-  // abs-agg (GraphicAudio/SoundBooth Theater) and abs-tract (Goodreads/Kindle)
+  // abs-agg (GraphicAudio/SoundBooth Theater) and abs-tract (Kindle)
   // are unrelated to the Audible/ABS accounts pair above -- each is its own
   // independent optional service with its own settings section. Always
   // live-checked, same reasoning as getConnectionState() (no page-load cache).
@@ -286,6 +286,8 @@
   // same "stop and explain" behavior, no silent switch.
   const _ABS_AGG_PROVIDER_VALUES = new Set(["abs-agg", "graphicaudio", "soundbooththeater"]);
   const _ABS_TRACT_PROVIDER_VALUES = new Set(["kindle"]);
+  // Providers that need no account or service at all.
+  const _NO_CONNECTION_PROVIDER_VALUES = new Set(["audible-public", "goodreads"]);
 
   // Single entry point for every provider <select> (Start run, m4b-tool
   // search, Search For Selected Target): dispatches to the right check for
@@ -295,14 +297,14 @@
     const value = selectEl?.value;
     if (_ABS_AGG_PROVIDER_VALUES.has(value)) return ensureConnected("abs-agg");
     if (_ABS_TRACT_PROVIDER_VALUES.has(value)) return ensureConnected("abs-tract");
+    if (_NO_CONNECTION_PROVIDER_VALUES.has(value)) return true;
     // audible/abs family: auto-swap if the pick isn't connected but the other
     // one is. If autoRouteProvider found nothing to swap to (both connected,
     // or neither is), fall through to the real "at least one" gate -- it
     // no-ops when already satisfied, and redirects when truly nothing works.
     await autoRouteProvider(selectEl, actionLabel);
-    // Both Audible choices work: the public catalog needs no login, and
-    // "your account" was routed to it above when there is none.
-    if (selectEl?.value === "audible" || selectEl?.value === "audible-public") return true;
+    // "Your account" was routed to the public catalog above when there is none.
+    if (selectEl?.value === "audible" || _NO_CONNECTION_PROVIDER_VALUES.has(selectEl?.value)) return true;
     return ensureConnected("any");
   }
 

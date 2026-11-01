@@ -202,6 +202,28 @@ class SequenceLeniencyTests(unittest.TestCase):
         )
         self.assertFalse(FIXER.has_sequence_conflict(clues, par, 600.0))
 
+    def test_a_listing_whose_own_title_numbers_another_book_is_that_book(self):
+        # Every book of the series shares the subtitle the file is titled by:
+        # "Scholomance 6" names book 6, whatever the runtime.
+        clues = {
+            "title": "The Devil's Academy",
+            "raw_title": "Book 5 - The Devil's Academy",
+            "series": "Scholomance",
+            "author": "Logan Jacobs",
+            "narrator": "JD Tanner",
+            "book_number": "5",
+            "book_number_source": "path",
+        }
+        for minutes in (624, 654):
+            with self.subTest(minutes=minutes):
+                six = product(asin="B06", title="Scholomance 6: The Devil's Academy", series="Scholomance",
+                              sequence="6", authors=("Logan Jacobs",), narrators=("JD Tanner",), minutes=minutes)
+                self.assertTrue(FIXER.has_sequence_conflict(clues, six, 654.16))
+                self.assertEqual(FIXER.score_product_for_metadata(clues, six, 654.16), 0.0)
+        five = product(asin="B05", title="Scholomance 5: The Devil's Academy", series="Scholomance",
+                       sequence="5", authors=("Logan Jacobs",), narrators=("JD Tanner",), minutes=654)
+        self.assertGreaterEqual(FIXER.score_product_for_metadata(clues, five, 654.16), 0.70)
+
 
 class OmnibusRangeTests(unittest.TestCase):
     def setUp(self):
@@ -271,6 +293,26 @@ class OmnibusRangeTests(unittest.TestCase):
             FIXER.determine_edit_mode(candidate, clues, score, duration),
             "full",
         )
+
+    def test_perfect_runtime_box_set_is_full_whatever_the_local_title(self):
+        # "The Vesik Series" (#461): no box-set wording locally, but a runtime
+        # within 3% of the whole set is the set.
+        clues = {"title": "The Vesik Series", "raw_title": "The Vesik Series", "series": "",
+                 "author": "Eric Asher", "narrator": "", "book_number": "", "book_number_source": ""}
+        candidate = product(asin="B01M2V3X4L", title="The Vesik Series: Books 1-3", subtitle="Vesik Series Box Set",
+                            series="Vesik", sequence="", authors=("Eric Asher",), minutes=1705)
+        duration = FIXER.compare_duration(1705.65, candidate["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, candidate, 1705.65)
+        self.assertEqual(FIXER.determine_edit_mode(candidate, clues, score, duration), "full")
+
+    def test_box_set_on_a_single_book_runtime_stays_series_only(self):
+        clues = {"title": "The Vesik Series", "raw_title": "The Vesik Series", "series": "Vesik",
+                 "author": "Eric Asher", "narrator": "", "book_number": "", "book_number_source": ""}
+        candidate = product(asin="B01M2V3X4L", title="The Vesik Series: Books 1-3", subtitle="Vesik Series Box Set",
+                            series="Vesik", sequence="", authors=("Eric Asher",), minutes=1705)
+        duration = FIXER.compare_duration(560.0, candidate["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, candidate, 560.0)
+        self.assertNotEqual(FIXER.determine_edit_mode(candidate, clues, score, duration), "full")
 
 
 class TieBreakTests(unittest.TestCase):
@@ -638,6 +680,22 @@ class MissingCandidateSequenceTests(unittest.TestCase):
         )
         score = FIXER.score_product_for_metadata(clues, p, 634.0)
         self.assertGreaterEqual(score, 0.80)
+
+    def test_number_without_a_series_is_not_guarded(self):
+        # "Snow Crash; Book 01" (#460): a standalone's number belongs to no series,
+        # so an exact title, author and runtime match is the book.
+        clues = {
+            "title": "Snow Crash",
+            "raw_title": "Snow Crash",
+            "author": "Neal Stephenson",
+            "narrator": "",
+            "series": "",
+            "book_number": "1",
+            "book_number_source": "path",
+        }
+        p = product(asin="B002UUKWCY", title="Snow Crash", authors=("Neal Stephenson",), minutes=1023.0)
+        score = FIXER.score_product_for_metadata(clues, p, 1024.26)
+        self.assertGreaterEqual(score, 0.90)
 
     def test_weak_track_derived_number_is_not_guarded(self):
         """Track-derived numbers are weak metadata; do not gate on them."""

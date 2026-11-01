@@ -179,6 +179,18 @@ class Mp4RealFileStaleTagRepoTests(unittest.TestCase):
         self.assertEqual(tags["\xa9mvn"][0], "Dune")
         self.assertEqual(tags["\xa9mvi"], [1])
 
+    def test_a_match_with_no_asin_removes_the_norealasin_placeholder(self):
+        # Some older tool wrote "NOREALASIN" into the asin tag; a Goodreads
+        # match has no ASIN, so the default policy never touched the field.
+        from mutagen.mp4 import MP4, MP4FreeForm
+        path = self._make_pretagged()
+        audio = MP4(str(path))
+        audio.tags["----:com.apple.iTunes:ASIN"] = [MP4FreeForm(b"NOREALASIN")]
+        audio.save()
+        FIXER.mutagen_write_mp4_tags(path, {**EDIT_METADATA, "asin": ""}, backup=False)
+        tags = MP4(str(path)).tags
+        self.assertFalse([k for k in tags.keys() if k.lower().endswith(":asin")])
+
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg binary not available to build test fixtures")
 class Mp3RealFileStaleTagRepoTests(unittest.TestCase):
@@ -213,6 +225,24 @@ class Mp3RealFileStaleTagRepoTests(unittest.TestCase):
         self.assertEqual(str(tags["TXXX:asin"].text[0]), "B0NEWASIN01")
         self.assertEqual(str(tags["TXXX:isbn"].text[0]), "9780765340338")
 
+    def test_a_match_with_no_asin_removes_the_norealasin_placeholder(self):
+        from mutagen.id3 import ID3, TXXX
+        path = self._make_pretagged()
+        tags = ID3(str(path))
+        tags.delall("TXXX:ASIN")
+        tags.add(TXXX(encoding=3, desc="asin", text=["NOREALASIN"]))
+        tags.save(str(path))
+        FIXER.mutagen_write_mp3_tags(path, {**EDIT_METADATA, "asin": ""}, backup=False)
+        self.assertFalse([f for f in ID3(str(path)).getall("TXXX") if f.desc.lower() == "asin"])
+
+
+
+class AsinPlaceholderClueTests(unittest.TestCase):
+    def test_the_norealasin_placeholder_is_not_the_book_asin(self):
+        # It was looked up as an ASIN ("Trying ASIN direct lookup: NOREALASIN").
+        clues = FIXER.build_search_clues_from_file(
+            Path("/books/Frank Herbert/Dune/Dune.m4b"), tags={"title": "Dune", "asin": "NOREALASIN"})
+        self.assertNotIn("existing_asin", clues)
 
 if __name__ == "__main__":
     unittest.main()

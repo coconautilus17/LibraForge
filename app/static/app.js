@@ -423,6 +423,7 @@ function renderStats(stats, startedAt, finishedAt) {
     stat('Mode: full', mode.full, 'Full metadata rewrite planned/applied.'),
     stat('Mode: series_only', mode.series_only, 'Only grouping-critical metadata is changed.'),
     stat('Mode: none', mode.none, 'No safe edit selected.'),
+    provider.audiobookguild ? stat('Via Audiobook Guild', provider.audiobookguild, 'Books by an author Audiobook Guild sells, matched there first. Audible is not searched for them.') : '',
     provider.graphicaudio ? stat('Via GraphicAudio', provider.graphicaudio, 'Books matched via the GraphicAudio abs-agg endpoint.') : '',
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads fallback, used when Audible did not return a confident match.') : '',

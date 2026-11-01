@@ -18,6 +18,7 @@ from typing import Any
 from app.debug_trace import trace, ALTER, CHOOSE, SCORE
 from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
+    ASIN_PLACEHOLDER,
     is_never_series,
     series_from_subtitle,
     normalize_for_match,
@@ -36,12 +37,17 @@ from app.fixer.parsing import (
     sequence_values_equal,
     normalize_book_label_for_match,
     _authors_compatible,
+    _other_person_same_surname,
+    _split_author_names,
     canonicalize_author_credits,
     is_invalid_local_title,
     strip_title_search_noise,
+    drop_publisher_credits,
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
+    clean_series_value,
+    parse_series_sequence_segment,
     ET_AL_RE,
 )
 
@@ -52,6 +58,10 @@ from app.fixer.parsing import (
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
 # The fixer's default --min-score: the score a match needs to be applied.
 MIN_MATCH_SCORE = 0.70
+
+# Placeholder author values (normalize_for_match form) that name no real author.
+GENERIC_AUTHORS = {"unknown", "unknown author", "various", "various authors", "anonymous", "misc", "n a", "na"}
+
 # Format labels, never genres ("Audiobook" is not a genre: PR #105, #306).
 GENRE_BLOCKLIST = {"audiobook", "audiobooks", "audio book", "audio books"}
 
@@ -629,6 +639,18 @@ def has_cross_series_folder_identity(
     )["status"] == "perfect"
 
 
+def titles_name_different_books(clues: dict, product: dict) -> bool:
+    """Each title has a word the other lacks: they name two books, however
+    similar ("... The Secondary Phase" vs "... Tertiary Phase", "Mistborn -
+    Collected Tales" vs "Mistborn: Secret History"). Numbers are not words."""
+    def words(title: str) -> set[str]:
+        return {t for t in significant_title_tokens(title) if not t.isdigit()}
+
+    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
+    audible_tokens = words(product.get("title", "") or "")
+    return bool(local_tokens - audible_tokens and audible_tokens - local_tokens)
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def strong_identity_overrides_number_conflict(
     clues: dict,
@@ -662,12 +684,8 @@ def strong_identity_overrides_number_conflict(
     audible_title_number = extract_title_identity_number(
         product.get("title", "") or ""
     )
-    if (
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    ):
-        # Both titles carry explicit series numbers and they disagree -- not a
+    if title_numbers_another_book(clues, product):
+        # The candidate's own title numbers another book -- not a
         # parallel-series case (e.g. local "Series 4" vs Audible "Series 6").
         return False
 
@@ -687,15 +705,8 @@ def strong_identity_overrides_number_conflict(
             except (ValueError, TypeError):
                 return False
 
-    # Each title has a word the other lacks: they name two books of the series
-    # ("... The Secondary Phase" vs "... Tertiary Phase"), however similar.
     # Numbers are left to the number checks above.
-    def words(title: str) -> set[str]:
-        return {t for t in significant_title_tokens(title) if not t.isdigit()}
-
-    local_tokens = words(clues.get("title", "") or clues.get("raw_title", ""))
-    audible_tokens = words(product.get("title", "") or "")
-    if local_tokens - audible_tokens and audible_tokens - local_tokens:
+    if titles_name_different_books(clues, product):
         return False
 
     duration = compare_duration(
@@ -745,10 +756,25 @@ def local_number_unconfirmed_by_candidate(clues: dict, product: dict) -> bool:
     agreement alone must not promote this to a confident, auto-write score;
     without a number to compare, the identity is genuinely unconfirmed.
     """
-    if not has_strong_local_number(clues):
+    # A number with no series ("Snow Crash; Book 01") places the book in
+    # nothing, so there is nothing for the candidate to confirm.
+    if not has_strong_local_number(clues) or not normalize_for_match(clues.get("series", "")):
         return False
     _series, audible_sequence = get_primary_series(product)
     return not str(audible_sequence).strip()
+
+
+def title_numbers_another_book(clues: dict, product: dict) -> bool:
+    """The candidate's own title numbers a book ("Scholomance 6: The Devil's
+    Academy") other than the local one: the local title's number, or else a
+    book number from the local title or folder."""
+    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
+    if not audible_title_number:
+        return False
+    local_number = extract_title_identity_number(clues.get("title", "") or clues.get("raw_title", ""))
+    if not local_number and has_strong_local_number(clues):
+        local_number = str(clues.get("book_number", "")).strip()
+    return bool(local_number) and not sequence_values_equal(local_number, audible_title_number)
 
 
 @trace(SCORE, capture=["local_duration_minutes"])
@@ -796,20 +822,13 @@ def has_sequence_conflict(
     if has_cross_series_folder_identity(clues, product, local_duration_minutes):
         return False
 
-    # When both the local title and the Audible title carry explicit, differing
-    # trailing numbers (e.g. local "Power Mage 5" vs Audible "Power Mage 6"),
-    # the numbers ARE the identity of two different books in the same series.
-    # High title similarity (they share the base series name) must not be allowed
-    # to mask this as a parallel-numbering case.
-    local_title_number = extract_title_identity_number(
-        clues.get("title", "") or clues.get("raw_title", "")
-    )
-    audible_title_number = extract_title_identity_number(product.get("title", "") or "")
-    explicit_title_number_conflict = bool(
-        local_title_number
-        and audible_title_number
-        and local_title_number != audible_title_number
-    )
+    # When the Audible title carries a number other than the local book's
+    # (e.g. local "Power Mage 5", or "Book 5 - The Devil's Academy", vs Audible
+    # "Power Mage 6", "Scholomance 6: The Devil's Academy"), the numbers ARE the
+    # identity of two different books in the same series. High title similarity
+    # (a shared series name or subtitle) must not be allowed to mask this as a
+    # parallel-numbering case.
+    explicit_title_number_conflict = title_numbers_another_book(clues, product)
 
     # If the title is a strong match and duration confirms it,
     # do not reject only because the local folder numbering differs from
@@ -880,16 +899,7 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
     if not local_author or not product_author:
         return False
 
-    generic = {
-        "unknown",
-        "unknown author",
-        "various",
-        "various authors",
-        "anonymous",
-        "n a",
-        "na",
-    }
-    if local_author in generic or product_author in generic:
+    if local_author in GENERIC_AUTHORS or product_author in GENERIC_AUTHORS:
         return False
 
     # "Audio Versee", "Audio Version", etc. are garbled production-format labels
@@ -911,11 +921,20 @@ def has_author_identity_conflict(clues: dict, product: dict) -> bool:
 
     # Any shared meaningful name token (>= 3 chars, skipping initials) means we
     # cannot be sure the authors differ -- shared co-author, alternate spelling,
-    # etc. Only block when there is zero overlap.
+    # etc. -- unless every name sharing one is a surname under another given
+    # name (Frank Herbert vs Brian Herbert). Only block when there is no overlap.
     def name_tokens(value: str) -> set[str]:
         return {token for token in value.split() if len(token) >= 3}
 
-    if name_tokens(local_author) & name_tokens(product_author):
+    sharing = [
+        (local_name, product_name)
+        for local_name in _split_author_names(clean_author_value(clues.get("author", "")))
+        for product_name in _split_author_names(", ".join(get_people(product, "authors")))
+        if name_tokens(local_name) & name_tokens(product_name)
+    ]
+    if name_tokens(local_author) & name_tokens(product_author) and not (
+        sharing and all(_other_person_same_surname(*pair) for pair in sharing)
+    ):
         return False
 
     # No similarity, no containment, no shared name token: confidently different.
@@ -992,6 +1011,23 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
         if normalize_for_match(name) == local:
             return {**product, "series": [entry] + series[:index] + series[index + 1:], "_series_from_clues": True}
     return product
+
+
+def local_series_name(clues: dict) -> str:
+    """The series as the file names it, for a source that names a series its
+    own way (Audiobook Guild's "Monster Girl Islands" for the library's
+    "Monster Girl Islands Series"); "" when the file names none. A file series
+    that carries the book's own number ("Summoner 6", "Adam and His Eves #7",
+    "Okay, But Try Not to Murder Anyone, Book #8") is read without it, and one
+    that is the book's author ("J.A. Cipriano; The Pen Is Mightier; Book 01")
+    is a folder segment, not a series."""
+    name, _ = split_series_trailing_number(clean_series_value(clues.get("series", "") or ""), "")
+    bare, number = parse_series_sequence_segment(re.sub(r"\s*#\s*(?=\d+$)", " ", name), require_label=False)
+    if bare and sequence_values_equal(number, clues.get("book_number", "")):
+        name = bare
+    if name and _authors_compatible(name, clues.get("author", "") or "") is True:
+        return ""
+    return name
 
 
 @trace(SCORE, capture=["local_duration_minutes"])
@@ -1196,16 +1232,6 @@ def score_product_for_metadata(
 
     # Title evidence.
     title_score = title_evidence_score(clues, product)
-    local_title = normalize_for_match(clues.get("title", ""))
-    audible_title = normalize_for_match(product.get("title", "") or "")
-    audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
-
-    title_matches_audible = (
-        title_score >= 0.55
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
     score += title_score * 0.12
 
     # Strong identity bonus.
@@ -1722,13 +1748,6 @@ def determine_edit_mode(
     audible_title = normalize_for_match(product.get("title", "") or "")
     audible_subtitle = normalize_for_match(product.get("subtitle", "") or "")
 
-    title_matches_audible = (
-        title_score >= 0.55
-        or (local_title and local_title in audible_title)
-        or (local_title and local_title in audible_subtitle)
-        or is_generic_series_number_title(clues)
-    )
-
     local_author = normalize_for_match(clues.get("author", ""))
     audible_authors = normalize_for_match(" ".join(get_people(product, "authors")))
     local_series = normalize_for_match(clues.get("series", ""))
@@ -1752,6 +1771,16 @@ def determine_edit_mode(
             or local_series in audible_series
             or SequenceMatcher(None, local_series, audible_series).ratio() >= 0.88
         )
+    )
+
+    # A loose title score is a match only when neither title names a book
+    # the other doesn't ("Mistborn - Collected Tales" vs "... Secret History").
+    title_matches_audible = (
+        (title_score >= 0.85 or (title_score >= 0.55 and not titles_name_different_books(clues, product)))
+        or (local_title and local_title in audible_title)
+        or (local_title and local_title in audible_subtitle)
+        # "The Riyria Revelations 02" names book 2 of that series only.
+        or (is_generic_series_number_title(clues) and series_identity_match)
     )
 
     def safe_series_only() -> str:
@@ -1784,10 +1813,11 @@ def determine_edit_mode(
                 flags=re.IGNORECASE,
             )
         )
-        if (
-            local_omnibus
-            and title_score >= 0.80
-            and duration_status in {"perfect", "strong"}
+        # A runtime within 3% of the whole set is the set itself, whatever the
+        # local title calls it ("The Vesik Series", "Condition Evolution 1-3").
+        if title_score >= 0.80 and (
+            duration_status == "perfect"
+            or (local_omnibus and duration_status == "strong")
         ):
             return "full"
         return safe_series_only()
@@ -2022,7 +2052,7 @@ def metadata_from_product(
         # still carrying this product's ASIN got it from an earlier
         # series_only write, so that one is dropped too.
         local_asin = str(clues.get("existing_asin", "") or "").upper()
-        asin = "" if local_asin in {"NOREALASIN", asin.upper()} else local_asin
+        asin = "" if local_asin in {ASIN_PLACEHOLDER, asin.upper()} else local_asin
         isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
         cover_url = ""
 
@@ -2031,7 +2061,7 @@ def metadata_from_product(
         "title": title,
         "subtitle": subtitle,
         "author": author_text or sanitize_tag(clues.get("author", "")),
-        "narrator": narrator_to_write,
+        "narrator": drop_publisher_credits(narrator_to_write),
         "series": series_name,
         "sequence": sequence_to_write,
         "year": year_to_write,
