@@ -745,7 +745,9 @@ def local_number_unconfirmed_by_candidate(clues: dict, product: dict) -> bool:
     agreement alone must not promote this to a confident, auto-write score;
     without a number to compare, the identity is genuinely unconfirmed.
     """
-    if not has_strong_local_number(clues):
+    # A number with no series ("Snow Crash; Book 01") places the book in
+    # nothing, so there is nothing for the candidate to confirm.
+    if not has_strong_local_number(clues) or not normalize_for_match(clues.get("series", "")):
         return False
     _series, audible_sequence = get_primary_series(product)
     return not str(audible_sequence).strip()
