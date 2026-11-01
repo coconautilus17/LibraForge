@@ -36,6 +36,15 @@ class PublisherCaptureTests(unittest.TestCase):
         FIXER.capture_publisher_clue(clues, {"publisher": "Tantor Audio"})
         self.assertEqual(clues["author"], "Jane Doe")
 
+    def test_a_narrator_that_is_only_a_publisher_is_no_narrator(self):
+        # GraphicAudio files carry the studio in the narrator (composer) tag.
+        clues = {"author": "Brandon Sanderson", "narrator": "GraphicAudio [Dramatized Adaptation]"}
+        FIXER.capture_publisher_clue(clues, {"composer": "GraphicAudio [Dramatized Adaptation]"})
+        self.assertEqual((clues["publisher"], clues["narrator"]), ("Graphic Audio", ""))
+        clues = {"author": "Jane Doe", "narrator": "Michael Kramer, GraphicAudio"}
+        FIXER.capture_publisher_clue(clues, {})
+        self.assertEqual(clues["narrator"], "Michael Kramer")
+
     def test_capture_from_adjacent_field_when_no_publisher_tag(self):
         clues = {"author": "Jane Doe"}
         FIXER.capture_publisher_clue(clues, {"album_artist": "Soundbooth Theater"})
@@ -102,6 +111,12 @@ class PublisherWriteTests(unittest.TestCase):
         args = FIXER.build_metadata_args(meta)
         joined = " ".join(args)
         self.assertIn("publisher=Tantor Audio", joined)
+
+    def test_a_publisher_listed_as_narrator_is_not_written_as_one(self):
+        product = {**self._product(), "narrators": [{"name": "GraphicAudio"}], "_abs_provider": "graphicaudio"}
+        clues = {"title": "The Book", "author": "Jane Doe", "local_duration_minutes": 600}
+        meta = FIXER.metadata_from_product(product, clues, 1.0, "full")
+        self.assertEqual((meta["narrator"], meta["publisher"]), ("", "Graphic Audio"))
 
     def test_preview_includes_publisher(self):
         preview = FIXER.final_metadata_preview({"title": "X", "publisher": "Tantor Audio"})
