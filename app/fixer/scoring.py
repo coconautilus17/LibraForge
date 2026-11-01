@@ -1784,10 +1784,11 @@ def determine_edit_mode(
                 flags=re.IGNORECASE,
             )
         )
-        if (
-            local_omnibus
-            and title_score >= 0.80
-            and duration_status in {"perfect", "strong"}
+        # A runtime within 3% of the whole set is the set itself, whatever the
+        # local title calls it ("The Vesik Series", "Condition Evolution 1-3").
+        if title_score >= 0.80 and (
+            duration_status == "perfect"
+            or (local_omnibus and duration_status == "strong")
         ):
             return "full"
         return safe_series_only()

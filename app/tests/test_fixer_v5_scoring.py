@@ -272,6 +272,26 @@ class OmnibusRangeTests(unittest.TestCase):
             "full",
         )
 
+    def test_perfect_runtime_box_set_is_full_whatever_the_local_title(self):
+        # "The Vesik Series" (#461): no box-set wording locally, but a runtime
+        # within 3% of the whole set is the set.
+        clues = {"title": "The Vesik Series", "raw_title": "The Vesik Series", "series": "",
+                 "author": "Eric Asher", "narrator": "", "book_number": "", "book_number_source": ""}
+        candidate = product(asin="B01M2V3X4L", title="The Vesik Series: Books 1-3", subtitle="Vesik Series Box Set",
+                            series="Vesik", sequence="", authors=("Eric Asher",), minutes=1705)
+        duration = FIXER.compare_duration(1705.65, candidate["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, candidate, 1705.65)
+        self.assertEqual(FIXER.determine_edit_mode(candidate, clues, score, duration), "full")
+
+    def test_box_set_on_a_single_book_runtime_stays_series_only(self):
+        clues = {"title": "The Vesik Series", "raw_title": "The Vesik Series", "series": "Vesik",
+                 "author": "Eric Asher", "narrator": "", "book_number": "", "book_number_source": ""}
+        candidate = product(asin="B01M2V3X4L", title="The Vesik Series: Books 1-3", subtitle="Vesik Series Box Set",
+                            series="Vesik", sequence="", authors=("Eric Asher",), minutes=1705)
+        duration = FIXER.compare_duration(560.0, candidate["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, candidate, 560.0)
+        self.assertNotEqual(FIXER.determine_edit_mode(candidate, clues, score, duration), "full")
+
 
 class TieBreakTests(unittest.TestCase):
     def setUp(self):
