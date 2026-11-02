@@ -1030,6 +1030,31 @@ def local_series_name(clues: dict) -> str:
     return name
 
 
+def book_number_to_write(value: str) -> str:
+    """A whole or decimal book number as written ("3", "3.5"); clean_sequence
+    keeps whole numbers only, which left every novella (3.5) unnumbered."""
+    value = str(value or "").strip()
+    if re.fullmatch(r"\d+\.\d*[1-9]\d*", value):
+        return f"{float(value):g}"
+    return clean_sequence(value)
+
+
+def own_book_number(clues: dict) -> str:
+    """The book's own number: its sequence tag, else the number read from its
+    title or folder."""
+    return (book_number_to_write((clues.get("current") or {}).get("sequence", ""))
+            or book_number_to_write(clues.get("book_number", "")))
+
+
+def same_series_name(a: str, b: str) -> bool:
+    """One series named two ways ("Hell Divers Series" / "Hell Divers")."""
+    a, b = normalize_for_match(a), normalize_for_match(b)
+    if not a or not b:
+        return False
+    shorter, longer = sorted((a, b), key=len)
+    return a == b or (len(shorter) >= 4 and longer.startswith(shorter))
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
@@ -1951,7 +1976,7 @@ def metadata_from_product(
     subtitle = sanitize_tag(product.get("subtitle", ""))
 
     series_name, sequence = get_primary_series(product)
-    clean_seq = preferred_audible_sequence(product)
+    clean_seq = preferred_audible_sequence(product) or book_number_to_write(sequence)
 
     duration_result = compare_duration(
         local_minutes=clues.get("local_duration_minutes"),
@@ -1985,6 +2010,10 @@ def metadata_from_product(
         )
         album = title
         sequence_to_write = clean_seq
+        # A listing in the file's own series but with no number for it (many
+        # novellas, "Gate Lord" #1) doesn't unnumber the book: keep the file's.
+        if not sequence_to_write and same_series_name(series_name, local_series_name(clues)):
+            sequence_to_write = own_book_number(clues)
         edition = different_edition(clues, product, duration_result)
         narrator_to_write = edition["local_narrator"] if edition else narrator_text
         year_to_write = year
@@ -2006,7 +2035,9 @@ def metadata_from_product(
             else local_title
         )
         album = title
-        sequence_to_write = ""
+        # The product is another book of the series, so its number isn't this
+        # book's; the file's own number is.
+        sequence_to_write = own_book_number(clues)
         narrator_to_write = sanitize_tag(clues.get("narrator", ""))
         year_to_write = ""
         summary_to_write = ""
@@ -2033,7 +2064,7 @@ def metadata_from_product(
     ):
         current = clues.get("current") or {}
         series_name = sanitize_tag(current.get("series", ""))
-        sequence_to_write = clean_sequence(current.get("sequence", "")) if series_name else ""
+        sequence_to_write = book_number_to_write(current.get("sequence", "")) if series_name else ""
 
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
