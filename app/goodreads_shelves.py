@@ -202,7 +202,14 @@ def fetch_book_shelves(
 
 
 # "Mistborn: The Final Empire (Mistborn, #1)": Goodreads' title with its series.
-_SERIES_SUFFIX_RE = re.compile(r"^(?P<title>.*\S)\s*\((?P<series>[^()]*?),?\s*#(?P<seq>[\d.]+(?:\s*-\s*[\d.]+)?)\)\s*$")
+# A book in two series lists both: "The Last Hero (Discworld, #27; Rincewind #7)".
+_SERIES_SUFFIX_RE = re.compile(r"^(?P<title>.*\S)\s*\((?P<series>[^()#;]*?),?\s*#(?P<seq>[\d.]+(?:\s*-\s*[\d.]+)?)(?:;[^()]*)?\)\s*$")
+# "Casual Farming 3 (Sowing Season)": a series named with no number.
+_TRAILING_PARENTHETICAL_RE = re.compile(r"\s*\(([^()]+)\)\s*$")
+
+
+def _series_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", re.sub(r"^the\s+|\s+series$", "", name.lower().replace("&", "and").strip())).strip()
 _LANGUAGES = {"eng": "english", "en": "english", "en-us": "english", "en-gb": "english", "spa": "spanish",
               "ger": "german", "deu": "german", "fre": "french", "fra": "french", "ita": "italian", "jpn": "japanese",
               "por": "portuguese", "dut": "dutch", "nld": "dutch", "rus": "russian", "pol": "polish"}
@@ -218,11 +225,18 @@ def book_match(book_el: ET.Element) -> dict[str, Any]:
     if m:  # the title's series is the book's own, series_works may list an umbrella first
         title = m.group("title").strip()
         series = [{"series": m.group("series").strip(), "sequence": re.sub(r"\s+", "", m.group("seq"))}]
-    for work in [] if series else book_el.findall("series_works/series_work"):
-        name, position = (work.findtext("series/title") or "").strip(), (work.findtext("user_position") or "").strip()
+    works = [((work.findtext("series/title") or "").strip(), (work.findtext("user_position") or "").strip())
+             for work in book_el.findall("series_works/series_work")]
+    for name, position in [] if series else works:
         if name and position:
             series = [{"series": name, "sequence": position}]
             break
+    # A series named in the title with no number is still the series, not
+    # part of the title (the numbered form is handled above).
+    suffix = _TRAILING_PARENTHETICAL_RE.search(title)
+    if suffix and (_series_key(suffix.group(1)) in {_series_key(name) for name, _ in works if name}
+                   or re.search(r"\bseries\s*$", suffix.group(1), re.IGNORECASE)):
+        title = title[:suffix.start()].strip()
     authors, narrators = [], []
     for author in book_el.findall("authors/author"):
         name, role = (author.findtext("name") or "").strip(), (author.findtext("role") or "").strip().lower()
