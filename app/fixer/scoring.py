@@ -241,12 +241,29 @@ def literal_text(value: str) -> str:
 
 
 @trace(ALTER, capture=[])
+def series_from_title(title: str) -> tuple[str, str]:
+    """Series and number from a title's trailing "(Series Book N)", else ("", "")."""
+    if not re.search(r"\)\s*$", title or ""):
+        return "", ""
+    return series_from_subtitle(title)
+
+
+def title_without_series_parenthetical(title: str, series_name: str) -> str:
+    """The title without a trailing "(Series Book N)" naming its series."""
+    match = re.search(r"\s*\([^()]*\)\s*$", title or "")
+    if match and series_name and literal_text(series_from_title(title)[0]) == literal_text(series_name):
+        return title[:match.start()].strip()
+    return title
+
+
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
 
     if not series:
-        # Audible left the series field empty but the subtitle names it.
-        return series_from_subtitle(product.get("subtitle"))
+        # Audible left the series field empty but the subtitle names it, or
+        # its title ends with it ("Frigid Magic (Ard's Oath Book 3)").
+        found = series_from_subtitle(product.get("subtitle"))
+        return found if found[0] else series_from_title(product.get("title"))
 
     # A book in several series ([The Cosmere, The Stormlight Archive 4]) comes
     # back from Audible in no stable order: a numbered series beats an
@@ -1995,6 +2012,7 @@ def metadata_from_product(
 
     author_text = canonicalize_author_credits(authors)
     narrator_text = ", ".join(narrators)
+    audible_title = title_without_series_parenthetical(audible_title, series_name)
 
     year = get_year(product)
     summary = sanitize_tag(
@@ -2106,6 +2124,11 @@ def metadata_from_product(
         asin = "" if local_asin in {ASIN_PLACEHOLDER, asin.upper()} else local_asin
         isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
         cover_url = ""
+
+    # A number with no series names nothing ("Fahrenheit 451" is no book 451):
+    # never write one alone.
+    if not series_name:
+        sequence_to_write = ""
 
     return {
         "asin": asin,
