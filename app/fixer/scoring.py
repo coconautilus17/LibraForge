@@ -1366,29 +1366,43 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
     match_narrator = ", ".join(get_people(product, "narrators"))
     if not match_narrator:
         return None
-    authors = " ".join(get_people(product, "authors"))
+    # One name per author: joined with spaces, "James Hunter, eden Hudson"
+    # became a single name no credit ("James A. Hunter") could match.
+    authors = ", ".join(get_people(product, "authors"))
     # The file's own author tag names its author, even when spelled unlike
     # the match ("Pegaz A" for Audible's "Pegaz"): never a reader.
     local_authors = {normalize_for_match(n) for n in split_credit_names(clues.get("author", ""))}
 
+    def is_author(name: str) -> bool:
+        return (_authors_compatible(name, authors) is True
+                or normalize_for_match(name) in local_authors
+                or _authors_compatible(name, clues.get("author", "")) is True)
+
     def readers(values) -> list[str]:
         return [name for value in values for name in split_credit_names(value)
-                if _authors_compatible(name, authors) is not True
-                and normalize_for_match(name) not in local_authors]
+                if not is_author(name) and normalize_for_match(name) not in GENERIC_AUTHORS]
 
     # The author can also narrate. Trust an explicit narrator tag unless another
-    # local credit identifies the matched recording's reader.
-    tagged = split_credit_names(clues.get("narrator", ""))
+    # local credit identifies the matched recording's reader. A placeholder
+    # ("Misc", "Unknown") names nobody.
+    tagged = [name for name in split_credit_names(clues.get("narrator", ""))
+              if normalize_for_match(name) not in GENERIC_AUTHORS]
     credits = clues.get("credit_names") or []
     credited = list(dict.fromkeys(names[-1] for names in (readers([c]) for c in credits) if names))
     # A composer tag sometimes holds the author while the actual reader sits
     # in another credit. Prefer that reader, but keep the tag if no other
     # reader is identifiable (the author may narrate).
-    tagged_reader = [name for name in tagged if _authors_compatible(name, authors) is not True]
+    tagged_reader = [name for name in tagged if not is_author(name)]
     # A group credit ("Kimberly A. Blessing et al.") naming only authors is an
     # author/editor credit, not an author who narrates.
     group_credit = bool(ET_AL_RE.search(clues.get("narrator", "") or ""))
     local = tagged_reader or credited or ([] if group_credit else tagged)
+    # A narrator tag that only names the author is as often the artist tag
+    # copied over as the author really narrating, so like any tag it doesn't
+    # outweigh audio within 1% of the match (RUNTIME_RIVAL_MAX_DIFF_PERCENT).
+    diff = duration_result.get("diff_percent")
+    if local and not (tagged_reader or credited) and diff is not None and diff <= RUNTIME_RIVAL_MAX_DIFF_PERCENT:
+        return None
     if not local or any(
         narrator_match_score({"narrator": name}, product) >= NARRATOR_GOOD_SCORE
         for name in tagged + readers(credits)
