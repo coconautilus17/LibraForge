@@ -43,6 +43,7 @@ from app.fixer.parsing import (
     is_invalid_local_title,
     strip_title_search_noise,
     drop_publisher_credits,
+    is_generic_chapter_title,
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
@@ -2172,13 +2173,19 @@ def choose_best_title(audible_title: str, audible_series: str, local_title: str)
     if not audible_title_clean:
         return local_title_clean
 
-    # If Audible uses the series name as the title, the local title is usually more specific.
+    # If Audible uses the series name as the title, the local title is usually
+    # more specific, as long as it is a title and not a file or track name
+    # ("01 Monster Core", "King_Of_The_Fae_Islands_-_Adam_Lance",
+    # "Opening Credits - Speedrunning the Multiverse").
+    local_title_clean = strip_leading_sequence_from_title(local_title_clean) or local_title_clean
     if (
         audible_series_clean
         and normalize_for_match(audible_title_clean)
         == normalize_for_match(audible_series_clean)
         and normalize_for_match(local_title_clean)
         != normalize_for_match(audible_title_clean)
+        and "_" not in local_title_clean
+        and not is_generic_chapter_title(re.split(r"\s+[-–—:]\s+", local_title_clean)[0])
     ):
         return local_title_clean
 
