@@ -264,6 +264,29 @@ class SearchBooksTests(unittest.TestCase):
                                    "<series><title> Cradle </title></series></series_work></series_works>")).find("book")
         self.assertEqual(book_match(page)["series"], [{"series": "Cradle", "sequence": "1"}])
 
+    def _match(self, title, extra=""):
+        from app.goodreads_shelves import book_match
+        import xml.etree.ElementTree as ET
+        return book_match(ET.fromstring(_page(title, "Robert Bevan", extra)).find("book"))
+
+    def test_a_series_named_with_no_number_leaves_the_title(self):
+        # Benchmark: "3d6 (Caverns & Creatures)" and "Casual Farming 3 (Sowing Season)" were written as titles.
+        works = ("<series_works><series_work><user_position></user_position>"
+                 "<series><title>Caverns and Creatures</title></series></series_work></series_works>")
+        self.assertEqual(self._match("3d6 (Caverns &amp; Creatures)", works)["title"], "3d6")
+        self.assertEqual(self._match("The Shortest History of Reality (The Shortest History Series)")["title"],
+                         "The Shortest History of Reality")
+
+    def test_a_parenthetical_that_is_not_a_series_stays(self):
+        self.assertEqual(self._match("Network Effect (Dramatized Adaptation)")["title"],
+                         "Network Effect (Dramatized Adaptation)")
+
+    def test_a_book_in_two_series_takes_the_first(self):
+        # "Discworld, #27; Rincewind" was written as the series name.
+        match = self._match("The Last Hero (Discworld, #27; Rincewind #7)")
+        self.assertEqual(match["title"], "The Last Hero")
+        self.assertEqual(match["series"], [{"series": "Discworld", "sequence": "27"}])
+
     def test_a_blocked_search_is_failed_not_empty(self):
         from app.goodreads_shelves import search_books
 
