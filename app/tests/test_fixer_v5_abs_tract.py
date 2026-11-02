@@ -448,6 +448,30 @@ class GoodreadsEditModeGateTests(unittest.TestCase):
         self.assertEqual(metadata["series"], "Rise of the Bloodmoon Witch")
         self.assertEqual(metadata["sequence"], "1")
 
+    def test_sparse_match_keeps_the_files_narrator(self):
+        # Dune (#477): Goodreads lists no narrator; the full write cleared the
+        # file's "George Guidall, Scott Porter".
+        clues = {"title": "Moonrise", "author": "Chad J Maske", "narrator": "Lindsey Dorcus",
+                 "current": {"narrator": "Lindsey Dorcus"}}
+        metadata = fixer.metadata_from_product(
+            self._product("Moonrise", "Chad J. Maske"), clues, 0.22
+        )
+        self.assertEqual(metadata["edit_mode"], "full")
+        self.assertEqual(metadata["narrator"], "Lindsey Dorcus")
+
+    def test_audible_listing_without_a_narrator_keeps_the_files(self):
+        # Raymond Benson's Bond novels: the Audible listing has no narrator, the
+        # file is read by Simon Vance.
+        product = {"asin": "B0DDDDDDDD", "title": "Zero Minus Ten", "authors": [{"name": "Raymond Benson"}],
+                   "narrators": [], "series": [{"title": "James Bond by Benson", "sequence": "1"}],
+                   "runtime_length_min": 600}
+        clues = {"title": "Zero Minus Ten", "author": "Raymond Benson", "narrator": "Simon Vance",
+                 "book_number": "1", "local_duration_minutes": 601.0,
+                 "current": {"narrator": "Simon Vance", "series": "James Bond by Benson", "sequence": "1"}}
+        metadata = fixer.metadata_from_product(product, clues, 1.0)
+        self.assertEqual(metadata["edit_mode"], "full")
+        self.assertEqual(metadata["narrator"], "Simon Vance")
+
     def test_sparse_match_with_series_still_writes_its_own(self):
         clues = {"title": "Unsouled", "author": "Will Wight",
                  "current": {"series": "Old Tag", "sequence": "9"}}
