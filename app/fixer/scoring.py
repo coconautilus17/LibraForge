@@ -2057,6 +2057,12 @@ def metadata_from_product(
     special_provider = SPECIAL_PROVIDERS.get(product.get("_abs_provider") or "", "")
     publisher = special_provider or sanitize_tag(clues.get("publisher", ""))
 
+    # Like a missing series above, a listing with no narrator (Goodreads never
+    # lists one; some Audible listings leave it empty) doesn't say the book has
+    # none: keep the file's own narrator instead of clearing it.
+    if edit_mode == "full" and not narrator_to_write:
+        narrator_to_write = sanitize_tag((clues.get("current") or {}).get("narrator", ""))
+
     asin = product.get("asin", "")
     isbn = product.get("_abs_isbn", "") or ""
     cover_url = get_cover_url(product)
