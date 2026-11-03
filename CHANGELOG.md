@@ -6,6 +6,53 @@ onward is tracked here going forward.
 
 ---
 
+## v0.3.0 (2026-11-04)
+
+- Metadata Forge: an **Audible public catalog (no login)** provider with a
+  marketplace picker (US, UK, CA, AU, DE, FR, IT, ES, IN, JP); a login is only
+  needed to download your own library. M4B Tool, Chapter Forge and Enrichment
+  Forge use the public catalog when there is no login.
+- Metadata Forge: books Audible's search hides (titles that can't be bought where
+  the search comes from) are found through the other books of their series on
+  Audible, then through AudioSilo's community database, before the Goodreads
+  fallback; details are written from the book's own Audible listing. A new
+  Settings section points AudioSilo at a copy you run yourself.
+- Metadata Forge: Audiobook Guild is searched first for the authors it sells,
+  from its catalog kept locally and refreshed weekly.
+- Metadata Forge: Goodreads is read directly; abs-tract is only needed for Kindle
+  covers.
+- Metadata Forge: searches start with the title and first author as separate
+  fields; the file's own ASIN is looked up in Audiobookshelf mode too; an
+  untagged book takes its author from its `Author/` folder.
+- Metadata Forge: series-only matches write only the grouping fields and keep
+  the book's own ASIN, ISBN, subtitle and number, and are searched again on later
+  runs; a match that is another recording keeps the file's narrator, ASIN, year
+  and ISBN; tags that contradict the audio go to review.
+- Metadata Forge: many matching fixes: book range folders, near-identical
+  titles, author spellings, series in the artist tag, the subtitle or the
+  listing's title, books in several Audible series, decimal and missing series
+  numbers, a number without a series, file names and series names written as
+  titles, a narrator kept when the listing has none, placeholder titles, authors
+  who share a surname, box sets and standalones, placeholders (NOREALASIN,
+  "Misc", a publisher) taken as data, and a folder that names only the series.
+- Folder Forge: run-level review alerts (cut-off titles, repeated folder names,
+  authors spelled two ways in a series, mixed Book/Vol. labels, duplicate ASINs),
+  a reason filter with counts, and full paths on cards.
+- Folder Forge: planning, sidecar ownership, companion files (covers, notes,
+  .cue, .nfo) and ebook pairing fixes; a destination that already holds a book is
+  reported as a conflict instead of a "-2" copy.
+- Enrichment Forge: genre conflict warnings, genre collections split into
+  numbered parts Audiobookshelf can open, Non-Fiction by subject, every source
+  genre kept unless it is scrap, genres in other languages, and its own earlier
+  writes no longer vote again. Books without an ASIN use Metadata Forge's pick.
+- Audiobookshelf: `--abs-series` and `--abs-authors` clean book numbers and author
+  names inside Audiobookshelf's own records.
+- Docs: user and developer docs split, a metadata providers guide, the lookup
+  order, and a Product Model (`product-model/`). The Docker image no longer ships
+  the tests or developer tools.
+
+---
+
 ## v0.2.6 (2026-10-04)
 
 - Metadata Forge: a full-score match no longer replaces the local narrator when
