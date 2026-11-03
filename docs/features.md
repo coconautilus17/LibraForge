@@ -66,6 +66,13 @@ Searches Audible (or another provider) and writes matched metadata to your files
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup warns if you enabled the fallback with more than 5 search workers, since that's
   what usually trips it.
+- **Series members:** when Audible finds no confident full match and the book belongs to
+  a series, LibraForge reads that series' own Audible listing, which names every book in it,
+  and looks them all up by ASIN. Audible's search leaves out books that can't be bought
+  where the request comes from, but a lookup by ASIN doesn't, so a book the search hides is
+  still found through its series (Theft of Swords, sold only in the US and Canada, through
+  Riyria Revelations). The series comes from any search result that names the book's own
+  series, or from one search for the series its title names. Runs before AudioSilo.
 - **AudioSilo fallback:** runs after Audible and before Goodreads, on every run. Audible's
   search leaves out books that can't be bought where the request comes from (a title sold
   only in the US and Canada never shows up in a search sent from elsewhere), while a lookup
