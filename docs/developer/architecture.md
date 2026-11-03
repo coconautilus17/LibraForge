@@ -110,14 +110,24 @@ abs-tract. Goodreads is rate-limited upstream, so `abs_tract_search` wraps both 
 circuit breaker (`_ABS_TRACT_BREAKER*` in `app/fixer/search.py`): after repeated failures it stops
 calling for a cooldown instead of hammering a blocked service.
 
-Before it, `find_series_member_match` reads the book's own series: `series_asins_for_book`
+The order inside `search_item` (scripts/audible-metadata-fixer-v5.py): Audiobook Guild
+for its authors (`audiobook_guild_search`, final when full), the special publishers through
+abs-agg (`detect_special_provider`), the embedded ASIN (`lookup_asin`, final only when the
+runtime agrees), the Audible title+author search and keyword queries (`audible_searches`,
+or `abs_search` in ABS mode), then the fallbacks below while the match isn't full, and
+last the review gates (min score, ambiguity, missing title or author). Audible's
+`catalog/products` search is filtered by where the request comes from (and, signed in, by
+the account), while every lookup by ASIN (`catalog/products/{asin}`, `?asins=`) is not;
+the two fallbacks exist to turn a hidden book into an ASIN.
+
+The first fallback, `find_series_member_match`, reads the book's own series: `series_asins_for_book`
 picks the series ASIN from any result naming the file's series (or the one its title names;
 with none, one search for that series name), `audible_series_members` reads the series'
 listing (`catalog/products/{series_asin}?response_groups=relationships`, cached per run) and
 `audible_lookup_many` fetches the members (`catalog/products?asins=`, 50 a request). Lookups
 by ASIN aren't limited by the requester's country the way search is.
 
-AudioSilo's community database is the matcher's fallback after Audible and before Goodreads
+AudioSilo's community database is the second fallback, after the series and before Goodreads
 (`find_audiosilo_match` in the fixer, `audiosilo_search` in `app/fixer/search.py`). It is
 searched through its Audiobookshelf-provider endpoint (`/abs/search`) at the URL from
 `audiosilo.json` (Settings → AudioSilo; meta.audiosilo.app by default), which every run
