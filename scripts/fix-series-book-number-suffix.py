@@ -88,6 +88,7 @@ try:
         split_series_trailing_number,
     )
     from app.fixer.tagging import id3_set_txxx, mp4_set_freeform
+    from app.json_files import write_json_atomic
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app.abs_client import abs_get_json, abs_patch_json, merge_series_entries
@@ -97,6 +98,7 @@ except ModuleNotFoundError:
         split_series_trailing_number,
     )
     from app.fixer.tagging import id3_set_txxx, mp4_set_freeform
+    from app.json_files import write_json_atomic
 
 SERVICE_PREFIXES = ("_", "#", "@", ".")
 AUDIO_EXTENSIONS = {".m4b": "mp4", ".m4a": "mp4", ".mp3": "id3"}
@@ -290,9 +292,7 @@ def _apply_json(path: Path, series: str, sequence: str | None) -> None:
     marker["series"] = series
     if sequence is not None:
         marker["sequence"] = sequence
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    write_json_atomic(path, data, indent=2)
 
 
 def _apply_mp4(path: Path, series: str, sequence: str | None) -> None:
@@ -389,9 +389,7 @@ def sync_metadata_json_series(book_folder: Path) -> None:
     if expected is None or current == expected:
         return
     data["series"] = [expected]
-    tmp = metadata_json.with_suffix(metadata_json.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, metadata_json)
+    write_json_atomic(metadata_json, data, indent=2)
 
 
 def _scan_metadata_json_paths(paths: list[Path]) -> list[dict]:
@@ -622,9 +620,7 @@ def plan_all_changes_via_abs(
 def _apply_metadata_json(path: Path, series: str, sequence: str | None) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     data["series"][0] = series
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    write_json_atomic(path, data, indent=2)
 
 
 def _classify_abs_series_entry(name: str, sequence: str, known_names: set[str]) -> dict | None:
