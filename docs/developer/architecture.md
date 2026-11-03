@@ -43,6 +43,7 @@ browser ──HTTP──> app/main.py (FastAPI, uvicorn)
 | `app/*_policy.py`, `author_names.py` | User-editable pattern sets (title noise, publishers, author-name scheme) and the code that applies them. |
 | `app/library_index.py`, `folder_scan_cache.py`, `conversion_*.py` | Library walking and the caches built on it. |
 | `app/debug_trace.py` | Opt-in tracing decorators for code that chooses, alters or scores data. |
+| `app/json_files.py` | `write_json_atomic`: every cache, policy and state file is saved through it (a temporary file swapped into place). |
 
 ## The two big scripts
 

@@ -50,6 +50,7 @@ try:
         remove_trailing_title_noise,
     )
     from app.sidecar_ownership import folder_sidecar_file_belongs_to
+    from app.json_files import write_json_atomic
     from app.abs_client import (
         _is_real_asin,
         abs_get_json,
@@ -71,6 +72,7 @@ except ModuleNotFoundError:
         remove_trailing_title_noise,
     )
     from app.sidecar_ownership import folder_sidecar_file_belongs_to
+    from app.json_files import write_json_atomic
     from app.abs_client import (
         _is_real_asin,
         abs_get_json,
@@ -4692,10 +4694,7 @@ def load_structure_cache(
 
 def save_structure_cache(cache_path: Path, cache: dict[str, Any]) -> None:
     cache["generated_at"] = utc_now()
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
-    temporary.write_text(json.dumps(cache, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(cache_path)
+    write_json_atomic(cache_path, cache, indent=2, sort_keys=True)
 
 
 def register_structure_entry(cache: dict[str, Any], entry: dict[str, Any]) -> None:

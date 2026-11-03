@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from app.settings_paths import user_settings_file
+from app.json_files import write_json_atomic
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -214,13 +215,7 @@ def save_publisher_policy(
         "disabled_defaults": disabled,
         "custom_publishers": normalized,
     }
-    LOCAL_POLICY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = LOCAL_POLICY_FILE.with_name(f".{LOCAL_POLICY_FILE.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(LOCAL_POLICY_FILE)
+    write_json_atomic(LOCAL_POLICY_FILE, payload, indent=2)
     clear_publisher_cache()
     return load_publisher_policy()
 

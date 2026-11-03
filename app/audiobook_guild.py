@@ -31,6 +31,7 @@ from typing import Any, Callable
 import httpx
 
 from app.goodreads_shelves import GoodreadsPacer
+from app.json_files import write_json_atomic
 
 STORE_URL = "https://audiobookguild.com"
 _USER_AGENT = "Mozilla/5.0"
@@ -122,10 +123,7 @@ def _read_store_catalog(pacer: GoodreadsPacer, http_get: Callable[[str, float], 
 
 def _save_catalog(catalog: dict[str, Any], cache_path: Path) -> None:
     try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = cache_path.with_name(cache_path.name + ".tmp")
-        temp.write_text(json.dumps(catalog), encoding="utf-8")
-        os.replace(temp, cache_path)
+        write_json_atomic(cache_path, catalog)
     except OSError:
         pass
 
