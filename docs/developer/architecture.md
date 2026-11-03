@@ -110,6 +110,15 @@ abs-tract. Goodreads is rate-limited upstream, so `abs_tract_search` wraps both 
 circuit breaker (`_ABS_TRACT_BREAKER*` in `app/fixer/search.py`): after repeated failures it stops
 calling for a cooldown instead of hammering a blocked service.
 
+AudioSilo's community database is the matcher's fallback after Audible and before Goodreads
+(`find_audiosilo_match` in the fixer, `audiosilo_search` in `app/fixer/search.py`). It is
+searched through its Audiobookshelf-provider endpoint (`/abs/search`) at the URL from
+`audiosilo.json` (Settings → AudioSilo; meta.audiosilo.app by default), which every run
+passes as `--audiosilo-url`. The pick's ASIN is looked up on Audible (`lookup_asin`, the
+embedded-ASIN step's lookup), because Audible's search hides listings that can't be sold
+in the requester's country while its ASIN lookup does not. `AUDIOSILO_PACER` paces and
+pauses every AudioSilo call, the fallback's and Enrichment Forge's alike.
+
 Audiobook Guild, a store selling a short list of self-published authors, is read from its
 public Shopify storefront (`app/audiobook_guild.py`). Its whole catalog (about 800 books,
 1.3 MB) is read from `products.json` in four requests at most weekly and kept as

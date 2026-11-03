@@ -63,6 +63,7 @@
       <a href="#accounts">Accounts</a>
       <a href="#absSection">Audiobookshelf</a>
       <a href="#abs-agg">GA/SBT</a>
+      <a href="#audiosilo">AudioSilo</a>
       <a href="#abs-tract">Goodreads/Kindle</a>
       <a href="#developer">Developer</a>
       <a href="#cleanup" class="danger">Danger zone</a>
@@ -354,6 +355,23 @@
         <button id="absAggSaveBtn" type="button">Save and verify</button>
       </div>
       <p id="absAggSettingsStatus" class="note" style="margin-top:10px"></p>
+    </section>
+
+    <!-- AudioSilo community database -->
+    <section id="audiosilo" class="card side-nav-card">
+      <h2>AudioSilo</h2>
+      <p>When Audible finds no confident match, LibraForge searches <a href="https://meta.audiosilo.app" target="_blank" rel="noopener" style="color:var(--accent)">AudioSilo</a>'s community audiobook database, before Goodreads. It lists books Audible's search leaves out, such as titles sold only in other countries: Audible hides those from search wherever they can't be bought, but still finds them by ASIN. An AudioSilo pick's ASIN is looked up on Audible, so the details written are Audible's own; one Audible doesn't know is never written.</p>
+      <p>The public service is used by default and needs nothing installed. If you run a local copy of the database, enter its URL: the <code>ghcr.io/kodestar/audiosilo-meta</code> container downloads and serves it, and can also serve the copy an AudioSilo server keeps in mirror mode (<code>metaserve --db</code>). Leave the field empty to go back to the public service.</p>
+      <div class="grid" style="--grid-cols:1;margin-top:14px">
+        <label>
+          <span class="field-label">AudioSilo database URL</span>
+          <input id="audiosiloUrl" placeholder="https://meta.audiosilo.app" style="font-family:var(--font-mono);font-size:0.85em" />
+        </label>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="audiosiloSaveBtn" type="button">Save and verify</button>
+      </div>
+      <p id="audiosiloStatus" class="note" style="margin-top:10px"></p>
     </section>
 
     <!-- abs-tract (Goodreads/Kindle) -->
@@ -779,6 +797,31 @@
           absAggSettingsStatus.style.color = check.reachable ? "var(--success)" : "var(--warning,#e8a020)";
         } catch (err) { absAggSettingsStatus.textContent = err.message; absAggSettingsStatus.style.color = "var(--danger)"; }
         finally { absAggSaveBtn.disabled = false; absAggSaveBtn.textContent = "Save and verify"; }
+      });
+
+      // ── AudioSilo ─────────────────────────────────────────────────────────
+      const audiosiloUrl = $("audiosiloUrl"), audiosiloSaveBtn = $("audiosiloSaveBtn"), audiosiloStatus = $("audiosiloStatus");
+      fetch("/api/audiosilo/settings").then((r) => r.json()).then((d) => {
+        audiosiloUrl.value = d.url === d.default_url ? "" : (d.url || "");
+      }).catch(() => {});
+      audiosiloSaveBtn.addEventListener("click", async () => {
+        audiosiloSaveBtn.disabled = true; audiosiloSaveBtn.textContent = "Checking..."; audiosiloStatus.textContent = "";
+        try {
+          const res = await fetch("/api/audiosilo/settings", {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: audiosiloUrl.value.trim() }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to save.");
+          audiosiloUrl.value = data.url === data.default_url ? "" : data.url;
+          const check = await fetch("/api/audiosilo/health").then((r) => r.json()).catch(() => ({ reachable: false }));
+          const works = check.stats && check.stats.works;
+          audiosiloStatus.textContent = check.reachable
+            ? `Saved. ${data.url} answers${works ? ` (${Number(works).toLocaleString()} works)` : ""}.`
+            : `Saved, but ${data.url} is not answering. Check that the service is running.`;
+          audiosiloStatus.style.color = check.reachable ? "var(--success)" : "var(--warning,#e8a020)";
+        } catch (err) { audiosiloStatus.textContent = err.message; audiosiloStatus.style.color = "var(--danger)"; }
+        finally { audiosiloSaveBtn.disabled = false; audiosiloSaveBtn.textContent = "Save and verify"; }
       });
 
       // ── abs-tract (Goodreads/Kindle) ──────────────────────────────────────
