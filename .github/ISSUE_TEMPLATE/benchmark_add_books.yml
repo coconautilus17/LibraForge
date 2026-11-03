@@ -1,0 +1,61 @@
+name: Benchmark - add books
+description: Add your audiobooks to the matching benchmark that compares LibraForge with other tools
+title: "Benchmark: add books"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The benchmark matches every book from its **original tags, folder path and runtime**, so that is
+        all it needs: no audio is ever uploaded. Each book is rebuilt as a silent file with your tags at
+        your path, and every tool on the page is run on it.
+
+        **What is published:** the benchmark page is public and shows every book's folder path, file name
+        and tags. Only send books you are fine having listed there.
+
+        Run this in a terminal on the machine with the books (needs `ffprobe`, part of FFmpeg, and `jq`),
+        pointing it at the folder that holds them:
+
+        ```sh
+        find "/path/to/audiobooks" -type f \( -iname '*.m4b' -o -iname '*.m4a' -o -iname '*.mp3' \
+          -o -iname '*.flac' -o -iname '*.ogg' -o -iname '*.opus' \) \
+          -exec ffprobe -v quiet -print_format json -show_entries format=filename,duration:format_tags {} \; \
+          | jq -s . > books.json
+        ```
+
+        That writes one entry per audio file with its full path and file name (`filename`), its length
+        (`duration`) and its tags (`tags`). Attach `books.json` below.
+
+  - type: checkboxes
+    id: untouched
+    attributes:
+      label: Tags as they came
+      options:
+        - label: >-
+            The tags were not edited by hand or by any tagger (LibraForge included): the files are in the
+            state they were procured in.
+          required: true
+        - label: I'm fine with these folder paths, file names and tags being shown on the public benchmark page.
+          required: true
+
+  - type: textarea
+    id: books
+    attributes:
+      label: books.json
+      description: Drag the books.json file into this box.
+    validations:
+      required: true
+
+  - type: input
+    id: count
+    attributes:
+      label: How many books
+      placeholder: e.g. 120
+
+  - type: textarea
+    id: answers
+    attributes:
+      label: Known answers (optional)
+      description: >-
+        If you know the right Audible ASIN for some books (for example from your own library after
+        matching), list them as "folder path - ASIN". Books without one are still scored by hand.

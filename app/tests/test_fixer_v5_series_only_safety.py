@@ -59,6 +59,33 @@ class SeriesOnlyMetadataTests(unittest.TestCase):
         md = SCORING.metadata_from_product(GENNADY, fists_clues(existing_asin="B0C413M12W"), 0.72)
         self.assertEqual(md["asin"], "")
 
+    def test_the_files_own_book_number_is_kept(self):
+        # #476: the other book's number is left out, the file's own "12" stays.
+        md = SCORING.metadata_from_product(GENNADY, fists_clues(current={"sequence": "12"}), 0.72)
+        self.assertEqual(md["edit_mode"], "series_only")
+        self.assertEqual(md["sequence"], "12")
+
+    def test_the_book_number_from_the_title_is_kept_without_a_sequence_tag(self):
+        md = SCORING.metadata_from_product(GENNADY, fists_clues(), 0.72)
+        self.assertEqual(md["sequence"], "12")
+
+    def test_a_full_match_with_no_number_keeps_the_files(self):
+        # Dawnshard, The Stormlight Archive 3.5: the listing names the series but no number.
+        fists = product("B079H8GKHR", "Fists of Justice", 746, "")
+        md = SCORING.metadata_from_product(fists, fists_clues(book_number="3.5", current={"sequence": "3.5"}), 1.0)
+        self.assertEqual(md["edit_mode"], "full")
+        self.assertEqual(md["sequence"], "3.5")
+
+    def test_a_listings_decimal_number_is_written(self):
+        fists = product("B079H8GKHR", "Fists of Justice", 746, "12.5")
+        md = SCORING.metadata_from_product(fists, fists_clues(book_number="12.5"), 1.0)
+        self.assertEqual(md["sequence"], "12.5")
+
+    def test_a_full_match_in_another_series_takes_no_number_from_the_file(self):
+        other = {**product("B079H8GKHR", "Fists of Justice", 746, ""), "series": [{"title": "The Cosmere"}]}
+        md = SCORING.metadata_from_product(other, fists_clues(current={"sequence": "12"}), 1.0)
+        self.assertEqual(md["sequence"], "")
+
     def test_a_full_match_still_writes_its_asin(self):
         fists = product("B079H8GKHR", "Fists of Justice", 746, "12", isbn="9781039400000")
         md = SCORING.metadata_from_product(fists, fists_clues(), 1.0)

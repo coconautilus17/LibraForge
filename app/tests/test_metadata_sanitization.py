@@ -1085,7 +1085,8 @@ class MetadataTitleFallbackTests(unittest.TestCase):
         self.assertEqual(full["sequence"], "2")
         self.assertEqual(series_only["edit_mode"], "series_only")
         self.assertEqual(series_only["title"], "Local Title")
-        self.assertEqual(series_only["sequence"], "")
+        # The other book's number is left out; the file's own (from its folder) stays (#476).
+        self.assertEqual(series_only["sequence"], "2")
 
     def test_metadata_series_plus_number_recovers_missing_sequence(self):
         self.assertEqual(

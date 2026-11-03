@@ -68,11 +68,44 @@ class DifferentEditionTests(unittest.TestCase):
         self.assertNotIn("different_edition", metadata)
 
     def test_author_narrated_book_keeps_its_narrator_tag(self):
+        # Douglas Adams reading his own Hitchhiker's books runs 5-15% off the
+        # Martin Freeman / Stephen Fry listings.
         clues = {**SPIRAL_CLUES, "narrator": "Roderick Gordon",
-                 "credit_names": ["Roderick Gordon"], "local_duration_minutes": 684.0}
+                 "credit_names": ["Roderick Gordon"], "local_duration_minutes": 720.0}
         metadata = metadata_from_product(SPIRAL, clues, 1.0)
         self.assertEqual(metadata["narrator"], "Roderick Gordon")
         self.assertEqual(metadata["different_edition"]["match_narrator"], "Paul Chequer")
+
+    def test_author_in_narrator_tag_within_one_percent_is_the_match(self):
+        # Eric Vall, Dragon Emperor 5: the narrator tag is the author, the audio
+        # runs 0.1% off the Alex Perone / Marissa Parness listing.
+        clues = {**SPIRAL_CLUES, "narrator": "Roderick Gordon",
+                 "credit_names": ["Roderick Gordon"], "local_duration_minutes": 682.7}
+        metadata = metadata_from_product(SPIRAL, clues, 1.0)
+        self.assertNotIn("different_edition", metadata)
+        self.assertEqual(metadata["narrator"], "Paul Chequer")
+        self.assertEqual(metadata["asin"], "B006QM9TO4")
+
+    def test_author_credit_with_a_middle_initial_is_not_a_reader(self):
+        # Rogue Dungeon 2 (#478): co-authored "James Hunter, eden Hudson"; the
+        # credits name "James A. Hunter". Joined into one name, the author list
+        # matched nobody, so the author became the reader of another recording.
+        rogue = {"asin": "B07N34HKBC", "title": "Civil War", "narrators": [{"name": "Nick Podehl"}],
+                 "authors": [{"name": "James Hunter"}, {"name": "eden Hudson"}],
+                 "series": [{"title": "The Rogue Dungeon", "sequence": "2"}], "runtime_length_min": 680}
+        clues = {"title": "Civil War", "author": "James Hunter, eden Hudson", "narrator": "",
+                 "credit_names": ["James Hunter, eden Hudson", "James A. Hunter"],
+                 "book_number": "2", "local_duration_minutes": 712.0}
+        metadata = metadata_from_product(rogue, clues, 1.0)
+        self.assertNotIn("different_edition", metadata)
+        self.assertEqual(metadata["narrator"], "Nick Podehl")
+
+    def test_placeholder_narrator_tag_names_nobody(self):
+        # METAtropolis: Cascadia, narrator tag "Misc".
+        clues = {**SPIRAL_CLUES, "narrator": "Misc", "credit_names": ["Misc"], "local_duration_minutes": 720.0}
+        metadata = metadata_from_product(SPIRAL, clues, 1.0)
+        self.assertNotIn("different_edition", metadata)
+        self.assertEqual(metadata["narrator"], "Paul Chequer")
 
     def test_author_in_narrator_tag_uses_other_local_reader(self):
         clues = {**SPIRAL_CLUES, "narrator": "Roderick Gordon",

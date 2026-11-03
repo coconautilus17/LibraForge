@@ -118,6 +118,24 @@ class ChooseBestTitleTests(unittest.TestCase):
         self.assertEqual(s.choose_best_title("", "Cradle", "Local Title"), "Local Title")
         self.assertEqual(s.choose_best_title("", "", ""), "")
 
+    def test_a_series_named_listing_keeps_the_local_title(self):
+        self.assertEqual(s.choose_best_title("Art of the Adept", "Art of the Adept", "Scholar of Magic"),
+                         "Scholar of Magic")
+
+    def test_a_file_or_track_name_is_not_kept_over_the_listing(self):
+        # Benchmark: these local titles were written over a series-named listing.
+        self.assertEqual(s.choose_best_title("Monster Core", "Monster Core", "01 Monster Core"), "Monster Core")
+        self.assertEqual(s.choose_best_title("King of the Fae Islands", "King of the Fae Islands",
+                                             "King_Of_The_Fae_Islands_-_Adam_Lance_Annabelle_Hawthorne"),
+                         "King of the Fae Islands")
+        self.assertEqual(s.choose_best_title("Speedrunning the Multiverse", "Speedrunning the Multiverse",
+                                             "Opening Credits - Speedrunning the Multiverse"),
+                         "Speedrunning the Multiverse")
+
+    def test_a_numbered_local_title_loses_only_its_ordering_prefix(self):
+        self.assertEqual(s.choose_best_title("Dragon Heart", "Dragon Heart", "01 Stone Will"), "Stone Will")
+
+
 class MetadataFromProductTests(unittest.TestCase):
     def meta(self, clues=None, product=None, minutes=None):
         product = product or {"asin": "B0X", "title": "Unsouled", "authors": [{"name": "Will Wight"}],
