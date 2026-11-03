@@ -39,7 +39,11 @@ from app.fixer.parsing import (
     is_invalid_local_title,
     _READ_BY_RE,
 )
-from app.fixer.scoring import is_generic_series_number_title, significant_title_tokens
+from app.fixer.scoring import (
+    is_generic_series_number_title,
+    significant_title_tokens,
+    split_series_trailing_number,
+)
 
 
 def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
@@ -70,11 +74,17 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     path_title_norm = normalize_for_match(path_meta.get("title", ""))
     current_title_norm = normalize_for_match(clues.get("title", ""))
     current_series_norm = normalize_for_match(clues.get("series", ""))
+    # An album of "Master of the Arena, Book 1" still names the series
+    # "Master of the Arena", so a "Book 1 - Master of the Arena" folder is a
+    # series label, not the book's title.
+    series_name_norm = normalize_for_match(
+        split_series_trailing_number(clues.get("series", ""), "")[0]
+    )
     path_title_is_series_label = bool(
         path_title_norm
-        and current_series_norm
-        and path_title_norm == current_series_norm
-        and current_title_norm != current_series_norm
+        and series_name_norm
+        and path_title_norm == series_name_norm
+        and current_title_norm != series_name_norm
     )
 
     if (
