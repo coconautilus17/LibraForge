@@ -89,6 +89,34 @@ Searches Audible (or another provider) and writes matched metadata to your files
   own way). When the store can't be read, the book is matched at Audible as usual. The
   store's catalog (about 1.3 MB) is kept locally and refreshed weekly.
 
+### How a book is looked up
+Each step runs only while no earlier one has found a confident full match:
+
+1. **Audiobook Guild**, for a book by an author the store sells.
+2. **GraphicAudio or SoundBooth Theater** (through abs-agg), when the file names that
+   publisher.
+3. **The file's own ASIN**, looked up directly. It ends the search only when the runtime
+   agrees, so a stale ASIN from another edition can still lose to the right listing.
+4. **Audible search**: the book's title and first author as separate fields, then the
+   keyword searches (in Audiobookshelf mode, Audiobookshelf's search instead).
+5. **The book's series**: the series' own Audible listing names every book in it, and
+   they are all looked up by ASIN.
+6. **AudioSilo**: its pick's ASIN is looked up on Audible, so the details written are
+   Audible's own.
+7. **Goodreads**, when the run's Goodreads fallback is on.
+
+Whatever is found then passes the same checks before anything is written: the minimum
+score, a runtime and narrator check against other recordings, and a tie between
+candidates sends the book to review instead.
+
+**Why steps 5 and 6 exist:** Audible's search leaves out books that can't be bought where
+the search comes from. A title sold only in the US and Canada never shows up in a search
+sent from elsewhere, from LibraForge, Audiobookshelf or any other tool, while a lookup by
+its ASIN still returns it. Steps 5 and 6 find such a book's ASIN another way. With
+**Audible (your account)**, what search shows depends on the signed-in account, so one
+account can see these books while another can't; the public catalog always searches as
+the place LibraForge runs from.
+
 ## M4B Tool (`/m4b-tool`)
 Converts or merges audio into a single M4B. Loads existing fixer sidecars automatically,
 scans for multipart / non-M4B conversion candidates, and exposes codec, bitrate, and job
