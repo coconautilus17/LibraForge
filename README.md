@@ -64,7 +64,8 @@ provider, and setting - this is the short version.
 **Providers:** the Audible public catalog (no login, any marketplace), Audible through
 your logged-in account, Audiobookshelf, abs-agg (GraphicAudio, SoundBooth
 Theater, LibriVox, Storytel, Audioteka, BookBeat, Big Finish, ARD Audiothek, Die drei ???,
-and Goodreads or Hardcover when abs-agg has their keys), Goodreads (read directly), Audiobook Guild (first, for the authors it sells), Kindle covers via abs-tract,
+and Goodreads or Hardcover when abs-agg has their keys), AudioSilo's community database (automatic
+fallback after Audible), Goodreads (read directly), Audiobook Guild (first, for the authors it sells), Kindle covers via abs-tract,
 and Pocket FM as a Manual Review source. Open Library is used by Enrichment Forge and for
 ebooks.
 
@@ -208,6 +209,7 @@ LIBRAFORGE_IMAGE_TAG=latest-chaptering AUDIOBOOKS_PATH=/path/to/your/audiobooks 
 |---|---|---|
 | [Audiobookshelf](https://www.audiobookshelf.org/) | Metadata provider via ABS's built-in search API. Create a dedicated API key in ABS Settings → Users → API Keys and add it under Settings → Accounts. | No |
 | [abs-agg](https://github.com/Vito0912/abs-agg) | Aggregates metadata from LibriVox, Storytel, BookBeat, Big Finish, and others. Deploy on the same Docker network; set the URL in provider settings. | No |
+| [audiosilo-meta](https://github.com/KodeStar/audiosilo-meta) | A local copy of AudioSilo's community database (`ghcr.io/kodestar/audiosilo-meta`), used instead of the public meta.audiosilo.app for the matcher's fallback. Set its URL under Settings → AudioSilo. | No |
 | [abs-tract](https://github.com/ahobsonsayers/abs-tract) | Kindle cover art after a Goodreads match (Goodreads itself is read directly). Deploy on the same Docker network; set its URL in provider settings. | No |
 
 ### Container paths

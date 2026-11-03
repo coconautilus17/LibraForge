@@ -27,14 +27,13 @@ import urllib.request
 from typing import Any, Callable
 
 from app.abs_client import _is_real_asin
+from app.fixer.search import AUDIOSILO_PACER, audiosilo_product
 from app.genre_taxonomy import LABEL_MAP, label_for_slug, labels_from_genres, normalize_label
 from app.goodreads_shelves import GoodreadsPacer, clean_query_title
 from app.source_matching import best_candidate, provider_product
 
 SourcePacer = GoodreadsPacer
-# Measured in the 2026-09-27 full-library run: AudioSilo showed no limiting at
-# ~100 req/min; Open Library answers in 1-3 s and asks for about 1 req/s.
-AUDIOSILO_PACER = SourcePacer(gap_s=0.35, fail_threshold=3, cooldown_s=60)
+# Open Library answers in 1-3 s and asks for about 1 req/s.
 OPENLIBRARY_PACER = SourcePacer(gap_s=1.0, fail_threshold=3, cooldown_s=60)
 # Fandom's MediaWiki API: a few calls per series, paced so a batch run stays polite.
 HAREMLIT_PACER = SourcePacer(gap_s=0.5, fail_threshold=3, cooldown_s=60)
@@ -89,15 +88,6 @@ AUDIOSILO_LOOKUP_URL = "https://meta.audiosilo.app/api/v1/lookup"
 AUDIOSILO_WORK_URL = "https://meta.audiosilo.app/api/v1/works/"
 
 
-def _audiosilo_product(match: dict[str, Any]) -> dict[str, Any]:
-    """The fixer's ABS-provider product, plus the runtime AudioSilo does return
-    (in minutes) so the matcher can use duration like it does for Audible."""
-    product = provider_product(match, "audiosilo", str(match.get("asin") or ""))
-    if match.get("duration"):
-        product["runtime_length_min"] = match["duration"]
-    return product
-
-
 def _audiosilo_labels(genres: Any) -> list[str]:
     """AudioSilo genres come as names ("Epic Fantasy") from /abs/search and as
     slugs ("epic-fantasy") from the work record."""
@@ -147,7 +137,7 @@ def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_
         matches = ((data or {}).get("matches") or []) if isinstance(data, dict) else []
         last_title = last_title or (matches[0].get("title") if matches else None)
         # Same book? Metadata Forge's matcher over every result, not just the first.
-        match = best_candidate(book, [(_audiosilo_product(m), m) for m in matches])
+        match = best_candidate(book, [(audiosilo_product(m), m) for m in matches])
         if match is not None:
             return _result("found", match.get("title"), _audiosilo_labels(match.get("genres")))
     return _result("not_found", last_title)

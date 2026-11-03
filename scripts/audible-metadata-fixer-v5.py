@@ -100,6 +100,9 @@ try:
         score_product_for_metadata,
         pick_best_match_for_metadata,
         local_series_name,
+        same_series_name,
+        literal_text,
+        series_from_subtitle,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -158,6 +161,10 @@ try:
         abs_search,
         abs_lookup_by_asin,
         abs_agg_search,
+        audiosilo_search,
+        AUDIOSILO_DEFAULT_URL,
+        audible_series_members,
+        audible_lookup_many,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
         _ABS_TRACT_BREAKER_THRESHOLD,
@@ -249,6 +256,9 @@ except ModuleNotFoundError:
         score_product_for_metadata,
         pick_best_match_for_metadata,
         local_series_name,
+        same_series_name,
+        literal_text,
+        series_from_subtitle,
         metadata_from_product,
         get_primary_series,
         split_series_trailing_number,
@@ -307,6 +317,10 @@ except ModuleNotFoundError:
         abs_search,
         abs_lookup_by_asin,
         abs_agg_search,
+        audiosilo_search,
+        AUDIOSILO_DEFAULT_URL,
+        audible_series_members,
+        audible_lookup_many,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
         _ABS_TRACT_BREAKER_THRESHOLD,
@@ -3679,6 +3693,105 @@ def find_goodreads_match(
     return None, 0.0, None, ""
 
 
+def series_asins_for_book(products: list[dict], clues: dict) -> list[str]:
+    """The ASINs of the series these listings belong to that is the book's own:
+    the file's series, or one its title or album names ("Theft of Swords:
+    Riyria Revelations, Volume 1"). In the order first seen."""
+    name = local_series_name(clues)
+    text = " ".join(literal_text(clues.get(key, "")) for key in ("title", "raw_title", "album"))
+    found = []
+    for product in products or []:
+        for series in product.get("series") or []:
+            asin = str(series.get("asin") or "").upper()
+            title = series.get("title", "") or ""
+            own = (name and same_series_name(title, name)) or (
+                len(literal_text(title)) >= 4 and f" {literal_text(title)} " in f" {text} "
+            )
+            if asin and asin not in found and own:
+                found.append(asin)
+    return found
+
+
+def find_series_member_match(
+    client, clues: dict, series_asins: list[str], log: list[str],
+    local_duration_minutes: float | None = None,
+) -> tuple[dict | None, float, dict | None, str]:
+    """The best full match among the members of the book's own series.
+
+    Audible's search leaves out listings that can't be sold where the request
+    comes from (Theft of Swords, sold only in the US and Canada), but the
+    series' own listing names every member and a lookup by ASIN returns
+    them. Two series at most. Returns (product, score, ambiguity, series ASIN),
+    or (None, 0.0, None, "")."""
+    for series_asin in series_asins[:2]:
+        members = audible_series_members(client, series_asin)
+        log.append(f"  Series {series_asin}: {len(members)} books")
+        if not members:
+            continue
+        products = audible_lookup_many(client, members)
+        candidate, candidate_score, ambiguity = pick_best_match_for_metadata(
+            clues, products, local_duration_minutes
+        )
+        if not candidate:
+            continue
+        mode = metadata_from_product(candidate, clues, candidate_score).get("edit_mode")
+        log.append(
+            f"  Series candidate: score={candidate_score} title={candidate.get('title')} "
+            f"mode={mode} asin={candidate.get('asin')}"
+        )
+        if mode == "full":
+            return candidate, candidate_score, ambiguity, series_asin
+    return None, 0.0, None, ""
+
+
+def find_audiosilo_match(
+    clues: dict, audiosilo_url: str, lookup_asin, limit: int, log: list[str],
+    local_duration_minutes: float | None = None,
+) -> tuple[dict | None, float, dict | None, str]:
+    """The best full AudioSilo match, its ASIN confirmed on Audible.
+
+    AudioSilo's community database lists books Audible's search leaves out,
+    such as a title sold only in other countries, which Audible search hides
+    from the requester's country while a lookup by ASIN still returns it. The
+    pick is judged like an Audible listing (it has narrator and runtime), then
+    its ASIN is looked up so the details written are Audible's own. When
+    Audible doesn't know the ASIN (another store's) the community record is
+    used without it. Returns (product, score, ambiguity, query), or
+    (None, 0.0, None, "").
+    """
+    queries = [clues.get("title", "")]
+    if clues.get("raw_title") and normalize_for_match(clues["raw_title"]) != normalize_for_match(queries[0]):
+        queries.append(clues["raw_title"])
+    author = (split_credit_names(clues.get("author", "")) or [""])[0]
+    for query in dict.fromkeys(q for q in queries if q):
+        products = audiosilo_search(query, author, audiosilo_url, limit, log)
+        log.append(f"  AudioSilo results: {len(products)}")
+        if not products:
+            continue
+        candidate, candidate_score, ambiguity = pick_best_match_for_metadata(
+            clues, products, local_duration_minutes
+        )
+        if not candidate:
+            continue
+        asin = candidate.get("asin", "")
+        audible_product = lookup_asin(asin) if asin else None
+        if audible_product:
+            audible_score = score_product_for_metadata(clues, audible_product, local_duration_minutes)
+            log.append(f"  AudioSilo ASIN {asin} confirmed on Audible (score={audible_score})")
+            candidate, candidate_score = audible_product, audible_score
+        else:
+            if asin:
+                log.append(f"  AudioSilo ASIN {asin} not on this Audible store: kept out of the tags")
+            candidate = {**candidate, "asin": clues.get("existing_asin", "")}
+        mode = metadata_from_product(candidate, clues, candidate_score).get("edit_mode")
+        log.append(
+            f"  AudioSilo candidate: score={candidate_score} title={candidate.get('title')} mode={mode}"
+        )
+        if mode == "full":
+            return candidate, candidate_score, ambiguity, query
+    return None, 0.0, None, ""
+
+
 def match_ebook(
     clues: dict, abs_url: str, abs_api_key: str, goodreads: bool,
     limit: int = 10, log: list[str] | None = None,
@@ -4176,6 +4289,7 @@ def search_item(
                         (f"{clues['title']} - {author_names[0]}", clues["title"], author_names[0])
                     )
             audible_searches += [(query, "", "") for query in queries]
+            series_asins: list[str] = []  # the book's own series, as the results name it
             for query, title_part, author_part in audible_searches if not use_abs else []:
                 if match_is_settled():
                     break
@@ -4198,6 +4312,7 @@ def search_item(
                 )
                 suffix = " (cached)" if already_cached else ""
                 log.append(f"  Results: {len(query_products)}{suffix}")
+                series_asins += [a for a in series_asins_for_book(query_products, clues) if a not in series_asins]
 
                 if not query_products:
                     continue
@@ -4254,6 +4369,61 @@ def search_item(
             audible_is_full = (
                 bool(product) and score >= args.min_score and audible_edit_mode == "full"
             )
+
+            # Series members, before AudioSilo: the book's own series, named by
+            # any result, lists every book in it, including ones the search hides.
+            if not use_abs and clues.get("title") and not audible_is_full:
+                if product and audible_edit_mode == "series_only":
+                    series_asins += [a for a in series_asins_for_book([product], clues) if a not in series_asins]
+                # No result named the series: search for it by name ("Rise of
+                # Empire: Riyria Revelations, Volume 2"), so a visible book of
+                # it leads to the series' listing.
+                series_query_name = local_series_name(clues) or (
+                    series_from_subtitle(clues["title"].rpartition(": ")[2])[0] if ": " in clues["title"] else ""
+                )
+                if not series_asins and series_query_name:
+                    series_author = (split_credit_names(clues.get("author", "")) or [""])[0]
+                    series_query = f"{series_query_name} {series_author}".strip()
+                    log.append(f"  Trying series query: {series_query}")
+                    series_products = cached_audible_search(
+                        client, series_query, args.limit, args.api_delay_ms,
+                        search_cache, search_cache_lock, search_in_flight,
+                    )
+                    series_asins += series_asins_for_book(series_products, clues)
+                if series_asins:
+                    log.append(f"  Audible match not full -> trying the series' books ({', '.join(series_asins[:2])})")
+                    ser_candidate, ser_score, ser_ambiguity, ser_asin = find_series_member_match(
+                        client, clues, series_asins, log, local_duration_minutes,
+                    )
+                    if ser_candidate and ser_score >= args.min_score:
+                        product = ser_candidate
+                        score = ser_score
+                        used_query = f"series:{ser_asin}"
+                        match_ambiguity = ser_ambiguity
+                        result.source_provider = ""
+                        audible_edit_mode = "full"
+                        audible_is_full = True
+
+            # AudioSilo fallback, before Goodreads: the community database has
+            # narrator and runtime, so its match is judged like an Audible one.
+            audiosilo_url = getattr(args, "audiosilo_url", "")
+            if audiosilo_url and clues.get("title") and not audible_is_full:
+                log.append(
+                    f"  Audible match not full (score={score:.4f}, mode={audible_edit_mode}) -> trying AudioSilo"
+                    if product else "  No Audible match -> trying AudioSilo"
+                )
+                as_candidate, as_score, as_ambiguity, as_query = find_audiosilo_match(
+                    clues, audiosilo_url, lookup_asin, args.limit, log, local_duration_minutes,
+                )
+                if as_candidate and as_score >= args.min_score:
+                    product = as_candidate
+                    score = as_score
+                    used_query = f"audiosilo:{as_query}"
+                    match_ambiguity = as_ambiguity
+                    # Confirmed on Audible it is an Audible listing; else the community's record.
+                    result.source_provider = as_candidate.get("_abs_provider", "")
+                    audible_edit_mode = "full"
+                    audible_is_full = True
             if (
                 goodreads_fallback_enabled
                 and clues.get("title")
@@ -5131,6 +5301,7 @@ def print_plan(
         "audiobookguild": "AUDIOBOOK GUILD MATCH:",
         "graphicaudio": "GRAPHICAUDIO MATCH:",
         "soundbooththeater": "SOUNDBOOTH THEATER MATCH:",
+        "audiosilo": "AUDIOSILO MATCH:",
     }.get(source_provider, "AUDIBLE MATCH:")
     print(_match_header)
     print(f"  Score:    {score}")
@@ -6061,6 +6232,16 @@ def main():
         help=(
             "Base URL of the abs-tract service, used only for Kindle cover "
             "enrichment after a Goodreads match (Goodreads itself is read directly)."
+        ),
+    )
+    parser.add_argument(
+        "--audiosilo-url",
+        default=os.environ.get("AUDIOSILO_URL", AUDIOSILO_DEFAULT_URL),
+        dest="audiosilo_url",
+        help=(
+            "Base URL of AudioSilo's community database (meta.audiosilo.app, or a "
+            "self-hosted copy), searched when Audible finds no confident full match, "
+            "before Goodreads. An empty value turns it off."
         ),
     )
     parser.add_argument(

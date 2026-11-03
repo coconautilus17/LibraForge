@@ -56,7 +56,9 @@ Searches Audible (or another provider) and writes matched metadata to your files
   marketplace, US, UK, DE and so on), **Audible (your account)** (the same catalog through
   your logged-in account; with no login a run or search switches to the public catalog and
   says so), **Audiobookshelf** (via its own search API, which returns fewer candidates),
-  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), and **Goodreads**
+  **abs-agg** (LibriVox, Storytel, BookBeat, Big Finish, and others), **AudioSilo**'s
+  community database as an automatic fallback whenever Audible finds no confident full
+  match, and **Goodreads**
   (read directly, no extra service) as an opt-in fallback for no-match, series-only, or
   low-score books, with **Kindle** (via `abs-tract`) for its cover art. Goodreads
   rate-limits aggressively; a circuit breaker opens after repeated failures and skips
@@ -64,6 +66,20 @@ Searches Audible (or another provider) and writes matched metadata to your files
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup warns if you enabled the fallback with more than 5 search workers, since that's
   what usually trips it.
+- **Series members:** when Audible finds no confident full match and the book belongs to
+  a series, LibraForge reads that series' own Audible listing, which names every book in it,
+  and looks them all up by ASIN. Audible's search leaves out books that can't be bought
+  where the request comes from, but a lookup by ASIN doesn't, so a book the search hides is
+  still found through its series (Theft of Swords, sold only in the US and Canada, through
+  Riyria Revelations). The series comes from any search result that names the book's own
+  series, or from one search for the series its title names. Runs before AudioSilo.
+- **AudioSilo fallback:** runs after Audible and before Goodreads, on every run. Audible's
+  search leaves out books that can't be bought where the request comes from (a title sold
+  only in the US and Canada never shows up in a search sent from elsewhere), while a lookup
+  by ASIN still returns them. AudioSilo's database lists them with narrator and runtime, so
+  its match is judged like an Audible one; its ASIN is then looked up on Audible and the
+  details written are Audible's own. An ASIN Audible doesn't know is never written. It uses
+  the public service (meta.audiosilo.app) unless Settings points it at a local copy.
 - **Audiobook Guild first for its authors:** a book by an author that
   [Audiobook Guild](https://audiobookguild.com) sells (Eric Vall, Logan Jacobs,
   Michael-Scott Earle and others) is matched there first, with the same title, author,
@@ -274,7 +290,8 @@ the downloads when finished.
 ## Settings (`/settings`)
 One consolidated page for everything global: About, Appearance, Title noise, Publishers,
 Author names, Library, Reports (retention policy), Accounts, Audiobookshelf, abs-agg
-(shown as GA/SBT in the side menu), Goodreads/Kindle (abs-tract), Developer, and a
+(shown as GA/SBT in the side menu), AudioSilo (the database URL, public by default),
+Goodreads/Kindle (abs-tract), Developer, and a
 Danger zone with the sidecar cleanup. The gear icon in the header links here from every page;
 the old `/auth-setup` URL still works and redirects to the Accounts section.
 

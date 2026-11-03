@@ -320,6 +320,31 @@ def _save_abs_tract_config(config: dict[str, Any]) -> None:
     )
 
 
+# AudioSilo's community database: always searched after Audible and before
+# Goodreads. The public service by default; a self-hosted copy can replace it.
+AUDIOSILO_CONFIG_FILE = user_settings_file("audiosilo.json")
+AUDIOSILO_DEFAULT_URL = "https://meta.audiosilo.app"
+
+
+def _load_audiosilo_config() -> dict[str, Any]:
+    try:
+        if AUDIOSILO_CONFIG_FILE.exists():
+            config = json.loads(AUDIOSILO_CONFIG_FILE.read_text(encoding="utf-8"))
+            if (config.get("url") or "").strip():
+                return config
+    except Exception:
+        pass
+    return {"url": AUDIOSILO_DEFAULT_URL}
+
+
+def _save_audiosilo_config(config: dict[str, Any]) -> None:
+    AUDIOSILO_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AUDIOSILO_CONFIG_FILE.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def search_abs_agg_candidates(
     *,
     query: str,
@@ -2221,6 +2246,7 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         # when configured.
         _abs_tract_cfg = _load_abs_tract_config()
         _abs_tract_url = (_abs_tract_cfg.get("url") or "").strip()
+        cmd += ["--audiosilo-url", _load_audiosilo_config()["url"]]
         if req.enable_goodreads_fallback:
             cmd.append("--enable-goodreads-fallback")
         if _abs_tract_url:
@@ -6200,6 +6226,35 @@ def save_abs_tract_settings(req: AbsTractSettingsRequest) -> dict[str, Any]:
     }
     _save_abs_tract_config(config)
     return config
+
+
+class AudioSiloSettingsRequest(BaseModel):
+    url: str = ""
+
+
+@app.get("/api/audiosilo/settings")
+def get_audiosilo_settings() -> dict[str, Any]:
+    return {**_load_audiosilo_config(), "default_url": AUDIOSILO_DEFAULT_URL}
+
+
+@app.put("/api/audiosilo/settings")
+def save_audiosilo_settings(req: AudioSiloSettingsRequest) -> dict[str, Any]:
+    url = require_http_base_url(req.url, field_name="AudioSilo URL", allow_blank=True) or AUDIOSILO_DEFAULT_URL
+    _save_audiosilo_config({"url": url})
+    return {"url": url, "default_url": AUDIOSILO_DEFAULT_URL}
+
+
+@app.get("/api/audiosilo/health")
+def audiosilo_health() -> dict[str, Any]:
+    """Whether the configured AudioSilo database answers, and how many works it holds."""
+    url = _load_audiosilo_config()["url"].rstrip("/")
+    try:
+        req = urllib.request.Request(f"{url}/api/v1/stats", headers={"Accept": "application/json", "User-Agent": "LibraForge"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            stats = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        return {"reachable": False, "url": url, "error": str(exc)}
+    return {"reachable": True, "url": url, "stats": stats}
 
 
 @app.post("/api/abs-agg/search")
