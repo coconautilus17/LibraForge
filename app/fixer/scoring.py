@@ -667,6 +667,41 @@ def titles_name_different_books(clues: dict, product: dict) -> bool:
     return bool(local_tokens - audible_tokens and audible_tokens - local_tokens)
 
 
+def main_title(title: str) -> str:
+    """A title before its subtitle, as words: "The End: Zombie Fallout, Book 3"
+    is "the end", "What If?: Serious Scientific Answers ..." is "what if"."""
+    title = strip_leading_sequence_from_title(title or "")  # "0.5 - Dominion" is "dominion"
+    return literal_text(re.split(r"\s*[:(\[]|\s+-\s+", title, maxsplit=1)[0])
+
+
+def same_series_other_title(clues: dict, product: dict) -> bool:
+    """Within exactly the series the file names, a listing whose main title
+    is not the file's names another book of it ("The End Has Come and Gone",
+    book 4, is not "The End", book 3), however close its number and runtime.
+    A sub-series listing ("The Elder Empire: Sea" for "The Elder Empire") and
+    a generic "Series N" title are left to the number checks."""
+    local_series = normalize_for_match(local_series_name(clues))
+    audible_series, _ = get_primary_series(product)
+    if not local_series or normalize_for_match(audible_series) != local_series:
+        return False
+    if is_generic_series_number_title(clues):
+        return False
+    local, audible = main_title(clues.get("title", "") or clues.get("raw_title", "")), main_title(product.get("title", ""))
+    return bool(local and audible) and local != audible
+
+
+def title_adds_a_number(clues: dict, product: dict) -> bool:
+    """The listing's main title is the file's own plus a number ("What If? 2"
+    for "What If?"), while the file names no number at all: the listing is a
+    later book, not this one."""
+    if extract_title_identity_number(clues.get("title", "") or "") or extract_title_identity_number(clues.get("raw_title", "") or ""):
+        return False
+    if str(clues.get("book_number", "") or "").strip():
+        return False
+    local, audible = main_title(clues.get("title", "") or clues.get("raw_title", "")), main_title(product.get("title", ""))
+    return bool(local) and re.fullmatch(re.escape(local) + r" \d+(?: \d+)?", audible) is not None
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def strong_identity_overrides_number_conflict(
     clues: dict,
@@ -722,7 +757,7 @@ def strong_identity_overrides_number_conflict(
                 return False
 
     # Numbers are left to the number checks above.
-    if titles_name_different_books(clues, product):
+    if titles_name_different_books(clues, product) or same_series_other_title(clues, product):
         return False
 
     duration = compare_duration(
@@ -870,6 +905,7 @@ def has_sequence_conflict(
 
     if (
         not explicit_title_number_conflict
+        and not same_series_other_title(clues, product)
         and sequence_gap is not None
         and sequence_gap <= 1
         and title_score >= 0.85
@@ -1107,6 +1143,11 @@ def score_product_for_metadata(
         # Hard reject same-words/different-order titles.
         # Example: "Of Dawn and Darkness" is not "Of Darkness and Dawn".
         if has_reordered_title_conflict(clues, product):
+            return 0.0
+
+        # Hard reject a numbered later book for a file that names no number:
+        # "What If? 2" is not "What If?".
+        if title_adds_a_number(clues, product):
             return 0.0
 
         # Hard reject same-series wrong-book candidates before fuzzy title/duration
