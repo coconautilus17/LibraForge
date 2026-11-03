@@ -17,4 +17,4 @@ domain: metadata-forge
 
 # Preview metadata matching
 
-Match local audio against the selected provider and report proposed field changes before applying them. Supported providers are Audible's public catalog for a chosen marketplace (no login), Audible through the connected account, Audiobookshelf search and abs-agg, with an opt-in Goodreads fallback that reads Goodreads directly. A run that asks for the account while none is connected uses the public catalog instead.
+Match local audio against the selected provider and report proposed field changes before applying them. Supported providers are Audible's public catalog for a chosen marketplace (no login), Audible through the connected account, Audiobookshelf search and abs-agg. When those find no confident full match, the book's own series on Audible and AudioSilo's community database are searched, then the opt-in Goodreads fallback, which reads Goodreads directly. A run that asks for the account while none is connected uses the public catalog instead.
