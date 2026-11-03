@@ -28,3 +28,6 @@ venv/
 
 # dev branch tooling never ships
 dev/
+
+# Product Model docs (pdd-kit) never ship
+product-model/
