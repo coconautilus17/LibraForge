@@ -85,6 +85,11 @@ class GuildTestCase(unittest.TestCase):
         guild._CATALOG = None
         self.addCleanup(setattr, guild, "_CATALOG", None)
         self.cache = Path(tempfile.mkdtemp()) / "catalog.json"
+        # No shipped catalog unless a test writes one.
+        self.shipped = self.cache.with_name("shipped.json")
+        patcher = mock.patch.object(guild, "SHIPPED_CATALOG", self.shipped)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def search(self, store, title, author="Eric Vall", **kwargs):
         return guild.search_books(title, author, pacer=pacer(), http_get=store, cache_path=self.cache, **kwargs)
@@ -127,6 +132,33 @@ class StoreCatalogTests(GuildTestCase):
         store = FakeStore(catalog=[old[0], product("Metal Mage 2", series="Metal Mage", updated_at="2026-02-01")])
         found = self.catalog(store, clock=lambda: 30 * 24 * 3600.0)
         self.assertEqual(found["runtimes"], {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500}})
+
+    def test_a_new_install_starts_from_the_shipped_catalog_without_asking_the_store(self):
+        self.shipped.write_text(json.dumps({
+            "read_at": 1000.0, "products": [guild._slim(product("Eidolon Master"))],
+            "runtimes": {"eidolon-master": {"updated_at": "2026-01-01", "minutes": 583}}}))
+        store = FakeStore()
+        catalog = self.catalog(store, clock=lambda: 1000.0 + 24 * 3600)
+        self.assertEqual([p["title"] for p in catalog["products"]], ["Eidolon Master"])
+        self.assertEqual(catalog["runtimes"]["eidolon-master"]["minutes"], 583)
+        self.assertEqual(store.urls, [])
+
+    def test_a_newer_cache_still_uses_the_shipped_runtimes(self):
+        self.shipped.write_text(json.dumps({
+            "read_at": 1000.0, "products": [guild._slim(product("Eidolon Master"))],
+            "runtimes": {"eidolon-master": {"updated_at": "2026-01-01", "minutes": 583}}}))
+        self.cache.write_text(json.dumps({"read_at": 2000.0, "products": [guild._slim(product("Eidolon Master"))]}))
+        catalog = self.catalog(FakeStore(), clock=lambda: 2000.0)
+        self.assertEqual(catalog["runtimes"]["eidolon-master"]["minutes"], 583)
+
+    def test_a_refresh_keeps_the_shipped_runtimes_of_unchanged_books(self):
+        self.shipped.write_text(json.dumps({
+            "read_at": 0.0, "products": [guild._slim(product("Metal Mage 1", series="Metal Mage"))],
+            "runtimes": {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500}}}))
+        store = FakeStore(catalog=[product("Metal Mage 1", series="Metal Mage"), product("Metal Mage 2", series="Metal Mage")])
+        catalog = self.catalog(store, clock=lambda: 30 * 24 * 3600.0)
+        self.assertEqual(len(catalog["products"]), 2)
+        self.assertEqual(catalog["runtimes"], {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500}})
 
     def test_no_catalog_at_all_is_no_author(self):
         with mock.patch.object(guild, "CATALOG_CACHE", self.cache), mock.patch.object(guild, "PACER", pacer()):

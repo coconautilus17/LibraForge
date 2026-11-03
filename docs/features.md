@@ -87,7 +87,8 @@ Searches Audible (or another provider) and writes matched metadata to your files
   Audible isn't searched for that book; the store has no ASIN or release year, so the
   file's own are kept, and so is the file's series name (the store names some series its
   own way). When the store can't be read, the book is matched at Audible as usual. The
-  store's catalog (about 1.3 MB) is kept locally and refreshed weekly.
+  store's catalog (about 1.3 MB, every book with its length) ships with LibraForge and is
+  refreshed from the store weekly.
 
 ### How a book is looked up
 Each step runs only while no earlier one has found a confident full match:
