@@ -19,6 +19,7 @@ from app.debug_trace import trace, ALTER, CHOOSE, SCORE
 from app.publisher_policy import SPECIAL_PROVIDERS, match_canonical_publisher
 from app.fixer.parsing import (
     ASIN_PLACEHOLDER,
+    GENERIC_AUTHORS,
     is_never_series,
     series_from_subtitle,
     normalize_for_match,
@@ -59,9 +60,6 @@ from app.fixer.parsing import (
 AGGRESSIVE_SCORE_THRESHOLD = 0.70
 # The fixer's default --min-score: the score a match needs to be applied.
 MIN_MATCH_SCORE = 0.70
-
-# Placeholder author values (normalize_for_match form) that name no real author.
-GENERIC_AUTHORS = {"unknown", "unknown author", "various", "various authors", "anonymous", "misc", "n a", "na"}
 
 # Format labels, never genres ("Audiobook" is not a genre: PR #105, #306).
 GENRE_BLOCKLIST = {"audiobook", "audiobooks", "audio book", "audio books"}
