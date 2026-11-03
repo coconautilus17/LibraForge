@@ -1,0 +1,5 @@
+schema: 11
+sdd:
+  paths: []
+lint:
+  verbs: [compile, preview, revert]
