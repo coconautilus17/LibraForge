@@ -155,6 +155,25 @@ class BuildSearchContextCurrentIsolationTests(unittest.TestCase):
         self.assertEqual(clues["current"]["title"], "Sean Oswald")
         self.assertEqual(clues["current"]["series"], "Magic Eater")
 
+    def test_folder_naming_the_series_keeps_the_embedded_title(self):
+        # "Book 1 - Master of the Arena" names the series (the album says
+        # "Master of the Arena, Book 1"), not the book: its title is DOMINUS.
+        path = Path(
+            "/library/Marcus Sloss/Master of the Arena/"
+            "Book 1 - Master of the Arena/DOMINUS.m4b"
+        )
+        tags = {
+            "title": "DOMINUS",
+            "artist": "Marcus Sloss",
+            "album": "Master of the Arena, Book 1",
+        }
+
+        with patch.object(FIXER, "read_tags_and_duration", return_value=(tags, 884.6, True)):
+            _, clues, _ = FIXER.build_search_context(path, {})
+
+        self.assertEqual(clues["title"], "DOMINUS")
+        self.assertEqual(clues["book_number"], "1")
+
     def test_cached_backup_tags_trigger_a_fresh_live_probe_for_current(self):
         # is_live=False means `tags` came from a cached backup/sidecar
         # snapshot, not a genuine current read -- "current" must still do one
