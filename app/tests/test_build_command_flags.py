@@ -1,6 +1,7 @@
 """The exact command line build_command() hands to the Metadata Fixer for each
 RunRequest setting. A flag that is dropped, duplicated or sent with the wrong
 value changes what the run does to the library, so every setting is pinned."""
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +83,18 @@ class VersionedFlagTests(unittest.TestCase):
         fallback_without_url = run({}, enable_goodreads_fallback=True)
         self.assertIn("--enable-goodreads-fallback", fallback_without_url)
         self.assertNotIn("--abs-tract-url", fallback_without_url)
+
+    def test_audiosilo_is_always_searched_public_unless_a_local_copy_is_set(self):
+        def run(cfg):
+            with patch("app.main._get_abs_api_key", return_value=""), patch("app.main._load_abs_agg_config", return_value={}), \
+                 patch("app.main._load_abs_tract_config", return_value={}), \
+                 patch("app.main.AUDIOSILO_CONFIG_FILE") as config_file:
+                config_file.exists.return_value = cfg is not None
+                config_file.read_text.return_value = json.dumps(cfg or {})
+                return pairs(build_command(RunRequest(script_name=SCRIPT))[0])
+        self.assertEqual(run(None)["--audiosilo-url"], ["https://meta.audiosilo.app"])
+        self.assertEqual(run({"url": ""})["--audiosilo-url"], ["https://meta.audiosilo.app"])
+        self.assertEqual(run({"url": "http://silo:8080"})["--audiosilo-url"], ["http://silo:8080"])
 
 
 if __name__ == "__main__":
