@@ -43,6 +43,7 @@ from app.fixer.parsing import (
     is_invalid_local_title,
     strip_title_search_noise,
     drop_publisher_credits,
+    is_generic_chapter_title,
     strip_leading_sequence_from_title,
     parse_book_number_range,
     split_credit_names,
@@ -241,12 +242,29 @@ def literal_text(value: str) -> str:
 
 
 @trace(ALTER, capture=[])
+def series_from_title(title: str) -> tuple[str, str]:
+    """Series and number from a title's trailing "(Series Book N)", else ("", "")."""
+    if not re.search(r"\)\s*$", title or ""):
+        return "", ""
+    return series_from_subtitle(title)
+
+
+def title_without_series_parenthetical(title: str, series_name: str) -> str:
+    """The title without a trailing "(Series Book N)" naming its series."""
+    match = re.search(r"\s*\([^()]*\)\s*$", title or "")
+    if match and series_name and literal_text(series_from_title(title)[0]) == literal_text(series_name):
+        return title[:match.start()].strip()
+    return title
+
+
 def get_primary_series(product: dict) -> tuple[str, str]:
     series = product.get("series") or []
 
     if not series:
-        # Audible left the series field empty but the subtitle names it.
-        return series_from_subtitle(product.get("subtitle"))
+        # Audible left the series field empty but the subtitle names it, or
+        # its title ends with it ("Frigid Magic (Ard's Oath Book 3)").
+        found = series_from_subtitle(product.get("subtitle"))
+        return found if found[0] else series_from_title(product.get("title"))
 
     # A book in several series ([The Cosmere, The Stormlight Archive 4]) comes
     # back from Audible in no stable order: a numbered series beats an
@@ -1030,6 +1048,31 @@ def local_series_name(clues: dict) -> str:
     return name
 
 
+def book_number_to_write(value: str) -> str:
+    """A whole or decimal book number as written ("3", "3.5"); clean_sequence
+    keeps whole numbers only, which left every novella (3.5) unnumbered."""
+    value = str(value or "").strip()
+    if re.fullmatch(r"\d+\.\d*[1-9]\d*", value):
+        return f"{float(value):g}"
+    return clean_sequence(value)
+
+
+def own_book_number(clues: dict) -> str:
+    """The book's own number: its sequence tag, else the number read from its
+    title or folder."""
+    return (book_number_to_write((clues.get("current") or {}).get("sequence", ""))
+            or book_number_to_write(clues.get("book_number", "")))
+
+
+def same_series_name(a: str, b: str) -> bool:
+    """One series named two ways ("Hell Divers Series" / "Hell Divers")."""
+    a, b = normalize_for_match(a), normalize_for_match(b)
+    if not a or not b:
+        return False
+    shorter, longer = sorted((a, b), key=len)
+    return a == b or (len(shorter) >= 4 and longer.startswith(shorter))
+
+
 @trace(SCORE, capture=["local_duration_minutes"])
 def score_product_for_metadata(
     clues: dict,
@@ -1366,29 +1409,43 @@ def different_edition(clues: dict, product: dict, duration_result: dict) -> dict
     match_narrator = ", ".join(get_people(product, "narrators"))
     if not match_narrator:
         return None
-    authors = " ".join(get_people(product, "authors"))
+    # One name per author: joined with spaces, "James Hunter, eden Hudson"
+    # became a single name no credit ("James A. Hunter") could match.
+    authors = ", ".join(get_people(product, "authors"))
     # The file's own author tag names its author, even when spelled unlike
     # the match ("Pegaz A" for Audible's "Pegaz"): never a reader.
     local_authors = {normalize_for_match(n) for n in split_credit_names(clues.get("author", ""))}
 
+    def is_author(name: str) -> bool:
+        return (_authors_compatible(name, authors) is True
+                or normalize_for_match(name) in local_authors
+                or _authors_compatible(name, clues.get("author", "")) is True)
+
     def readers(values) -> list[str]:
         return [name for value in values for name in split_credit_names(value)
-                if _authors_compatible(name, authors) is not True
-                and normalize_for_match(name) not in local_authors]
+                if not is_author(name) and normalize_for_match(name) not in GENERIC_AUTHORS]
 
     # The author can also narrate. Trust an explicit narrator tag unless another
-    # local credit identifies the matched recording's reader.
-    tagged = split_credit_names(clues.get("narrator", ""))
+    # local credit identifies the matched recording's reader. A placeholder
+    # ("Misc", "Unknown") names nobody.
+    tagged = [name for name in split_credit_names(clues.get("narrator", ""))
+              if normalize_for_match(name) not in GENERIC_AUTHORS]
     credits = clues.get("credit_names") or []
     credited = list(dict.fromkeys(names[-1] for names in (readers([c]) for c in credits) if names))
     # A composer tag sometimes holds the author while the actual reader sits
     # in another credit. Prefer that reader, but keep the tag if no other
     # reader is identifiable (the author may narrate).
-    tagged_reader = [name for name in tagged if _authors_compatible(name, authors) is not True]
+    tagged_reader = [name for name in tagged if not is_author(name)]
     # A group credit ("Kimberly A. Blessing et al.") naming only authors is an
     # author/editor credit, not an author who narrates.
     group_credit = bool(ET_AL_RE.search(clues.get("narrator", "") or ""))
     local = tagged_reader or credited or ([] if group_credit else tagged)
+    # A narrator tag that only names the author is as often the artist tag
+    # copied over as the author really narrating, so like any tag it doesn't
+    # outweigh audio within 1% of the match (RUNTIME_RIVAL_MAX_DIFF_PERCENT).
+    diff = duration_result.get("diff_percent")
+    if local and not (tagged_reader or credited) and diff is not None and diff <= RUNTIME_RIVAL_MAX_DIFF_PERCENT:
+        return None
     if not local or any(
         narrator_match_score({"narrator": name}, product) >= NARRATOR_GOOD_SCORE
         for name in tagged + readers(credits)
@@ -1937,7 +1994,7 @@ def metadata_from_product(
     subtitle = sanitize_tag(product.get("subtitle", ""))
 
     series_name, sequence = get_primary_series(product)
-    clean_seq = preferred_audible_sequence(product)
+    clean_seq = preferred_audible_sequence(product) or book_number_to_write(sequence)
 
     duration_result = compare_duration(
         local_minutes=clues.get("local_duration_minutes"),
@@ -1956,6 +2013,7 @@ def metadata_from_product(
 
     author_text = canonicalize_author_credits(authors)
     narrator_text = ", ".join(narrators)
+    audible_title = title_without_series_parenthetical(audible_title, series_name)
 
     year = get_year(product)
     summary = sanitize_tag(
@@ -1971,6 +2029,10 @@ def metadata_from_product(
         )
         album = title
         sequence_to_write = clean_seq
+        # A listing in the file's own series but with no number for it (many
+        # novellas, "Gate Lord" #1) doesn't unnumber the book: keep the file's.
+        if not sequence_to_write and same_series_name(series_name, local_series_name(clues)):
+            sequence_to_write = own_book_number(clues)
         edition = different_edition(clues, product, duration_result)
         narrator_to_write = edition["local_narrator"] if edition else narrator_text
         year_to_write = year
@@ -1992,7 +2054,9 @@ def metadata_from_product(
             else local_title
         )
         album = title
-        sequence_to_write = ""
+        # The product is another book of the series, so its number isn't this
+        # book's; the file's own number is.
+        sequence_to_write = own_book_number(clues)
         narrator_to_write = sanitize_tag(clues.get("narrator", ""))
         year_to_write = ""
         summary_to_write = ""
@@ -2019,7 +2083,7 @@ def metadata_from_product(
     ):
         current = clues.get("current") or {}
         series_name = sanitize_tag(current.get("series", ""))
-        sequence_to_write = clean_sequence(current.get("sequence", "")) if series_name else ""
+        sequence_to_write = book_number_to_write(current.get("sequence", "")) if series_name else ""
 
     raw_genres = product.get("_abs_genres") or []
     genre_text = ", ".join(clean_provider_genres(raw_genres)[:3])
@@ -2043,6 +2107,12 @@ def metadata_from_product(
     special_provider = SPECIAL_PROVIDERS.get(product.get("_abs_provider") or "", "")
     publisher = special_provider or sanitize_tag(clues.get("publisher", ""))
 
+    # Like a missing series above, a listing with no narrator (Goodreads never
+    # lists one; some Audible listings leave it empty) doesn't say the book has
+    # none: keep the file's own narrator instead of clearing it.
+    if edit_mode == "full" and not narrator_to_write:
+        narrator_to_write = sanitize_tag((clues.get("current") or {}).get("narrator", ""))
+
     asin = product.get("asin", "")
     isbn = product.get("_abs_isbn", "") or ""
     cover_url = get_cover_url(product)
@@ -2055,6 +2125,11 @@ def metadata_from_product(
         asin = "" if local_asin in {ASIN_PLACEHOLDER, asin.upper()} else local_asin
         isbn = sanitize_tag((clues.get("current") or {}).get("isbn", ""))
         cover_url = ""
+
+    # A number with no series names nothing ("Fahrenheit 451" is no book 451):
+    # never write one alone.
+    if not series_name:
+        sequence_to_write = ""
 
     return {
         "asin": asin,
@@ -2098,13 +2173,19 @@ def choose_best_title(audible_title: str, audible_series: str, local_title: str)
     if not audible_title_clean:
         return local_title_clean
 
-    # If Audible uses the series name as the title, the local title is usually more specific.
+    # If Audible uses the series name as the title, the local title is usually
+    # more specific, as long as it is a title and not a file or track name
+    # ("01 Monster Core", "King_Of_The_Fae_Islands_-_Adam_Lance",
+    # "Opening Credits - Speedrunning the Multiverse").
+    local_title_clean = strip_leading_sequence_from_title(local_title_clean) or local_title_clean
     if (
         audible_series_clean
         and normalize_for_match(audible_title_clean)
         == normalize_for_match(audible_series_clean)
         and normalize_for_match(local_title_clean)
         != normalize_for_match(audible_title_clean)
+        and "_" not in local_title_clean
+        and not is_generic_chapter_title(re.split(r"\s+[-–—:]\s+", local_title_clean)[0])
     ):
         return local_title_clean
 

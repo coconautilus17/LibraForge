@@ -534,11 +534,13 @@ def is_never_series(value: str) -> bool:
 # The ways a publisher writes "this is book N of <series>" into a subtitle:
 #   "Blight, Book 1"                           the whole subtitle
 #   "A LitRPG Fantasy (Last Light, Book 1)"    a trailing parenthetical
+#   "Frigid Magic (Ard's Oath Book 3)"         the same, also in a listing's title
 #   "Volume 3 in the Kokoro Cat Clinic series for fans of ..."
 _SUBTITLE_LABEL = r"(?:book|vol\.?|volume)"
 _SUBTITLE_SERIES_PATTERNS = (
     re.compile(rf"^\s*(?P<series>[^,()]+?)\s*,\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s*$", re.IGNORECASE),
-    re.compile(rf"\(\s*(?P<series>[^,()]+?)\s*,\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s*\)\s*$", re.IGNORECASE),
+    re.compile(rf"\(\s*(?P<series>[^,()]+?)\s*,?\s*{_SUBTITLE_LABEL}\s*#?\s*(?P<number>\d{{1,3}}(?:\.\d+)?)\s*\)\s*$",
+               re.IGNORECASE),
     re.compile(
         rf"^\s*{_SUBTITLE_LABEL}\s*(?P<number>\d{{1,3}})\s+(?:in|of)\s+the\s+(?P<series>.+?)\s+series\b",
         re.IGNORECASE,
