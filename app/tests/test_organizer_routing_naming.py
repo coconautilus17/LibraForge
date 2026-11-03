@@ -173,6 +173,11 @@ class AuthorCompatibilityTests(unittest.TestCase):
         self.assertTrue(ORGANIZER.authors_compatible("", "Will Wight"))
         self.assertTrue(ORGANIZER.authors_compatible("Unknown Author", "Will Wight"))
 
+    def test_placeholder_authors_are_the_fixers(self):
+        # The fixer's GENERIC_AUTHORS list, not a shorter copy of it.
+        self.assertTrue(ORGANIZER.authors_compatible("Misc", "Will Wight"))
+        self.assertTrue(ORGANIZER.authors_compatible("N/A", "Will Wight"))
+
 
 class CrossAuthorSeriesGuardTests(unittest.TestCase):
     def _cradle_cache(self, root: Path) -> dict:
