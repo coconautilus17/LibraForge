@@ -286,6 +286,57 @@ def _abs_match_to_product(match: dict, provider: str, asin: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# AudioSilo community database
+# ---------------------------------------------------------------------------
+
+AUDIOSILO_DEFAULT_URL = "https://meta.audiosilo.app"
+# Shared by every AudioSilo call (the matcher fallback and Enrichment Forge).
+# Measured in the 2026-09-27 full-library run: AudioSilo showed no limiting at
+# ~100 req/min.
+AUDIOSILO_PACER = GoodreadsPacer(gap_s=0.35, fail_threshold=3, cooldown_s=60)
+
+
+def audiosilo_product(match: dict) -> dict:
+    """An AudioSilo /abs/search match as the Audible-shaped product, with the
+    runtime (minutes) and publisher it returns, so the matcher can judge it
+    like an Audible listing."""
+    product = _abs_match_to_product(match, "audiosilo", str(match.get("asin") or "").upper())
+    if match.get("duration"):
+        product["runtime_length_min"] = match["duration"]
+    product["publisher_name"] = match.get("publisher", "") or ""
+    return product
+
+
+def audiosilo_search(title: str, author: str, base_url: str, limit: int, log: list[str] | None = None) -> list[dict]:
+    """Search AudioSilo's community database (meta.audiosilo.app or a self-hosted
+    copy) through its Audiobookshelf provider endpoint: one result per
+    recording, with its narrator and runtime. While the pacer's breaker is open
+    after failures, nothing is sent."""
+    import urllib.parse as _urlparse
+    import urllib.request as _urlrequest
+
+    if not AUDIOSILO_PACER.wait_turn():
+        if log is not None:
+            log.append("  AudioSilo paused after failed requests -> skipped")
+        return []
+    params = {"query": title}
+    if author:
+        params["author"] = author
+    url = f"{base_url.rstrip('/')}/abs/search?{_urlparse.urlencode(params)}"
+    try:
+        req = _urlrequest.Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"})
+        with _urlrequest.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        AUDIOSILO_PACER.record(False)
+        if log is not None:
+            log.append(f"  AudioSilo search failed: {exc}")
+        return []
+    AUDIOSILO_PACER.record(True)
+    return [audiosilo_product(match) for match in (raw.get("matches") or [])[:limit]]
+
+
+# ---------------------------------------------------------------------------
 # abs-tract circuit breaker + throttle
 # ---------------------------------------------------------------------------
 
