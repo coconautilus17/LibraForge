@@ -165,6 +165,7 @@ try:
         AUDIOSILO_DEFAULT_URL,
         audible_series_members,
         audible_lookup_many,
+        AsinLookahead,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
         _ABS_TRACT_BREAKER_THRESHOLD,
@@ -321,6 +322,7 @@ except ModuleNotFoundError:
         AUDIOSILO_DEFAULT_URL,
         audible_series_members,
         audible_lookup_many,
+        AsinLookahead,
         _abs_match_to_product,
         _ABS_TRACT_BREAKER,
         _ABS_TRACT_BREAKER_THRESHOLD,
@@ -3850,6 +3852,7 @@ def search_item(
     search_in_flight: dict,
     folder_audio_counts: dict | None = None,
     abs_index: dict | None = None,
+    asin_lookahead: AsinLookahead | None = None,
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
@@ -4173,7 +4176,10 @@ def search_item(
                 )
             else:
                 client = get_thread_client(auth_file, auth_password)
-                lookup_asin = lambda asin: audible_lookup_by_asin(client, asin)
+                if asin_lookahead is not None:
+                    lookup_asin = lambda asin: asin_lookahead.lookup(client, asin, index)
+                else:
+                    lookup_asin = lambda asin: audible_lookup_by_asin(client, asin)
 
             # ASIN-first: if the file already embeds an ASIN, attempt a direct
             # product lookup before falling back to keyword searches.
@@ -5756,6 +5762,87 @@ def _save_disk_asin_cache(cache: dict[str, dict]) -> None:
     except OSError:
         pass
 
+def asin_without_probe(fp: Path) -> str:
+    """A file's ASIN from its cheap sources (same idea as the owned-ASIN check):
+    the [B0XXXXXXXX] filename token, then the libraforge.json sidecar, so most
+    organized books resolve without opening the media file over the network
+    mount. "" when neither has it."""
+    m = re.search(r"\[(?:ASIN\.)?([Bb]0[A-Z0-9]{8})\]", fp.name, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    try:
+        sidecar_asin = str((load_marker(fp).get("audible") or {}).get("asin") or "").strip().upper()
+        if sidecar_asin and sidecar_asin != ASIN_PLACEHOLDER:
+            return sidecar_asin
+    except Exception:
+        pass
+    return ""
+
+
+def upcoming_asins_for_run(processing_items: list[Path], multi_part_group_map: dict,
+                           search_context_cache: dict, search_context_lock: threading.Lock,
+                           look_ahead: int = 200):
+    """index -> the ASINs of the books after it in the run, for AsinLookahead: a
+    book's parsed clues when its search already built them, else the file's
+    cheap sources (never a probe). Each file is read once per run."""
+    known: dict[Path, str] = {}
+
+    def upcoming(index: int):
+        for file_path in processing_items[index:index + look_ahead]:
+            key = get_search_context_cache_key(file_path, multi_part_group_map)
+            with search_context_lock:
+                cached = search_context_cache.get(key)
+            if cached is not None:
+                yield str(cached[1].get("existing_asin") or "")
+                continue
+            if file_path not in known:
+                known[file_path] = asin_without_probe(file_path)
+            yield known[file_path]
+    return upcoming
+
+
+def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: dict, args,
+                            search_context_cache: dict, search_context_lock: threading.Lock) -> None:
+    """Read the tags of every book LibraForge hasn't processed (no libraforge.json
+    marker, no ASIN in its name) before the search starts: the same reads the
+    search makes, done first, so AsinLookahead sees each embedded ASIN and asks
+    for it with its neighbours'. A processed book is left to the search, its ASIN
+    cheap to read, and so is a duplicate-set folder, which is never searched."""
+    todo: dict[str, Path] = {}
+    for file_path in processing_items:
+        if file_path.parent in DUPLICATE_SET_FOLDERS:
+            continue
+        try:
+            if load_marker(file_path) or asin_without_probe(file_path):
+                continue
+        except Exception:
+            pass
+        todo.setdefault(get_search_context_cache_key(file_path, multi_part_group_map), file_path)
+    if not todo:
+        return
+    print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+
+    def read_one(item: tuple[str, Path]) -> None:
+        key, file_path = item
+        if _cancel_requested:
+            return
+        try:
+            queries, clues, _ = build_search_context(
+                file_path,
+                multi_part_group_map,
+                use_backup_tags=args.force_original,
+                reprobe=args.reprobe,
+                save_probe_cache=args.backup,
+            )
+        except Exception:
+            return  # the search reads it again and reports the failure there
+        with search_context_lock:
+            search_context_cache.setdefault(key, (queries, clues))
+
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        list(executor.map(read_one, todo.items()))
+
+
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     """Map each ASIN already present on disk -> set of file paths that carry it.
 
@@ -5787,19 +5874,10 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
         def read_one(item: tuple[str, float | None]) -> tuple[str, float | None, str]:
             key, mtime = item
             fp = Path(key)
-            # Cheap sources first (same idea as the owned-ASIN check): the
-            # [B0XXXXXXXX] filename token, then the libraforge.json sidecar, so
-            # most organized books resolve without opening the media file over
-            # the network mount. Fall back to probing only when neither has it.
-            m = re.search(r"\[(?:ASIN\.)?([Bb]0[A-Z0-9]{8})\]", fp.name, flags=re.IGNORECASE)
-            if m:
-                return key, mtime, m.group(1).upper()
-            try:
-                sidecar_asin = str((load_marker(fp).get("audible") or {}).get("asin") or "").strip().upper()
-                if sidecar_asin and sidecar_asin != ASIN_PLACEHOLDER:
-                    return key, mtime, sidecar_asin
-            except Exception:
-                pass
+            # Cheap sources first; probe the media file only when neither has it.
+            asin = asin_without_probe(fp)
+            if asin:
+                return key, mtime, asin
             tags, _ = probe_file(fp)
             asin = str((tags or {}).get("asin", "") or "").strip().upper()
             return key, mtime, asin
@@ -6460,6 +6538,13 @@ def main():
     match_cache: dict = {}
     match_cache_lock = threading.Lock()
     total = len(processing_items)
+    # Embedded-ASIN lookups go up to 50 to a request, the next books' with each.
+    asin_lookahead = AsinLookahead(upcoming_asins_for_run(
+        processing_items, multi_part_group_map, search_context_cache, search_context_lock,
+    ))
+    if getattr(args, "provider", "audible") != "abs":
+        prefill_search_contexts(processing_items, multi_part_group_map, args,
+                                search_context_cache, search_context_lock)
 
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
@@ -6483,6 +6568,7 @@ def main():
                 search_in_flight=search_in_flight,
                 folder_audio_counts=folder_audio_counts,
                 abs_index=abs_index,
+                asin_lookahead=asin_lookahead,
             )
             for index, file_path in enumerate(processing_items, start=1)
         ]

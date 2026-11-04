@@ -7,6 +7,8 @@ import unittest
 import urllib.error
 from unittest import mock
 
+import httpx
+
 from app.fixer import search
 
 
@@ -120,38 +122,57 @@ class ThreadClientTests(unittest.TestCase):
 
 
 class PublicAudibleClientTests(unittest.TestCase):
+    def client(self, answer, region=""):
+        """A client whose requests go to answer(request) -> httpx.Response, not the network."""
+        return search.PublicAudibleClient(region, transport=httpx.MockTransport(answer))
+
     def test_get_calls_the_marketplace_catalog_and_parses_json(self):
         urls = []
-        def fake(req, timeout=None):
-            urls.append(req.full_url)
-            return _Resp(json.dumps({"products": [{"asin": "B0X"}]}).encode())
-        with mock.patch("urllib.request.urlopen", fake):
-            out = search.audible_search(search.PublicAudibleClient("uk"), "Moby Dick", 50)
+        def answer(request):
+            urls.append(str(request.url))
+            return httpx.Response(200, json={"products": [{"asin": "B0X"}]})
+        out = search.audible_search(self.client(answer, "uk"), "Moby Dick", 50)
         self.assertEqual(out, [{"asin": "B0X"}])
         self.assertTrue(urls[0].startswith("https://api.audible.co.uk/1.0/catalog/products?keywords=Moby+Dick&num_results=50"))
 
     def test_unknown_region_uses_the_us_catalog(self):
         self.assertEqual(search.PublicAudibleClient("zz").base_url, "https://api.audible.com/1.0/")
 
+    def test_requests_share_one_open_connection(self):
+        client = self.client(lambda request: httpx.Response(200, json={}))
+        connection = client._http
+        client.get("catalog/products/B0X")
+        client.get("catalog/products/B0Y")
+        self.assertIs(client._http, connection)
+        self.assertFalse(connection.is_closed)
+
     def test_throttling_is_retried_then_succeeds(self):
         calls = []
-        def fake(req, timeout=None):
+        def answer(request):
             calls.append(1)
             if len(calls) == 1:
-                raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
-            return _Resp(b'{"product": {"asin": "B0X"}}')
-        with mock.patch("urllib.request.urlopen", fake), mock.patch.object(search.time, "sleep"):
-            self.assertEqual(search.PublicAudibleClient().get("catalog/products/B0X"), {"product": {"asin": "B0X"}})
+                return httpx.Response(429)
+            return httpx.Response(200, json={"product": {"asin": "B0X"}})
+        with mock.patch.object(search.time, "sleep"):
+            self.assertEqual(self.client(answer).get("catalog/products/B0X"), {"product": {"asin": "B0X"}})
         self.assertEqual(len(calls), 2)
+
+    def test_a_network_failure_is_retried_then_raised(self):
+        calls = []
+        def answer(request):
+            calls.append(1)
+            raise httpx.ConnectError("down", request=request)
+        with mock.patch.object(search.time, "sleep"), self.assertRaises(httpx.ConnectError):
+            self.client(answer).get("catalog/products/B0X")
+        self.assertEqual(len(calls), 3)
 
     def test_not_found_is_not_retried(self):
         calls = []
-        def fake(req, timeout=None):
+        def answer(request):
             calls.append(1)
-            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
-        with mock.patch("urllib.request.urlopen", fake):
-            # audible_lookup_by_asin swallows the error and tries keyword search too.
-            self.assertIsNone(search.audible_lookup_by_asin(search.PublicAudibleClient(), "B0NOPE0000"))
+            return httpx.Response(404)
+        # audible_lookup_by_asin swallows the error and tries keyword search too.
+        self.assertIsNone(search.audible_lookup_by_asin(self.client(answer), "B0NOPE0000"))
         self.assertEqual(len(calls), 2)
 
 class AbsSearchTests(unittest.TestCase):
