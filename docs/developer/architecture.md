@@ -138,11 +138,13 @@ pauses every AudioSilo call, the fallback's and Enrichment Forge's alike.
 
 Audiobook Guild, a store selling a short list of self-published authors, is read from its
 public Shopify storefront (`app/audiobook_guild.py`). Its whole catalog (about 800 books,
-1.3 MB) is read from `products.json` in four requests at most weekly and kept as
-`audiobook-guild-catalog.json` in the reports folder; the author list comes from it, and
+1.3 MB) ships with LibraForge in `app/data/audiobook-guild-catalog.json`, every book with
+its runtime (rebuilt with `dev/tools/build_guild_catalog.py`). It is refreshed from
+`products.json` in four requests at most weekly and kept as `audiobook-guild-catalog.json`
+in the reports folder, whichever of the two is newer being used; the author list comes from it, and
 a book is searched there locally (its author's books, ranked with the matcher's
-`title_evidence_score`, its own number first). A candidate's runtime is read from its
-product page once and kept in the same file until the store changes that book. A book by
+`title_evidence_score`, its own number first). Only a book the store added since needs its
+product page read once for its runtime, which is then kept in the same file. A book by
 one of those authors is matched there before any other source (`audiobook_guild_search`
 in `app/fixer/search.py`, scored like any candidate), and a full match there skips the
 ASIN lookup and Audible search, with the file's own series name written once every

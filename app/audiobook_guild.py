@@ -8,9 +8,11 @@ book's author (the product vendor), series (the product type) and tags
 9 Hours, 43 Minutes"). There is no ASIN, ISBN or release year: the product
 dates are when the store listed the book.
 
-The whole catalog (about 800 books, 1.3 MB) is kept locally and searched
-there: four products.json requests a week, and a book page only for a
-candidate's runtime, read once and kept with the catalog.
+The whole catalog (about 800 books, 1.3 MB) ships with LibraForge
+(app/data/audiobook-guild-catalog.json), each book with its runtime, and is
+searched locally. It is refreshed from the store at most weekly (four
+products.json requests); only a book the store added since needs its page
+read once for its runtime, which is then kept with the catalog.
 
 Pacing: one shared 2 s minimum gap and the Goodreads breaker settings,
 through the same pacer class. Measured on 2026-10-30: the store refuses the
@@ -47,6 +49,8 @@ _NOT_AUTHORS = {"audiobook guild"}
 # The catalog is read from the store at most weekly and kept with the app's
 # other caches, with the runtimes read so far.
 CATALOG_CACHE = Path(os.environ.get("REPORTS_DIR", "/app/reports")) / "audiobook-guild-catalog.json"
+# The catalog as shipped, every book with its runtime: what a new install starts from.
+SHIPPED_CATALOG = Path(__file__).resolve().parent / "data" / "audiobook-guild-catalog.json"
 CATALOG_MAX_AGE_S = 7 * 24 * 3600
 
 # A store book is a search result when the matcher's title evidence for the
@@ -128,31 +132,41 @@ def _save_catalog(catalog: dict[str, Any], cache_path: Path) -> None:
         pass
 
 
+def _load_catalog(path: Path) -> dict[str, Any]:
+    try:
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return catalog if isinstance(catalog, dict) and isinstance(catalog.get("products"), list) else {}
+
+
 def store_catalog(*, pacer: GoodreadsPacer | None = None, http_get: Callable[[str, float], bytes] | None = None,
-                  timeout: float = 20, cache_path: Path | None = None,
+                  timeout: float = 20, cache_path: Path | None = None, shipped_path: Path | None = None,
                   clock: Callable[[], float] = time.time) -> dict[str, Any]:
     """{"read_at", "products": [_slim()], "runtimes": {handle: {"updated_at",
-    "minutes"}}}: the cached catalog while it is under a week old, else read
-    from the store (the old one when that fails), keeping the runtime of each
-    book the store hasn't changed since. No products when neither is
-    available."""
+    "minutes"}}}: the newer of the cached and the shipped catalog while it is
+    under a week old, else read from the store (the old one when that fails),
+    keeping the runtime of every book still in the store. No
+    products when none is available."""
     global _CATALOG
     pacer, cache_path = pacer or PACER, cache_path or CATALOG_CACHE
     with _CATALOG_LOCK:
         if _CATALOG is not None:
             return _CATALOG
-        try:
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            cached = {}
-        if not isinstance(cached, dict) or not isinstance(cached.get("products"), list):
-            cached = {}
+        own, shipped = _load_catalog(cache_path), _load_catalog(shipped_path or SHIPPED_CATALOG)
+        cached = max((own, shipped), key=lambda c: (bool(c), float(c.get("read_at") or 0)))
+        if cached:
+            # Either one's runtimes serve the other's books while the store leaves them unchanged.
+            cached["runtimes"] = {**(shipped.get("runtimes") or {}), **(own.get("runtimes") or {})}
         if not cached or clock() - float(cached.get("read_at") or 0) > CATALOG_MAX_AGE_S:
             fresh = _read_store_catalog(pacer, http_get or _default_http_get, timeout)
             if fresh:
-                updated = {p["handle"]: p["updated_at"] for p in fresh}
+                # A published book's runtime doesn't change, and the store touches its
+                # products' updated_at constantly, so a runtime is kept for every book
+                # still in the store.
+                handles = {p["handle"] for p in fresh}
                 runtimes = {handle: r for handle, r in (cached.get("runtimes") or {}).items()
-                            if isinstance(r, dict) and updated.get(handle) == r.get("updated_at")}
+                            if isinstance(r, dict) and handle in handles}
                 cached = {"read_at": clock(), "products": fresh, "runtimes": runtimes}
                 _save_catalog(cached, cache_path)
         if not cached:
@@ -268,11 +282,11 @@ _UNREAD = object()
 
 def _runtime(product: dict[str, Any], catalog: dict[str, Any], pacer: GoodreadsPacer,
              http_get: Callable[[str, float], bytes], timeout: float, cache_path: Path) -> Any:
-    """The book's runtime from its page, read once while the store leaves the
-    book unchanged (None for a page without one), or _UNREAD."""
+    """The book's runtime from its page, read once (None for a page without
+    one), or _UNREAD."""
     handle = product["handle"]
     kept = catalog["runtimes"].get(handle)
-    if isinstance(kept, dict) and kept.get("updated_at") == product.get("updated_at"):
+    if isinstance(kept, dict) and "minutes" in kept:
         return kept.get("minutes")
     page = _fetch(STORE_URL + "/products/" + urllib.parse.quote(handle), pacer, http_get, timeout)
     if page is None:
