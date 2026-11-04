@@ -123,15 +123,16 @@ class StoreCatalogTests(GuildTestCase):
         self.assertEqual([p["title"] for p in found["products"]], ["Eidolon Master"])
         self.assertTrue(store.urls)
 
-    def test_a_refresh_keeps_the_runtimes_of_the_books_the_store_has_not_changed(self):
+    def test_a_refresh_keeps_the_runtimes_of_the_books_still_in_the_store(self):
+        # The store touches updated_at constantly; a published book's runtime doesn't change.
         old = [product("Metal Mage 1", series="Metal Mage"), product("Metal Mage 2", series="Metal Mage")]
         self.cache.write_text(json.dumps({
             "read_at": 0.0, "products": [guild._slim(p) for p in old],
             "runtimes": {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500},
                          "metal-mage-2": {"updated_at": "2026-01-01", "minutes": 400}}}))
-        store = FakeStore(catalog=[old[0], product("Metal Mage 2", series="Metal Mage", updated_at="2026-02-01")])
+        store = FakeStore(catalog=[product("Metal Mage 2", series="Metal Mage", updated_at="2026-02-01")])
         found = self.catalog(store, clock=lambda: 30 * 24 * 3600.0)
-        self.assertEqual(found["runtimes"], {"metal-mage-1": {"updated_at": "2026-01-01", "minutes": 500}})
+        self.assertEqual(found["runtimes"], {"metal-mage-2": {"updated_at": "2026-01-01", "minutes": 400}})
 
     def test_a_new_install_starts_from_the_shipped_catalog_without_asking_the_store(self):
         self.shipped.write_text(json.dumps({
