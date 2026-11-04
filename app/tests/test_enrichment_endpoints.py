@@ -18,14 +18,19 @@ _REAL_COLLECT_EXTRA_SOURCES = main._collect_extra_sources
 _NO_EXTRA = ({}, {"labels": [], "evidence": [], "pf_progression": False}, {})
 _extra_patch = patch.object(main, "_collect_extra_sources", return_value=_NO_EXTRA)
 _no_network = patch("urllib.request.urlopen", side_effect=AssertionError("network call in an endpoint test"))
+# The public Audible catalog goes through httpx; the TestClient has its own transport.
+_no_httpx_network = patch("httpx.HTTPTransport.handle_request",
+                          side_effect=AssertionError("network call in an endpoint test"))
 
 
 def setUpModule():
     _extra_patch.start()
     _no_network.start()
+    _no_httpx_network.start()
 
 
 def tearDownModule():
+    _no_httpx_network.stop()
     _no_network.stop()
     _extra_patch.stop()
 

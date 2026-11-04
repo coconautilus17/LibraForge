@@ -12,8 +12,11 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterable
+from itertools import islice
 
 import audible
+import httpx
 
 from app import audiobook_guild
 from app.debug_trace import trace, CHOOSE
@@ -141,6 +144,60 @@ def audible_lookup_many(
             continue
         products += (response or {}).get("products") or []
     return products
+
+
+class AsinLookahead:
+    """A run's ASIN lookups, answered up to 50 to a request.
+
+    The first lookup a book needs also asks for the ASINs of the books after it
+    in the run (catalog/products?asins=, the same listing a single lookup
+    returns), so their lookups are answered when they get there. A run never
+    sends more requests than one per looked-up book, as before; an ASIN the
+    batch leaves out is looked up on its own (audible_lookup_by_asin)."""
+
+    def __init__(self, upcoming: Callable[[int], Iterable[str]], batch_size: int = 50):
+        self._upcoming = upcoming  # index -> the ASINs of the books after it
+        self._batch_size = batch_size
+        self._found: dict[str, dict] = {}
+        self._pending: dict[str, threading.Event] = {}
+        self._asked: set[str] = set()
+        self._lock = threading.Lock()
+
+    def lookup(self, client: audible.Client, asin: str, index: int) -> dict | None:
+        asin = asin.strip().upper()
+        with self._lock:
+            started = asin in self._asked
+        # The next books' ASINs are read outside the lock: a sidecar read is file I/O.
+        ahead = [] if started else [a.strip().upper() for a in islice(self._upcoming(index), 4 * self._batch_size) if a]
+        batch: list[str] = []
+        with self._lock:
+            if asin not in self._asked:
+                batch = [asin] + [a for a in dict.fromkeys(ahead) if a != asin and a not in self._asked]
+                batch = batch[:self._batch_size]
+                event = threading.Event()
+                for a in batch:
+                    self._asked.add(a)
+                    self._pending[a] = event
+            else:
+                event = self._pending.get(asin)
+        if batch:
+            products: list[dict] = []
+            try:
+                products = audible_lookup_many(client, batch)
+            finally:
+                with self._lock:
+                    for product in products:
+                        key = str(product.get("asin") or "").upper()
+                        if key in batch:
+                            self._found[key] = product
+                    for a in batch:
+                        self._pending.pop(a, None)
+                event.set()
+        elif event is not None:
+            event.wait(timeout=60)
+        with self._lock:
+            product = self._found.get(asin)
+        return product or audible_lookup_by_asin(client, asin)
 
 
 def audible_lookup_chapters(client: audible.Client, asin: str) -> list[dict] | None:
@@ -679,30 +736,28 @@ class PublicAudibleClient:
     endpoints (library, licenses) need a real login and fail here.
     """
 
-    def __init__(self, region: str = "", timeout: float = 20.0, retries: int = 2):
+    def __init__(self, region: str = "", timeout: float = 20.0, retries: int = 2,
+                 transport: httpx.BaseTransport | None = None):
         region = (region or os.environ.get("AUDIBLE_PUBLIC_REGION", "") or "us").lower()
         self.base_url = f"https://api.{PUBLIC_AUDIBLE_DOMAINS.get(region, 'audible.com')}/1.0/"
         self.timeout = timeout
         self.retries = retries
+        # One connection kept open for every request: opening a new one each
+        # time (urllib) made a catalog call ~500 ms instead of ~210 ms.
+        self._http = httpx.Client(timeout=timeout, headers={"Accept": "application/json"}, transport=transport)
 
     def get(self, path: str, params: dict | None = None) -> dict:
-        import urllib.error as _urlerror
-        import urllib.parse as _urlparse
-        import urllib.request as _urlrequest
-
         url = self.base_url + path.lstrip("/")
-        if params:
-            url += "?" + _urlparse.urlencode(params)
-        req = _urlrequest.Request(url, headers={"Accept": "application/json"})
         for attempt in range(self.retries + 1):
             try:
-                with _urlrequest.urlopen(req, timeout=self.timeout) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
-            except _urlerror.HTTPError as exc:
+                resp = self._http.get(url, params=params)
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as exc:
                 # Throttling or a transient upstream error: back off and retry.
-                if exc.code not in (429, 500, 502, 503, 504) or attempt == self.retries:
+                if exc.response.status_code not in (429, 500, 502, 503, 504) or attempt == self.retries:
                     raise
-            except (_urlerror.URLError, OSError):
+            except httpx.TransportError:
                 if attempt == self.retries:
                     raise
             time.sleep(1.5 * (attempt + 1))

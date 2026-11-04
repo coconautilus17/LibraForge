@@ -94,7 +94,8 @@ that when adding a write path (the same rule is in [CONTRIBUTING](../../CONTRIBU
 Search providers sit behind `app/fixer/search.py` and `app/manual_candidates.py` (the shape
 every Manual Review result row shares). Audible is queried directly: `get_catalog_client()`
 returns the logged-in `audible.Client` when an auth file exists, else `PublicAudibleClient`,
-which calls the same catalog endpoints with no login. The "Audible public catalog" provider
+which calls the same catalog endpoints with no login over one kept-open httpx connection
+(a new connection per request doubled each call). The "Audible public catalog" provider
 forces the public client for one marketplace (`PUBLIC_AUDIBLE_DOMAINS`): the UI sends
 `audible_region`, and runs pass `--audible-public-region` to the fixer. Audiobookshelf,
 abs-agg and abs-tract are HTTP services whose responses are normalised to one metadata
@@ -113,7 +114,10 @@ calling for a cooldown instead of hammering a blocked service.
 The order inside `search_item` (scripts/audible-metadata-fixer-v5.py): Audiobook Guild
 for its authors (`audiobook_guild_search`, final when full), the special publishers through
 abs-agg (`detect_special_provider`), the embedded ASIN (`lookup_asin`, final only when the
-runtime agrees), the Audible title+author search and keyword queries (`audible_searches`,
+runtime agrees; in Audible mode `AsinLookahead` asks `catalog/products?asins=` for it and for
+the next books' ASINs, up to 50 to a request, read from their parsed clues or the file's
+cheap sources by `upcoming_asins_for_run`, so a run sends at most one request per looked-up
+book and usually far fewer), the Audible title+author search and keyword queries (`audible_searches`,
 or `abs_search` in ABS mode), then the fallbacks below while the match isn't full, and
 last the review gates (min score, ambiguity, missing title or author). Audible's
 `catalog/products` search is filtered by where the request comes from (and, signed in, by
