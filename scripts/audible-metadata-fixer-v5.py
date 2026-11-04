@@ -2926,10 +2926,17 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
         # The folder above the book is the series only below the author level;
         # in Author/"Author; Title; Book 01" it is the author folder.
         is_author_folder = file_path.parent.parent.name == library_author_folder(file_path.parent, LIBRARY_ROOTS)
-        if (
+        names_a_series = bool(
             hierarchy_series
             and not is_author_folder
             and normalize_for_match(hierarchy_series) not in generic_series
+        )
+        if names_a_series:
+            # The series the library files the book under picks among a listing's
+            # series (#504), whatever the tag says; it is never scored against one.
+            clues["folder_series"] = hierarchy_series
+        if (
+            names_a_series
             and (
                 not current_series_norm
                 or current_series_norm == current_title_norm
