@@ -1054,9 +1054,10 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
     from Audible in a different order from one request to the next, and
     get_primary_series() reads one of them. When the file's series clue names
     one, that one is first, so scoring and the write agree run after run; else
-    one the file's own title names ("Into the Storm: Book One of The
-    Malcontents", listed as War Machine 5 and The Malcontents 1), so the book's
-    number is checked against its own series."""
+    one its folder names ("Author; Series; Book NN; Title", #502), else one the
+    file's own title names ("Into the Storm: Book One of The Malcontents", listed
+    as War Machine 5 and The Malcontents 1), so the book's number is checked
+    against its own series."""
     series = product.get("series") or []
     if len(series) < 2:
         return product
@@ -1064,7 +1065,10 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
         (entry or {}).get("title") or (entry or {}).get("name") or ""), "")[0]) for entry in series]
     local = normalize_for_match(clues.get("series", ""))
     title = f" {normalize_for_match(clues.get('raw_title') or clues.get('title') or '')} "
+    folder = normalize_for_match(clues.get("folder_series", ""))
     index = next((i for i, name in enumerate(names) if local and name == local), None)
+    if index is None:
+        index = next((i for i, name in enumerate(names) if folder and name == folder), None)
     if index is None:
         # The most specific name the title holds: "Monster Hunter Memoirs: Sinners" names
         # Monster Hunter Memoirs, not the Monster Hunter umbrella.
