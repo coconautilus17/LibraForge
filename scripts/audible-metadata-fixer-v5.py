@@ -4386,7 +4386,7 @@ def search_item(
                 # it leads to the series' listing.
                 series_query_name = local_series_name(clues) or (
                     series_from_subtitle(clues["title"].rpartition(": ")[2])[0] if ": " in clues["title"] else ""
-                )
+                ) or clues.get("folder_series", "")
                 if not series_asins and series_query_name:
                     series_author = (split_credit_names(clues.get("author", "")) or [""])[0]
                     series_query = f"{series_query_name} {series_author}".strip()

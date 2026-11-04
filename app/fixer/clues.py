@@ -17,6 +17,7 @@ from app.fixer.parsing import (
     drop_publisher_credits,
     sequence_values_equal,
     parse_structured_book_from_path,
+    semicolon_layout_series,
     extract_author_from_title,
     strip_title_search_noise,
     normalize_book_number,
@@ -53,6 +54,14 @@ def apply_structured_path_override(clues: dict, file_path: Path) -> dict:
     name is now accurate, but the embedded M4B tags still contain old bad
     title/series/track metadata.
     """
+    # "Author; Series; Book NN; Title" (#502): the series it states picks among a listing's
+    # series and names the series search. It is kept apart from the series clue, which the
+    # score compares with a listing's: the library's own name ("D6") isn't Audible's
+    # ("Caverns and Creatures").
+    layout_series = semicolon_layout_series(file_path, known_author=clues.get("author", ""))
+    if layout_series:
+        clues["folder_series"] = layout_series
+
     path_meta = parse_structured_book_from_path(
         file_path,
         known_author=clues.get("author", ""),

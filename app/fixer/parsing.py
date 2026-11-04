@@ -1523,6 +1523,32 @@ def parse_identity_rich_book_text(value: str) -> dict:
     return {}
 
 
+# A hand-made layout that states every fact (#502): "Larry Correia; The Malcontents; Book 01;
+# Into the Storm", "Book XX" for an unnumbered book, "Book 01-03" for a collection.
+_SEMICOLON_LAYOUT = re.compile(
+    r"^(?P<author>[^;]+?)\s*;\s*(?P<series>[^;]+?)\s*;\s*Book\s+"
+    r"(?:\d{1,4}(?:\.\d+)?(?:\s*-\s*\d{1,4})?|XX)\s*;\s*[^;]+?\s*$",
+    re.IGNORECASE,
+)
+
+
+def semicolon_layout_series(file_path: Path, known_author: str = "") -> str:
+    """The series an "Author; Series; Book NN; Title" folder or file name states,
+    when the name has exactly that shape and its first part is the book's author;
+    else "". Only the series is read: the layout's titles are the library's own
+    short forms ("Zero", "8D6"), and its numbers are left to the parsers that
+    already read them."""
+    for candidate in (file_path.parent.name, file_path.stem):
+        match = _SEMICOLON_LAYOUT.match(sanitize_technical_labels(candidate))
+        if not match:
+            continue
+        author = clean_author_value(match.group("author"))
+        if (_authors_compatible(known_author, author) is True if known_author
+                else looks_like_person_name(author)):
+            return clean_series_value(match.group("series").strip())
+    return ""
+
+
 @trace(ALTER, capture=["file_path", "known_author"])
 def parse_structured_book_from_path(file_path: Path, known_author: str = "") -> dict:
     """Return structured metadata from the corrected folder/file path if available."""
