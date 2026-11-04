@@ -96,5 +96,37 @@ class UpcomingAsinsTests(unittest.TestCase):
             probe.assert_not_called()
 
 
+class PrefillSearchContextsTests(unittest.TestCase):
+    def test_only_books_libraforge_has_not_processed_are_read_before_the_search(self):
+        root = Path("/lib")
+        fresh, processed, named = root / "A" / "a.m4b", root / "B" / "b.m4b", root / "C" / "c [B0NAMED001].m4b"
+        duplicate, part1, part2 = root / "D" / "d.m4b", root / "E" / "1.mp3", root / "E" / "2.mp3"
+        groups = {part1.parent: [part1, part2]}
+        args = mock.Mock(workers=2, force_original=False, reprobe=False, backup=False)
+        cache, read = {}, []
+
+        def build(file_path, group_map, **kw):
+            read.append(file_path)
+            return [f"q {file_path.name}"], {"existing_asin": "B0FROMTAGS"}, ""
+        with mock.patch.object(FIXER, "load_marker", side_effect=lambda fp: {"applied": True} if fp == processed else {}), \
+                mock.patch.object(FIXER, "build_search_context", side_effect=build), \
+                mock.patch.dict(FIXER.DUPLICATE_SET_FOLDERS, {duplicate.parent: "two copies"}, clear=True), \
+                mock.patch("builtins.print"):
+            FIXER.prefill_search_contexts([fresh, processed, named, duplicate, part1, part2], groups, args,
+                                          cache, threading.Lock())
+        self.assertEqual(sorted(read), [fresh, part1])
+        self.assertEqual(cache[FIXER.get_search_context_cache_key(fresh, groups)][1]["existing_asin"], "B0FROMTAGS")
+        self.assertIn(FIXER.get_search_context_cache_key(part2, groups), cache)  # the group, read once
+
+    def test_a_book_whose_tags_fail_to_read_is_left_to_the_search(self):
+        cache = {}
+        args = mock.Mock(workers=1, force_original=False, reprobe=False, backup=False)
+        with mock.patch.object(FIXER, "load_marker", return_value={}), \
+                mock.patch.object(FIXER, "build_search_context", side_effect=OSError("unreadable")), \
+                mock.patch("builtins.print"):
+            FIXER.prefill_search_contexts([Path("/lib/A/a.m4b")], {}, args, cache, threading.Lock())
+        self.assertEqual(cache, {})
+
+
 if __name__ == "__main__":
     unittest.main()

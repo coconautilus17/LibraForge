@@ -5801,6 +5801,48 @@ def upcoming_asins_for_run(processing_items: list[Path], multi_part_group_map: d
     return upcoming
 
 
+def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: dict, args,
+                            search_context_cache: dict, search_context_lock: threading.Lock) -> None:
+    """Read the tags of every book LibraForge hasn't processed (no libraforge.json
+    marker, no ASIN in its name) before the search starts: the same reads the
+    search makes, done first, so AsinLookahead sees each embedded ASIN and asks
+    for it with its neighbours'. A processed book is left to the search, its ASIN
+    cheap to read, and so is a duplicate-set folder, which is never searched."""
+    todo: dict[str, Path] = {}
+    for file_path in processing_items:
+        if file_path.parent in DUPLICATE_SET_FOLDERS:
+            continue
+        try:
+            if load_marker(file_path) or asin_without_probe(file_path):
+                continue
+        except Exception:
+            pass
+        todo.setdefault(get_search_context_cache_key(file_path, multi_part_group_map), file_path)
+    if not todo:
+        return
+    print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+
+    def read_one(item: tuple[str, Path]) -> None:
+        key, file_path = item
+        if _cancel_requested:
+            return
+        try:
+            queries, clues, _ = build_search_context(
+                file_path,
+                multi_part_group_map,
+                use_backup_tags=args.force_original,
+                reprobe=args.reprobe,
+                save_probe_cache=args.backup,
+            )
+        except Exception:
+            return  # the search reads it again and reports the failure there
+        with search_context_lock:
+            search_context_cache.setdefault(key, (queries, clues))
+
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        list(executor.map(read_one, todo.items()))
+
+
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     """Map each ASIN already present on disk -> set of file paths that carry it.
 
@@ -6500,6 +6542,9 @@ def main():
     asin_lookahead = AsinLookahead(upcoming_asins_for_run(
         processing_items, multi_part_group_map, search_context_cache, search_context_lock,
     ))
+    if getattr(args, "provider", "audible") != "abs":
+        prefill_search_contexts(processing_items, multi_part_group_map, args,
+                                search_context_cache, search_context_lock)
 
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
