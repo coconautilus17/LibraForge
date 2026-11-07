@@ -1,6 +1,6 @@
 ---
 scope: Core library preparation in the web tools and maintained matching, organization and selected maintenance
-  commands, at 97779be92077839bc7b7fa3fd48e8cbf049634ab.
+  commands, at a415b5f25740045db754234bc9fea572c486b3c9.
 method: Static tracing of tracked source, UI, documentation and selected regression tests at the pinned
   upstream commit.
 covered:
@@ -19,6 +19,8 @@ covered:
   - app/manual_candidates.py
   - scripts/audible-metadata-fixer-v5.py
   - scripts/review-libraforge-report.py
+  - app/audiobook_guild.py
+  - app/data/
 - description: Maintained destination planning and movement.
   paths:
   - scripts/organize-audiobooks-by-metadata-v3_13.py
