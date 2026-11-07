@@ -4,10 +4,16 @@ BOOKORBIT_URL   API base (default http://127.0.0.1:5057/api/v1)
 BOOKORBIT_CREDS JSON file with {"username", "password"} (default data/bookorbit-admin.json)
 
 usage: bookorbit.py METHOD PATH [json-body]
+       bookorbit.py fetch <library-id> <out.time>
+
+fetch starts a metadata fetch for every book in the library (ignoring BookOrbit's
+provider cache), waits for its queue to empty, and writes the total runtime in
+seconds to out.time (score.py reads it as data/bo.time).
 """
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -43,7 +49,31 @@ def login():
     return r.get("accessToken") or r.get("access_token") or r["tokens"]["accessToken"]
 
 
+def fetch(library_id, out_time):
+    tok = login()
+    start = time.time()
+    st, r = call("POST", f"/book-metadata-fetch/run/{library_id}", {"ignoreCache": True}, tok)
+    if st >= 300:
+        sys.exit(f"run failed {st} {r}")
+    while True:
+        time.sleep(60)
+        try:
+            st, s = call("GET", "/book-metadata-fetch/status", None, tok)
+        except Exception:  # BookOrbit busy or restarting: try again
+            continue
+        if st == 401:
+            tok = login()
+            continue
+        print(time.strftime("%H:%M"), s.get("sessionDone"), "of", s.get("sessionTotal"), "failed", s.get("failed"), flush=True)
+        if st == 200 and not s.get("queued") and not s.get("processing"):
+            break
+    open(out_time, "w").write(f"{time.time() - start:.0f}\n")
+
+
 if __name__ == "__main__":
+    if sys.argv[1] == "fetch":
+        fetch(int(sys.argv[2]), sys.argv[3])
+        sys.exit()
     tok = login()
     body = json.loads(sys.argv[3]) if len(sys.argv) > 3 else None
     st, r = call(sys.argv[1], sys.argv[2], body, tok)

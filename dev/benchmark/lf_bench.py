@@ -8,7 +8,8 @@ placed in the context cache, and search_item() runs normally against the real
 providers. Report items come from the fixer's own _build_report_item, so they
 match a real dry run's REPORT_ITEM_JSON; each also carries its log lines.
 
-usage: lf_bench.py <books.json> <out.jsonl> <audible|abs> [workers] [--abs-config PATH]
+usage: lf_bench.py <books.json> <out.jsonl> <audible|abs> [workers] [--abs-config PATH] [--goodreads]
+  --goodreads  the run screen's Goodreads fallback (--enable-goodreads-fallback)
 """
 import argparse
 import importlib.util
@@ -27,6 +28,7 @@ ap.add_argument("out")
 ap.add_argument("provider", choices=["audible", "abs"])
 ap.add_argument("workers", nargs="?", type=int, default=4)
 ap.add_argument("--abs-config", default="/app/config/abs.json")
+ap.add_argument("--goodreads", action="store_true")
 opts = ap.parse_args()
 
 spec = importlib.util.spec_from_file_location("fixer", "/app/scripts/audible-metadata-fixer-v5.py")
@@ -37,6 +39,8 @@ spec.loader.exec_module(fixer)
 argv = [str(MOCK_ROOT), "--min-score", "0.70", "--limit", "50",
         "--abs-agg-url", "http://abs-agg:3000", "--abs-tract-url", "http://abs-tract:5555",
         "--abs-tract-kindle-region", "uk"]
+if opts.goodreads:
+    argv.append("--enable-goodreads-fallback")
 if opts.provider == "abs":
     cfg = json.load(open(opts.abs_config))
     argv += ["--provider", "abs", "--abs-provider", "audible", "--abs-url", cfg["url"], "--abs-api-key", cfg["api_key"]]
@@ -82,6 +86,11 @@ for book in books:
     search_context_cache[fixer.get_search_context_cache_key(path, {})] = (queries, clues)
 
 out = open(opts.out, "w", encoding="utf-8")
+# The run's batched ASIN lookups, as main() builds them (#497): every book's tags are read above.
+asin_lookahead = None
+if hasattr(fixer, "AsinLookahead") and opts.provider == "audible":
+    items = [MOCK_ROOT / b["folder"] / b["file"] for b in books]
+    asin_lookahead = fixer.AsinLookahead(fixer.upcoming_asins_for_run(items, {}, search_context_cache, locks["ctx"]))
 
 
 def run(index_book):
@@ -95,6 +104,7 @@ def run(index_book):
             match_cache=match_cache, match_cache_lock=locks["match"],
             search_cache=search_cache, search_cache_lock=locks["search"],
             search_in_flight=in_flight, folder_audio_counts=None, abs_index=None,
+            **({"asin_lookahead": asin_lookahead} if asin_lookahead else {}),
         )
         item = fixer._build_report_item(result)
         item["log"] = result.log_lines
