@@ -1,0 +1,24 @@
+---
+domain: benchmark
+references:
+- kind: code
+  role: implementation
+  target: dev/benchmark/collect.py#collect
+- kind: code
+  role: implementation
+  target: dev/benchmark/collect.py#import_dump
+---
+
+# Benchmark book
+
+One audiobook in its original state, before any tool matched it: the case every tool is given.
+
+## Information kept
+
+- **Folder** — The book's folder path, which every tool sees as the book's place in a library.
+- **File** — Its audio file's name.
+- **Original tags** — The tags the file arrived with, saved before LibraForge first wrote anything.
+- **Runtime** — The book's real length.
+- **Right answer** — The listing the book is (its ASIN, title, author, narrator, series and number), or the series, number and title its file name states.
+- **Answer source** — A confirmed listing, the file name, or none.
+- **Origin** — This library, or another library's tag dump.
