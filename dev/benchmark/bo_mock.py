@@ -1,7 +1,7 @@
 """Build BookOrbit mockup files: 1 s of silence carrying each book's original tags,
 at its real Author/Title path. BookOrbit never reads duration when matching.
 
-usage: bo_mock.py <books.json> <out_root> [--itunes] [--runtime]   (out_root under data/, e.g. data/bo_books)
+usage: bo_mock.py <books.json> <out_root> [--itunes] [--runtime] [--public]   (out_root under data/, e.g. data/bo_books)
 
 M4B tags are written as custom keys by default, which ffprobe-based readers (BookOrbit,
 Audiobookshelf) see whatever their name. --itunes writes the standard iTunes atoms
@@ -9,6 +9,9 @@ instead, for mutagen-based readers (beets): ffmpeg then keeps only the keys it m
 --runtime makes each file as long as the book (its "minutes"), for a tool that reads
 the runtime when matching (AudioSilo): an hour of 8 kbps silence, built once next to
 out_root and repeated without re-encoding, about 0.23 MB per hour.
+
+--public keeps only the tags a matcher reads (bench_data.MATCHING_TAGS), for the mock
+anyone can download: no comments, descriptions, cover art, store or encoder fields.
 
 Mount out_root read-only into the BookOrbit container and add it as a library.
 """
@@ -18,9 +21,12 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+from bench_data import public_tags
+
 sample, out_root = json.load(open(sys.argv[1])), sys.argv[2]
 itunes = "--itunes" in sys.argv[3:]
 runtime = "--runtime" in sys.argv[3:]
+public = "--public" in sys.argv[3:]
 # Container/encoder bookkeeping, not book metadata.
 SKIP = {"major_brand", "minor_version", "compatible_brands", "encoder", "gapless_playback",
         "media_type", "creation_time", "handler_name", "vendor_id", "itunsmpb", "itunnorm"}
@@ -52,7 +58,7 @@ def build(book):
         cmd += ["-c:a", "libmp3lame", "-b:a", "32k"] if mp3 else ["-c:a", "aac", "-b:a", "16k"]
     cmd += ["-id3v2_version", "3", "-f", "mp3"] if mp3 else \
            [*([] if itunes else ["-movflags", "use_metadata_tags"]), "-f", "mp4"]
-    for key, value in book["tags"].items():
+    for key, value in (public_tags(book["tags"]) if public else book["tags"]).items():
         if key.lower() not in SKIP and value not in (None, ""):
             cmd += ["-metadata", f"{key}={value}"]
     r = subprocess.run(cmd + [dst + ".part"], capture_output=True, text=True)

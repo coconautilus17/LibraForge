@@ -86,7 +86,7 @@ def scan(books_path, out_path, sub=""):
                 elif event in ("complete", "error"):
                     print(event, str(d)[:200], flush=True)
                     break
-    # Total runtime of the matching (not the folder discovery), read by score.py.
+    # Total runtime of the matching (not the folder discovery).
     open(out_path.removesuffix(".jsonl") + ".time", "w").write(f"{time.time() - (matching_from or start):.0f}\n")
     with open(out_path, "w", encoding="utf-8") as out:
         for book in json.load(open(books_path)):

@@ -34,7 +34,7 @@ for i in $(seq 0 $((shards - 1))); do
 done
 for i in $(seq 0 $((shards - 1))); do docker wait "beets-bench-$i" >/dev/null; docker rm "beets-bench-$i" >/dev/null; done
 took=$(( $(date +%s) - start ))
-echo "$took" > "$data/$tag.time"  # total runtime in seconds (pip install included), read by score.py
+echo "$took" > "$data/$tag.time"  # total runtime in seconds (pip install included)
 
 python3 "$here/beets_rows.py" "$data/$books" "$data/$tag.jsonl" $(for i in $(seq 0 $((shards - 1))); do echo "$data/${tag}_shard$i.db"; done)
 echo "$tag: $(( took / 60 )) min"

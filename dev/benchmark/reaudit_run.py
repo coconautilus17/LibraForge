@@ -1,9 +1,10 @@
 """Carry the hand audit over to a new LibraForge run: keep the verdict where the result is
 unchanged, judge a changed result by rule where the evidence settles it, list the rest.
 
-usage: reaudit_run.py <data dir> <old run.jsonl> <new run.jsonl> <out verdict dir>
+usage: reaudit_run.py <old run.jsonl> <new run.jsonl> <out verdict dir> [--manifest manifest.json]
 
-The out dir gets a copy of data/audit/verdicts_*.txt with LibraForge's column replaced, plus
+The old run is the one the manifest's audit judged (its audit.final and audit.verdicts); the
+out dir gets a copy of those verdict files with LibraForge's column replaced, plus
 changed.tsv (every changed book and how it was settled) and to_review.tsv (by hand).
 Identity rules for a changed result, in order:
   matched, full     its ASIN is the confirmed answer                            -> C
@@ -12,24 +13,26 @@ Identity rules for a changed result, in order:
   skipped           nothing written                                             -> N  (H/h only by hand)
 The field checks (audit_check.py) then decide C versus P from what was written.
 """
+import argparse
 import glob
 import json
 import os
 import re
 import shutil
-import sys
 
-D, old_path, new_path, out_dir = sys.argv[1:5]
-TOOLS = ["public_gr", "audiosilo", "absqm", "grimmory", "rmab", "bo", "beets"]
-books = json.load(open(os.path.join(D, "combined_4044.json")))
-# The audit the old run was judged in (default the original; e.g. BASE_JSON=audit_final_nov4.json
-# BASE_DIR=audit_nov4 to carry a later re-audit forward).
-audit = json.load(open(os.path.join(D, os.environ.get("BASE_JSON", "audit.json"))))
-old = {r["folder"]: r for r in map(json.loads, open(old_path, encoding="utf-8"))}
-new = {r["folder"]: r for r in map(json.loads, open(new_path, encoding="utf-8"))}
-others = {t: {r["folder"]: r for r in map(json.loads, open(os.path.join(D, f), encoding="utf-8"))}
-          for t, f in [("audiosilo", "audiosilo.jsonl"), ("absqm", "plus_absqm.jsonl"), ("grimmory", "plus_grimmory.jsonl"),
-                       ("rmab", "plus_rmab.jsonl"), ("beets", "plus_beets.jsonl")]}
+from bench_data import TOOL_NAMES as TOOLS, Benchmark, pick, rows_of
+
+ap = argparse.ArgumentParser()
+ap.add_argument("old")
+ap.add_argument("new")
+ap.add_argument("out_dir")
+ap.add_argument("--manifest", default="manifest.json")
+opts = ap.parse_args()
+bench = Benchmark(opts.manifest)
+books = bench.books
+audit = json.load(open(bench.file("audit", "final")))
+old, new, out_dir = rows_of(opts.old), rows_of(opts.new), opts.out_dir
+others = {t: bench.runs(t) for t in TOOLS[1:]}
 
 
 def norm(s):
@@ -62,10 +65,10 @@ def judge(i, b, r):
         return "C", "the confirmed answer's ASIN"
     for tool in TOOLS[1:]:
         code = audit[b["folder"]]["v"].get(tool)
-        pick = ((others.get(tool, {}).get(b["folder"]) or {}).get("match") or {}).get("asin", "").upper()
-        if code in ("C", "P") and pick and pick == asin:
+        chosen = pick(tool, others[tool].get(b["folder"]))
+        if code in ("C", "P") and chosen and chosen == asin:
             return "C", f"{tool}'s hand-judged right pick"
-        if code == "E" and pick and pick == asin:
+        if code == "E" and chosen and chosen == asin:
             return "E", f"{tool}'s hand-judged other recording"
     return None, f"new pick {asin} {m.get('title')!r}"
 
@@ -86,7 +89,7 @@ for i, b in enumerate(books):
         code = before  # placeholder until reviewed by hand
     lf_code[i] = code
 
-for path in sorted(glob.glob(os.path.join(D, os.environ.get("BASE_DIR", "audit"), "verdicts_*.txt"))):
+for path in sorted(glob.glob(os.path.join(bench.file("audit", "verdicts"), "verdicts_*.txt"))):
     lines = []
     for line in open(path, encoding="utf-8"):
         if not line.strip():

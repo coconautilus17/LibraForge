@@ -28,5 +28,5 @@ docker run --rm --name "bench-$tag" --network "${BENCH_NETWORK:-homelab-proxy}" 
   /bench/lf_bench.py "/bench/data/$books" "/bench/data/$tag.jsonl" "$provider" "$workers" ${GOODREADS:+--goodreads} \
   > "$here/data/$tag.log" 2>&1 && rc=0 || rc=$?
 took=$(( $(date +%s) - start ))
-echo "$took" > "$here/data/$tag.time"  # total runtime in seconds, read by score.py
+echo "$took" > "$here/data/$tag.time"  # total runtime in seconds
 echo "$tag: exit $rc ($(wc -l < "$here/data/$tag.jsonl") books, $(( took / 60 )) min)"

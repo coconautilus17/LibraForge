@@ -14,7 +14,7 @@ to attach, runtime within 10%), to review (held) and not found.
 
 usage: audiosilo.py library                        create the library on /library, wait for its scan
        audiosilo.py match <out.time>               timed match run over the library
-       audiosilo.py rows <books.json> <out.jsonl>  lf_bench.py-shaped rows for score.py
+       audiosilo.py rows <books.json> <out.jsonl>  lf_bench.py-shaped rows (bench_data.py reads them)
 
 AUDIOSILO_URL   default http://127.0.0.1:8091
 AUDIOSILO_CREDS JSON {"username", "password"}

@@ -1,172 +1,170 @@
-# dev/ (dev branch only)
+# dev/
 
-Tooling for developing LibraForge that a normal install never needs. It lives on the
-long-lived `dev` branch, which is `main` plus this folder: features still go to `main`
-through pull requests, and `main` is merged into `dev` to keep it current. Nothing here is
-copied into the Docker image (the Dockerfile copies only `app/`, `scripts/`, `config/` and
-`tools/`, and `.dockerignore` excludes `dev/` as well).
+Tooling for developing LibraForge that a normal install never needs. Nothing here is copied
+into the Docker image (the Dockerfile copies only `app/`, `scripts/`, `config/` and `tools/`,
+and `.dockerignore` excludes `dev/` as well).
 
-## benchmark/: matching accuracy on your own library
+The benchmark is also mapped in the Product Model (`product-model/domains/benchmark.md` and
+the capabilities it lists): what each step reads and writes, and the rules that keep its
+results comparable. Read that first when changing it.
+
+## benchmark/: matching tools compared on the same books
+
+The same real audiobooks, in their original state, are given to every matching tool; every
+result is then audited book by book, and the comparison page is built from that audit.
+
+**The dataset is your library.** `dev/benchmark/data/` holds titles, tags, ASINs and folder
+paths and is gitignored: never commit it, the repository is public. Only the published page
+and its downloads carry any of it, and those list only the tags a matcher reads.
+
+### The pipeline
+
+| Step | Command | Reads | Writes |
+| --- | --- | --- | --- |
+| 1. Collect | `collect.py --root /mnt/audiobooks` | the library's `libraforge.json` backups | `data/full.json` |
+| 1b. Import | `overlap.py`, `collect.py --import`, `dedupe.py` | another library's ffprobe dump | a merged dataset |
+| 1c. Confirm answers | `review_lib.py build` / `confirm` | books with no confirmed answer | the dataset, answers filled in |
+| 2. Mock files | `bo_mock.py <books> <out> [--itunes] [--runtime] [--public]` | the dataset | silent files carrying the tags |
+| 3. Run each tool | `run.sh`, `audiosilo.py`, `abs_quickmatch.py`, `grimmory.py`, `readmeabook.py`, `bookorbit.py`, `beets_run.sh` | the dataset or the mock | `data/<run>.jsonl`, `data/<run>.time` |
+| 4. Manifest | edit `data/manifest.json` (shape: `manifest.example.json`) | | which dataset, runs and audit make up this benchmark |
+| 5. Hand audit | write `data/<audit>/verdicts_*.txt`, then `audit.py` | every tool's result per book | `audit.hand` |
+| 6. Field checks | `audit_check.py --write` | the runs and the hand audit | `audit.final`, the verdicts the page shows |
+| 7. Second audit | `reaudit_sample.py sample 300 <seed>`, judge the sheets, `findings.txt` | `audit.final` | the page's error rates |
+| 8. Geo | `geo.py rights`, `geo.py summary --market XX` | confirmed answers | how many Audible's search hid |
+| 9. Publish | `publish_pages.sh` | the manifest | `gh-pages`: the page, `benchmark-books.json`, `benchmark-mock-files.tar.gz` |
+
+Steps 4 to 9 read everything through `bench_data.py` and the manifest, so they always agree
+on which files make up the benchmark. `bench_data.result()` is the one statement of how
+each tool writes; the field checks and the downloadable book list both use it.
+
+### 1. The dataset
 
 Every book whose `libraforge.json` kept its original tags (`backup.format_tags`, saved
-before LibraForge first wrote anything) is a ready-made test case: the tags the file
-arrived with, its duration, and, when a match was applied, the answer. The benchmark feeds
-those original tags straight into the real matcher (no audio files, no copies) and scores
-the picks against the applied matches.
+before LibraForge first wrote anything) is a test case: the tags the file arrived with, its
+duration and folder, and, when a match was applied, that match as the right answer (its ASIN
+and the title, author, narrator, series and number it wrote then).
 
 ```bash
-# 1. Build the dataset from the NAS backups (all books, _unorganized included).
 python3 dev/benchmark/collect.py --root /mnt/audiobooks            # data/full.json
-python3 dev/benchmark/collect.py --root /mnt/audiobooks --sample 300   # + data/sample.json
-
-# 2. Run the matcher from this checkout (public Audible catalog, or ABS).
-dev/benchmark/run.sh full.json now_public audible
-ABS_CONFIG=/home/tamir/dockers/libraforge/config dev/benchmark/run.sh full.json now_abs abs
-
-# 3. Score one or more runs side by side (in the image: it reuses the fixer's placeholder authors).
-docker run --rm --entrypoint /opt/venv/bin/python -v "$PWD/app:/app/app:ro" -v "$PWD/dev/benchmark:/bench" \
-  -w /bench libraforge-libraforge score.py data/full.json data/scores.json \
-  public=data/now_public.jsonl abs=data/now_abs.jsonl
 ```
 
-A pick is **correct** when it is the reference ASIN, or another listing of the same
-recording (runtime within 3% of the file or of the reference listing, and a shared
-narrator). The reference is the library's own applied match, so it can be wrong too: a
-"wrong" pick is worth a look before it counts as a regression. Books without an applied
-ASIN are reported by outcome (applied / held / none) but not scored. Runs hit the live
-providers, so results drift a little between days (an ABS search can stop returning a
-listing); compare runs made close together.
-
-To compare two versions, run each from its own worktree into a different tag and score
-them together; to see what changed per book, diff the `class` fields of the score file.
-
-Every runner writes its total wall time to `data/<tag>.time` (seconds); `score.py` saves
-them under `_runtime` and the report shows them as each tool's Total runtime.
-
-### Adding books from another library
-
-A tag dump of someone else's files (before any matching) adds books your library doesn't
-have. The dump is a JSON list of `{"path", "filename", "duration" (seconds), "tags"}`, one
-per audio file: ffprobe's `format.filename`, `format.duration` and `format.tags`.
+Books from another library come as an ffprobe tag dump (a JSON list of `{"path",
+"filename", "duration" (seconds), "tags"}` per audio file, see the "Add your books" issue
+template). Keep the ones your library doesn't have, add them, then keep one of each search:
 
 ```bash
-# keep the books your library doesn't already have (runs against your ABS)
 docker run --rm --network homelab-proxy --entrypoint /opt/venv/bin/python -e ABS_URL=http://audiobookshelf \
   -v "$PWD/app:/app/app:ro" -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/config:/app/config:ro" \
   -v "$PWD/dev/benchmark:/bench" -w /app libraforge-libraforge \
   /bench/overlap.py /bench/data/dump.json /bench/data/import_kept.json /bench/data/import_overlap.json
-# add them to the dataset
 python3 dev/benchmark/collect.py --import dev/benchmark/data/import_kept.json \
-  --merge dev/benchmark/data/complete.json --out dev/benchmark/data/combined.json
+  --merge dev/benchmark/data/full.json --out dev/benchmark/data/combined.json
+# dedupe.py runs in the image the same way: dedupe.py <books.json> <out.json> [--dump ... --overlap ...]
 ```
 
-These books have no applied ASIN. Until one is confirmed (below), a file name curated as
-`Author; Series; Book NN; Title` is the answer: a pick is correct when it is that book (same
-author, and the same series and number or the same title), whichever recording. Library
-and imported books are one list: each is a book in its original state.
+An imported book has no applied match. A file name in `Author; Series; Book NN; Title` form
+is its answer until one is confirmed: the right book is that author's, with that series and
+number or that title, in any recording. Its answer names no narrator.
 
-### Confirming more answers
-
-Books with no confirmed match (no applied ASIN, from either source) can be reviewed in a
-throwaway LibraForge and applied there, the way a real library is matched:
+To confirm answers, build a throwaway library of those books (each with the backup a real
+library book has), match and apply them in a throwaway LibraForge, and read the applied
+matches back:
 
 ```bash
-# a writable copy of their mock files, each with a libraforge.json backup of its original
-# tags and real duration (the fixer's write_original_metadata_backup)
 docker run --rm --user 1000:1000 --entrypoint /opt/venv/bin/python -v "$PWD/app:/app/app:ro" \
   -v "$PWD/scripts:/app/scripts:ro" -v "$PWD/dev/benchmark:/bench" -w /bench libraforge-libraforge \
   review_lib.py build data/combined.json data/abs_books data/review_books
-# a LibraForge on it, with no ABS config so nothing reaches your real Audiobookshelf
-docker run -d --name lf-review -p 5066:5056 --network homelab-proxy --user 1000:1000 \
-  -v "$PWD/app:/app/app" -v "$PWD/scripts:/app/scripts" -v ~/dockers/libraforge-review/config:/app/config \
-  -v ~/dockers/libraforge-review/reports:/app/reports -v ~/dockers/libraforge-review/auth:/auth \
-  -v "$PWD/dev/benchmark/data/review_books:/audiobooks" -e SCRIPTS_DIR=/app/scripts \
-  -e REPORTS_DIR=/app/reports -e AUDIOBOOKS_ROOT=/audiobooks libraforge-libraforge
-```
-
-Run a Metadata Forge dry run there, review its report and apply what is right. Then read
-the applied matches back as confirmed answers (an applied ASIN, as in the real library):
-
-```bash
+# a LibraForge on data/review_books with no ABS config; dry run, review, apply; then:
 docker run --rm --entrypoint /opt/venv/bin/python -v "$PWD/app:/app/app:ro" -v "$PWD/scripts:/app/scripts:ro" \
   -v "$PWD/dev/benchmark:/bench" -w /bench libraforge-libraforge \
   review_lib.py confirm data/combined.json data/review_books data/combined.json
 ```
 
-**The dataset is your library.** `dev/benchmark/data/` holds titles, tags, ASINs and
-folder paths, and is gitignored: never commit it, the repository is public.
+### 2 and 3. Mock files and runs
 
-### Optional: compare with BookOrbit
+Every tool gets the same books. LibraForge's own run feeds the original tags straight into
+the real matcher (no files); every other tool reads mock files: each book as silence
+carrying its original tags at its real folder path, built by `bo_mock.py`:
 
-`bo_mock.py` writes a 1-second silent file per book carrying its original tags at its real
-`Author/Title` path (about 10 KB each). Mount that folder read-only into a throwaway
-BookOrbit stack, add it as a library, then run `python3 dev/benchmark/bookorbit.py fetch
-<library id> dev/benchmark/data/bo.time` (a bulk metadata fetch, timed until its queue is
-empty) and pass `bo=<library id>` to `score.py` (`bookorbit.py` reads `BOOKORBIT_URL` and
-`BOOKORBIT_CREDS`). A library fetched before has BookOrbit's own metadata, not the
-original tags, so a rerun needs a new library. BookOrbit fetches one book at a time with a 2 to 5 s pause between
-books (longer while a provider throttles), so a full library takes about 12 hours.
+- default: 1 s, tags as custom keys (ffprobe readers: BookOrbit, Audiobookshelf, ReadMeABook)
+- `--itunes`: standard iTunes atoms (mutagen and jaudiotagger readers: beets, Grimmory)
+- `--runtime`: as long as the book, for AudioSilo, which checks runtime (beets reads each
+  book's real runtime from the dataset through `beets/benchplug` instead)
 
-### Optional: compare with Audiobookshelf Quick Match and beets-audible
-
-Both read the same mock files. Never point either at your real library: Quick Match writes.
+Each tool runs in a throwaway instance, never your real library (Quick Match and Grimmory
+write), the way its own documentation suggests. Each runner's docstring has its setup:
 
 ```bash
-python3 dev/benchmark/bo_mock.py dev/benchmark/data/complete.json dev/benchmark/data/abs_books
-# throwaway ABS on the mock (read-only), then Quick Match every book, one at a time
-docker run -d --name abs-bench --network homelab-proxy -v /tmp/abs-bench/config:/config \
-  -v /tmp/abs-bench/metadata:/metadata -v "$PWD/dev/benchmark/data/abs_books:/audiobooks:ro" \
-  ghcr.io/advplyr/audiobookshelf:latest
-docker run --rm --network homelab-proxy --entrypoint /opt/venv/bin/python -v "$PWD/dev/benchmark:/bench" \
-  libraforge-libraforge /bench/abs_quickmatch.py http://abs-bench /bench/data/abs_quickmatch.jsonl
-
-# beets reads tags with mutagen, so its mock uses standard iTunes atoms
-python3 dev/benchmark/bo_mock.py dev/benchmark/data/complete.json dev/benchmark/data/beets_books --itunes
-dev/benchmark/beets_run.sh complete.json beets 4     # 4 parallel imports -> data/beets.jsonl
+dev/benchmark/run.sh combined.json lf_run audible 5            # LibraForge (GOODREADS=1 for the fallback)
+python3 dev/benchmark/audiosilo.py match data/audiosilo.time   # then: rows <books> data/audiosilo.jsonl
+docker run ... /bench/abs_quickmatch.py http://abs-bench /bench/data/absqm.jsonl
+python3 dev/benchmark/grimmory.py refresh data/grimmory.time   # then: rows <books> data/grimmory.jsonl
+python3 dev/benchmark/readmeabook.py scan <books> data/rmab.jsonl
+python3 dev/benchmark/bookorbit.py fetch <library id> data/bo.time   # then: rows <library id> data/bo_rows.jsonl
+dev/benchmark/beets_run.sh combined.json beets 4
 ```
 
-Score them like any run (`absqm=...jsonl beets=...jsonl`). Quick Match on a fresh ABS each
-time: it writes the match into ABS, so a second pass starts from its own answers.
+Every runner writes the run's total wall time to `data/<run>.time` (seconds). Runs hit live
+providers, so results drift a little between days: compare runs made close together.
 
-### Books reviewed by hand
+### 4 to 7. The audit
 
-`curated=data/curation.json` on `score.py` overrides the rules for books reviewed one by
-one: `{folder: {"verdict", "note", "accept": [ASIN], "titles": [title], "reject": [ASIN],
-"others": [note]}}`. An accepted ASIN (or, for a Goodreads pick, title) is correct for every
-tool that picked it, and a rejected one wrong, so a wrong library answer can be set aside.
-Settle a library book's recording with `tools/chapter_match.py` on its real file; runtime
-decides when the file's chapters were redone. The report shows each note on its book.
+`data/manifest.json` names the dataset, each tool's run, the audit files and the
+LibraForge build (`manifest.example.json` has the shape).
 
-### The HTML report
-
-`report.py` builds one standalone page: every book's original tags, the clues the matcher
-parsed, the searches it ran, its candidates, the decision and the fields against the
-library's answer, plus a summary, a table of how each tool matches with our notes on it, and
-one comparison table per other tool. Each book also lists every other tool's outcome and pick,
-and the filters (kept in the address, so a view can be linked) combine LibraForge's outcome
-with another tool's.
+Every book's result for every tool is judged by hand into verdict files, one line per book:
+`<book index> LF AS ABS GRM RMAB BO BEETS | note`, one code per tool (C right book and every
+field right, E right book from another recording, P right book with a field off, W wrong book,
+S/s series-only write into the right/wrong series, H/h held for review with a right/wrong
+pick, N nothing written). The hand verdict decides which book it is; `audit_check.py` then
+rebuilds what each tool left on the book and checks every field, which decides C or P:
 
 ```bash
-python3 dev/benchmark/report.py dev/benchmark/data/complete.json dev/benchmark/data/scores.json \
-    public dev/benchmark/data/public.jsonl dev/benchmark/data/report.html \
-    --commit "$(git rev-parse --short HEAD)" --compare "absqm=Audiobookshelf Quick Match" \
-    --compare "bo=BookOrbit" --compare "beets=beets-audible"
+cd dev/benchmark
+python3 audit.py                            # verdict files -> audit.hand
+python3 audit_check.py --write --out data/disagreements.jsonl   # -> audit.final
 ```
 
-The page carries the whole library's titles, paths and tags: it stays in `data/` unless you
-decide to publish it. Per-tool notes live in `TOOLS` in report.py; add an entry with each new tool.
-
-### The public page
-
-`publish_pages.sh` rebuilds the page with `--public` (only the tags a matcher reads: no
-comments, descriptions, encoder or store fields) into a worktree of the `gh-pages` branch and
-commits it there. GitHub Pages serves that branch as is. Look at the page, then push the branch.
+Every book where the field checks and the hand verdict disagree goes to the disagreements
+file for a second look. To measure the audit, draw a sample, judge its sheets again and
+list every verdict that was wrong in `findings.txt` (`<index> <TOOL> <old>-><new> | why
+(rule|hand)`); a rule error is fixed for every book. `validation` draws a fresh sample after
+that. `audit_check.py --write` counts both into the page's error rates.
 
 ```bash
-git worktree add ../pages gh-pages   # once per machine
-dev/benchmark/publish_pages.sh combined_4044.json scores_nov2.json public_gr nov2_public_gr.jsonl "$(git -C <main checkout> rev-parse --short HEAD)"
-git -C ../pages push origin gh-pages
+python3 reaudit_sample.py sample 300 20261102
+python3 reaudit_sample.py validation 100 424242
 ```
+
+A new LibraForge run is judged by carrying the audit forward: an unchanged result keeps its
+verdict, a changed one is settled by rule where the evidence is plain (the confirmed answer's
+ASIN, a pick another tool was judged right on, the book's own series), and the rest is listed
+for hand review:
+
+```bash
+python3 reaudit_run.py old_run.jsonl new_run.jsonl data/audit_new
+# review data/audit_new/to_review.tsv, then point the manifest's audit.verdicts at data/audit_new
+```
+
+### 8. Books Audible's search couldn't show
+
+Audible's search returns a book only where Audible sells it; a lookup by ASIN works
+everywhere. `geo.py rights` reads the sales rights of every confirmed answer, and `geo.py
+summary --market XX` counts the answers sold only elsewhere. The market is never written
+anywhere: the page never says where the runs were made.
+
+### 9. The page
+
+```bash
+git worktree add ../pages gh-pages     # once per machine
+dev/benchmark/publish_pages.sh         # commits to the gh-pages worktree
+git -C ../pages push origin gh-pages   # after looking at it
+```
+
+It publishes the page, `benchmark-books.json` (every book with its tags, the right answer
+and each tool's verdict, pick and result) and `benchmark-mock-files.tar.gz` (the 1 s mock
+with only the tags a matcher reads: no comments, descriptions, cover art, store or encoder
+fields). Per-tool notes live in `TOOLS` and `WRITES` in report.py; add one with each new tool.
 
 ## tools/
 
@@ -174,3 +172,4 @@ git -C ../pages push origin gh-pages
   chapter lengths with each ASIN's chapter list from Audible's public catalog. Two
   recordings of one book rarely share a chapter layout, so this settles cases where tags
   and runtime disagree.
+- `build_guild_catalog.py`: rebuilds the Audiobook Guild catalog LibraForge ships.

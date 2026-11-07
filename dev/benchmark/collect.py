@@ -18,7 +18,7 @@ usage: collect.py [--root /mnt/audiobooks] [--out data/full.json]
 "filename", "duration" (seconds), "tags"} per file, e.g. another library's files before
 matching (run overlap.py first to drop the books you already have). Those books have no
 applied ASIN, so a file name in "Author; Series; Book NN; Title" form becomes the
-reference: score.py checks that a pick is that book (author, plus series and number or
+reference: the audit checks that a pick is that book (author, plus series and number or
 title), not which recording. --merge prepends an existing dataset.
 
 The output holds your library's titles, tags and paths: it stays in data/,

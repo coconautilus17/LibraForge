@@ -1,0 +1,16 @@
+{
+ "books": "combined.json",
+ "commit": "abc1234",
+ "runs": {
+  "public_gr": {"rows": "lf_run.jsonl"},
+  "audiosilo": {"rows": "audiosilo.jsonl", "online_time": "audiosilo_online.time"},
+  "absqm": {"rows": "absqm.jsonl"},
+  "grimmory": {"rows": "grimmory.jsonl"},
+  "rmab": {"rows": "rmab.jsonl"},
+  "bo": {"rows": "bo_rows.jsonl", "folders_from": "older_dataset.json"},
+  "beets": {"rows": "beets.jsonl"}
+ },
+ "audit": {"verdicts": "audit", "hand": "audit.json", "final": "audit_final.json", "reaudit": "reaudit"},
+ "rights": "rights.json",
+ "geo": "geo.json"
+}

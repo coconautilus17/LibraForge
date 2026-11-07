@@ -1,15 +1,15 @@
-"""Build a standalone HTML benchmark report: every book, what its file said, how the
-matcher searched, what it picked, and how that compares with the library's answer.
+"""Build the standalone comparison page and its downloadable book list.
 
-usage: report.py <books.json> <scores.json> <run-name> <run.jsonl> <out.html>
-                 [--compare name=label ...] [--title TEXT] [--commit SHA]
+usage: report.py <out.html> [--manifest manifest.json] [--public] [--mock-url URL]
 
-  books.json   the dataset (collect.py), the reference answers included
-  scores.json  score.py output holding <run-name> and any --compare runs
-  run.jsonl    the LibraForge run the report lists (lf_bench.py rows, with logs)
+Everything comes from the manifest (bench_data.py): the dataset, every tool's run, the final
+audit verdicts (audit_check.py --write), the geo summary (geo.py) and the LibraForge build.
+The page embeds its book list gzipped and needs no server. Beside it, benchmark-books.json
+holds the same books for download: each book's tags, the right answer and every tool's
+verdict, pick and what it left on the book.
 
---compare adds a summary row per other tool, scored on the books both it and
-LibraForge processed. The page embeds its data gzipped and needs no server.
+--public  for publishing: list only the tags a matcher reads (bench_data.MATCHING_TAGS)
+--mock-url  where the mock files can be downloaded (a link on the page when given)
 """
 import argparse
 import base64
@@ -17,40 +17,37 @@ import datetime
 import gzip
 import html
 import json
+import os
 import re
 import urllib.parse
 from collections import Counter
 
+import bench_data
+from bench_data import TOOLS as TOOL_ROWS, Benchmark, pick, result
+
 ap = argparse.ArgumentParser()
-ap.add_argument("books")
-ap.add_argument("scores")
-ap.add_argument("run_name")
-ap.add_argument("run")
 ap.add_argument("out")
-ap.add_argument("--compare", action="append", default=[], help="name=label")
-ap.add_argument("--label", default="LibraForge, public catalog + Goodreads", help="the listed run's row label")
+ap.add_argument("--manifest", default="manifest.json")
 ap.add_argument("--title", default="LibraForge matching benchmark")
 ap.add_argument("--public", action="store_true", help="for publishing: list only the tags a matcher reads")
-ap.add_argument("--repo",default="coconautilus17/LibraForge", help="GitHub repo for the open-an-issue links")
-ap.add_argument("--commit", default="")
-ap.add_argument("--provider", default="Audible public catalog (no login), US marketplace")
-ap.add_argument("--geo", help="geo summary json: how many confirmed listings Audible's search hid from the runs")
-ap.add_argument("--audit", help="audit_final.json (audit_check.py --write): the audited verdicts for every book and tool, scored instead of the rules")
+ap.add_argument("--repo", default="coconautilus17/LibraForge", help="GitHub repo for the open-an-issue links")
+ap.add_argument("--mock-url", default="", help="where the mock files can be downloaded")
 opts = ap.parse_args()
-audit = json.load(open(opts.audit)) if opts.audit else None
-audit_meta = audit.pop("_meta", {}) if audit else {}
+bench = Benchmark(opts.manifest)
+opts.run_name = "public_gr"
+opts.commit = bench.m.get("commit", "")
+audit = json.load(open(bench.file("audit", "final")))
+audit_meta = audit.pop("_meta", {})
 # A hand verdict as the class the book list shows.
 AUDIT_CLASS = {"C": "correct", "S": "correct", "E": "recording", "P": "partial", "W": "wrong", "s": "wrong",
                "H": "correct-held", "h": "wrong-held", "N": "none"}
 
-books = {b["folder"]: b for b in json.load(open(opts.books))}
-scores = json.load(open(opts.scores))
-runs = {}
-for line in open(opts.run, encoding="utf-8"):
-    row = json.loads(line)
-    runs[row["folder"]] = row
-mine = scores[opts.run_name]
-others = [spec.split("=", 1) for spec in opts.compare]  # [name, label]
+books = bench.by_folder
+runs = bench.runs(opts.run_name)
+LABELS = {t: f"{name}, {how}" if t == opts.run_name else name for t, _, name, how in TOOL_ROWS}
+LABELS.update({"absqm": "Audiobookshelf Quick Match", "beets": "beets (audible plugin)"})
+opts.label = LABELS[opts.run_name]
+others = [(t, LABELS[t]) for t in bench_data.TOOL_NAMES if t != opts.run_name]  # [name, label]
 
 # Lines of the matcher's trace that repeat what the page already shows as fields.
 _SKIP_BLOCKS = ("FILE:", "FINAL METADATA PREVIEW:")
@@ -117,9 +114,7 @@ _CLUE_LABELS = {"raw_title": "raw title", "title": "title", "author": "author", 
 
 # --public keeps only the tags a matcher reads. The rest (comments, descriptions, encoder,
 # DRM and store fields) say nothing about matching and can say where a file came from.
-_MATCHING_TAGS = {"title", "subtitle", "artist", "album_artist", "albumartists", "album", "sort_album", "composer",
-                  "narratedby", "series", "series-part", "part", "mvnm", "mvin", "movement", "grouping", "track", "disc",
-                  "date", "releasetime", "genre", "language", "publisher", "label", "asin", "audible_asin", "isbn"}
+_MATCHING_TAGS = bench_data.MATCHING_TAGS
 
 
 def clean_tags(tags):
@@ -167,18 +162,14 @@ def checked_note(row):
 
 
 def verdict(name, folder):
-    """[class, asin] for a tool on a book, from the hand audit when there is one."""
-    score = scores[name].get(folder) or {}
-    cls = score.get("class", "not run")
-    if audit and folder in audit and name in audit[folder]["v"]:
-        cls = AUDIT_CLASS[audit[folder]["v"][name]]
-    return [cls, score.get("asin") or ""]
+    """[class, asin] for a tool on a book: its audited verdict and the listing it chose."""
+    code = (audit.get(folder) or {}).get("v", {}).get(name)
+    return [AUDIT_CLASS[code] if code else "not run", pick(name, bench.runs(name).get(folder))]
 
 
 rows = []
 for folder, book in books.items():
     run = runs.get(folder) or {}
-    score = mine.get(folder) or {}
     match = run.get("match") or {}
     final = book.get("final") or {}
     hand = (audit or {}).get(folder) or {}
@@ -196,49 +187,43 @@ for folder, book in books.items():
         "match": {k: match.get(k, "") for k in ("asin", "title", "subtitle", "author", "narrator", "series", "sequence",
                                                 "year", "publisher", "isbn", "duration_minutes", "duration_diff_pct")} if match else {},
         "edition": run.get("different_edition") or None, "series_asin": run.get("series_match_asin", ""),
-        "cls": verdict(opts.run_name, folder)[0], "fields": None if audit else score.get("fields"),
-        "cur": checked_note(hand) or readable(score.get("curated") or ""),
+        "cls": verdict(opts.run_name, folder)[0], "fields": None,
+        "cur": checked_note(hand),
         "q": searches(run.get("log")), "cand": candidates(run.get("log")), "trace": trace(run.get("log")),
         # Every other tool's outcome and pick for the same book: [class, asin].
         "o": {name: verdict(name, folder) for name, _ in others},
     })
 
-ORDER = ["correct", "correct-held", "wrong", "wrong-held", "none"]
+# The downloadable book list: the same books as the page, each with every tool's verdict,
+# pick and what it left on the book (bench_data.result), so anyone can recount the page.
+CODE_MEANING = {"C": "the right book, every field right", "S": "series-only write, the right series",
+                "E": "the right book, another recording's details", "P": "the right book, a field off",
+                "W": "the wrong book", "s": "series-only write, the wrong series", "H": "held for review, the right pick",
+                "h": "held for review, a wrong pick", "N": "nothing written"}
+download = []
+for folder, book in books.items():
+    own = (runs.get(folder) or {}).get("local") or {}
+    own = {k: own.get(k) or "" for k in bench_data.FIELDS}
+    answer = (book.get("final") if book.get("asin") else book.get("expect")) or {}
+    hand = audit.get(folder) or {"v": {}, "f": {}}
+    tools = {}
+    for t, _, name, _ in TOOL_ROWS:
+        wrote, _ = result(t, own, bench.runs(t).get(folder))
+        tools[name] = {"verdict": hand["v"].get(t, ""), "pick": pick(t, bench.runs(t).get(folder)),
+                       "wrote": None if t == "rmab" else wrote, "field_problems": (hand.get("f") or {}).get(t, [])}
+    download.append({
+        "folder": folder, "file": book.get("file", ""), "minutes": round(book.get("minutes") or 0, 1),
+        "tags": bench_data.public_tags(book.get("tags")) if opts.public else book.get("tags"),
+        "answer": {"from": "confirmed listing" if book.get("asin") else "file name" if book.get("expect") else "none",
+                   "asin": book.get("asin") or "", **{k: answer.get(k, "") for k in bench_data.FIELDS}},
+        "note": readable(hand.get("note", "")), "tools": tools})
+DOWNLOAD_NAME = "benchmark-books.json"
+json.dump({"commit": opts.commit, "date": datetime.date.today().isoformat(), "verdict_codes": CODE_MEANING,
+           "books": download}, open(os.path.join(os.path.dirname(os.path.abspath(opts.out)), DOWNLOAD_NAME), "w"),
+          ensure_ascii=False, separators=(",", ":"))
 
-
-def reference(folder):
-    """"asin" (the library's applied match), "name" (an imported book's file name) or ""."""
-    book = books.get(folder, {})
-    return "asin" if book.get("asin") else "name" if book.get("expect") else ""
-
-
-def summarize(name, folders=None):
-    rows_ = scores[name]
-    ref = [f for f in rows_ if reference(f) and (folders is None or f in folders)]
-    c = Counter(rows_[f]["class"] for f in ref)
-    applied = c["correct"] + c["wrong"]
-    # Fields are checked against the library's own answer, so only on books that have one.
-    ok = [rows_[f] for f in ref if reference(f) == "asin" and rows_[f]["class"] == "correct" and rows_[f].get("fields")]
-    fld = {}
-    for k in ("title", "author", "narrator", "series"):
-        known = [r for r in ok if r["fields"].get(k) is not None]
-        fld[k] = sum(1 for r in known if r["fields"][k]) / len(known) * 100 if known else None
-    total = sum(1 for f in rows_ if folders is None or f in folders)
-    return {"total": total, "n": len(ref), **{k: c.get(k, 0) for k in ORDER},
-            "precision": c["correct"] / applied * 100 if applied else 0, "fields": fld}
-
-
-overall = summarize(opts.run_name)
-by_asin = sum(1 for f in mine if reference(f) == "asin")
-by_name = sum(1 for f in mine if reference(f) == "name")
-noref = Counter(mine[f]["class"] for f in mine if not reference(f))
-n_curated = sum(1 for f in mine if mine[f].get("curated"))
-RUNTIME = scores.get("_runtime", {})
-comparisons = []
-for name, label in others:
-    both = {f for f in scores[name] if f in mine}
-    comparisons.append({"label": label, "name": name, "them": summarize(name, both), "us": summarize(opts.run_name, both)})
-
+RUNTIME = {t: bench.runtime(t) for t in bench_data.TOOL_NAMES}
+RUNTIME["audiosilo_online"] = bench.runtime("audiosilo", online=True)
 payload = base64.b64encode(gzip.compress(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode())).decode()
 today = datetime.date.today().isoformat()
 
@@ -270,26 +255,6 @@ CONCURRENCY = {
     "bo": ("1", "no, 2 to 5 s pause between books"),
 }
 
-
-def summary_row(label, s, name, held=True):
-    runtime = took(RUNTIME.get(name))
-    conc, editable = CONCURRENCY.get(name, ("n/a", "n/a"))
-    cells = [s["correct"], s["correct-held"], s["wrong"], s["wrong-held"], s["none"]]
-    tds = "".join(f"<td>{pct(v, s['n']) if held or i in (0, 2, 4) else 'n/a'}</td>" for i, v in enumerate(cells))
-    fld = "".join(f"<td>{'n/a' if v is None else f'{v:.1f}%'}</td>" for v in s["fields"].values())
-    return (f"<tr><th scope=row>{html.escape(label)}</th><td>{s['total']:,}</td><td>{s['n']:,}</td>{tds}<td>{s['precision']:.2f}%</td>"
-            f"{fld}<td>{runtime}</td><td>{html.escape(conc)}</td><td>{html.escape(editable)}</td></tr>")
-
-
-HEAD = ("<tr><th></th><th>Total books</th><th>Scored</th><th>Correct</th><th>Correct, held</th><th>Wrong, applied</th><th>Wrong, held</th>"
-        "<th>No match</th><th>Precision</th><th>Title</th><th>Author</th><th>Narrator</th><th>Series</th>"
-        "<th>Total runtime</th><th>Concurrent searches</th><th>Editable</th></tr>")
-comparison_html = "".join(
-    f"<h3>{html.escape(c['label'])} <span class=muted>({c['us']['n']:,} books both processed)</span></h3>"
-    f"<div class=scroll><table class=summary><thead>{HEAD}</thead><tbody>"
-    f"{summary_row(c['label'], c['them'], c['name'], c['them']['correct-held'] + c['them']['wrong-held'] > 0)}"
-    f"{summary_row(opts.label, c['us'], opts.run_name)}</tbody></table></div>"
-    for c in comparisons)
 
 # How each tool matches, from its source and docs, and our take after running it. Keyed by run
 # name; a run without an entry gets a row with its label only.
@@ -524,7 +489,7 @@ def lf_findings():
 
 
 lf_title = display(opts.label)[0]
-geo = json.load(open(opts.geo)) if opts.geo else None
+geo = json.load(open(bench.file("geo"))) if bench.m.get("geo") and os.path.exists(bench.file("geo")) else None
 GEO_HTML = ""
 if geo:
     rh = geo["right_on_hidden"]
@@ -884,8 +849,6 @@ function apply() {
 })();
 """
 
-if not audit:
-    raise SystemExit("the page is built from the hand audit: pass --audit audit_final.json")
 tool_options = "".join(f'<option value="{html.escape(n)}">{html.escape(display(l)[0])}</option>' for n, l in others)
 page = f"""<!doctype html>
 <html lang="en">
@@ -959,6 +922,8 @@ network and nothing to wait for. The trade-off is coverage: it can only find wha
 <p class=sub>Each book with its original tags, the right answer, what {html.escape(lf_title)} read, searched and wrote,
 and every other tool's outcome. Combine the filters, for example {html.escape(lf_title)} "Wrong book" with another
 tool "Fully correct", to see where it did better.</p>
+<p class=small><a href="{DOWNLOAD_NAME}" download>Download every book as JSON</a> (the tags, the right answer and every
+tool's verdict, pick and what it left on the book){f' · <a href="{html.escape(opts.mock_url)}" rel=noopener>Download the mock files</a> (each book as one second of silence carrying its original tags, at its folder path)' if opts.mock_url else ''}.</p>
 <div class=controls>
   <input type=search id=q placeholder="Search a folder, title, author or ASIN" aria-label="Search books">
   <span class=lab>{html.escape(lf_title)}</span>

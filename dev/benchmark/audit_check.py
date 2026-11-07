@@ -1,20 +1,15 @@
 """Check the hand-audit verdicts against what each tool's write rules leave on the book.
 
-usage: audit_check.py <data dir> [--out disagreements.jsonl] [--write final.json]
+usage: audit_check.py [--manifest manifest.json] [--out disagreements.jsonl] [--write]
 
 The final verdict takes only the book's identity from the hand audit (right book, another recording,
 wrong book, held pick right or wrong); whether the tool wrote and which fields ended up wrong come
 from the checks below.
 
-Each tool's result is rebuilt from its raw record and the file's own tags:
-  LibraForge  full: the listing's fields (a blank one too); another recording keeps the file's narrator;
-              series-only: the file's details with the listing's series
-  AudioSilo   confident: fills only blank fields; review and none write nothing
-  ABS, Grimmory, beets: the listing's non-blank fields over the file's
-  BookOrbit   its own record as fetched
-  ReadMeABook writes nothing; only its pick is checked
-The result is then checked field by field against the reference and the file, and every book where
-those mechanical checks disagree with the hand verdict is listed for a second look.
+Each tool's result is rebuilt from its raw record and the file's own tags (bench_data.result: how
+each tool writes). The result is then checked field by field against the reference and the file,
+and every book where those mechanical checks disagree with the hand verdict is listed for a second
+look. --write saves the final verdicts to the manifest's audit.final, which the page shows.
 """
 import argparse
 import json
@@ -24,29 +19,17 @@ import unicodedata
 import difflib
 from collections import Counter
 
+from bench_data import FIELDS, TOOL_NAMES as TOOLS, Benchmark, result
+
 ap = argparse.ArgumentParser()
-ap.add_argument("data")
+ap.add_argument("--manifest", default="manifest.json")
 ap.add_argument("--out", default="")
-ap.add_argument("--write", default="", help="write the final verdicts (hand identity + checked fields) here")
+ap.add_argument("--write", action="store_true", help="write the final verdicts (hand identity + checked fields)")
 opts = ap.parse_args()
-D = opts.data
-FIELDS = ("title", "author", "narrator", "series", "sequence")
-TOOLS = ["public_gr", "audiosilo", "absqm", "grimmory", "rmab", "bo", "beets"]
-
-
-def rows(name):
-    return {r["folder"]: r for r in map(json.loads, open(os.path.join(D, name), encoding="utf-8"))}
-
-
-books = json.load(open(os.path.join(D, "combined_4044.json")))
-audit = json.load(open(os.path.join(D, os.environ.get("AUDIT_IN", "audit.json"))))
-# BookOrbit ran before a few folders were renamed; map its rows to today's folders by tags and runtime.
-identity = lambda b: json.dumps([b["tags"], round(b["minutes"], 3)], sort_keys=True)
-now = {identity(b): b["folder"] for b in books}
-moved = {b["folder"]: now[identity(b)] for b in json.load(open(os.path.join(D, "full_morning.json"))) if identity(b) in now}
-raw = {"public_gr": rows(os.environ.get("LF_RUN", "nov2_public_gr.jsonl")), "audiosilo": rows("audiosilo.jsonl"), "absqm": rows("plus_absqm.jsonl"),
-       "grimmory": rows("plus_grimmory.jsonl"), "rmab": rows("plus_rmab.jsonl"),
-       "bo": {moved.get(f, f): r for f, r in rows("bo_rows.jsonl").items()}, "beets": rows("plus_beets.jsonl")}
+bench = Benchmark(opts.manifest)
+books = bench.books
+audit = json.load(open(bench.file("audit", "hand")))
+raw = {tool: bench.runs(tool) for tool in TOOLS}
 
 
 def norm(x):
@@ -64,37 +47,6 @@ def book_number(folder):
     """The book number the folder names ("Book 4 - ...", "...; Book 04; ...", "Vol. 4"), else None."""
     m = re.search(r"(?:^|[/;] ?)(?:Book|Vol\.?|Volume) (\d+(?:\.\d+)?)(?=$|[ ;/-])", folder)
     return float(m.group(1)) if m else None
-
-
-def result(tool, file, r):
-    """(written fields or None when the tool wrote nothing, its pick's ASIN)."""
-    if not r:
-        return None, ""
-    if tool == "bo":
-        if not ((r.get("asin") or "").upper() not in ("", "NOREALASIN") or r.get("goodreads")):
-            return None, ""
-        return {k: r.get(k) or "" for k in FIELDS}, r.get("asin") or ""
-    m = r.get("match") or {}
-    if tool == "public_gr":
-        if r.get("status") != "matched":
-            return None, ""
-        if r.get("mode") == "series_only":
-            # Series-only writes its own title clue, which a folder name can replace.
-            return {**file, "title": m.get("title") or file["title"], "series": m.get("series") or "",
-                    "sequence": m.get("sequence") or ""}, r.get("series_match_asin") or ""
-        out = {k: m.get(k) or "" for k in FIELDS}
-        edition = r.get("different_edition")
-        if edition:  # another recording: the file keeps its own narrator and ASIN
-            out["narrator"] = edition.get("local_narrator") or file["narrator"]
-            return out, ""
-        return out, m.get("asin") or ""
-    if tool == "audiosilo":
-        if r.get("outcome") not in ("auto", "own_asin"):
-            return None, m.get("asin") or ""
-        return {k: file[k] or m.get(k) or "" for k in FIELDS}, m.get("asin") or ""
-    if r.get("status") != "matched":
-        return None, ""
-    return {k: m.get(k) or file[k] for k in FIELDS}, m.get("asin") or ""
 
 
 # Titles no listing or publisher gives a book: file names, track names, tag noise.
@@ -348,7 +300,7 @@ print(len(report), "disagreements")
 print("final:", {tool: dict(Counter(r["v"][tool] for r in final.values())) for tool in TOOLS})
 def tally_findings(name, books_in_sample):
     """How many verdicts a second audit found wrong: data/reaudit/<name>, one 'idx TOOL a->b | why (rule|hand)' per line."""
-    path = os.path.join(D, "reaudit", name)
+    path = os.path.join(bench.file("audit", "reaudit"), name)
     if not os.path.exists(path):
         return {}
     lines = [l for l in open(path) if re.match(r"\d+ \w+ \w->\w", l)]
@@ -357,13 +309,15 @@ def tally_findings(name, books_in_sample):
 
 
 if opts.write:
-    sample = os.path.join(D, "reaudit", "sample.json")
+    validation = os.path.join(bench.file("audit", "reaudit"), "validation_sample.json")
+    sample = os.path.join(bench.file("audit", "reaudit"), "sample.json")
     final["_meta"] = {
         "reaudit": tally_findings("findings.txt", len(json.load(open(sample))) if os.path.exists(sample) else 0),
-        "validation": tally_findings("validation_findings.txt", len(json.load(open(os.path.join(D, "reaudit", "validation_sample.json"))))
-                                     if os.path.exists(os.path.join(D, "reaudit", "validation_sample.json")) else 0),
+        "validation": tally_findings("validation_findings.txt", len(json.load(open(validation)))
+                                     if os.path.exists(validation) else 0),
     }
-    json.dump(final, open(opts.write, "w"), ensure_ascii=False, indent=0)
+    json.dump(final, open(bench.file("audit", "final"), "w"), ensure_ascii=False, indent=0)
+    print("wrote", bench.file("audit", "final"))
 if opts.out:
     with open(opts.out, "w") as fh:
         for r in report:

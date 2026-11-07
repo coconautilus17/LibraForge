@@ -1,4 +1,4 @@
-"""Turn beets-audible import databases into lf_bench.py-shaped rows for score.py.
+"""Turn beets-audible import databases into lf_bench.py-shaped rows (bench_data.py reads them).
 
 usage: beets_rows.py <books.json> <out.jsonl> <beets.db> [<beets.db> ...]
 

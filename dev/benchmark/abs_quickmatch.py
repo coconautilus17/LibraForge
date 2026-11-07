@@ -12,7 +12,7 @@ It creates the root user and a book library with the Audible provider, scans it,
 then calls POST /api/items/{id}/match per book: the Quick Match button, which takes
 the first result of ABS's Audible search (by the file's ASIN when it has one).
 overrideDetails is on so the item's ASIN is always the one ABS picked. Rows use the
-lf_bench.py shape (folder, status, match), so score.py reads them as-is; the matching's
+lf_bench.py shape (folder, status, match), so bench_data.py reads them as-is; the matching's
 total runtime goes to <out>.time.
 """
 import json
@@ -92,6 +92,6 @@ with open(OUT, "w") as out, ThreadPoolExecutor(WORKERS) as pool:
         done += 1
         if done % 200 == 0:
             print("matched", done, "of", len(items), flush=True)
-# Total runtime of the matching (not the scan), read by score.py.
+# Total runtime of the matching (not the scan).
 open(OUT.removesuffix(".jsonl") + ".time", "w").write(f"{time.time() - start:.0f}\n")
 print("done", done, flush=True)

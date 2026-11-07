@@ -13,7 +13,7 @@ it), replacing a field when the provider has a value.
 usage: grimmory.py setup                          admin user, Audible on
        grimmory.py library                        create the library on /books, wait for its scan
        grimmory.py refresh <out.time> [book-ids]  timed refresh (all books, or a few to test)
-       grimmory.py rows <books.json> <out.jsonl>  lf_bench.py-shaped rows for score.py
+       grimmory.py rows <books.json> <out.jsonl>  lf_bench.py-shaped rows (bench_data.py reads them)
 
 GRIMMORY_URL   default http://127.0.0.1:6061
 GRIMMORY_CREDS JSON {"username", "password", "email", "name"}
