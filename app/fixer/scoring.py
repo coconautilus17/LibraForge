@@ -267,10 +267,14 @@ def get_primary_series(product: dict) -> tuple[str, str]:
     # A book in several series ([The Cosmere, The Stormlight Archive 4]) comes
     # back from Audible in no stable order: a numbered series beats an
     # unnumbered umbrella, unless with_preferred_series() put the series the
-    # file names first.
-    first = series[0] if product.get("_series_from_clues") else next(
-        (s for s in series if s and (s.get("sequence") or s.get("position"))),
-        series[0],
+    # file names first. Among several of either kind the choice is by name, so
+    # the same listing gives the same series whatever order it came in (#504).
+    def by_name(entries):
+        return min(entries, key=lambda s: normalize_for_match(s.get("title") or s.get("name") or ""))
+
+    numbered = [s for s in series if s and (s.get("sequence") or s.get("position"))]
+    first = series[0] if product.get("_series_from_clues") else (
+        by_name(numbered) if numbered else by_name([s for s in series if s] or [{}])
     )
     first = first or {}
 
@@ -1063,17 +1067,51 @@ def with_preferred_series(product: dict, clues: dict) -> dict:
         return product
     names = [normalize_for_match(split_series_trailing_number(sanitize_tag(
         (entry or {}).get("title") or (entry or {}).get("name") or ""), "")[0]) for entry in series]
+    sequences = [str((entry or {}).get("sequence") or (entry or {}).get("position") or "") for entry in series]
     local = normalize_for_match(clues.get("series", ""))
+    tag_name, tag_number = split_series_trailing_number(clues.get("series", "") or "", "")
+    tag_name = normalize_for_match(tag_name)
     title = f" {normalize_for_match(clues.get('raw_title') or clues.get('title') or '')} "
     folder = normalize_for_match(clues.get("folder_series", ""))
-    index = next((i for i, name in enumerate(names) if local and name == local), None)
-    if index is None:
-        index = next((i for i, name in enumerate(names) if folder and name == folder), None)
-    if index is None:
+    number = own_book_number(clues)
+
+    literal = [sanitize_tag((entry or {}).get("title") or (entry or {}).get("name") or "").lower() for entry in series]
+
+    def only(fits):
+        found = [i for i in range(len(series)) if fits(i)]
+        return found[0] if len(found) == 1 else None
+
+    def numbered(i):
+        return bool(number) and sequence_values_equal(sequences[i], number)
+
+    def named(wanted, written):
+        """The series named `wanted`; of several that read alike ("A Jack Ryan Novel
+        (chronological order)" and "(publication order)"), the one the book's
+        number fits, then the one written the same, then the first by name."""
+        found = [i for i, name in enumerate(names) if wanted and name == wanted]
+        if len(found) > 1:
+            found = [i for i in found if numbered(i)] or found
+        if len(found) > 1:
+            found = [i for i in found if literal[i] == written.strip().lower()] or found
+        return min(found, key=lambda i: literal[i], default=None)
+
+    # Each rule reads the file, never the order Audible sent (#504); the first that
+    # names one series decides.
+    rules = (
+        lambda: named(local, clues.get("series", "") or ""),
+        lambda: named(folder, clues.get("folder_series", "") or ""),
+        # The library's folder numbers the book ("Discworld/Book 19"): the series it is 19 of.
+        lambda: only(numbered) if clues.get("book_number_source") == "path" else None,
+        # The tag's series, read without its number ("..., Book #3"), when that number fits.
+        lambda: only(lambda i: tag_name and names[i] == tag_name
+                     and (not tag_number or sequence_values_equal(sequences[i], tag_number))),
+        lambda: only(numbered),
         # The most specific name the title holds: "Monster Hunter Memoirs: Sinners" names
         # Monster Hunter Memoirs, not the Monster Hunter umbrella.
-        named = [i for i, name in enumerate(names) if len(name) >= 4 and f" {name} " in title]
-        index = max(named, key=lambda i: len(names[i]), default=None)
+        lambda: max((i for i, name in enumerate(names) if len(name) >= 4 and f" {name} " in title),
+                    key=lambda i: (len(names[i]), numbered(i), literal[i]), default=None),
+    )
+    index = next((found for rule in rules if (found := rule()) is not None), None)
     if index is None:
         return product
     return {**product, "series": [series[index]] + series[:index] + series[index + 1:], "_series_from_clues": True}
