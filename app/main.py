@@ -2682,49 +2682,62 @@ def discover_m4b_candidates(
         probe=probe_audio_file,
         entries=(probe_seed or {}).get("audio_probes", {}),
     )
+    # A change under a search cached for this fixer re-reads only the book
+    # folders whose signature changed; every other folder keeps its results.
+    if (
+        cached_search
+        and cached_search.get("script_mtime_ns") == script_mtime_ns
+        and target_path.is_dir()
+    ):
+        incremental = _m4b_incremental_refresh(
+            cached_search=cached_search,
+            target_path=target_path,
+            shared=shared,
+            fixer_module=fixer_module,
+            chapter_reader=chapter_reader,
+            audio_reader=audio_reader,
+        )
+        if incremental is not None:
+            search_entry = {
+                "path": str(target_path),
+                "script_name": script_name,
+                "script_mtime_ns": script_mtime_ns,
+                "refreshed_at": utc_timestamp(),
+                **incremental["entry"],
+            }
+            with M4B_DISCOVERY_CACHE_LOCK:
+                cache = load_discovery_cache(M4B_DISCOVERY_CACHE)
+                cache["searches"][cache_key] = search_entry
+                save_discovery_cache(M4B_DISCOVERY_CACHE, cache)
+            return format_m4b_discovery_response(
+                target_path=target_path,
+                mode=mode,
+                results=search_entry["results"],
+                limit=limit,
+                cache_info={
+                    "source": "refresh",
+                    "refreshed_at": search_entry["refreshed_at"],
+                    "audio_file_count": search_entry["audio_file_count"],
+                    "chapter_probes_reused": chapter_reader.reused,
+                    "chapter_probes_run": chapter_reader.probed,
+                    "audio_probes_reused": audio_reader.reused,
+                    "audio_probes_run": audio_reader.probed,
+                    "folders_rebuilt": incremental["rebuilt"],
+                    "folders_kept": incremental["kept"],
+                },
+            )
+
     files, group_map, processing_items = fixer_processing_context(
         target_path=target_path,
         fixer_module=fixer_module,
         chapter_count_reader=chapter_reader,
     )
-
-    candidates_by_mode: dict[str, list[dict[str, Any]]] = {
-        requested_mode: [] for requested_mode in supported_modes
-    }
-    for source_path in processing_items:
-        display_path = fixer_module.get_processing_display_path(source_path, group_map)
-        grouped_files = group_map.get(source_path.parent, [])
-        item_files = grouped_files if display_path != source_path else [source_path]
-        included_modes = [
-            requested_mode
-            for requested_mode in supported_modes
-            if conversion_candidate(
-                source_path=source_path,
-                display_path=display_path,
-                item_files=item_files,
-                mode=requested_mode,
-            )
-        ]
-        if not included_modes:
-            continue
-        audio_summary = summarize_audio_probes(
-            item_files,
-            [audio_reader(item_file) for item_file in item_files],
-        )
-        for requested_mode in included_modes:
-            candidate = conversion_candidate(
-                source_path=source_path,
-                display_path=display_path,
-                item_files=item_files,
-                mode=requested_mode,
-                audio_summary=audio_summary,
-            )
-            candidates_by_mode[requested_mode].append(candidate)
-
-    results: dict[str, list[dict[str, Any]]] = {}
-    for requested_mode, candidates in candidates_by_mode.items():
-        candidates.sort(key=lambda item: item["display_path"].casefold())
-        results[requested_mode] = candidates
+    results = _m4b_candidates(
+        fixer_module=fixer_module,
+        group_map=group_map,
+        processing_items=processing_items,
+        audio_reader=audio_reader,
+    )
 
     refreshed_at = utc_timestamp()
     # Re-fetch the shared state rather than reusing the `shared` snapshot
@@ -2744,6 +2757,7 @@ def discover_m4b_candidates(
         "chapter_probes": chapter_reader.pruned_entries(),
         "audio_probes": audio_reader.pruned_entries(),
         "folder_signatures": folder_signatures,
+        "folder_file_counts": _m4b_file_counts(files, folder_signatures),
         "results": results,
     }
     with M4B_DISCOVERY_CACHE_LOCK:
@@ -2766,6 +2780,187 @@ def discover_m4b_candidates(
             "audio_probes_run": audio_reader.probed,
         },
     )
+
+
+M4B_SUPPORTED_MODES = ("multipart", "non_m4b")
+
+
+def _m4b_candidates(
+    *,
+    fixer_module,
+    group_map: dict[Path, list[Path]],
+    processing_items: list[Path],
+    audio_reader,
+) -> dict[str, list[dict[str, Any]]]:
+    """Conversion candidates by mode for these processing items, sorted by display path."""
+    candidates_by_mode: dict[str, list[dict[str, Any]]] = {
+        requested_mode: [] for requested_mode in M4B_SUPPORTED_MODES
+    }
+    for source_path in processing_items:
+        display_path = fixer_module.get_processing_display_path(source_path, group_map)
+        grouped_files = group_map.get(source_path.parent, [])
+        item_files = grouped_files if display_path != source_path else [source_path]
+        included_modes = [
+            requested_mode
+            for requested_mode in M4B_SUPPORTED_MODES
+            if conversion_candidate(
+                source_path=source_path,
+                display_path=display_path,
+                item_files=item_files,
+                mode=requested_mode,
+            )
+        ]
+        if not included_modes:
+            continue
+        audio_summary = summarize_audio_probes(
+            item_files,
+            [audio_reader(item_file) for item_file in item_files],
+        )
+        for requested_mode in included_modes:
+            candidate = conversion_candidate(
+                source_path=source_path,
+                display_path=display_path,
+                item_files=item_files,
+                mode=requested_mode,
+                audio_summary=audio_summary,
+            )
+            candidates_by_mode[requested_mode].append(candidate)
+    for candidates in candidates_by_mode.values():
+        candidates.sort(key=lambda item: item["display_path"].casefold())
+    return candidates_by_mode
+
+
+def _m4b_owner_folder(path: Path, folders: set[str]) -> str | None:
+    """The indexed book folder a file belongs to: its own folder, or the book
+    folder holding its disc/part subfolder (library_index collapses those)."""
+    if str(path.parent) in folders:
+        return str(path.parent)
+    if library_index.DISC_RE.match(path.parent.name) and str(path.parent.parent) in folders:
+        return str(path.parent.parent)
+    return None
+
+
+def _m4b_file_counts(files: list[Path], folder_signatures: dict[str, str]) -> dict[str, int]:
+    """Audio files per indexed book folder ("" for files no folder signature covers)."""
+    folders = set(folder_signatures)
+    counts: dict[str, int] = {}
+    for file_path in files:
+        owner = _m4b_owner_folder(file_path, folders) or ""
+        counts[owner] = counts.get(owner, 0) + 1
+    return counts
+
+
+def _m4b_incremental_refresh(
+    *,
+    cached_search: dict[str, Any],
+    target_path: Path,
+    shared: "library_index.LibraryIndexState",
+    fixer_module,
+    chapter_reader,
+    audio_reader,
+) -> dict[str, Any] | None:
+    """Rebuild a cached discovery search for only the book folders whose
+    signature changed, were added or were removed, plus any loose audio
+    files directly in the searched folder (which have no signature). Grouping
+    and candidates depend only on a folder's own files (fixer
+    multi_part_files_by_parent), so every other folder's results stand.
+
+    Returns None, meaning "do the full walk", whenever that guarantee can't
+    be checked: no completed index, a cache entry without per-folder file
+    counts, a cached candidate whose folder isn't indexed, or most folders
+    changed anyway.
+    """
+    cached_signatures = cached_search.get("folder_signatures")
+    file_counts = cached_search.get("folder_file_counts")
+    if shared.status != "ready" or not isinstance(cached_signatures, dict) or not isinstance(file_counts, dict):
+        return None
+    current = _m4b_folder_signatures_under(target_path, shared)
+    if not current:
+        return None
+    changed = {folder for folder, signature in current.items() if cached_signatures.get(folder) != signature}
+    removed = set(cached_signatures) - set(current)
+    if len(changed) + len(removed) > len(current) // 2:
+        return None
+    known = set(cached_signatures)
+    stale = changed | removed
+
+    kept_results: dict[str, list[dict[str, Any]]] = {}
+    for requested_mode, candidates in (cached_search.get("results") or {}).items():
+        kept = []
+        for candidate in candidates:
+            owner = _m4b_owner_folder(Path(candidate.get("representative_path", "")), known)
+            if owner is None and not (
+                target_path == AUDIOBOOKS_ROOT and Path(candidate.get("representative_path", "")).parent == target_path
+            ):
+                return None
+            if owner is not None and owner not in stale:
+                kept.append(candidate)
+        kept_results[requested_mode] = kept
+
+    # Sign each folder before reading it: a change made while it is read
+    # leaves an older signature behind, so the next search reads it again.
+    fresh_signatures = {folder: library_index.folder_listing_signature(Path(folder)) for folder in changed}
+    files: list[Path] = []
+    for folder in sorted(changed):
+        files.extend(
+            file_path
+            for file_path in fixer_module.collect_audio_files(Path(folder))
+            if _m4b_owner_folder(file_path, {folder}) == folder
+        )
+    # Only the library root has audio no folder signature covers (see
+    # _m4b_cached_search_is_still_fresh); it is always read again.
+    loose = sorted(
+        item for item in target_path.iterdir()
+        if item.is_file() and fixer_module.is_supported_audio_file(item)
+    ) if target_path == AUDIOBOOKS_ROOT else []
+    files.extend(loose)
+    group_map = fixer_module.build_multi_part_group_map(files, chapter_count_reader=chapter_reader)
+    processing_items = fixer_module.build_processing_items(files, group_map)
+    rebuilt = _m4b_candidates(
+        fixer_module=fixer_module,
+        group_map=group_map,
+        processing_items=processing_items,
+        audio_reader=audio_reader,
+    )
+    results = {}
+    for requested_mode in M4B_SUPPORTED_MODES:
+        merged = kept_results.get(requested_mode, []) + rebuilt.get(requested_mode, [])
+        merged.sort(key=lambda item: item["display_path"].casefold())
+        results[requested_mode] = merged
+
+    signatures = {
+        folder: fresh_signatures.get(folder, cached_signatures.get(folder, signature))
+        for folder, signature in current.items()
+    }
+    counts = {folder: n for folder, n in file_counts.items() if folder and folder not in stale}
+    counts.update({k: v for k, v in _m4b_file_counts(files, signatures).items() if k})
+    if loose:
+        counts[""] = len(loose)
+
+    def kept_probe(path: str) -> bool:
+        owner = _m4b_owner_folder(Path(path), known)
+        return owner is not None and owner not in stale
+
+    chapter_probes = {
+        path: entry for path, entry in (cached_search.get("chapter_probes") or {}).items() if kept_probe(path)
+    }
+    chapter_probes.update(chapter_reader.pruned_entries())
+    audio_probes = {
+        path: entry for path, entry in (cached_search.get("audio_probes") or {}).items() if kept_probe(path)
+    }
+    audio_probes.update(audio_reader.pruned_entries())
+    return {
+        "entry": {
+            "audio_file_count": sum(counts.values()),
+            "chapter_probes": chapter_probes,
+            "audio_probes": audio_probes,
+            "folder_signatures": signatures,
+            "folder_file_counts": counts,
+            "results": results,
+        },
+        "rebuilt": len(changed),
+        "kept": len(current) - len(changed),
+    }
 
 
 def _m4b_folder_signature_scope(target_path: Path) -> Path:
