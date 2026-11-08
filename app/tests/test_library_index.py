@@ -188,6 +188,38 @@ class BuildLibraryIndexTests(unittest.TestCase):
         folder_paths = {str(p) for p, is_file in entries if not is_file}
         self.assertEqual(folder_paths, set(signatures.keys()))
 
+    def test_signatures_from_the_walk_equal_listing_each_folder_again(self):
+        # Cached searches store these signatures, so the one-pass walk must sign
+        # exactly as folder_listing_signature does: hidden files, companions and
+        # disc subfolders included.
+        self._touch("A/Book1/Book1.m4b")
+        self._touch("A/Book1/cover.jpg")
+        self._touch("A/Book1/.DS_Store")
+        self._touch("A/Book2/Disc 1/p1.mp3")
+        self._touch("A/Book2/Disc 2/p2.mp3")
+        self._touch("A/Book2/notes.txt")
+        _entries, signatures = build_library_index(self.root)
+        self.assertEqual(len(signatures), 2)
+        for folder, signature in signatures.items():
+            self.assertEqual(signature, folder_listing_signature(Path(folder)))
+
+    def test_a_folder_that_cannot_be_listed_is_skipped(self):
+        self._touch("A/Book1/Book1.m4b")
+        locked = self._touch("B/Book2/Book2.m4b").parent
+        locked.chmod(0)
+        try:
+            entries, _ = build_library_index(self.root)
+        finally:
+            locked.chmod(0o755)
+        if os.geteuid() != 0:  # root can list it anyway
+            self.assertEqual(entries, [(self.root / "A" / "Book1", False)])
+
+    def test_a_symlinked_folder_is_not_walked(self):
+        self._touch("A/Book1/Book1.m4b")
+        (self.root / "Link").symlink_to(self.root / "A", target_is_directory=True)
+        entries, _ = build_library_index(self.root)
+        self.assertEqual(entries, [(self.root / "A" / "Book1", False)])
+
 
 class EnsureLibraryIndexFreshTests(unittest.TestCase):
     def setUp(self):
