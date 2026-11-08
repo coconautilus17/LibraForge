@@ -56,17 +56,46 @@ NUMBER_WORDS.update({"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 
                      "ninth": 9, "tenth": 10, "thirty": 30, "forty": 40, "fifty": 50})
 
 
-def said_numbers(credit_words):
-    """The numbers the credits say ("Book Six", "Volume 20", "Backyard Dungeon 3"); not years or catalog codes."""
-    out, words = set(), list(credit_words)
+def number_at(words, i):
+    """The number words[i] says ("6", "six", "twenty one"), else None."""
+    if i >= len(words):
+        return None
+    w = words[i]
+    if i + 1 < len(words) and words[i + 1] == "edition":
+        return None  # "Second Edition"
+    m = re.fullmatch(r"(\d+)point(\d+)", w)
+    if m:
+        return float(f"{m.group(1)}.{m.group(2)}")  # "Book 3.5", kept whole by credit_words
+    if w.isdigit():
+        return int(w) if int(w) <= 300 else None
+    if w in NUMBER_WORDS:
+        n = NUMBER_WORDS[w]
+        if n >= 20 and i + 1 < len(words) and words[i + 1] in NUMBER_WORDS and NUMBER_WORDS[words[i + 1]] < 10:
+            n += NUMBER_WORDS[words[i + 1]]  # "twenty one"
+        return n
+    return None
+
+
+CUES = {"book", "volume", "vol", "number"}
+
+
+def said_numbers(credit_words, series_names=(), title_numbers=frozenset()):
+    """The book numbers the credits say: after a cue ("Book Six", "Volume 20"), or right after the series'
+    name ("Backyard Dungeon 3") unless the title itself holds that number ("Dungeon Diving 102")."""
+    words, out = list(credit_words), set()
     for i, w in enumerate(words):
-        if w.isdigit() and int(w) <= 300:
-            out.add(int(w))
-        elif w in NUMBER_WORDS:
-            n = NUMBER_WORDS[w]
-            if n >= 20 and i + 1 < len(words) and words[i + 1] in NUMBER_WORDS and NUMBER_WORDS[words[i + 1]] < 10:
-                n += NUMBER_WORDS[words[i + 1]]  # "twenty one"
-            out.add(n)
+        if w in CUES and not (i and words[i - 1] in ("of", "in")):  # not a recap's "summary of book one"
+            n = number_at(words, i + 1)
+            if n is not None:
+                out.add(n)
+    for name in series_names:
+        name_words = norm(name).split()
+        k = len(name_words)
+        for i in range(len(words) - k):
+            if k and words[i:i + k] == name_words:
+                n = number_at(words, i + k)
+                if n is not None and n not in title_numbers:
+                    out.add(n)
     return out
 
 
@@ -85,17 +114,25 @@ def listed_numbers(series):
     return out
 
 
+def credit_words(credits):
+    """The credits' words, a decimal book number kept as one ("3.5" -> "3point5")."""
+    return norm(re.sub(r"(\d)\.(\d)", r"\1point\2", credits)).split()
+
+
 def judge(fields, text, book_minutes=None):
     """How the opening credits stand against a listing's fields ({title, author, narrator, series,
     minutes}): each name's closeness, whether the book number said is one the listing has, whether the
     runtime agrees, and the verdict."""
     end = CREDITS_END.search(text)
     credits = text[:end.start()] if end and end.start() > 20 else text[:400]
-    w = norm(credits).split()
+    w = credit_words(credits)
     c = {"title": closeness(title_core(fields.get("title", "")), w) if fields.get("title") else None,
          "authors": {p: closeness(p, w) for p in people(fields.get("author"))},
          "narrators": {p: closeness(p, w) for p in people(fields.get("narrator"))}}
-    said, listed = said_numbers(w), listed_numbers(fields.get("series"))
+    title_words = norm(f"{fields.get('title', '')} {fields.get('subtitle', '')}").split()
+    in_title = {n for i in range(len(title_words)) if (n := number_at(title_words, i)) is not None}
+    names = [n for n, _ in fields.get("series") or [] if n] + [title_core(fields.get("title", ""))]
+    said, listed = said_numbers(w, names, in_title), listed_numbers(fields.get("series"))
     c["number"] = None if not said or not listed else bool(said & listed)
     m = fields.get("minutes")
     c["runtime"] = None if not m or not book_minutes else abs(m - book_minutes) <= max(3, 0.03 * book_minutes)
