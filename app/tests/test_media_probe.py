@@ -123,6 +123,26 @@ class MediaProbeTests(unittest.TestCase):
             media_probe.inspect(book)
         self.assertEqual(media_probe.stats().get("store_hits", 0), 0)
 
+    def test_prune_forgets_deleted_files_but_never_on_an_empty_root(self):
+        library = self.dir / "library"
+        library.mkdir()
+        kept = make_m4b(library / "kept.m4b")
+        gone = make_m4b(library / "gone.m4b")
+        media_probe.configure_store(self.dir / "facts.sqlite")
+        self.addCleanup(media_probe.configure_store, None)
+        media_probe.inspect(kept)
+        media_probe.inspect(gone)
+        gone.unlink()
+        self.assertEqual(media_probe.prune_missing(library), 1)
+        self.assertEqual(media_probe._store.paths_under(str(library)), [str(kept)])
+        # An unmounted share is an empty folder: nothing is pruned.
+        kept.rename(self.dir / "kept.m4b")
+        for leftover in library.glob("*.ffmeta"):
+            leftover.unlink()
+        self.assertEqual(media_probe.prune_missing(library), 0)
+        self.assertEqual(media_probe.prune_missing(self.dir / "missing"), 0)
+        self.assertEqual(media_probe._store.paths_under(str(library)), [str(kept)])
+
     def test_container_tags_win_over_stream_tags(self):
         facts = media_probe.MediaFacts(path="x", format_tags={"title": "Container"},
                                        stream_tags={"title": "Stream", "artist": "Only On Stream"})

@@ -15,6 +15,7 @@ unknown (None), never zero.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from struct import error as struct_error
@@ -301,6 +302,25 @@ def forget(path: Path | str) -> None:
         _memo.pop(str(path), None)
     if _store:
         _store.forget(str(path))
+
+
+def prune_missing(root: Path | str) -> int:
+    """Forget stored facts for files under root that no longer exist. Does nothing when
+    root is missing, can't be listed or is empty: an unmounted share looks just like
+    that, and pruning then would throw away every stored fact."""
+    store, root = _store, Path(root)
+    if store is None:
+        return 0
+    try:
+        with os.scandir(root) as entries:
+            if next(entries, None) is None:
+                return 0
+    except OSError:
+        return 0
+    gone = [path for path in store.paths_under(str(root)) if not os.path.exists(path)]
+    for path in gone:
+        store.forget(path)
+    return len(gone)
 
 
 def duration_seconds(path: Path | str) -> float | None:

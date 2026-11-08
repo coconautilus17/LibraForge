@@ -5114,6 +5114,8 @@ async def _lifespan(app: FastAPI):
     # defined later in this module -- name lookup inside a function body
     # happens at call time, well after the whole module has loaded.
     _ensure_manual_review_search_index_fresh([])
+    # Drop stored media facts for files deleted or moved since the last run.
+    threading.Thread(target=media_probe.prune_missing, args=(AUDIOBOOKS_ROOT,), daemon=True).start()
     try:
         # Decides once whether this is a fresh install or an upgrade (see
         # app/install_state.py) so the author-name scheme defaults correctly.

@@ -77,14 +77,12 @@ class MediaFactsStore:
         except sqlite3.Error:
             pass
 
-    def prune(self, keep: set[str], under: str) -> int:
-        """Drop facts for files under `under` that are no longer among `keep` (a completed walk's files)."""
-        prefix = under.rstrip("/") + "/"
+    def paths_under(self, root: str) -> list[str]:
+        prefix = root.rstrip("/") + "/"
         try:
-            db = self._connect()
-            rows = db.execute("SELECT path FROM facts WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)).fetchall()
-            gone = [(p,) for (p,) in rows if p not in keep]
-            db.executemany("DELETE FROM facts WHERE path = ?", gone)
-            return len(gone)
+            rows = self._connect().execute(
+                "SELECT path FROM facts WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
+            ).fetchall()
         except sqlite3.Error:
-            return 0
+            return []
+        return [path for (path,) in rows]
