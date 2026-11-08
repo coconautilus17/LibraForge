@@ -112,10 +112,24 @@ class LookupItemInIndexTests(unittest.TestCase):
     def test_miss_returns_none(self):
         self.assertIsNone(abs_client.lookup_item_in_index(self.index, asin="NOPE", path="/nope"))
 
+    def test_isbn10_asin_indexes_and_matches_when_path_misses(self):
+        index = abs_client.build_item_index([
+            {"id": "li_dune", "path": "/p", "relPath": "p", "updatedAt": 1,
+             "media": {"metadata": {"asin": "1004027907"}}},
+        ])
+        record = abs_client.lookup_item_in_index(index, asin="1004027907", path="/moved/elsewhere")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["library_item_id"], "li_dune")
+
 
 class IsRealAsinTests(unittest.TestCase):
     def test_real_shaped_asin_is_accepted(self):
         self.assertTrue(abs_client._is_real_asin("B0ABC12345"))
+
+    def test_isbn10_shaped_asins_are_accepted(self):
+        for asin in ("1004027907", "1473565952", "1460793188", "152913417X"):
+            with self.subTest(asin=asin):
+                self.assertTrue(abs_client._is_real_asin(asin))
 
     def test_norealasin_placeholder_is_rejected(self):
         self.assertFalse(abs_client._is_real_asin("NOREALASIN"))
@@ -125,6 +139,11 @@ class IsRealAsinTests(unittest.TestCase):
 
     def test_blank_is_rejected(self):
         self.assertFalse(abs_client._is_real_asin(""))
+
+    def test_malformed_isbn10_shapes_are_rejected(self):
+        for asin in ("100402790", "10040279077", "X100402790", "100402790Y"):
+            with self.subTest(asin=asin):
+                self.assertFalse(abs_client._is_real_asin(asin))
 
 
 class BuildMediaPatchPayloadTests(unittest.TestCase):

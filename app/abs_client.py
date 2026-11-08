@@ -160,6 +160,7 @@ def build_item_index(items: list[dict[str, Any]]) -> dict[str, dict[str, dict[st
 
 
 _REAL_ASIN_RE = re.compile(r"^B0[0-9A-Z]{8}$")
+_ISBN10_SHAPED_ASIN_RE = re.compile(r"^[0-9]{9}[0-9X]$")
 
 
 def _is_real_asin(asin: str) -> bool:
@@ -175,12 +176,12 @@ def _is_real_asin(asin: str) -> bool:
     "abs-agg-graphicaudio-0". The strict B0-prefixed shape already excludes
     every known placeholder on its own; no separate sentinel list needed.
 
-    TODO(#307): too narrow. Audible's older titles use ISBN-10-shaped ASINs
-    ([0-9]{9}[0-9X], e.g. 1004027907 Dune: House Atreides; 7% of a real
-    library), which this rejects, so those books are never indexed by ASIN.
-    That shape cannot collide with any placeholder, so it can be accepted too.
+    Audible's older titles use ISBN-10-shaped ASINs ([0-9]{9}[0-9X], e.g.
+    1004027907 Dune: House Atreides, 152913417X Space Hacks; ~7% of a real
+    library), which are also accepted (#307). That shape cannot collide with
+    any placeholder, keeping the #291 guarantee intact.
     """
-    return bool(_REAL_ASIN_RE.fullmatch(asin))
+    return bool(_REAL_ASIN_RE.fullmatch(asin) or _ISBN10_SHAPED_ASIN_RE.fullmatch(asin))
 
 
 def lookup_item_in_index(
