@@ -16,4 +16,4 @@ domain: benchmark
 
 # Confirm benchmark answers
 
-Give every book a confirmed listing where one exists, and read each confirmed listing's own record as the book's right answer: confirm books in a throwaway review library or by hand from a candidate, then read every confirmed listing from the catalog by its ASIN.
+Give every book a confirmed edition where one exists, and keep that edition's own record as the book's right answer: confirm books in a throwaway review library or by hand from a candidate (corrected, or typed in when no catalog has the edition), then read every confirmed Audible listing from the catalog by its ASIN.

@@ -49,7 +49,7 @@ VERDICT_MEANING = {
     "P": "the right book, with a field wrong or missing", "E": "another recording of the book (another narrator or edition)",
     "W": "the wrong book", "s": "a series-only write into the wrong series", "H": "held for review; the held pick is the right book",
     "h": "held for review; the held pick is the wrong book", "N": "nothing written",
-    "U": "not scored: the book has no confirmed listing to check against"}
+    "U": "not scored: the book has no confirmed edition to check against"}
 
 books = bench.by_folder
 runs = bench.runs(opts.run_name)
@@ -168,7 +168,7 @@ def answer_view(a):
         return None
     return {"asin": a["asin"], "title": a["title"], "subtitle": a["subtitle"], "author": a["author"],
             "narrator": a["narrator"], "series": "; ".join(f"{n} #{q}" if q else n for n, q in a["series"]),
-            "minutes": a["minutes"]}
+            "minutes": a["minutes"], "ids": [i for i in a["ids"] if i != a["asin"]]}
 
 
 def series_text(res):
@@ -223,7 +223,8 @@ for folder, book in books.items():
         "tags": bench_data.public_tags(book.get("tags")) if opts.public else book.get("tags"),
         "answer": {"source": book["answer_source"], **{k: book["answer"][k] for k in ("asin", "title", "subtitle")},
                    "authors": book["answer"]["author"], "narrators": book["answer"]["narrator"],
-                   "series": book["answer"]["series"], "minutes": book["answer"]["minutes"]} if book["answer"] else None,
+                   "series": book["answer"]["series"], "minutes": book["answer"]["minutes"],
+                   "other_ids": [i for i in book["answer"]["ids"] if i != book["answer"]["asin"]]} if book["answer"] else None,
         "note": readable(row_audit.get("note", "")), "tools": tools_out})
 
 # The downloadable book list: the same books as the page, so anyone can recount it.
@@ -497,7 +498,7 @@ if geo:
 <p>Audible's search only returns a book where Audible sells it, while looking a book up by its ASIN works everywhere.
 Some listings are sold in only some of Audible's markets (only the UK and Commonwealth stores, only Australia and New
 Zealand, only the US and Canada), so a search made outside those markets doesn't return them. Checked against Audible's
-own sales-rights data, {geo["hidden"]:,} of the {geo["confirmed"]:,} books with a confirmed listing were hidden from
+own sales-rights data, {geo["hidden"]:,} of the {geo["confirmed"]:,} books with a confirmed Audible listing were hidden from
 search where these runs were made ({share(geo["hidden"], geo["books"]):.1f}% of all books). {geo["hidden_with_asin"]:,} of those
 files carry their own ASIN, which a tool can look up directly.</p>
 <p>That is the margin of error this adds: run where those books are sold, a tool that searches Audible could do
@@ -516,19 +517,21 @@ original tags, its folder path and its runtime, with no login, against the live 
 <p>Every tool got the same books, as silent files carrying the original tags at the books' real folder paths (and,
 for tools that check runtime, as long as the real book), and each was run the way its own documentation suggests.</p>
 <h3>The right answers</h3>
-<p>A book's right answer is the listing confirmed as that book, as Audible's catalog itself records it, read by its
-ASIN: its title, every author, every narrator, every series it is listed in with its number there, and its runtime.
-A listing counts as confirmed when it was applied to the book in a library and reviewed there, or, for
-{by_hand:,} books from another library, confirmed by hand from the listings the tools picked, against the file name,
-runtime and narrator. A book listed in several series is answered by any of them. {len(books) - scored:,} books have no
-confirmed listing (not on Audible, or no listing of the file's own recording): every tool's result is shown for them,
-but they are not scored.</p>
+<p>A book's right answer is the edition confirmed as that book, as its own catalog records it: Audible's listing,
+read by its ASIN, when the edition is on Audible; otherwise the record of the catalog that publishes it (a
+publisher's own store by ISBN, AudioSilo's community database), or the fields confirmed by hand when no catalog has
+it. Each holds the title, every author, every narrator, every series with its number there, the runtime where known,
+and every ID the edition has. An edition counts as confirmed when it was applied to the book in a library and
+reviewed there, or, for {by_hand:,} books, confirmed by hand from the editions the tools picked, against the file
+name, runtime, narrator and what the book's opening credits say. A book in several series is answered by any of
+them. {len(books) - scored:,} books have no confirmed edition yet: every tool's result is shown for them, but they are
+not scored.</p>
 <h3>How results were judged</h3>
 <div class=callout><p><b>Checked with Claude, under human supervision.</b> The book-by-book review was done with
 Claude, an AI model, following one written set of rules for every tool and every book. A person supervised the
 work and checked random books by hand along the way, but did not personally review every one of the
 {len(books):,} books. The second audit below measures how often the review got a verdict wrong.</p></div>
-<p>A tool that chose the confirmed listing's ASIN chose the right book. Any other choice was judged by hand, once per
+<p>A tool that chose any of the confirmed edition's IDs (its ASIN, ISBN or community-database work) chose the right book. Any other choice was judged by hand, once per
 book and listing: another listing of the same recording (the right book), another recording, or the wrong book. What
 the tool then left on the book was rebuilt from its own way of writing and checked field by field against the
 listing's record, by one script for every tool: a field is off when the book ends up with something the listing
@@ -789,7 +792,7 @@ function grid(r) {
   const answer = r.a;
   return `<table class="cmp book-grid"><thead><tr><th></th>${FIELDS.map(([, n]) => `<th>${n}</th>`).join("")}<th>Verdict</th></tr></thead><tbody>
     ${line("The file's tags", r.own, {cls: "src"})}
-    ${answer ? line("Right answer", answer, {cls: "src answer"}) : `<tr class="src answer"><th scope=row>Right answer</th><td colspan=6 class=na>none: no confirmed listing, so this book is not scored</td></tr>`}
+    ${answer ? line("Right answer", answer, {cls: "src answer"}) : `<tr class="src answer"><th scope=row>Right answer</th><td colspan=6 class=na>none: no confirmed edition, so this book is not scored</td></tr>`}
     ${ORDER.map((tid) => toolLine(r, tid)).join("")}
   </tbody></table>`;
 }
@@ -801,7 +804,7 @@ function detail(r) {
     r.cand.map((x) => `<tr><td>${esc(x.score)}</td><td>${esc(x.title)}</td><td>${esc(x.asin)}</td><td>${esc(x.duration)}</td><td>${esc(x.sequence)}</td><td>${esc(x.mode)}</td></tr>`).join("") + "</tbody></table>" : '<p class="muted small">none above the cut</p>';
   const facts = {status: r.status, "why not written": r.skip, score: r.score, mode: r.mode, runtime: r.dur,
     "listing runtime (min)": r.listing_min, "other recording": r.edition ? `${r.edition.match_asin || ""} (listing narrator ${r.edition.match_narrator || "?"})` : "", "series from": r.series_asin};
-  const src = r.a ? `Right answer: the confirmed listing ${link(r.a.asin)}, ${esc(SOURCE[r.src] || r.src)}${r.a.minutes ? `, ${r.a.minutes} min` : ""}.` : "No confirmed listing: not scored.";
+  const src = r.a ? `Right answer: the confirmed edition ${[r.a.asin ? link(r.a.asin) : "", ...(r.a.ids || []).map(esc)].filter(Boolean).join(", ") || "(no catalog ID)"}, ${esc(SOURCE[r.src] || r.src)}${r.a.minutes ? `, ${r.a.minutes} min` : ""}.` : "No confirmed edition: not scored.";
   return `<div class=detail>
   <p class="muted small">${esc(r.file)} · ${r.min} min · ${src}</p>
   <div class=scroll-x>${grid(r)}</div>
@@ -899,7 +902,7 @@ supervision (<a href="#method">how</a>).</p>
 
 <section id=glance>
 <h2>At a glance</h2>
-<p class=sub>What each tool left on the {scored:,} books with a confirmed listing, best first. Writes is how much of
+<p class=sub>What each tool left on the {scored:,} books with a confirmed edition, best first. Writes is how much of
 them it wrote; fully correct and right book are shares of what it wrote.</p>
 {glance()}
 <div class=explain>

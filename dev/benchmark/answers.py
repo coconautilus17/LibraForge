@@ -1,21 +1,28 @@
-"""Every book's right answer: its confirmed listing, as the catalog itself records it.
+"""Every book's right answer: its confirmed edition, as its own catalog records it.
 
-A listing is confirmed when it was applied to the book (in the library, or in the review
-library: the dataset's "asin") or confirmed by hand from a candidate. Its record is read
-from Audible's public catalog by ASIN, which no market hides: title, subtitle, every
-author, every narrator, every series it is listed in with its number, and runtime. A book
-with no confirmed listing has no right answer: it is reported, not scored.
+An edition is confirmed when it was applied to the book (in the library, or in the review
+library: the dataset's "asin") or confirmed by hand from a candidate. An Audible edition's
+record is read from Audible's public catalog by ASIN, which no market hides: title,
+subtitle, every author, every narrator, every series it is listed in with its number, and
+runtime. An edition Audible doesn't have (a publisher's own, the community database's, or
+none) is the fields the owner confirmed on the review page, with every ID it carries. A
+book with no confirmed edition has no right answer: it is reported, not scored.
 
 usage: answers.py records [--manifest manifest.json]
            read the record of every confirmed listing into the manifest's "answers"
        answers.py candidates <out.tsv> [--manifest manifest.json]
            for each book with no confirmed listing, the listings the tools chose, with their
            records beside what the file name states, to confirm by hand
+       answers.py reviews <folder of review JSON files> [--manifest manifest.json]
+           record the owner's reviews from the review page (saved with ArtifactData's out_dir):
+           "correct" or "edited" confirms that edition with its fields, "none" with typed fields
+           confirms those fields, "none" without them leaves the book unscored
        answers.py confirm <decisions.tsv> [--manifest manifest.json]
            record the lines "<folder>\t<ASIN>" as confirmed by hand, then read their records;
            "<folder>\t-" removes a confirmed listing found to be another book or recording
 
-The answers file: {folder: {"asin", "source": "applied" | "hand" | "removed", "record": {...} | null}}.
+The answers file: {folder: {"asin", "source": "applied" | "hand" | "removed", "record": {...} | null,
+"fields": {...}}}; "fields" (the owner's own, from a review) makes the record and is kept over a reread.
 """
 import argparse
 import json
@@ -75,12 +82,60 @@ def records(bench, answers):
             answers[b["folder"]] = {"asin": asin, "source": "applied", "record": None}
     got = fetch(a["asin"] for a in answers.values() if a["asin"])
     for a in answers.values():
-        a["record"] = got.get(a["asin"])
+        a["record"] = from_fields(a["fields"], got.get(a["asin"])) if a.get("fields") else got.get(a["asin"])
     json.dump(answers, open(bench.file("answers"), "w"), ensure_ascii=False, indent=0)
     gone = sorted(f for f, a in answers.items() if not a["record"] and a["asin"])
     print(f"{len(answers) - len(gone)} answers read, {len(gone)} listings the catalog no longer returns -> {bench.file('answers')}")
     for f in gone:
         print("  no record:", answers[f]["asin"], f)
+
+
+def from_fields(fields, listing=None):
+    """A record from the owner's fields (a review): its title, people, "Name #N; Other #M" series and IDs;
+    the runtime is the Audible listing's when the fields name one."""
+    people = lambda x: [p.strip() for p in str(x or "").split(",") if p.strip()]
+    series = []
+    for part in str(fields.get("series") or "").split(";"):
+        m = re.fullmatch(r"\s*(.*?)\s*(?:#\s*([\d.\-]+))?\s*", part)
+        if m and (m.group(1) or m.group(2)):
+            series.append([m.group(1), m.group(2) or ""])
+    asin = str(fields.get("asin") or "").strip().upper()
+    return {"asin": asin if re.fullmatch(r"[A-Z0-9]{10}", asin) else "", "title": fields.get("title") or "",
+            "subtitle": fields.get("subtitle") or "", "authors": people(fields.get("authors")),
+            "narrators": people(fields.get("narrators")), "series": series,
+            "minutes": (listing or {}).get("minutes"), "ids": fields.get("ids") or []}
+
+
+def reviews(bench, answers, folder):
+    """The owner's review-page decisions as answers."""
+    n = {}
+    for root, _, files in os.walk(folder):
+        for name in files:
+            if not name.endswith(".json"):
+                continue
+            doc = json.load(open(os.path.join(root, name), encoding="utf-8"))
+            doc = doc.get("data", doc)  # a saved document's fields, or the fields themselves
+            f, status = doc.get("folder"), doc.get("status")
+            if f not in bench.by_folder or status not in ("correct", "edited", "none"):
+                continue
+            fields = dict(doc.get("fields") or {})
+            pick, asin = doc.get("pick") or "", (fields.get("asin") or "").strip().upper()
+            if status == "none" and not fields.get("title"):
+                answers.pop(f, None) if (answers.get(f) or {}).get("source") == "hand" else None
+                n["left unscored"] = n.get("left unscored", 0) + 1
+                continue
+            # The edition chosen keeps its ID unless the owner replaced the ASIN with another.
+            keep = status != "none" and pick and not pick.startswith("fields:") and "asin" not in (doc.get("changed") or [])
+            ids = {pick} if keep else set()
+            if re.fullmatch(r"[A-Z0-9]{10}", asin):
+                ids.add(asin)
+            if status == "correct" and re.fullmatch(r"[A-Z0-9]{10}", pick):
+                answers[f] = {"asin": pick, "source": "hand", "record": None}  # as Audible lists it
+            else:
+                answers[f] = {"asin": asin if re.fullmatch(r"[A-Z0-9]{10}", asin) else "", "source": "hand",
+                              "record": None, "fields": {**fields, "ids": sorted(ids)}}
+            n[status] = n.get(status, 0) + 1
+    print("reviews:", n)
 
 
 def words(x):
@@ -127,7 +182,7 @@ def candidates(bench, answers, out_path):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["records", "candidates", "confirm"])
+    ap.add_argument("step", choices=["records", "candidates", "confirm", "reviews"])
     ap.add_argument("file", nargs="?")
     ap.add_argument("--manifest", default="manifest.json")
     opts = ap.parse_args()
@@ -137,6 +192,9 @@ if __name__ == "__main__":
         records(bench, answers)
     elif opts.step == "candidates":
         candidates(bench, answers, opts.file)
+    elif opts.step == "reviews":
+        reviews(bench, answers, opts.file)
+        records(bench, answers)
     else:
         for line in open(opts.file, encoding="utf-8"):
             folder, asin = line.rstrip("\n").split("\t")[:2]

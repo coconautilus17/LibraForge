@@ -23,8 +23,9 @@ and its downloads carry any of it, and those list only the tags a matcher reads.
 | --- | --- | --- | --- |
 | 1. Collect | `collect.py --root /mnt/audiobooks` | the library's `libraforge.json` backups | `data/full.json` |
 | 1b. Import | `overlap.py`, `collect.py --import`, `dedupe.py` | another library's ffprobe dump | a merged dataset |
-| 1c. Confirm answers | `review_lib.py build` / `confirm`, or `answers.py candidates` / `confirm` | books with no confirmed listing | the dataset, or `answers` (confirmed by hand) |
-| 1d. Read the answers | `answers.py records` | every confirmed listing | `answers`: each listing's catalog record, the right answers |
+| 1c. Confirm answers | `review_lib.py build` / `confirm`, or `answers.py candidates` / `confirm` / `reviews` | books with no confirmed edition | the dataset, or `answers` (confirmed by hand) |
+| 1d. Read the answers | `answers.py records` | every confirmed edition | `answers`: each edition's own record, the right answers |
+| 1e. Opening credits | `asr_intro.py --out asr_intro.jsonl`, then `asr_check.py` | the books' real audio, a faster-whisper server | what each book's opening says, checked against its answer |
 | 2. Mock files | `bo_mock.py <books> <out> [--itunes] [--runtime] [--public]` | the dataset | silent files carrying the tags |
 | 3. Run each tool | `run.sh`, `audiosilo.py`, `abs_quickmatch.py`, `grimmory.py`, `readmeabook.py`, `bookorbit.py`, `beets_run.sh` | the dataset or the mock | `data/<run>.jsonl`, `data/<run>.time` |
 | 4. Manifest | edit `data/manifest.json` (shape: `manifest.example.json`) | | which dataset, runs and audit make up this benchmark |
@@ -63,14 +64,25 @@ python3 dev/benchmark/collect.py --import dev/benchmark/data/import_kept.json \
 # dedupe.py runs in the image the same way: dedupe.py <books.json> <out.json> [--dump ... --overlap ...]
 ```
 
-An imported book has no applied match, so no confirmed listing until one is confirmed; until
-then it is reported, not scored. Confirm them from what the tools picked:
+An imported book has no applied match, so no confirmed edition until one is confirmed; until
+then it is reported, not scored. Not every edition is on Audible: a GraphicAudio or Audiobook
+Guild edition, or a community-database work, is confirmed by its own IDs and record. Confirm
+them from what the tools picked, on the command line:
 
 ```bash
 python3 dev/benchmark/answers.py candidates data/candidates.tsv   # each pick's record beside the file name
 # judge every candidate by hand (author, number, title, runtime, narrator); write the kept ones as
 # "<folder>\t<ASIN>" lines, and "<folder>\t-" for a confirmed listing found to be another book or recording
 python3 dev/benchmark/answers.py confirm data/confirmed_by_hand.tsv
+```
+
+or on a review page (each book's tags, every edition the tools chose with its record or the
+fields they left, and what the opening credits say), saving each decision as a document
+`{folder, status: correct|edited|none, pick, fields, changed}`; save them as JSON files
+(ArtifactData's `out_dir`) and record them:
+
+```bash
+python3 dev/benchmark/answers.py reviews data/reviews   # "correct"/"edited": that edition with its fields
 ```
 
 Or build a throwaway library of those books (each with the backup a real
@@ -87,9 +99,11 @@ docker run --rm --entrypoint /opt/venv/bin/python -v "$PWD/app:/app/app:ro" -v "
   review_lib.py confirm data/combined.json data/review_books data/combined.json
 ```
 
-Every book's right answer is then its confirmed listing's own record, read from Audible's
-public catalog by ASIN (no market hides a lookup): title, every author, every narrator, every
-series with its number, runtime. A listing the catalog no longer returns leaves its book
+Every book's right answer is then its confirmed edition's own record: an Audible edition's
+read from Audible's public catalog by ASIN (no market hides a lookup), any other the fields
+confirmed on the review page with the IDs it carries (ISBN, community work, Goodreads): title,
+every author, every narrator, every series with its number, runtime. A tool that chose any of
+those IDs chose the right book. A listing the catalog no longer returns leaves its book
 unscored.
 
 ```bash

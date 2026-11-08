@@ -11,8 +11,8 @@ steps:
     cli:
       place: cli
 - kind: product
-  text: The Product reads each confirmed listing from the catalog by its ASIN and records the listing's whole
-    record as the book's right answer.
+  text: The Product reads each confirmed Audible listing from the catalog by its ASIN and records the listing's
+    whole record as the book's right answer.
   entities:
   - entity: benchmark-book
     effect: changes

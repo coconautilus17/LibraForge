@@ -19,6 +19,6 @@ One audiobook in its original state, before any tool matched it: the case every 
 - **File** — Its audio file's name.
 - **Original tags** — The tags the file arrived with, saved before LibraForge first wrote anything.
 - **Runtime** — The book's real length.
-- **Right answer** — The confirmed listing's own record: its ASIN, title, every author, every narrator, every series with its number, and runtime.
-- **Answer source** — Where the listing was confirmed (the library, the review library, or by hand from a candidate), or none.
+- **Right answer** — The confirmed edition's own record: every ID it has (ASIN, ISBN, community work, Goodreads), title, every author, every narrator, every series with its number, and runtime.
+- **Answer source** — Where the edition was confirmed (the library, the review library, or by hand from a candidate or as typed fields), or none.
 - **Origin** — This library, or another library's tag dump.

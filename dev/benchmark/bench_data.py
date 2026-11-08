@@ -18,12 +18,13 @@ data/manifest.json (gitignored like the rest of data/; manifest.example.json sho
             current run is newer), "extra" (later hand judgments: "<folder>\t<listing>\t
             right|other|wrong"), "final" (audit_check.py's output, what the page shows),
             "reaudit" (the second-audit samples and findings)
-  answers   every book's right answer: its confirmed listing's catalog record (answers.py)
+  answers   every book's right answer: its confirmed edition's own record (answers.py)
   rights    Audible's sales rights for every confirmed answer (geo.py rights)
   geo       the summary of answers Audible's search hid where the runs were made (geo.py summary)
 """
 import json
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
@@ -69,16 +70,18 @@ def identity(book):
 
 
 def answer_fields(record):
-    """A listing record as the fields a book is checked on; "series" is every series it is in."""
+    """An edition's record as the fields a book is checked on; "series" is every series it is in, "ids"
+    every ID the edition has (its ASIN, "isbn:..", "work:..", "goodreads:..")."""
     return {"asin": record["asin"], "title": record["title"], "subtitle": record["subtitle"],
             "author": ", ".join(record["authors"]), "narrator": ", ".join(record["narrators"]),
-            "series": record["series"], "minutes": record["minutes"]}
+            "series": record["series"], "minutes": record["minutes"],
+            "ids": sorted(set(record.get("ids") or []) | ({record["asin"]} if record["asin"] else set()))}
 
 
 class Benchmark:
     def __init__(self, manifest="manifest.json", answers=True):
-        """Every book gets "answer" (answer_fields of its confirmed listing, or None), "asin" (that
-        listing's, or "") and "answer_source" from the manifest's answers."""
+        """Every book gets "answer" (answer_fields of its confirmed edition, or None), "asin" (its Audible
+        ASIN, or ""), "ids" (every ID of that edition) and "answer_source" from the manifest's answers."""
         self.manifest_path = path(manifest)
         self.m = json.load(open(self.manifest_path))
         self.books = json.load(open(path(self.m["books"])))
@@ -90,6 +93,7 @@ class Benchmark:
                 a = known.get(b["folder"]) or {}
                 b["answer"] = answer_fields(a["record"]) if a.get("record") else None
                 b["asin"] = b["answer"]["asin"] if b["answer"] else ""
+                b["ids"] = set(b["answer"]["ids"]) if b["answer"] else set()
                 b["answer_source"] = a.get("source") if b["answer"] else "none"
 
     def file(self, key, *sub):
@@ -135,6 +139,25 @@ def pick(tool, row):
                 or (row.get("different_edition") or {}).get("match_asin") or "").upper()
     asin = (m.get("asin") or "").upper()
     return asin or (f"isbn:{m['isbn']}" if m.get("isbn") else f"work:{m['work']}" if m.get("work") else "")
+
+
+def choice(tool, file, row):
+    """The listing a tool chose, to judge which book it is: its pick, or for a write with no ASIN, ISBN or
+    work, the edition's ISBN or Goodreads ID the write carries ("isbn:..", "goodreads:.."), else the title,
+    series and number it left ("fields:.. | .. | .."); "" when it chose and wrote nothing."""
+    key = pick(tool, row)
+    if key:
+        return key
+    res, _ = result(tool, file, row)
+    if not res or tool == "rmab":
+        return ""
+    m = (row or {}).get("match") or row or {}
+    if m.get("isbn"):
+        return f"isbn:{m['isbn']}"
+    if m.get("goodreads"):
+        return f"goodreads:{m['goodreads']}"
+    return "fields:" + " | ".join(re.sub(r"[^a-z0-9]+", " ", str(res.get(k) or "").lower()).strip()
+                                  for k in ("title", "series", "sequence"))
 
 
 def result(tool, file, row):

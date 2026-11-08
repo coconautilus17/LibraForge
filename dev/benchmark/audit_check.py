@@ -28,7 +28,7 @@ import unicodedata
 import difflib
 from collections import Counter, defaultdict
 
-from bench_data import FIELDS, TOOL_NAMES as TOOLS, Benchmark, pick, result, rows_of
+from bench_data import FIELDS, TOOL_NAMES as TOOLS, Benchmark, choice, pick, result, rows_of
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--manifest", default="manifest.json")
@@ -228,7 +228,7 @@ for b in bench.books:
     for tool in TOOLS:
         code = (hand.get(f) or {}).get("v", {}).get(tool)
         row = (judged_runs.get(tool) or runs[tool]).get(f)
-        key = pick(tool, row)
+        key = choice(tool, {k: ((runs["public_gr"].get(f) or {}).get("local") or {}).get(k) or "" for k in FIELDS}, row)
         if tool == "public_gr" and (row or {}).get("different_edition"):
             continue  # it kept the file's own recording: says nothing about which book that listing is
         if code in IDENTITY and key:
@@ -249,7 +249,7 @@ if extra_path and os.path.exists(extra_path):
 def identity(b, key):
     if not key:
         return None
-    if b["asin"] and key == b["asin"]:
+    if key in b["ids"]:
         return "right"
     return known[b["folder"]].get(key)
 
@@ -263,7 +263,7 @@ for b in bench.books:
     for tool in TOOLS:
         rec = runs[tool].get(f)
         res, _ = result(tool, file, rec)
-        key = pick(tool, rec)
+        key = choice(tool, file, rec)
         wrote = (rec or {}).get("status") == "matched" if tool == "rmab" else res is not None
         if not b["answer"]:
             row["v"][tool] = "U"
