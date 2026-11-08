@@ -6025,6 +6025,8 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    # Share what was read about each file with the web app and other runs.
+    media_probe.configure_store(Path(os.environ.get("REPORTS_DIR", "/app/reports")) / "media-facts.sqlite")
 
     # The template only matters when a custom scheme is in play; the built-in
     # scheme ignores it, so an empty/odd field there is not an error.

@@ -26,6 +26,12 @@ def make_m4b(path: Path, *, title: str = "Book", chapters: int = 2, seconds: int
     return path
 
 
+def reads() -> int:
+    """Files actually read, in-process or by ffprobe."""
+    stats = media_probe.stats()
+    return stats.get("ffprobe_runs", 0) + stats.get("native_reads", 0)
+
+
 class MediaProbeTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -41,7 +47,7 @@ class MediaProbeTests(unittest.TestCase):
         self.assertAlmostEqual(media_probe.duration_seconds(book), 2.0, delta=0.1)
         audio = media_probe.audio_properties_of(book)
         self.assertEqual((audio["codec"], audio["channels"], audio["sample_rate_hz"]), ("aac", 1, 8000))
-        self.assertEqual(media_probe.stats()["ffprobe_runs"], 1)
+        self.assertEqual(reads(), 1)
         self.assertEqual(media_probe.stats()["memo_hits"], 3)
 
     def test_a_changed_file_is_read_again(self):
@@ -50,7 +56,7 @@ class MediaProbeTests(unittest.TestCase):
         make_m4b(self.dir / "b.m4b", title="Second", seconds=3)
         os.replace(self.dir / "b.m4b", book)
         self.assertEqual(media_probe.inspect(book).format_tags["title"], "Second")
-        self.assertEqual(media_probe.stats()["ffprobe_runs"], 2)
+        self.assertEqual(reads(), 2)
 
     def test_a_failed_read_is_unknown_and_not_remembered(self):
         junk = self.dir / "junk.m4b"
@@ -73,7 +79,7 @@ class MediaProbeTests(unittest.TestCase):
 
     def test_concurrent_askers_share_one_read(self):
         book = make_m4b(self.dir / "a.m4b")
-        real = media_probe._read_ffprobe
+        real = media_probe._read
         started = threading.Event()
 
         def slow(path):
@@ -81,13 +87,41 @@ class MediaProbeTests(unittest.TestCase):
             threading.Event().wait(0.3)
             return real(path)
 
-        with mock.patch.object(media_probe, "_read_ffprobe", side_effect=slow):
+        with mock.patch.object(media_probe, "_read", side_effect=slow):
             threads = [threading.Thread(target=media_probe.inspect, args=(book,)) for _ in range(6)]
             for t in threads:
                 t.start()
             for t in threads:
                 t.join()
-        self.assertEqual(media_probe.stats()["ffprobe_runs"], 1)
+        self.assertEqual(reads(), 1)
+
+    def test_the_store_answers_a_new_process_until_the_file_changes(self):
+        book = make_m4b(self.dir / "a.m4b", title="First", chapters=3)
+        media_probe.configure_store(self.dir / "facts.sqlite")
+        self.addCleanup(media_probe.configure_store, None)
+        first = media_probe.inspect(book)
+        media_probe.reset()  # a new process: nothing in memory
+        again = media_probe.inspect(book)
+        self.assertEqual(media_probe.stats().get("store_hits"), 1)
+        self.assertEqual(reads(), 0)
+        self.assertEqual((again.format_tags, again.chapter_count, again.duration_seconds, again.audio, again.fields),
+                         (first.format_tags, first.chapter_count, first.duration_seconds, first.audio, first.fields))
+        make_m4b(self.dir / "b.m4b", title="Second")
+        os.replace(self.dir / "b.m4b", book)
+        media_probe.reset()
+        self.assertEqual(media_probe.inspect(book).format_tags["title"], "Second")
+        self.assertEqual(media_probe.stats().get("store_hits", 0), 0)
+
+    def test_facts_from_another_reader_version_are_dropped(self):
+        book = make_m4b(self.dir / "a.m4b")
+        media_probe.configure_store(self.dir / "facts.sqlite")
+        self.addCleanup(media_probe.configure_store, None)
+        media_probe.inspect(book)
+        with mock.patch.object(media_probe, "READER_VERSION", media_probe.READER_VERSION + 1):
+            media_probe.configure_store(self.dir / "facts.sqlite")
+            media_probe.reset()
+            media_probe.inspect(book)
+        self.assertEqual(media_probe.stats().get("store_hits", 0), 0)
 
     def test_container_tags_win_over_stream_tags(self):
         facts = media_probe.MediaFacts(path="x", format_tags={"title": "Container"},

@@ -2,23 +2,34 @@
 
 A file's container tags, first audio stream's tags, duration, stream properties and
 chapter count all come from a single read, and that read answers every later question
-about the same unchanged file (same path, size and nanosecond mtime) for the life of the
-process. Two threads asking about the same file wait for one read instead of starting two.
+about the same unchanged file (same path, size and nanosecond mtime): for the life of
+the process, and across processes once configure_store() names the shared store. Two
+threads asking about the same file wait for one read instead of starting two.
 
-The reader is ffprobe: one call collects every field, so asking for the chapter count
-after the tags costs nothing more. A failed read is never remembered, and a field it
-could not establish stays unknown (None), never zero.
+MP4/M4B/M4A files are read in-process (app/mp4_native.py) when the file has nothing that
+reader does not reproduce exactly as ffprobe would; everything else is one ffprobe call
+collecting every field, so asking for the chapter count after the tags costs nothing
+more. A failed read is never remembered, and a field it could not establish stays
+unknown (None), never zero.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from struct import error as struct_error
 import threading
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app import mp4_native
+from app.media_facts_store import MediaFactsStore
+
+# Bump when what a read reports changes, so stored facts from the old reader are dropped.
+READER_VERSION = 1
+NATIVE_SUFFIXES = {".m4b", ".m4a", ".mp4"}
 FIELDS = frozenset({"tags", "duration", "audio", "chapters"})
 # A big file whose index sits at its end can take long to read over a network
 # share under load; a timeout means slow, not untagged, so one retry gets more time.
@@ -54,6 +65,40 @@ _memo: OrderedDict[str, MediaFacts] = OrderedDict()
 _memo_lock = threading.Lock()
 _key_locks: dict[str, threading.Lock] = {}
 _stats: Counter[str] = Counter()
+_store: MediaFactsStore | None = None
+native_enabled = True
+_release: list[str | None] = []
+
+
+def ffprobe_release() -> str | None:
+    """The installed ffprobe's major.minor release ("6.1"), read once per process; None if it can't be read."""
+    if not _release:
+        try:
+            out = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True, timeout=10).stdout
+            m = re.search(r"ffprobe version n?(\d+)\.(\d+)", out)
+            _release.append(f"{m.group(1)}.{m.group(2)}" if m else None)
+        except (OSError, subprocess.SubprocessError):
+            _release.append(None)
+    return _release[0]
+
+
+def reader_identity() -> str:
+    """What a stored fact was read with: a different reader or ffprobe release may report it differently."""
+    return f"{READER_VERSION}:{ffprobe_release() or 'none'}"
+
+
+def native_allowed() -> bool:
+    """The in-process MP4 reader follows one FFmpeg release's rules; with any other ffprobe, ffprobe reads everything."""
+    return native_enabled and ffprobe_release() == mp4_native.FFMPEG_RELEASE
+
+
+def configure_store(path: Path | str | None) -> None:
+    """Keep facts in this SQLite file, shared with every process that names it; None keeps them in memory only."""
+    global _store
+    try:
+        _store = MediaFactsStore(Path(path), reader_identity()) if path else None
+    except Exception:
+        _store = None
 
 
 def stats() -> dict[str, int]:
@@ -187,7 +232,14 @@ def _read_and_remember(path: Path, key: str, signature: tuple[int, int] | None, 
         if facts:
             _stats["memo_hits"] += 1
             return facts
-    facts = _read_ffprobe(path)
+    store = _store
+    stored = store.get(key, *signature) if store and signature else None
+    if stored:
+        _count("store_hits")
+        facts = MediaFacts(path=key, size=signature[0], mtime_ns=signature[1], **_from_payload(stored))
+        _remember(key, facts)
+        return facts
+    facts = _read(path)
     if not facts.fields:
         _count("failures")
         return facts
@@ -195,18 +247,60 @@ def _read_and_remember(path: Path, key: str, signature: tuple[int, int] | None, 
     if signature is None or after != signature:
         return facts  # changed (or unstattable) while being read: true now, not worth remembering
     facts = MediaFacts(**{**facts.__dict__, "size": signature[0], "mtime_ns": signature[1]})
+    _remember(key, facts)
+    if store:
+        store.put(key, *signature, _to_payload(facts))
+    return facts
+
+
+def _remember(key: str, facts: MediaFacts) -> None:
     with _memo_lock:
         _memo[key] = facts
         _memo.move_to_end(key)
         while len(_memo) > MEMO_SIZE:
             _memo.popitem(last=False)
-    return facts
+
+
+def _to_payload(facts: MediaFacts) -> dict[str, Any]:
+    return {"backend": facts.backend, "fields": sorted(facts.fields), "format_tags": facts.format_tags,
+            "stream_tags": facts.stream_tags, "duration_seconds": facts.duration_seconds,
+            "audio": facts.audio, "chapter_count": facts.chapter_count}
+
+
+def _from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {**payload, "fields": frozenset(payload.get("fields") or ())}
+
+
+def _read(path: Path) -> MediaFacts:
+    """In-process for MP4 files the native reader fully reproduces, else ffprobe."""
+    if path.suffix.lower() in NATIVE_SUFFIXES and native_allowed():
+        try:
+            native = mp4_native.read(path)
+        except mp4_native.Unsupported:
+            _count("native_fallbacks")
+        except (OSError, ValueError, IndexError, struct_error):
+            _count("native_errors")
+        else:
+            _count("native_reads")
+            return MediaFacts(
+                path=str(path),
+                backend="native",
+                fields=FIELDS,
+                format_tags=_clean_tags(native["format_tags"]),
+                stream_tags=_clean_tags(native["stream_tags"]),
+                duration_seconds=native["duration_seconds"],
+                audio=audio_properties(native["stream"], native["format"]),
+                chapter_count=native["chapter_count"],
+            )
+    return _read_ffprobe(path)
 
 
 def forget(path: Path | str) -> None:
     """Drop what is remembered about a file LibraForge just rewrote (its mtime would also tell)."""
     with _memo_lock:
         _memo.pop(str(path), None)
+    if _store:
+        _store.forget(str(path))
 
 
 def duration_seconds(path: Path | str) -> float | None:

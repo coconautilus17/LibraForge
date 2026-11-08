@@ -6269,6 +6269,8 @@ def main():
     )
 
     args = parser.parse_args()
+    # Share what was read about each file with the web app and other runs.
+    media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
     global _exit_on_cancel
     _exit_on_cancel = not args.apply and not args.restore_metadata
 

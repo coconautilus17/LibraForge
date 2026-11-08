@@ -159,6 +159,7 @@ AUDIOBOOKS_ROOT = Path(os.environ.get("AUDIOBOOKS_ROOT", "/audiobooks")).resolve
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 store_genres.configure(REPORTS_DIR / "audible-store-genres.json")
+media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
 
 
 
