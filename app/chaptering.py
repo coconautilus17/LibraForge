@@ -719,7 +719,7 @@ def detect_silences(files: list[Path], offsets: dict[str, float], noise_db: int 
     silences: list[tuple[float, float]] = []
     silence_start: float | None = None
     for file_path in files:
-        offset = offsets.get(str(file_path), 0.0)
+        offset = offsets.get(str(file_path), offsets.get(file_path.as_posix(), 0.0))
         result = subprocess.run(
             [
                 "ffmpeg",
@@ -1147,12 +1147,21 @@ def limited_audio_files(
     return limited, temp_dir, source_labels
 
 
-def source_file_offsets(files: list[Path]) -> dict[str, float]:
+def source_file_offsets(
+    files: list[Path],
+    durations: dict[str, float] | None = None,
+) -> dict[str, float]:
     offsets: dict[str, float] = {}
     current = 0.0
     for file_path in files:
-        offsets[str(file_path)] = current
-        current += ffprobe_duration(file_path)
+        key = str(file_path)
+        offsets[key] = current
+        if durations is not None and key in durations:
+            current += durations[key]
+        elif durations is not None and file_path.as_posix() in durations:
+            current += durations[file_path.as_posix()]
+        else:
+            current += ffprobe_duration(file_path)
     return offsets
 
 
@@ -1164,8 +1173,8 @@ def make_focus_clips(
 ) -> tuple[list[Path], Path | None, dict[str, str], dict[str, float], dict[str, int]]:
     if not gaps:
         return [], None, {}, {}, {}
-    source_offsets = source_file_offsets(files)
     source_durations = {str(file_path): ffprobe_duration(file_path) for file_path in files}
+    source_offsets = source_file_offsets(files, source_durations)
     temp_dir = Path(tempfile.mkdtemp(prefix="libraforge-chapter-rescan-"))
     clips: list[Path] = []
     labels: dict[str, str] = {}
