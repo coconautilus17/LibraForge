@@ -124,11 +124,16 @@ def reviews(bench, answers, folder):
                 answers.pop(f, None) if (answers.get(f) or {}).get("source") == "hand" else None
                 n["left unscored"] = n.get("left unscored", 0) + 1
                 continue
-            # The edition chosen keeps its ID unless the owner replaced the ASIN with another.
-            keep = status != "none" and pick and not pick.startswith("fields:") and "asin" not in (doc.get("changed") or [])
+            # The edition chosen keeps its ID unless the owner replaced that ID with another.
+            replaced = set(doc.get("changed") or []) & {"asin", "isbn"}
+            keep = status != "none" and pick and not pick.startswith("fields:") and not (
+                "asin" in replaced and re.fullmatch(r"[A-Z0-9]{10}", pick) or "isbn" in replaced and pick.startswith("isbn:"))
             ids = {pick} if keep else set()
             if re.fullmatch(r"[A-Z0-9]{10}", asin):
                 ids.add(asin)
+            isbn = re.sub(r"[^0-9Xx]", "", fields.get("isbn") or "").upper()
+            if len(isbn) in (10, 13):
+                ids.add(f"isbn:{isbn}")
             if status == "correct" and re.fullmatch(r"[A-Z0-9]{10}", pick):
                 answers[f] = {"asin": pick, "source": "hand", "record": None}  # as Audible lists it
             else:
