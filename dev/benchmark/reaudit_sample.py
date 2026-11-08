@@ -18,7 +18,7 @@ import json
 import os
 import random
 
-from bench_data import TOOLS, Benchmark, pick
+from bench_data import FIELDS, TOOLS, Benchmark, pick, result
 
 ap = argparse.ArgumentParser()
 ap.add_argument("name", choices=["sample", "validation"])
@@ -51,12 +51,16 @@ for sheet in range(0, len(idx), 25):
         b = books[i]
         f = b["folder"]
         own = (lf.get(f) or {}).get("local") or {}
-        ref = (b.get("final") if b.get("asin") else b.get("expect")) or {}
+        a = b["answer"]
+        ref = ("no right answer (not scored)" if not a else
+               f"{a['asin']} {a['title']}{': ' + a['subtitle'] if a['subtitle'] else ''} | {a['author']} | {a['narrator'][:60]} | "
+               + "; ".join(f"{s} #{n}" for s, n in a["series"]) + f" | {a['minutes']} min")
         out.append(f"### {i}  {f}\n  FILE: {fmt(own, ('title', 'author', 'narrator', 'series', 'sequence', 'asin'))} | min={round(b['minutes'])}\n"
-                   f"  REF({'conf' if b.get('asin') else 'name'} {b.get('asin') or ''}): {fmt(ref, ('title', 'author', 'narrator', 'series', 'sequence'))}")
+                   f"  ANSWER ({b['answer_source']}): {ref}")
         row = final[f]
         for tool, short, _, _ in TOOLS:
             r = bench.runs(tool).get(f) or {}
+            res, written = result(tool, {k: own.get(k) or "" for k in FIELDS}, r)
             if tool == "public_gr":
                 m = r.get("match") or {}
                 edition = r.get("different_edition")
@@ -67,7 +71,8 @@ for sheet in range(0, len(idx), 25):
             else:
                 m, state = r.get("match") or {}, r.get("outcome") or r.get("status") or "missing"
             checks = row["f"].get(tool) or []
-            out.append(f"  {short:5} [{row['v'][tool]}{' ' + ','.join(checks) if checks else ''}] ({state}) {fmt(m)}")
+            out.append(f"  {short:5} [{row['v'][tool]}{' ' + ','.join(checks) if checks else ''}] ({state}) pick {pick(tool, r) or '-'}\n"
+                       f"        left: {fmt({**(res or {}), 'asin': written}) if res else 'nothing'}")
         out.append(f"  NOTE: {row['note'][:300]}")
     open(os.path.join(folder_out, f"{opts.name}_{sheet // 25:02}.txt"), "w").write("\n".join(out) + "\n")
 print(f"{len(idx)} books drawn (seed {opts.seed}), {(len(idx) + 24) // 25} sheets in {folder_out}")

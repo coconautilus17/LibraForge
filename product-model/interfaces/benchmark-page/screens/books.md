@@ -20,5 +20,5 @@ references:
 
 # Every book
 
-Every benchmark book with LibraForge's outcome and pick, filtered by outcome, by another tool's outcome, or by a
-search over folders, titles, authors and ASINs.
+Every benchmark book with every tool's verdict, filtered by any tool's verdict or by a search over folders, titles,
+authors and ASINs.

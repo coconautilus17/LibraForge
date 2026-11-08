@@ -1,5 +1,10 @@
 ---
 entities:
+- entity: benchmark-run
+  shows:
+  - Tool
+  - Run date
+  - Run time
 - entity: benchmark
   shows:
   - Runs

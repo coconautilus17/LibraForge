@@ -10,4 +10,4 @@ domain: benchmark
 
 # Browse benchmark books
 
-Go through every book: filter by LibraForge's outcome or another tool's, search, and open a book to see its tags, the right answer, every tool's verdict and how LibraForge got there.
+Go through every book: filter by any tool's verdict, search, and open a book to see its tags, the right answer, every tool's result after its write and verdict, and how LibraForge got there.

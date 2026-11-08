@@ -38,9 +38,18 @@ opts.run_name = "public_gr"
 opts.commit = bench.m.get("commit", "")
 audit = json.load(open(bench.file("audit", "final")))
 audit_meta = audit.pop("_meta", {})
-# A hand verdict as the class the book list shows.
-AUDIT_CLASS = {"C": "correct", "S": "correct", "E": "recording", "P": "partial", "W": "wrong", "s": "wrong",
-               "H": "correct-held", "h": "wrong-held", "N": "none"}
+# Each final verdict (audit_check.py): its class on the page and its words.
+VERDICT = {"C": ("correct", "Fully correct"), "S": ("correct", "Series only, the right series"),
+           "P": ("partial", "Right book, a field off"), "E": ("recording", "Another recording"),
+           "W": ("wrong", "Wrong book"), "s": ("wrong", "Series only, the wrong series"),
+           "H": ("held", "Held, right pick"), "h": ("held-wrong", "Held, wrong pick"),
+           "N": ("none", "Nothing written"), "U": ("unscored", "Not scored")}
+VERDICT_MEANING = {
+    "C": "the right book, and every field it ends up with is the listing's", "S": "a series-only write into the book's own series",
+    "P": "the right book, with a field wrong or missing", "E": "another recording of the book (another narrator or edition)",
+    "W": "the wrong book", "s": "a series-only write into the wrong series", "H": "held for review; the held pick is the right book",
+    "h": "held for review; the held pick is the wrong book", "N": "nothing written",
+    "U": "not scored: the book has no confirmed listing to check against"}
 
 books = bench.by_folder
 runs = bench.runs(opts.run_name)
@@ -129,18 +138,18 @@ def clean_tags(tags):
     return out
 
 
-# What the field checks found, in words, for a book's "reviewed by hand" line.
+# What the field checks found (audit_check.field_problems), in words, and the field each is about.
 PROBLEM = {
-    "narrator_missing": "no narrator", "narrator_placeholder": "a placeholder (\"Misc\") as narrator",
-    "narrator_is_author": "the author as narrator", "series_nameless": "a series number with no series name",
-    "series_junk": "a junk series name", "series_missing": "no series", "number_for_range": "one number on a multi-book set",
-    "number_decimal_dropped": "the decimal series number dropped", "number_missing": "no series number",
-    "number_wrong": "the wrong series number", "series_invented": "a series made from the title",
-    "title_junk": "a junk title", "title_is_series": "the series name as the title", "title_series_suffix": "the series tacked onto the title",
-    "title_cut": "the title cut short", "title_differs": "another title", "author_doubled": "the authors doubled",
-    "author_junk": "a junk author", "author_missing": "a co-author missing",
+    "title_missing": "no title", "title_wrong": "a title that isn't the listing's",
+    "author_missing": "an author missing", "author_doubled": "the authors doubled",
+    "author_wrong": "an author the listing doesn't credit", "narrator_missing": "no narrator",
+    "narrator_wrong": "a narrator the listing doesn't credit", "series_missing": "no series",
+    "series_wrong": "a series the listing doesn't name", "series_invented": "a series made from the title",
+    "number_missing": "no book number", "number_wrong": "the wrong book number",
+    "number_without_series": "a book number with no series",
 }
-SHORT = {"public_gr": "LF", "audiosilo": "AS", "absqm": "ABS", "grimmory": "GRM", "rmab": "RMAB", "bo": "BO", "beets": "BEETS"}
+FIELD_OF = {"title": "title", "author": "author", "narrator": "narrator", "series": "series", "number": "series"}
+SHORT = dict(bench_data.SHORT)
 
 
 NAMES = {"LF": "LibraForge", "AS": "AudioSilo", "ABS": "Audiobookshelf", "GRM": "Grimmory", "RMAB": "ReadMeABook",
@@ -153,73 +162,78 @@ def readable(note):
     return re.sub(r"\b(LF|AS|ABS|GRM|RMAB|BO|BEETS)\b", lambda m: NAMES[m.group(1)], note)
 
 
-def checked_note(row):
-    """The hand note (the book's identity and recording) plus what the field checks found per tool."""
-    found = "; ".join(f"{SHORT.get(tool, tool)} {', '.join(PROBLEM.get(p, p) for p in problems)}"
-                      for tool, problems in (row.get("f") or {}).items())
-    note = row.get("note") or ""
-    return readable((note + (" | " if note and found else "") + ("Checked: " + found if found else "")).strip())
+def answer_view(a):
+    """The right answer as the page and the download show it."""
+    if not a:
+        return None
+    return {"asin": a["asin"], "title": a["title"], "subtitle": a["subtitle"], "author": a["author"],
+            "narrator": a["narrator"], "series": "; ".join(f"{n} #{q}" if q else n for n, q in a["series"]),
+            "minutes": a["minutes"]}
 
 
-def verdict(name, folder):
-    """[class, asin] for a tool on a book: its audited verdict and the listing it chose."""
-    code = (audit.get(folder) or {}).get("v", {}).get(name)
-    return [AUDIT_CLASS[code] if code else "not run", pick(name, bench.runs(name).get(folder))]
+def series_text(res):
+    if not res:
+        return ""
+    return f"{res['series']} #{res['sequence']}" if res.get("series") and res.get("sequence") else \
+        res.get("series") or (f"#{res['sequence']}" if res.get("sequence") else "")
 
 
-rows = []
+rows, download = [], []
 for folder, book in books.items():
     run = runs.get(folder) or {}
     match = run.get("match") or {}
-    final = book.get("final") or {}
-    hand = (audit or {}).get(folder) or {}
+    own = {k: (run.get("local") or {}).get(k) or "" for k in bench_data.FIELDS}
+    own_asin = ((run.get("local") or {}).get("asin") or "").upper()
+    row_audit = audit.get(folder) or {"v": {}, "f": {}, "note": ""}
+    answer = answer_view(book["answer"])
+    tools, tools_out = {}, {}
+    for t, short, name, _ in TOOL_ROWS:
+        rec = bench.runs(t).get(folder)
+        code = row_audit["v"].get(t, "")
+        problems = (row_audit.get("f") or {}).get(t, [])
+        res, written = result(t, own, rec)
+        if t == "rmab":
+            res = None  # it writes nothing; only its pick is judged
+        left = {"title": res["title"], "author": res["author"], "narrator": res["narrator"],
+                "series": series_text(res), "asin": (written or "").upper()} if res else None
+        # Which fields are off, for the marks on the page: the field checks' own findings.
+        bad = sorted({FIELD_OF[p.split("_")[0]] for p in problems})
+        tools[t] = [code, pick(t, rec), left, bad, [PROBLEM.get(p, p) for p in problems]]
+        tools_out[name] = {"verdict": code, "verdict_words": VERDICT.get(code, ("", ""))[1], "pick": pick(t, rec),
+                           "left_on_book": None if t == "rmab" else (
+                               {**{k: res[k] for k in bench_data.FIELDS}, "asin": (written or "").upper()} if res else None),
+                           "field_problems": problems}
+    file_view = {"title": own["title"], "author": own["author"], "narrator": own["narrator"],
+                 "series": series_text(own), "asin": own_asin}
     rows.append({
         "f": folder, "file": book.get("file", ""), "min": round(book.get("minutes") or 0, 1),
-        "recycled": bool(book.get("recycled")),
-        "tags": clean_tags(book.get("tags")),
+        "tags": clean_tags(book.get("tags")), "own": file_view, "a": answer, "src": book["answer_source"],
+        "note": readable(row_audit.get("note", "")), "t": tools,
+        # How LibraForge got there.
         "clues": {_CLUE_LABELS.get(k, k): ", ".join(v) if isinstance(v, list) else v
                   for k, v in (run.get("clues") or {}).items() if k in _CLUE_LABELS},
-        "planned": run.get("planned_queries") or [],
-        "ref": {"asin": book.get("asin") or "", **{k: final.get(k, "") for k in ("title", "author", "narrator", "series", "sequence")},
-                "manual": bool(book.get("manual"))},
-        "status": run.get("status", "not run"), "skip": run.get("skip_reason", ""), "score": run.get("score"),
-        "mode": run.get("mode", ""), "dur": run.get("duration_status", ""),
-        "match": {k: match.get(k, "") for k in ("asin", "title", "subtitle", "author", "narrator", "series", "sequence",
-                                                "year", "publisher", "isbn", "duration_minutes", "duration_diff_pct")} if match else {},
+        "planned": run.get("planned_queries") or [], "status": run.get("status", "not run"),
+        "skip": run.get("skip_reason", ""), "score": run.get("score"), "mode": run.get("mode", ""),
+        "dur": run.get("duration_status", ""), "listing_min": match.get("duration_minutes"),
         "edition": run.get("different_edition") or None, "series_asin": run.get("series_match_asin", ""),
-        "cls": verdict(opts.run_name, folder)[0], "fields": None,
-        "cur": checked_note(hand),
         "q": searches(run.get("log")), "cand": candidates(run.get("log")), "trace": trace(run.get("log")),
-        # Every other tool's outcome and pick for the same book: [class, asin].
-        "o": {name: verdict(name, folder) for name, _ in others},
     })
-
-# The downloadable book list: the same books as the page, each with every tool's verdict,
-# pick and what it left on the book (bench_data.result), so anyone can recount the page.
-CODE_MEANING = {"C": "the right book, every field right", "S": "series-only write, the right series",
-                "E": "the right book, another recording's details", "P": "the right book, a field off",
-                "W": "the wrong book", "s": "series-only write, the wrong series", "H": "held for review, the right pick",
-                "h": "held for review, a wrong pick", "N": "nothing written"}
-download = []
-for folder, book in books.items():
-    own = (runs.get(folder) or {}).get("local") or {}
-    own = {k: own.get(k) or "" for k in bench_data.FIELDS}
-    answer = (book.get("final") if book.get("asin") else book.get("expect")) or {}
-    hand = audit.get(folder) or {"v": {}, "f": {}}
-    tools = {}
-    for t, _, name, _ in TOOL_ROWS:
-        wrote, _ = result(t, own, bench.runs(t).get(folder))
-        tools[name] = {"verdict": hand["v"].get(t, ""), "pick": pick(t, bench.runs(t).get(folder)),
-                       "wrote": None if t == "rmab" else wrote, "field_problems": (hand.get("f") or {}).get(t, [])}
     download.append({
         "folder": folder, "file": book.get("file", ""), "minutes": round(book.get("minutes") or 0, 1),
         "tags": bench_data.public_tags(book.get("tags")) if opts.public else book.get("tags"),
-        "answer": {"from": "confirmed listing" if book.get("asin") else "file name" if book.get("expect") else "none",
-                   "asin": book.get("asin") or "", **{k: answer.get(k, "") for k in bench_data.FIELDS}},
-        "note": readable(hand.get("note", "")), "tools": tools})
+        "answer": {"source": book["answer_source"], **{k: book["answer"][k] for k in ("asin", "title", "subtitle")},
+                   "authors": book["answer"]["author"], "narrators": book["answer"]["narrator"],
+                   "series": book["answer"]["series"], "minutes": book["answer"]["minutes"]} if book["answer"] else None,
+        "note": readable(row_audit.get("note", "")), "tools": tools_out})
+
+# The downloadable book list: the same books as the page, so anyone can recount it.
+RUNS_META = {name: {"version": bench.m["runs"][t].get("version", ""), "date": bench.m["runs"][t].get("date", ""),
+                    "run_time_s": bench.runtime(t), "online_run_time_s": bench.runtime(t, online=True)}
+             for t, _, name, _ in TOOL_ROWS}
 DOWNLOAD_NAME = "benchmark-books.json"
-json.dump({"commit": opts.commit, "date": datetime.date.today().isoformat(), "verdict_codes": CODE_MEANING,
-           "books": download}, open(os.path.join(os.path.dirname(os.path.abspath(opts.out)), DOWNLOAD_NAME), "w"),
+json.dump({"commit": opts.commit, "date": datetime.date.today().isoformat(), "runs": RUNS_META,
+           "verdicts": VERDICT_MEANING, "field_problems": PROBLEM, "books": download},
+          open(os.path.join(os.path.dirname(os.path.abspath(opts.out)), DOWNLOAD_NAME), "w"),
           ensure_ascii=False, separators=(",", ":"))
 
 RUNTIME = {t: bench.runtime(t) for t in bench_data.TOOL_NAMES}
@@ -235,6 +249,9 @@ def pct(n, d):
 def took(seconds):
     if seconds is None:
         return "n/a"
+    if seconds < 600:  # short runs to the second
+        m, sec = divmod(round(seconds), 60)
+        return f"{m} min {sec:02d} s" if m else f"{sec} s"
     minutes = round(seconds / 60)
     return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
 
@@ -245,7 +262,7 @@ CONCURRENCY = {
     "public": ("4", "yes, Search workers 1 to 30"),
     "public_gr": ("5", "yes, Search workers 1 to 30"),
     "public_gr_old": ("5", "yes, Search workers 1 to 30"),
-    "audiosilo": ("2", "no, a match run uses 2 workers"),
+    "audiosilo": ("6", "no, a match run checks 6 books at once"),
     "abs": ("4", "yes, Search workers 1 to 30"),
     "abs_gr": ("5", "yes, Search workers 1 to 30"),
     "absqm": ("1", "no, Match All goes one book at a time"),
@@ -270,12 +287,13 @@ TOOLS = {
                 "narrator instead of writing the listing's."},
     "audiosilo": {
         "source": "Its own community database (audiosilo-meta, CC0), not Audible",
-        "how": "Sends the path, the tags and the runtime together. Books whose tags carry an ASIN or ISBN are matched "
-               "at scan. Applies a match only at score 90 or more, 10 ahead of the next candidate, with an ASIN or ISBN "
-               "and the runtime within 10%.",
+        "how": "Sends the path, the tags and the runtime together; a file's ASIN or ISBN is a hint it checks, not a "
+               "match by itself. Applies a match at score 90 or more, clearly ahead of the next candidate, with the "
+               "runtime close enough; since 2.6 also without an ASIN or ISBN when the author, series position and "
+               "runtime agree.",
         "review": "Holds everything else for review",
-        "note": "Part of its own metadata project. The whole database can be downloaded locally (mirror mode, about "
-                "2 GB, refreshed daily), so matching is fast and never polls their service. Coverage is only what the "
+        "note": "Part of its own metadata project. The whole database can be downloaded locally (mirror mode, a "
+                "download of about 500 MB, refreshed daily), so matching is fast and never polls their service. Coverage is only what the "
                 "community has added, and it fills only blank fields, so a file's wrong title or series stays."},
     "absqm": {
         "source": "Audible (Audiobookshelf's provider, US store)",
@@ -345,36 +363,18 @@ WRITES = {
                  "stay. Everything else waits in review.",
     "absqm": "Replaces the book's details with the listing's, in Audiobookshelf's database.",
     "grimmory": "Fills or replaces each field from the provider's top result, field by field.",
-    "rmab": "Picks a listing per book and writes nothing, to files or a library. Scored on whether the pick is the book.",
+    "rmab": "Picks a listing per book and writes nothing, to files or a library. Judged only on whether the pick is the book.",
     "bo": "Fetches the listing into its own records (title, authors, narrators, series), not into the files.",
     "beets": "Writes the listing's fields to the files when it accepts the match; skips the rest.",
 }
-ISSUE_LABELS = {
-    "narrator_missing": "No narrator written: the file had none and the match didn't supply one (mostly Goodreads, which lists no narrators)",
-    "number_missing": "A series written without its book number, though the file or folder had it",
-    "number_decimal_dropped": "A decimal book number (3.5, 14.5) dropped",
-    "title_cut": "A box set's range cut off the title (\"Box Set (25-28)\" written as \"Box Set\")",
-    "title_series_suffix": "The series left on the end of the title (\"9d6 (Caverns & Creatures)\")",
-    "narrator_is_author": "The author's name in the narrator field taken for another recording, and kept as the narrator",
-    "narrator_placeholder": "A placeholder (\"Misc\") in the narrator field taken for another recording, and kept",
-    "series_nameless": "A book number written with no series name (\"#451\" from \"Fahrenheit 451\")",
-    "title_junk": "A file or track name kept as the title (\"01 Monster Core\")",
-    "number_for_range": "One book number written on a multi-book set",
-    "series_missing": "No series written for a book in one",
-    "series_junk": "A junk series name (\"Discworld, #27; Rincewind #7\")",
-    "author_missing": "A co-author missing",
-    "title_differs": "Another title written (a Goodreads edition, or one story of a collection)",
-    "title_is_series": "The series name written as the title",
-    "series_invented": "A series made up from the title",
-    "number_wrong": "The wrong book number",
-    "other_recording": "Another recording's narrator written on a file that had no narrator tag",
-    "wrong_book": "The wrong book written",
-    "wrong_series": "The wrong series written in a series-only match",
-}
+# LibraForge's misses that are no field: the identity of what it wrote.
+MISS = {"other_recording": "Another recording's details written", "wrong_book": "The wrong book written",
+        "wrong_series": "The wrong series written in a series-only match"}
 
 
 def audit_counts(name):
-    c = Counter(audit[f]["v"][name] for f in audit if name in audit[f]["v"])
+    """A tool's verdicts over the scored books (a book with no right answer is not scored)."""
+    c = Counter(audit[f]["v"][name] for f in audit if audit[f]["v"].get(name, "U") != "U")
     s = {"books": sum(c.values()), "correct": c["C"] + c["S"], "recording": c["E"], "partial": c["P"],
          "wrong": c["W"] + c["s"], "held_right": c["H"], "held_wrong": c["h"], "none": c["N"]}
     s["written"] = s["correct"] + s["recording"] + s["partial"] + s["wrong"]
@@ -464,7 +464,7 @@ def tool_cards():
     <dt>How</dt><dd>{html.escape(t.get('how', ''))}</dd>
     <dt>Review</dt><dd>{html.escape(t.get('review', ''))}</dd>
     <dt>Writes</dt><dd>{html.escape(WRITES.get(name, ''))}</dd>
-    <dt>Speed</dt><dd>{speed(name, s['books'], conc, editable)}</dd>
+    <dt>Speed</dt><dd>{speed(name, len(books), conc, editable)}</dd>
   </dl>
   <p class=take>{html.escape(t.get('note', ''))}{(' ' + held) if held else ''}</p>
 </article>"""
@@ -481,7 +481,7 @@ def lf_findings():
         elif code in "EWs":
             issues[{"E": "other_recording", "W": "wrong_book", "s": "wrong_series"}[code]] += 1
     s = audit_counts(opts.run_name)
-    items = "".join(f"<li><b>{n:,}</b><span>{html.escape(ISSUE_LABELS.get(k) or PROBLEM.get(k, k))}</span></li>"
+    items = "".join(f"<li><b>{n:,}</b><span>{html.escape(MISS.get(k) or PROBLEM.get(k, k).capitalize())}</span></li>"
                     for k, n in issues.most_common())
     return (f"<p>Of the {s['written']:,} books LibraForge wrote, {s['correct']:,} came out fully correct and "
             f"{s['wrong']:,} were the wrong book. The rest were the right book with something off:</p>"
@@ -507,49 +507,65 @@ search didn't hide anything from it), Audiobookshelf {rh.get("absqm", 0)}, BookO
 Grimmory {rh.get("grimmory", 0)}, ReadMeABook {rh.get("rmab", 0)} and beets {rh.get("beets", 0)}.</p>"""
 reaud = audit_meta.get("reaudit", {})
 va = audit_meta.get("validation", {})
+scored = sum(1 for b in books.values() if b["answer"])
+by_hand = sum(1 for b in books.values() if b["answer_source"] == "hand")
 METHOD = f"""
 <p>{len(books):,} audiobooks in their original state, before any matching: the tags LibraForge saved before it first
 wrote anything to a library's books, or another library's files as they were. Each book was matched again from those
 original tags, its folder path and its runtime, with no login, against the live catalog.</p>
 <p>Every tool got the same books, as silent files carrying the original tags at the books' real folder paths (and,
 for tools that check runtime, as long as the real book), and each was run the way its own documentation suggests.</p>
+<h3>The right answers</h3>
+<p>A book's right answer is the listing confirmed as that book, as Audible's catalog itself records it, read by its
+ASIN: its title, every author, every narrator, every series it is listed in with its number there, and its runtime.
+A listing counts as confirmed when it was applied to the book in a library and reviewed there, or, for
+{by_hand:,} books from another library, confirmed by hand from the listings the tools picked, against the file name,
+runtime and narrator. A book listed in several series is answered by any of them. {len(books) - scored:,} books have no
+confirmed listing (not on Audible, or no listing of the file's own recording): every tool's result is shown for them,
+but they are not scored.</p>
 <h3>How results were judged</h3>
 <div class=callout><p><b>Checked with Claude, under human supervision.</b> The book-by-book review was done with
 Claude, an AI model, following one written set of rules for every tool and every book. A person supervised the
 work and checked random books by hand along the way, but did not personally review every one of the
 {len(books):,} books. The second audit below measures how often the review got a verdict wrong.</p></div>
-<p>Every book and every tool's result on it was audited. Whether a tool picked the right book, another recording of
-it or the wrong book (and, when it held its pick, whether the held pick was right) was decided by hand, book by book.
-What the tool then left on the book was checked by script against that tool's own way of writing, so one rule applies
-to every tool: a field is off when the book ends up with something wrong in it (written, or kept from the file) or
-without something it is known to have. A tool that keeps the file's own details is judged on the book as it ends up.</p>
+<p>A tool that chose the confirmed listing's ASIN chose the right book. Any other choice was judged by hand, once per
+book and listing: another listing of the same recording (the right book), another recording, or the wrong book. What
+the tool then left on the book was rebuilt from its own way of writing and checked field by field against the
+listing's record, by one script for every tool: a field is off when the book ends up with something the listing
+doesn't say (written, or kept from the file) or without something it does. Two tools that leave a book the same way
+always get the same verdict.</p>
 {f'''<p>To check the audit, {reaud.get("books", 0)} random books were audited a second time:
-{share(reaud.get("wrong", 0), reaud.get("verdicts", 0)):.1f}% of verdicts were wrong, and every kind of error found
-was corrected for all books. A fresh {va.get("books", 0)} books audited after that had
-{share(va.get("wrong", 0), va.get("verdicts", 0)):.1f}% wrong, also corrected.</p>''' if reaud else ""}
+{reaud.get("wrong", 0)} of {reaud.get("verdicts", 0):,} verdicts ({share(reaud.get("wrong", 0), reaud.get("verdicts", 0)):.1f}%)
+were wrong, and every kind of error found was corrected for all books. A fresh {va.get("books", 0)} books audited
+after that had {va.get("wrong", 0)} wrong ({share(va.get("wrong", 0), va.get("verdicts", 0)):.1f}%), also corrected.</p>''' if reaud else ""}
 {GEO_HTML}
 """
 
-SETUP = """<ul class=setup>
-<li><b>LibraForge</b>: Metadata Forge's matcher over the files, Audible public catalog with the Goodreads fallback on,
-5 search workers.</li>
-<li><b>AudioSilo</b> (v2.5.1): "Match automatically" over the library, in mirror mode (a local copy of the community
-database). Confident matches count as written, "to review" as held.</li>
-<li><b>Audiobookshelf Quick Match</b> (v2.35.1, Audible US provider): Quick Match per book, which takes the first
-Audible result, or the file's ASIN when it has one. One book at a time, as Match All does.</li>
-<li><b>BookOrbit</b>: a library bulk metadata fetch with its default providers.</li>
-<li><b>beets</b> (beets 2.14 with the beets-audible plugin, recommended settings): <code>beet import -q</code>, which
-applies strong matches and skips the rest. It was given each book's real runtime, since it scores on track length.</li>
-<li><b>Grimmory</b> (v3.5.0): a library metadata refresh with Audible enabled and first for every field (Goodreads,
-then Google behind it), applied without review.</li>
-<li><b>ReadMeABook</b> (v1.2.12): the Bulk Import scan, which picks an Audible match per book. It groups folders by
+
+def ran(t):
+    spec = bench.m["runs"][t]
+    bits = [b for b in (spec.get("version"), f"run {spec['date']}" if spec.get("date") else "") if b]
+    return f" ({html.escape(', '.join(bits))})" if bits else ""
+
+
+SETUP = f"""<ul class=setup>
+<li><b>LibraForge</b>{ran("public_gr")}: Metadata Forge's matcher over the files, Audible public catalog with the Goodreads
+fallback on, 5 search workers.</li>
+<li><b>AudioSilo</b>{ran("audiosilo")}: "Match automatically" over the library, in mirror mode (a local copy of the community
+database), and timed once more against its online service. Confident matches count as written, "to review" as held.</li>
+<li><b>Audiobookshelf Quick Match</b>{ran("absqm")}: Quick Match per book with the Audible US provider, which takes the
+first Audible result, or the file's ASIN when it has one. One book at a time, as Match All does.</li>
+<li><b>BookOrbit</b>{ran("bo")}: a library bulk metadata fetch with its default providers.</li>
+<li><b>beets</b>{ran("beets")}: <code>beet import -q</code> with the plugin's recommended settings, which applies strong
+matches and skips the rest. It was given each book's real runtime, since it scores on track length.</li>
+<li><b>Grimmory</b>{ran("grimmory")}: a library metadata refresh with Audible enabled and first for every field
+(Goodreads, then Google behind it), applied without review.</li>
+<li><b>ReadMeABook</b>{ran("rmab")}: the Bulk Import scan, which picks an Audible match per book. It groups folders by
 their tags, so books it merged into another folder count as nothing written. Its scan returns no series.</li>
 </ul>"""
 
-CLASS_OPTIONS = ('<option value="">Any outcome</option><option value="correct">Fully correct</option>'
-                 '<option value="recording">Right book, other recording</option><option value="partial">Right book, a field off</option>'
-                 '<option value="wrong">Wrong book</option><option value="correct-held">Held, right pick</option>'
-                 '<option value="wrong-held">Held, wrong pick</option><option value="none">Nothing written</option>')
+VERDICT_OPTIONS = '<option value="">Any verdict</option>' + "".join(
+    f'<option value="{c}">{html.escape(w)}</option>' for c, (_, w) in VERDICT.items() if c not in "Ss")
 
 n_tools = len(ALL_TOOLS)
 lf_s = audit_counts(opts.run_name)
@@ -661,6 +677,22 @@ border:1px solid transparent}
 .cmp td.good{background:color-mix(in srgb,var(--ok) 9%,transparent)}
 .cmp td.bad{background:color-mix(in srgb,var(--bad) 12%,transparent);font-weight:600}
 .cmp td.na{color:var(--muted);font-style:italic}
+.chips-row{display:flex;flex-wrap:wrap;gap:4px;grid-column:2;grid-row:1/span 2;align-self:start;justify-content:flex-end}
+.chip{font-size:11px;font-weight:700;letter-spacing:.02em;padding:2px 7px;border-radius:6px;white-space:nowrap}
+.c-correct,.b-correct{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.c-partial,.c-recording{color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,transparent)}
+.c-wrong{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.c-held,.c-held-wrong,.b-held,.b-held-wrong{color:var(--held);background:color-mix(in srgb,var(--held) 16%,transparent)}
+.c-none,.c-unscored,.b-unscored{color:var(--muted);background:var(--bg2)}
+.book-grid{table-layout:auto}.book-grid tbody th{white-space:nowrap}
+.book-grid tr.src th,.book-grid tr.src td{background:var(--panel2)}
+.book-grid tr.answer th{color:var(--ink)}
+.book-grid td.v{white-space:nowrap}.book-grid td.v small{display:block;white-space:normal;color:var(--soft);font-size:12px;margin-top:3px;max-width:26ch}
+.book-grid td.id{font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;white-space:nowrap}
+.book-grid thead th{white-space:nowrap}.subt{display:block;color:var(--muted);font-size:12px;font-family:Inter,ui-sans-serif,system-ui,sans-serif;white-space:normal}
+.book-grid td.v .val{display:block}
+.mk{font-weight:700}.cmp td.good .mk{color:var(--ok)}.cmp td.bad .mk{color:var(--bad)}
+.key-line{color:var(--muted)}
 details.more2{margin:16px 0 0;border-top:1px solid var(--line);padding-top:10px}
 details.more2>summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:14px}
 
@@ -696,6 +728,8 @@ footer{padding:28px 0 56px;color:var(--muted);font-size:13px;border-top:1px soli
 .tools-list td:nth-child(3){text-align:right}
 .verdict{grid-template-columns:1fr}.verdict small{grid-column:1}}
 @media (max-width:600px){.wrap{padding:0 16px}.book>summary{grid-template-columns:1fr}.badge{grid-row:auto;grid-column:1;justify-self:start}
+.chips-row{grid-column:1;grid-row:auto;justify-content:flex-start}
+.book-grid tr.src td.v{display:none}
 .hero{padding:36px 0 20px}.controls{top:52px}}
 """
 
@@ -704,75 +738,60 @@ const PAGE = 50;
 let rows = [], view = [], page = 0;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const LABEL = {"correct":"Fully correct","correct-held":"Held, right pick","wrong":"Wrong book","wrong-held":"Held, wrong pick",
-  "none":"Nothing written","recording":"Right book, other recording","partial":"Right book, a field off","not run":"Not run"};
+const FIELDS = [["title", "Title"], ["author", "Author"], ["narrator", "Narrator"], ["series", "Series"], ["asin", "ASIN"]];
+const RIGHT = new Set(["C", "P"]);
 
-function kv(obj, check) {
+function kv(obj) {
   const keys = Object.keys(obj).filter((k) => obj[k] !== "" && obj[k] !== null && obj[k] !== false);
   if (!keys.length) return '<p class="muted small">none</p>';
-  return '<table class=kv>' + keys.map((k) => {
-    const mark = check && k in check && check[k] !== null ? (check[k] ? ' <span class=ok>&#10003;</span>' : ' <span class=no>&#10007;</span>') : "";
-    return `<tr><th>${esc(k)}</th><td>${esc(obj[k])}${mark}</td></tr>`;
-  }).join("") + "</table>";
+  return '<table class=kv>' + keys.map((k) => `<tr><th>${esc(k)}</th><td>${esc(obj[k])}</td></tr>`).join("") + "</table>";
 }
 
-function others(r) {
-  const names = Object.keys(TOOLS);
-  if (!names.length) return '<p class="muted small">none compared</p>';
-  return '<table class="list tools-list"><colgroup><col><col><col></colgroup><thead><tr><th>Tool</th><th>Outcome</th><th>Picked</th></tr></thead><tbody>' + names.map((n) => {
-    const [cls, asin] = r.o[n] || ["not run", ""];
-    const same = asin && r.match && asin === r.match.asin ? ' <span class="muted">(same pick)</span>' : "";
-    const pick = asin ? `<a href="https://www.audible.com/pd/${encodeURIComponent(asin)}" rel=noopener>${esc(asin)}</a>${same}` : "";
-    return `<tr><td>${esc(TOOLS[n])}</td><td><span class="badge b-${esc(cls.split(" ")[0])}">${esc(LABEL[cls] || cls)}</span></td><td>${pick}</td></tr>`;
-  }).join("") + "</tbody></table>";
-}
+const badge = (code) => { const [cls, words] = V[code] || ["none", code]; return `<span class="badge b-${cls}">${esc(words)}</span>`; };
+const link = (asin) => /^[A-Z0-9]{10}$/.test(asin || "") ? `<a href="https://www.audible.com/pd/${encodeURIComponent(asin)}" rel=noopener>${esc(asin)}</a>` : esc(asin);
+const none = '<span class=muted>none</span>';
 
-const norm = (v) => String(v ?? "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
-const head = (v) => norm(String(v ?? "").split(/[:,(\[]/)[0]);
-const names = (v) => String(v ?? "").split(/,|;|&| and /).map(norm).filter(Boolean);
-const num = (v) => { const m = String(v ?? "").match(/\d+(?:\.\d+)?/); return m ? parseFloat(m[0]) : null; };
-
-// Does what LibraForge wrote agree with the right answer? true / false / null (nothing to compare).
-function agrees(field, wrote, answer, fileMinutes) {
-  if (field === "Runtime") return wrote && fileMinutes ? Math.abs(wrote - fileMinutes) / fileMinutes <= 0.03 : null;
-  if (!norm(wrote) || !norm(answer)) return null;
-  if (field === "Title") return head(wrote) === head(answer) || norm(wrote) === norm(answer);
-  if (field === "Book") return num(wrote) !== null && num(wrote) === num(answer);
-  if (field === "Author" || field === "Narrator") { const a = names(answer); return names(wrote).some((n) => a.includes(n)); }
-  if (field === "ASIN") return norm(wrote) === norm(answer);
-  return norm(wrote) === norm(answer) || norm(wrote).startsWith(norm(answer)) || norm(answer).startsWith(norm(wrote));
-}
-
-function comparison(r) {
-  const t = r.tags || {}, a = r.ref || {}, m = r.match || {}, c = r.clues || {};
-  const written = r.status === "matched";
-  const seriesOnly = written && r.mode === "series_only";
-  const edition = written && r.edition;
-  const fields = [
-    ["Title", t.title, a.title, m.title ? m.title + (m.subtitle ? ": " + m.subtitle : "") : ""],
-    ["Author", t.artist || t.album_artist, a.author, m.author],
-    ["Narrator", t.composer || t.narrator, a.narrator, m.narrator],
-    ["Series", t.series || t.mvnm || t.grouping || c.series, a.series, m.series],
-    ["Book", t["series-part"] || c.book, a.sequence, m.sequence],
-    ["Runtime", r.min ? r.min + " min" : "", "", m.duration_minutes ? Math.round(m.duration_minutes) + " min" : ""],
-    ["ASIN", t.asin || c.asin, a.asin, m.asin],
-  ];
-  const kept = (f) => (seriesOnly && !["Series", "Book"].includes(f)) || (edition && ["Narrator", "ASIN"].includes(f));
-  const rowsHtml = fields.map(([f, file, answer, wrote]) => {
-    let cell;
-    const lab = `data-label="${esc(LF)} wrote"`;
-    if (!written) cell = `<td class="na" ${lab}>nothing written</td>`;
-    else if (kept(f)) cell = `<td class="na" ${lab}>kept the file's</td>`;
-    else {
-      const ok = agrees(f, f === "Runtime" ? (m.duration_minutes || 0) : wrote, answer, r.min);
-      const mark = ok === true ? '<span class=ok>&#10003;</span> ' : ok === false ? '<span class=no>&#10007;</span> ' : "";
-      cell = `<td class="${ok === false ? "bad" : ok === true ? "good" : ""}" ${lab}><span>${mark}${esc(wrote) || '<span class=muted>none</span>'}</span></td>`;
-    }
-    const id = f === "ASIN" ? " id-cell" : "";
-    return `<tr class="${id}"><th>${f}</th><td data-label="File's tags">${esc(file) || '<span class=muted>none</span>'}</td><td data-label="Right answer">${esc(answer) || '<span class=muted>not known</span>'}</td>${cell}</tr>`;
+// One row of the grid: what a source says, or what a tool left on the book, field by field.
+function line(label, values, opts = {}) {
+  const cells = FIELDS.map(([k, name]) => {
+    const v = values ? values[k] : "";
+    let cls = "", mark = "";
+    if (opts.marks && k in opts.marks) { cls = opts.marks[k] ? "good" : "bad"; mark = opts.marks[k] ? "&#10003; " : "&#10007; "; }
+    const shown = (k === "asin" ? link(v) : esc(v)) + (k === "title" && values && values.subtitle ? `<small class=subt>${esc(values.subtitle)}</small>` : "")
+      + (k === "asin" && opts.asinNote ? `<small class=subt>${esc(opts.asinNote)}</small>` : "");
+    return `<td class="${cls}${k === "asin" ? " id" : ""}" data-label="${name}"><span class=val><span class=mk>${mark}</span>${v ? shown : none}</span></td>`;
   }).join("");
-  const how = !written ? "" : seriesOnly ? " (series only)" : edition ? " (another recording: the file's narrator kept)" : "";
-  return `<table class=cmp><colgroup><col class=c-label><col><col><col></colgroup><thead><tr><th></th><th>The file's tags</th><th>The right answer</th><th>What ${esc(LF)} wrote${how}</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+  return `<tr class="${opts.cls || ""}"><th scope=row>${label}</th>${cells}<td class=v data-label="Verdict"><span class=val>${opts.verdict || ""}</span></td></tr>`;
+}
+
+function toolLine(r, tid) {
+  const [code, pickId, left, bad, why] = r.t[tid] || ["", "", null, [], []];
+  const name = esc(TOOL_NAMES[tid]);
+  const verdict = code ? badge(code) + (why.length ? `<small>${esc(why.join(", "))}</small>` : "") : "";
+  if (!left) {
+    const what = tid === "rmab" ? (pickId ? `writes nothing; picked ${link(pickId)}` : "writes nothing; no pick")
+      : pickId ? `nothing written; held ${link(pickId)} for review` : "nothing written";
+    return `<tr><th scope=row>${name}</th><td colspan=5 class=na data-label="Result"><span class=val>${what}</span></td><td class=v data-label="Verdict"><span class=val>${verdict}</span></td></tr>`;
+  }
+  let marks = null;
+  if (RIGHT.has(code)) {
+    marks = {};
+    FIELDS.forEach(([k]) => { if (k !== "asin") marks[k] = !bad.includes(k); });
+    if (left.asin) marks.asin = true;  // the confirmed listing, or another listing judged the same book
+  } else if (code === "E" || code === "W" || code === "s") {
+    marks = {asin: false};
+  }
+  const asinNote = RIGHT.has(code) && left.asin && r.a && left.asin !== r.a.asin ? "another listing of this book" : "";
+  return line(name, left, {marks, verdict, asinNote});
+}
+
+function grid(r) {
+  const answer = r.a;
+  return `<table class="cmp book-grid"><thead><tr><th></th>${FIELDS.map(([, n]) => `<th>${n}</th>`).join("")}<th>Verdict</th></tr></thead><tbody>
+    ${line("The file's tags", r.own, {cls: "src"})}
+    ${answer ? line("Right answer", answer, {cls: "src answer"}) : `<tr class="src answer"><th scope=row>Right answer</th><td colspan=6 class=na>none: no confirmed listing, so this book is not scored</td></tr>`}
+    ${ORDER.map((tid) => toolLine(r, tid)).join("")}
+  </tbody></table>`;
 }
 
 function detail(r) {
@@ -780,14 +799,14 @@ function detail(r) {
     r.q.map(([k, s, n]) => `<tr><td>${esc(k)}</td><td>${esc(s)}</td><td>${esc(n ?? "")}</td></tr>`).join("") + "</tbody></table>" : '<p class="muted small">none</p>';
   const c = r.cand.length ? '<table class=list><thead><tr><th>Score</th><th>Title</th><th>ASIN</th><th>Runtime</th><th>Book</th><th>Mode</th></tr></thead><tbody>' +
     r.cand.map((x) => `<tr><td>${esc(x.score)}</td><td>${esc(x.title)}</td><td>${esc(x.asin)}</td><td>${esc(x.duration)}</td><td>${esc(x.sequence)}</td><td>${esc(x.mode)}</td></tr>`).join("") + "</tbody></table>" : '<p class="muted small">none above the cut</p>';
-  const [note, checked] = (r.cur || "").split(/\s*\|\s*Checked:\s*/);
-  const why = note || r.skip || "";
-  const facts = {score: r.score, mode: r.mode, runtime: r.dur, "other recording": r.edition ? `${r.edition.match_asin || ""} (listing narrator ${r.edition.match_narrator || "?"})` : "", "series from": r.series_asin};
+  const facts = {status: r.status, "why not written": r.skip, score: r.score, mode: r.mode, runtime: r.dur,
+    "listing runtime (min)": r.listing_min, "other recording": r.edition ? `${r.edition.match_asin || ""} (listing narrator ${r.edition.match_narrator || "?"})` : "", "series from": r.series_asin};
+  const src = r.a ? `Right answer: the confirmed listing ${link(r.a.asin)}, ${esc(SOURCE[r.src] || r.src)}${r.a.minutes ? `, ${r.a.minutes} min` : ""}.` : "No confirmed listing: not scored.";
   return `<div class=detail>
-  <div class="verdict b-${esc(r.cls.split(" ")[0])}"><b>${esc(LABEL[r.cls] || r.cls)}</b>${why ? `<span>${esc(why)}</span>` : ""}${checked ? `<small>Field checks: ${esc(checked)}</small>` : ""}</div>
-  <p class="muted small">${esc(r.file)} · ${r.min} min</p>
-  <div class=scroll-x>${comparison(r)}</div>
-  <h3>Every tool on this book</h3>${others(r)}
+  <p class="muted small">${esc(r.file)} · ${r.min} min · ${src}</p>
+  <div class=scroll-x>${grid(r)}</div>
+  <p class="small key-line"><span class=ok>&#10003;</span> matches the right answer · <span class=no>&#10007;</span> wrong or missing · fields are checked only when the tool chose the right book</p>
+  ${r.note ? `<p class=small><b>Audit note:</b> ${esc(r.note)}</p>` : ""}
   <details class=more2><summary>How ${esc(LF)} got there</summary>
     <div class=grid><section><h3>What it read</h3>${kv(r.clues)}</section><section><h3>Its decision</h3>${kv(facts)}</section></div>
     <h3>Searches</h3>${q}${r.planned.length ? `<details><summary class="muted small">All ${r.planned.length} planned keyword searches</summary><pre>${esc(r.planned.join("\n"))}</pre></details>` : ""}
@@ -801,9 +820,11 @@ function detail(r) {
 function render() {
   const start = page * PAGE;
   $("list").innerHTML = view.slice(start, start + PAGE).map((r) => {
-    const pick = r.match && r.match.title ? `${r.match.title}${r.match.author ? " · " + r.match.author : ""}${r.match.asin ? " · " + r.match.asin : ""}` : (r.skip || r.status);
+    const chips = ORDER.map((tid) => { const code = (r.t[tid] || [""])[0]; const [cls, words] = V[code] || ["none", ""];
+      return `<span class="chip c-${cls}" title="${esc(TOOL_NAMES[tid])}: ${esc(words)}">${esc(SHORTS[tid])}</span>`; }).join("");
+    const what = r.a ? `${r.a.title}${r.a.author ? " · " + r.a.author : ""}` : "no right answer, not scored";
     return `<details class=book data-i="${rows.indexOf(r)}"><summary><span class=path>${esc(r.f)}</span>
-      <span class="badge b-${esc(r.cls.split(" ")[0])}">${esc(LABEL[r.cls] || r.cls)}</span><span class=pick>${esc(pick)}</span></summary></details>`;
+      <span class=chips-row>${chips}</span><span class=pick>${esc(what)}</span></summary></details>`;
   }).join("") || '<p class=muted>No books match.</p>';
   $("list").querySelectorAll("details.book").forEach((d) => d.addEventListener("toggle", () => {
     if (d.open && !d.querySelector(".detail")) d.insertAdjacentHTML("beforeend", detail(rows[+d.dataset.i]));
@@ -815,14 +836,13 @@ function render() {
 }
 
 function apply() {
-  const q = $("q").value.trim().toLowerCase(), cls = $("cls").value, mode = $("mode").value;
-  const tool = $("tool").value, tcls = $("tcls").value;
+  const q = $("q").value.trim().toLowerCase();
+  const want = [[$("tool").value, $("v").value], [$("tool2").value, $("v2").value]];
   view = rows.filter((r) => {
-    if (cls && r.cls !== cls) return false;
-    if (mode === "edition" ? !r.edition : mode && r.mode !== mode) return false;
-    if (tool && tcls && (r.o[tool] || ["not run"])[0] !== tcls) return false;
+    for (const [tid, code] of want) if (tid && code && (r.t[tid] || [""])[0] !== code) return false;
     if (!q) return true;
-    return [r.f, r.match.title, r.match.author, r.match.asin, r.ref.asin, r.ref.title, r.tags.title, r.tags.artist, r.tags.album]
+    const picks = ORDER.map((tid) => (r.t[tid] || [])[1]);
+    return [r.f, r.own.title, r.own.author, r.own.asin, r.a && r.a.title, r.a && r.a.author, r.a && r.a.asin, ...picks]
       .some((v) => String(v || "").toLowerCase().includes(q));
   });
   page = 0; render();
@@ -832,8 +852,8 @@ function apply() {
   const bytes = Uint8Array.from(atob(DATA_GZ), (c) => c.charCodeAt(0));
   const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
   rows = JSON.parse(text);
-  // Filters live in the address (#q=...&cls=...), so a filtered view can be linked to.
-  const ids = ["q", "cls", "mode", "tool", "tcls"];
+  // Filters live in the address (#q=...&tool=...&v=...), so a filtered view can be linked to.
+  const ids = ["q", "tool", "v", "tool2", "v2"];
   const saved = new URLSearchParams(location.hash.slice(1));
   ids.forEach((id) => { if (saved.has(id)) $(id).value = saved.get(id); });
   ids.forEach((id) => $(id).addEventListener("input", () => {
@@ -849,7 +869,7 @@ function apply() {
 })();
 """
 
-tool_options = "".join(f'<option value="{html.escape(n)}">{html.escape(display(l)[0])}</option>' for n, l in others)
+tool_options = "".join(f'<option value="{html.escape(n)}">{html.escape(display(l)[0])}</option>' for n, l in ALL_TOOLS)
 page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -874,17 +894,17 @@ page = f"""<!doctype html>
 each book's listing and write its details. Then every result was checked: was it the right book, and did the book end
 up with the right title, author, narrator and series? The checking was done with Claude, an AI model, under human
 supervision (<a href="#method">how</a>).</p>
-<ul class=chips><li>{today}</li><li>{len(books):,} books</li><li>{n_tools} tools</li>{f'<li>{html.escape(lf_title)} build {html.escape(opts.commit)}</li>' if opts.commit else ''}</ul>
+<ul class=chips><li>{today}</li><li>{len(books):,} books, {scored:,} scored</li><li>{n_tools} tools</li>{f'<li>{html.escape(lf_title)} build {html.escape(opts.commit)}</li>' if opts.commit else ''}</ul>
 </header>
 
 <section id=glance>
 <h2>At a glance</h2>
-<p class=sub>What each tool left on the whole library, best first. Writes is how much of the library it wrote;
-fully correct and right book are shares of what it wrote.</p>
+<p class=sub>What each tool left on the {scored:,} books with a confirmed listing, best first. Writes is how much of
+them it wrote; fully correct and right book are shares of what it wrote.</p>
 {glance()}
 <div class=explain>
 <div><b>Fully correct</b>The right book, and every field it ends up with is right.</div>
-<div><b>Right book, a field off</b>The right book, but a field is wrong or missing, or another recording's narrator was written.</div>
+<div><b>Right book, a field off</b>The right book, but the title, an author, the narrator or the series is wrong or missing. Another recording of the book counts here too.</div>
 <div><b>Wrong book</b>Another book's details were written.</div>
 <div><b>Held for review</b>The tool found a candidate but waited for you to confirm it.</div>
 </div>
@@ -897,7 +917,7 @@ fully correct and right book are shares of what it wrote.</p>
 <p class=sub>How each one matches and writes, which also decides what "correct" means for it, with our notes from running it.</p>
 {tool_cards()}
 <div class=callout>
-<h3>Why AudioSilo matched every book in about a minute</h3>
+<h3>Why AudioSilo matched every book in {took(RUNTIME.get('audiosilo'))}</h3>
 <p>The other tools ask a web service for every book: each search is a round trip to Audible or Goodreads, often
 several per book, and most pause between books so they aren't blocked. AudioSilo's mirror mode downloads its whole
 community database once (about 320,000 recordings in one file), so matching is a query on the same disk, with no
@@ -919,19 +939,18 @@ network and nothing to wait for. The trade-off is coverage: it can only find wha
 
 <section id=books>
 <h2>Every book</h2>
-<p class=sub>Each book with its original tags, the right answer, what {html.escape(lf_title)} read, searched and wrote,
-and every other tool's outcome. Combine the filters, for example {html.escape(lf_title)} "Wrong book" with another
-tool "Fully correct", to see where it did better.</p>
+<p class=sub>Each book's original tags, its right answer and what every tool left on it, field by field, with
+each tool's verdict. Filter by any tool's verdict, or combine two: {html.escape(lf_title)} "Wrong book" with another
+tool "Fully correct" shows where that tool did better.</p>
 <p class=small><a href="{DOWNLOAD_NAME}" download>Download every book as JSON</a> (the tags, the right answer and every
 tool's verdict, pick and what it left on the book){f' · <a href="{html.escape(opts.mock_url)}" rel=noopener>Download the mock files</a> (each book as one second of silence carrying its original tags, at its folder path)' if opts.mock_url else ''}.</p>
 <div class=controls>
   <input type=search id=q placeholder="Search a folder, title, author or ASIN" aria-label="Search books">
-  <span class=lab>{html.escape(lf_title)}</span>
-  <select id=cls aria-label="{html.escape(lf_title)}'s outcome">{CLASS_OPTIONS}</select>
-  <select id=mode aria-label="How it matched"><option value="">Any match</option><option value="full">Full match</option><option value="series_only">Series only</option><option value="edition">Other recording</option></select>
-  <span class=lab>Compare with</span>
-  <select id=tool><option value="">No other tool</option>{tool_options}</select>
-  <select id=tcls aria-label="The other tool's outcome">{CLASS_OPTIONS}<option value="not run">Not run</option></select>
+  <select id=tool aria-label="Tool">{tool_options}</select>
+  <select id=v aria-label="Its verdict">{VERDICT_OPTIONS}</select>
+  <span class=lab>and</span>
+  <select id=tool2 aria-label="Another tool"><option value="">another tool</option>{tool_options}</select>
+  <select id=v2 aria-label="Its verdict">{VERDICT_OPTIONS}</select>
   <button id=collapse type=button>Collapse all</button>
   <span id=count></span>
 </div>
@@ -953,7 +972,11 @@ tool's verdict, pick and what it left on the book){f' · <a href="{html.escape(o
 <footer><div class=wrap>Built from the benchmark run of {today}. The book list loads in your browser and needs no server.</div></footer>
 <script>
 const DATA_GZ = "{payload}";
-const TOOLS = {json.dumps({n: display(l)[0] for n, l in others}, ensure_ascii=False)};
+const ORDER = {json.dumps([n for n, _ in ALL_TOOLS])};
+const TOOL_NAMES = {json.dumps({n: display(l)[0] for n, l in ALL_TOOLS}, ensure_ascii=False)};
+const SHORTS = {json.dumps(SHORT)};
+const V = {json.dumps(VERDICT, ensure_ascii=False)};
+const SOURCE = {json.dumps({"applied": "applied to the book in a library", "hand": "confirmed by hand"})};
 const LF = {json.dumps(lf_title)};
 const REPORT = {json.dumps(f"https://github.com/{opts.repo}/issues/new?")};
 const REPORT_BODY = {json.dumps(REPORT_BODY)};

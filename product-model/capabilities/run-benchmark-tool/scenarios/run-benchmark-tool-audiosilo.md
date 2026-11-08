@@ -47,4 +47,5 @@ The run's results and run time are saved for the audit.
 
 ## Edge cases
 
-- A book whose tags carry an ASIN or ISBN is matched at scan and recorded as its own.
+- Before version 2.6, a book whose tags carry an ASIN or ISBN is matched at scan and recorded as its own; from 2.6 those tags are hints its match run checks.
+- From 2.6 a match can name only an ISBN or the community's own entry for the book; it is recorded as that match.

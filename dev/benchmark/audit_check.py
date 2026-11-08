@@ -1,15 +1,24 @@
-"""Check the hand-audit verdicts against what each tool's write rules leave on the book.
+"""The final verdicts: which book each tool chose, and every field it left on the book.
 
-usage: audit_check.py [--manifest manifest.json] [--out disagreements.jsonl] [--write]
+usage: audit_check.py [--manifest manifest.json] [--write] [--judge to_judge.tsv]
 
-The final verdict takes only the book's identity from the hand audit (right book, another recording,
-wrong book, held pick right or wrong); whether the tool wrote and which fields ended up wrong come
-from the checks below.
+Which book a choice is comes from one place per book and listing:
+  - the confirmed listing's own ASIN is the right book, by rule;
+  - any other listing is what the hand audit judged it, on whichever tool chose it (the
+    manifest's audit.hand, with audit.judged_runs naming the run a verdict was made on when
+    a tool's current run is newer), or what audit.extra says ("<folder>\\t<listing>\\t
+    right|other|wrong", other = another recording of the right book).
+A choice nobody judged yet is listed in --judge for the hand audit and gets "?".
 
-Each tool's result is rebuilt from its raw record and the file's own tags (bench_data.result: how
-each tool writes). The result is then checked field by field against the reference and the file,
-and every book where those mechanical checks disagree with the hand verdict is listed for a second
-look. --write saves the final verdicts to the manifest's audit.final, which the page shows.
+What a tool left on the book is rebuilt by its own way of writing (bench_data.result) and
+checked against the right answer, the listing's own record, by the same rules for every
+tool. So two tools that leave a book with the same listing and the same fields always get
+the same verdict; the run fails if they don't.
+
+Verdicts: C right book, every field right; P right book, a field wrong or missing; E another
+recording; W wrong book; S/s series-only write into the right/wrong series (LibraForge);
+H/h held with a right/wrong pick; N nothing written; U no right answer (reported, not scored).
+--write saves them to the manifest's audit.final, which the page shows.
 """
 import argparse
 import json
@@ -17,308 +26,326 @@ import os
 import re
 import unicodedata
 import difflib
-from collections import Counter
+from collections import Counter, defaultdict
 
-from bench_data import FIELDS, TOOL_NAMES as TOOLS, Benchmark, result
+from bench_data import FIELDS, TOOL_NAMES as TOOLS, Benchmark, pick, result, rows_of
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--manifest", default="manifest.json")
-ap.add_argument("--out", default="")
-ap.add_argument("--write", action="store_true", help="write the final verdicts (hand identity + checked fields)")
+ap.add_argument("--write", action="store_true", help="write the final verdicts")
+ap.add_argument("--judge", default="", help="write the choices nobody judged yet to this file")
 opts = ap.parse_args()
 bench = Benchmark(opts.manifest)
-books = bench.books
-audit = json.load(open(bench.file("audit", "hand")))
-raw = {tool: bench.runs(tool) for tool in TOOLS}
+audit_spec = bench.m["audit"]
+hand = json.load(open(bench.file("audit", "hand")))
+runs = {tool: bench.runs(tool) for tool in TOOLS}
 
 
 def norm(x):
-    x = unicodedata.normalize("NFKD", str(x or "").replace("\u2019", "'")).encode("ascii", "ignore").decode().replace("'", "")
+    x = unicodedata.normalize("NFKD", str(x or "").replace("’", "'")).encode("ascii", "ignore").decode().replace("'", "")
     return re.sub(r"[^a-z0-9]+", " ", x.lower()).strip()
+
+
+ROLE = re.compile(r"\s*[-–—]\s*(translator|introduction|foreword|illustrator|adaptor|editor|afterword|preface)\b.*$"
+                  r"|\s*\((aka|translator|editor)[^)]*\)", re.I)
+PLACEHOLDER = {"misc", "unknown", "various", "various artists", "audiobook", "full cast", "uncredited", "unknown author",
+               "virtual voice", "blackstone audio", "soundbooth theater", "actors everywhere"}
+# Store categories, not series a tag should carry.
+CATEGORY = re.compile(r"^(litrpg|gamelit|the great courses\b.*|audible original stories|audible originals)$")
+STOP = {"the", "a", "an", "of", "and", "book", "books", "in", "to", "on", "for", "series", "vol", "volume", "part",
+        "saga", "trilogy", "novel", "edition"}
+# Words that mark a listing's title segment as a tagline rather than the book's own name.
+TAGLINE = {"novel", "novella", "adventure", "litrpg", "gamelit", "fantasy", "epic", "saga", "series", "book", "books",
+           "volume", "vol", "part", "thriller", "story", "stories", "collection", "edition", "dramatized", "dramatised",
+           "adaptation", "original", "drama", "introduction", "guide", "memoir", "cultivation", "progression", "harem",
+           "isekai", "slice", "narrated", "unabridged", "box", "set", "omnibus", "pack", "publisher", "romance",
+           "mystery", "comedy", "bbc", "radio", "production", "short", "classic", "anthology"}
+TITLE_JUNK = re.compile(r"\(unabridged\)|\bunabridged\b|\b(book|bk)\.?\s*#?\s*0\d|\s-\s+[A-Z][a-z]+ [A-Z][a-z]+$", re.I)
 
 
 def people(x):
     """The credited people, without roles (a translator or an introduction writer is not an author)."""
-    parts = [n for n in re.split(r",|;|&| and ", str(x or "")) if not re.search(r"\b(translator|introduction|foreword|illustrator|adaptor)\b", n, re.I)]
-    return [p for p in (norm(ROLE.sub("", n)) for n in parts) if p and p not in ("translator", "editor", "phd")]
+    parts = re.split(r",|;|&| and ", str(x or ""))
+    return [p for p in (norm(re.sub(r"\([^)]*\)", " ", ROLE.sub("", n))) for n in parts
+                        if not re.search(r"\b(translator|introduction|foreword|preface|editor|adaptor)\b", n, re.I))
+            if p and p not in ("translator", "editor", "phd")]
 
 
-def book_number(folder):
-    """The book number the folder names ("Book 4 - ...", "...; Book 04; ...", "Vol. 4"), else None."""
-    m = re.search(r"(?:^|[/;] ?)(?:Book|Vol\.?|Volume) (\d+(?:\.\d+)?)(?=$|[ ;/-])", folder)
-    return float(m.group(1)) if m else None
-
-
-# Titles no listing or publisher gives a book: file names, track names, tag noise.
-JUNK = re.compile(r"\(unabridged\)|\bunabridged\b|_|\.m4b|\.mp3|^track\b|^chapter\b|opening credits|^audiobook\b"
-                  r"|\((?:author|narrator|series|[^)]*\bseries)\)|^\d{1,3}\s*-\s", re.I)
-AUTHOR_JUNK = re.compile(r"[()\[\]]")
-GENRE_SERIES = {"litrpg", "gamelit", "fantasy", "science fiction", "audiobook", "progression fantasy"}
-ASIN_LIKE = re.compile(r"^b0[a-z0-9]{8}$")
-
-
-def bare(name):
-    """A person's name without initials or degrees, for comparing "James A. Hunter" with "James Hunter"."""
-    return " ".join(w for w in norm(name).split() if len(w) > 1 and w not in ("phd", "ph", "md", "dr"))
-
-
-def same_people(a, b):
-    """Whether two sets of bare names share a person, allowing a one-letter spelling slip ("Neal"/"Neil")."""
-    return any(x == y or (len(x) > 6 and difflib.SequenceMatcher(None, x, y).ratio() >= 0.85) for x in a for y in b)
-PLACEHOLDER = {"misc", "unknown", "various", "various artists", "audiobook", "full cast", "uncredited"}
-# Narrators that are a placeholder, never a credit: wrong whenever they end up on a book.
-FAKE_NARRATOR = {"misc", "unknown", "audiobook"}
-ROLE = re.compile(r"\s*-\s*(translator|introduction|foreword|illustrator|adaptor|editor|afterword)\b.*$|\s*\((aka|translator)[^)]*\)", re.I)
-OMNIBUS = re.compile(r"omnibus|box ?set|boxed|collection|compendium|pack|bundle", re.I)
-STOP = {"the", "a", "an", "of", "and", "book", "in", "to", "on", "for", "series", "vol", "volume", "part", "saga", "trilogy"}
-
-
-def number_of(x):
-    x = norm(x).replace(" ", ".")
-    try:
-        return float(x)
-    except ValueError:
-        return x
-
-
-def with_numbers(x):
-    return {w.rstrip("s") for w in norm(x).split() if w not in STOP}
+def surname(name):
+    words = [w for w in name.split() if len(w) > 1 and w not in ("jr", "sr", "phd", "md", "dr", "ii", "iii")]
+    return words[-1] if words else name
 
 
 def words(x):
-    return {w.rstrip("s") for w in norm(x).split() if w not in STOP and not w.isdigit()}
+    """Comparable words: plurals and leading zeros folded ("Plays"/"play", "01"/"1")."""
+    return {w.lstrip("0") or "0" if w.isdigit() else w.rstrip("s") for w in norm(x).split() if w not in STOP}
 
 
-def title_cut(title, want):
-    """True when the title is the start of the book's title and what was cut is its range of books."""
-    t, w = norm(title), norm(want)
-    if not t or not w.startswith(t + " "):
+def one_edit(a, b):
+    if abs(len(a) - len(b)) > 1:
         return False
-    return bool(re.search(r"\d+ (to |through )?\d+", w[len(t):]))
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) <= 1
+    short, long_ = sorted((a, b), key=len)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
 
 
-def same_series(series, title, ref_series, folder):
-    """The series the folder's book number belongs to, also when the title is tacked on ("The Grand Tour: Jupiter")."""
-    folder_series = folder.split("/")[-2] if folder.count("/") > 1 else ""
-    got = words(series)
-    for want in (words(ref_series), words(folder_series)):
-        if want and want <= got and got - want <= words(title):
-            return True
-    return False
+def same_name(a, b):
+    """One person's surname, allowing a one-letter slip ("Bouche"/"Boucher", "Neal"/"Neil")."""
+    return a == b or min(len(a), len(b)) >= 4 and one_edit(a, b)
 
 
-def checks(res, ref, file, known, listed, confirmed, folder, invents=True):
-    """What the book ends up with that does not match it: a wrong value (written or kept) or a known
-    one missing. known: every narrator the book is known to have; listed: those named by a listing of
-    the book (not the file). Loose (file-name) references only judge the series, since their title and
-    author come from a folder name."""
+def among(name, names):
+    return any(same_name(name, n) for n in names)
+
+
+def same_number(a, b):
+    a, b = norm(a).replace(" ", "."), norm(b).replace(" ", ".")
+    try:
+        return float(a) == float(b)
+    except ValueError:
+        return a.replace(".", "") == b.replace(".", "")
+
+
+def same_series_name(written, listed):
+    """The listing's series, also with a prefix or suffix ("VeilVerse: Cultivating Chaos", "... Spinoff");
+    a listing's own qualifier ("[chronological order]", "(radio plays)", ": A ... LitRPG Series") need not
+    be written. A number stuck on the name ("042 - Spellmonger") is not the series."""
+    plain = re.sub(r"\[[^]]*\]|\([^)]*\)", " ", listed)
+    cores = [c for c in (words(plain), words(plain.split(":")[0])) if c] or [words(listed)]
+    got = words(written)
+    return any(c <= got and not any(w.isdigit() for w in got - c) for c in cores)
+
+
+# "Series #3" or "Series, Book #3" in a series tag: the convention for a number inside the series text.
+SERIES_NUMBER = re.compile(r",?\s*(?:book\s*)?#\s*(\d+(?:\.\d+)?(?:\s*-\s*\d+)?)\s*$", re.I)
+NOT_A_PERSON = re.compile(r"\b(press|publishing|llc|studios?|audio|books)\b")
+
+
+def title_options(answer):
+    """The word sets a written title must cover: the listing's title proper, without its tagline segments
+    ("A LitRPG Adventure", "Series, Book 3") or the series name it may lead with, and the series-name head
+    itself; a listing titled only with its series name also offers its subtitle."""
+    names = [n for n, _ in answer["series"]]
+    segs = [g.strip(" )") for g in re.split(r":| - |\(", answer["title"]) if g.strip(" )")]
+    nums = {n for _, n in answer["series"]}
+
+    def is_series(seg):
+        return any(words(n) and words(n) <= words(seg) and all(re.fullmatch(r"[\divxlc.]+", w) for w in words(seg) - words(n))
+                   for n in names)
+
+    def is_tag(seg):
+        return bool(set(norm(seg).split()) & TAGLINE) or is_series(seg)
+
+    core = [g for i, g in enumerate(segs) if not is_series(g) and not any(is_tag(h) for h in segs[1:i + 1])]
+    options = [words(" ".join(core))] if core else []
+    if core and len(words(core[0])) >= 3:
+        options.append(words(core[0]))  # a long first segment is the title; what follows a subtitle
+    if segs and is_series(segs[0]) and (not core or words(segs[0]) - {w for n in names for w in words(n)}):
+        options.append(words(segs[0]))  # "Battle Mage 5", not the bare series name for "DEAD: Fortunes & Failures"
+        if len(segs) == 1 and answer["subtitle"] and not is_tag(answer["subtitle"]):
+            options.append(words(re.split(r":|\(", answer["subtitle"])[0]))
+    return [o - nums for o in options or [words(answer["title"])]]
+
+
+def field_problems(res, answer, file, folder_series=""):
+    """Each field the book ends up with that the listing's record doesn't support. file: the book's own tags."""
     out = []
-    narr = norm(res["narrator"])
-    authors = {bare(a) for a in people(res["author"])}
-    if not narr and known:
-        out.append("narrator_missing")
-    elif narr in FAKE_NARRATOR:
-        out.append("narrator_placeholder")
-    elif narr and bare(narr) in authors and any(bare(n) != bare(narr) for n in listed):
-        out.append("narrator_is_author")
-    series, seq = norm(res["series"]), str(res["sequence"] or "").strip()
-    ref_series = "" if norm(ref.get("series")) in GENRE_SERIES else ref.get("series") or ""
-    number = book_number(folder)
-    # A file-name reference names a "series" for a standalone book too ("Treasure Island; Book 01").
-    if not confirmed and number in (None, 1.0) and words(ref_series) == words(ref.get("title") or res["title"]):
-        ref_series = ""
-    file_series = "" if ASIN_LIKE.match(norm(file["series"]).replace(" ", "")) else file["series"]
-    want_series = ref_series or file_series
-    want = str(ref.get("sequence") or "").strip()
-    if number is None:  # the file's own number, also when it sits in the series text ("Odd Thomas, Book #0.5")
-        own_number = re.search(r"#\s*(\d+(?:\.\d+)?)\s*$", file["series"]) or re.fullmatch(r"(\d+(?:\.\d+)?)", file["sequence"].strip())
-        number = float(own_number.group(1)) if own_number else None
-    if not re.fullmatch(r"\d+(\.\d+)?", want) and number is not None and not re.search(r"\d\s*-\s*\d", want):
-        want = f"{number:g}"
-    elif number is not None and re.fullmatch(r"\d+(\.\d+)?", want) and float(want) != number:
-        want = ""  # the reference and the folder disagree: no number to check against
-    whole = " ".join([ref.get("title") or "", file["title"], folder.rsplit("/", 1)[-1]])
-    ranged = re.search(r"\b\d+\s*-\s*\d+\b", want) or re.search(r"\bbooks \d+\s*(-|to|&|,)\s*\d+|\bbooks? \d+-\d+\b|\(\d+-\d+\)", whole, re.I)
-    if ranged and confirmed and str(ref.get("sequence") or "").strip() == seq:
-        ranged = None  # the library numbers this box set the same way
-    if seq and not series:
-        out.append("series_nameless")
-    elif series in GENRE_SERIES or ASIN_LIKE.match(series.replace(" ", "")) or re.search(r"#\s*\d+(\.\d+)?\s*;", res["series"]) or len(re.findall(r"#\s*\d", res["series"])) > 1:
-        out.append("series_junk")
-    elif want_series and not series:
-        out.append("series_missing")
-    elif series and ranged and re.fullmatch(r"\d+", seq) and not OMNIBUS.search(res["series"]):
-        out.append("number_for_range")
-    elif series and re.fullmatch(r"\d+\.\d+", want) and number_of(seq) != number_of(want):
-        out.append("number_decimal_dropped")
-    elif series and not seq and re.fullmatch(r"\d+", want) and not ranged:
-        out.append("number_missing")
-    elif series and re.fullmatch(r"\d+(\.\d+)?", seq) and re.fullmatch(r"\d+(\.\d+)?", want) and float(seq) != float(want) \
-            and not OMNIBUS.search(res["series"]) and same_series(res["series"], res["title"], ref_series, folder):
-        out.append("number_wrong")
-    # Only a tool that builds its series from the title invents one; a listing's own series is real data.
-    if invents and series and not want_series and series == norm(res["title"]):
-        out.append("series_invented")
     title = res["title"]
-    sole = float(want) if re.fullmatch(r"\d+(\.\d+)?", want) else None
+    allowed = words(answer["title"]) | words(answer["subtitle"]) | {w for s, _ in answer["series"] for w in words(s)} \
+        | {w for _, n in answer["series"] for w in norm(n).split()}
+    options = title_options(answer)
     suffix = re.search(r"\(([^)]*)\)\s*$", title or "")
-    allowed = words(ref.get("title")) | words(res["series"]) | words(ref_series) | words(folder)
-    if title and (JUNK.search(title) or re.fullmatch(r"\s*(book|vol\.?|volume|part)\s*#?\s*\d+(\.\d+)?\s*", title, re.I)
-                  or re.match(r"\d{1,3}\s+[a-z]", title, re.I) and not re.match(r"\d", ref.get("title") or file["title"])
-                  or re.search(r"\bby\b.*\(\d{4}\)|^\[|\bunabridged\b", title, re.I)):
-        out.append("title_junk")
-    # A first book often shares its series' name, so book 1 needs a confirmed title that doesn't.
-    elif title and with_numbers(title) == (words(res["series"]) or words(ref_series)) \
-            and (sole not in (None, 1.0) or confirmed and words(ref.get("title")) and not words(ref.get("title")) & words(title)) \
-            and words(ref.get("title")) != words(ref_series):
-        out.append("title_is_series")
-    elif suffix and words(suffix.group(1)) & words(res["series"] or ref_series) and not re.search(r"\)\s*$", ref.get("title") or ""):
-        out.append("title_series_suffix")
-    elif confirmed and title_cut(title, ref.get("title")):
-        out.append("title_cut")
-    elif title and confirmed and not (words(ref.get("title")) <= words(title)) and not (words(title) <= allowed):
-        out.append("title_differs")
+    if not title:
+        out.append("title_missing")
+    elif TITLE_JUNK.search(title) and not TITLE_JUNK.search(answer["title"]) or title.count("(") != title.count(")") \
+            or suffix and (set(norm(suffix.group(1)).split()) & {"series"} or any(same_series_name(SERIES_NUMBER.sub("", suffix.group(1)), n) for n, _ in answer["series"])) \
+            and suffix.group(0) not in answer["title"]:
+        out.append("title_wrong")  # file-name noise, "(Unabridged)", or the series tacked on
+    elif not any(o <= words(title) for o in options):
+        out.append("title_wrong")
+    # Nothing the listing doesn't say, except a subtitle after a colon (another listing of the book words it its own way).
+    elif not words(title) - TAGLINE <= allowed and not (":" in title and any(o <= words(title.split(":")[0]) for o in options)):
+        out.append("title_wrong")
     names = people(res["author"])
-    if len(names) != len(set(names)) or len({bare(n) for n in names}) < len(names):
+    want = {surname(p) for p in people(answer["author"]) if not NOT_A_PERSON.search(p)} - {"courses"}
+    got = {surname(p) for p in names if not NOT_A_PERSON.search(p)} - {"courses"}
+    if not names:
+        out.append("author_missing")
+    elif len(names) != len(set(names)):
         out.append("author_doubled")
-    if AUTHOR_JUNK.search(ROLE.sub("", res["author"] or "")) or norm(res["author"]) in ("unknown author", "unknown") \
-            or (names and words(res["author"]) and words(res["author"]) == words(want_series)):
-        out.append("author_junk")
-    if confirmed and names:
-        series_words = words(ref_series)
-        missing = [p for p in people(ref.get("author")) if "great courses" not in p and words(p) != series_words
-                   and not any(p.split()[-1] in n for n in names)]
-        if missing:
-            out.append("author_missing")
+    elif want and any(not among(g, want) for g in got):
+        out.append("author_wrong")
+    elif any(not among(w, got) for w in want):
+        out.append("author_missing")
+    # A narrator the listing doesn't credit is wrong; a cast listed in part is not.
+    want_n = {surname(p) for p in people(answer["narrator"]) if p not in PLACEHOLDER}
+    got_n = {surname(p) for p in people(res["narrator"]) if p not in PLACEHOLDER}
+    if want_n:
+        if not got_n:
+            out.append("narrator_missing")
+        elif any(not among(g, want_n) for g in got_n):
+            out.append("narrator_wrong")
+    series, number = res["series"], str(res["sequence"] or "").strip()
+    inside = SERIES_NUMBER.search(series or "")
+    if inside:
+        series, number = series[:inside.start()].strip(), inside.group(1).replace(" ", "")
+    listed = [(s, n) for s, n in answer["series"] if not CATEGORY.match(norm(s))]
+    if listed:
+        match = [n for s, n in listed if same_series_name(series, s)]
+        if not series:
+            out.append("series_missing")
+        elif not match:
+            out.append("series_wrong")
+        elif any(match):
+            # A range ("1-3") is no single number: leaving the number blank is not missing one.
+            if not number and not all(re.search(r"\d\s*-\s*\d", n) for n in match if n):
+                out.append("number_missing")
+            elif not number:
+                pass
+            elif not any(same_number(number, n) for n in match if n):
+                out.append("number_wrong")
+    elif series and words(series) == words(title):
+        out.append("series_invented")  # the listing names no series: the title is not one
+    elif series and not any(same_series_name(series, n) for n, _ in answer["series"]) \
+            and not words(series) <= words(answer["title"]) | words(answer["subtitle"]) \
+            | words(SERIES_NUMBER.sub("", file.get("series") or "")) | words(folder_series):
+        # The listing names none (or only a store category): a series it, the file or the folder doesn't
+        # name is invented.
+        out.append("series_wrong")
+    if number and not series:
+        out.append("number_without_series")
     return out
 
 
-# What each listing is, from the tools that report a listing's own fields: its narrators and runtime.
-# Grimmory and BookOrbit mix fields from several sources, so they are not used.
-listing_narrators, listing_minutes = {}, {}
-for tool in ("public_gr", "audiosilo", "absqm", "rmab", "beets"):
-    for r in raw[tool].values():
-        m, edition = r.get("match") or {}, r.get("different_edition") or {}
-        for asin, narr, mins in ((edition.get("match_asin"), edition.get("match_narrator"), edition.get("match_minutes")),
-                                 ("" if edition else m.get("asin"), m.get("narrator"), m.get("runtime_min") or m.get("duration_minutes"))):
-            asin = (asin or "").upper()
-            if not asin:
-                continue
-            names = {bare(n) for n in people(narr)} - {bare(n) for n in PLACEHOLDER} - {""}
-            if names:
-                listing_narrators.setdefault(asin, set()).update(names)
-            if mins:
-                listing_minutes.setdefault(asin, float(mins))
-
-
-def other_recording(asin, book_narrators, ref_asin):
-    """True when the pick's ASIN is a listing narrated by someone else entirely."""
-    asin = (asin or "").upper()
-    if not asin or not book_narrators:
-        return False
-    names = listing_narrators.get(asin)
-    return bool(names) and not same_people(names, book_narrators)
-
-
-def not_the_book(asin, minutes):
-    mins = listing_minutes.get((asin or "").upper())
-    return bool(mins and minutes) and not 0.5 <= mins / minutes <= 1.5
-
-
-final = {}
-report, tally = [], Counter()
-for i, b in enumerate(books):
-    lf = raw["public_gr"].get(b["folder"]) or {}
-    local = lf.get("local") or {}
-    file = {k: local.get(k) or "" for k in FIELDS}
-    ref = (b.get("final") if b.get("asin") else b.get("expect")) or {}
-    codes = audit[b["folder"]]["v"]
-    confirmed = bool(b.get("asin"))
-    ref_asin = (b.get("asin") or "").upper()
-    author = norm(ref.get("author") or file["author"])
-    # Narrators named by a listing of this book: the right-book picks, and the listing LibraForge saw
-    # as another recording. Plus the reference's, and the file's unless it is just the author's name.
-    listed = set()
+# Which book each judged listing is, per book: from the hand audit, on the run it judged.
+IDENTITY = {"C": "right", "P": "right", "H": "right", "E": "other", "W": "wrong", "h": "wrong"}
+judged_runs = {t: rows_of(n) for t, n in (audit_spec.get("judged_runs") or {}).items()}
+known = defaultdict(dict)
+conflicts = []
+for b in bench.books:
+    f = b["folder"]
     for tool in TOOLS:
-        if codes[tool] in "CPE":
-            listed.update(people(((raw[tool].get(b["folder"]) or {}).get("match") or {}).get("narrator")))
-    listed.update(people((lf.get("different_edition") or {}).get("match_narrator")))
-    listed = {n for n in listed if n not in PLACEHOLDER}
-    known = set(listed) | {n for n in people(ref.get("narrator")) if n not in PLACEHOLDER}
-    if norm(file["narrator"]) not in PLACEHOLDER and (bare(file["narrator"]) != bare(author) or listed <= {norm(file["narrator"])}):
-        known |= set(people(file["narrator"]))
-    # The recording the file is: its own narrator when it names one, else the reference's.
-    author_names = {bare(a) for a in people(ref.get("author") or file["author"])} | {bare(a) for a in people(file["author"])}
-    file_people = {bare(n) for n in people(file["narrator"])} - {bare(n) for n in PLACEHOLDER}
-    own = file["narrator"] if file_people and not file_people <= author_names else ref.get("narrator")
-    book_narrators = {bare(n) for n in people(own)} - {""}
-    row = final[b["folder"]] = {"v": {}, "f": {}, "note": audit[b["folder"]]["note"]}
+        code = (hand.get(f) or {}).get("v", {}).get(tool)
+        row = (judged_runs.get(tool) or runs[tool]).get(f)
+        key = pick(tool, row)
+        if tool == "public_gr" and (row or {}).get("different_edition"):
+            continue  # it kept the file's own recording: says nothing about which book that listing is
+        if code in IDENTITY and key:
+            kind = IDENTITY[code]
+            if known[f].get(key, kind) != kind:
+                conflicts.append((f, key, tool, known[f][key], kind))
+            known[f].setdefault(key, kind)
+settled = {}
+extra_path = bench.file("audit", "extra") if audit_spec.get("extra") else ""
+if extra_path and os.path.exists(extra_path):
+    for line in open(extra_path, encoding="utf-8"):
+        if line.strip() and not line.startswith("#"):
+            f, key, kind = line.rstrip("\n").split("\t")[:3]
+            known[f][key] = kind  # a later hand judgment settles a conflict too
+            settled.setdefault(f, set()).add(key)
+
+
+def identity(b, key):
+    if not key:
+        return None
+    if b["asin"] and key == b["asin"]:
+        return "right"
+    return known[b["folder"]].get(key)
+
+
+final, to_judge = {}, []
+for b in bench.books:
+    f = b["folder"]
+    lf = runs["public_gr"].get(f) or {}
+    file = {k: (lf.get("local") or {}).get(k) or "" for k in FIELDS}
+    row = final[f] = {"v": {}, "f": {}, "note": (hand.get(f) or {}).get("note", "")}
     for tool in TOOLS:
-        code = codes[tool]
-        rec = raw[tool].get(b["folder"])
-        res, asin = result(tool, file, rec)
-        problems = [] if res is None or tool == "rmab" else checks(res, ref, file, known, listed, confirmed, b["folder"],
-                                                                             tool in ("grimmory", "bo") or (rec or {}).get("provider") == "goodreads")
-        wrote = res is not None if tool != "rmab" else (rec or {}).get("status") == "matched"
+        rec = runs[tool].get(f)
+        res, _ = result(tool, file, rec)
+        key = pick(tool, rec)
+        wrote = (rec or {}).get("status") == "matched" if tool == "rmab" else res is not None
+        if not b["answer"]:
+            row["v"][tool] = "U"
+            continue
+        kind = identity(b, key)
+        if tool == "public_gr" and (rec or {}).get("different_edition") and wrote:
+            kind = "right"
+        if key and kind is None:
+            to_judge.append((f, tool, key, res, b["answer"]))
+            row["v"][tool] = "?"
+            continue
         if not wrote:
-            held = ((rec or {}).get("match") or {}).get("asin") if tool == "audiosilo" else ""
-            row["v"][tool] = ("h" if code == "H" and not_the_book(held, b["minutes"]) else code) if code in "Hh" else "N"
-        elif code in "CPHN" or (code == "S" and problems):
-            if (asin or "").upper() == (local.get("asin") or "").upper():
-                asin = ""  # the file's own ASIN tag, kept: not the tool's pick
-            if not_the_book(asin, b["minutes"]):
-                row["v"][tool] = "W"
-            elif other_recording(asin, book_narrators, ref_asin):
-                row["v"][tool] = "E"
-            else:
-                row["v"][tool] = "P" if problems else "C"
+            row["v"][tool] = "N" if not key else "h" if kind == "wrong" else "H"
+            continue
+        if tool == "public_gr" and (rec or {}).get("different_edition"):
+            kind = "right"  # the book's details from another recording, its own narrator and ASIN kept
+        if tool == "public_gr" and (rec or {}).get("mode") == "series_only":
+            row["v"][tool] = "S" if kind == "right" else "s"
+        elif kind == "wrong":
+            row["v"][tool] = "W"
+        elif kind == "other":
+            row["v"][tool] = "E"
+        elif tool == "rmab":
+            row["v"][tool] = "C"  # it writes nothing; only its pick is checked
         else:
-            row["v"][tool] = code
-        if problems and wrote:
-            row["f"][tool] = problems
-        same_book = bool(asin and b.get("asin") and asin.upper() == b["asin"].upper())
-        why = None
-        if res is None and code in "CEPWSs":
-            why = "verdict says written, tool wrote nothing"
-        elif res is not None and code in "HhN" and tool != "rmab":
-            why = "verdict says not written, tool wrote"
-        elif code in "CS" and problems:
-            why = "correct, but " + ", ".join(problems)
-        elif code == "W" and same_book:
-            why = "wrong book, but the pick is the reference ASIN"
-        elif code == "P" and not problems:
-            why = "damaged, but no field check fails"
-        if why:
-            for p_ in (problems if why.startswith("correct") else [why]):
-                tally[(tool, why.split(",")[0] + (": " + p_ if why.startswith("correct") else ""))] += 1
-            report.append({"i": i, "folder": b["folder"], "tool": tool, "code": code, "why": why, "problems": problems,
-                           "res": res, "ref": ref, "file": file, "asin": asin, "ref_asin": b.get("asin") or "",
-                           "note": audit[b["folder"]]["note"]})
-for (tool, why), n in sorted(tally.items()):
-    print(f"{tool:10} {n:5}  {why}")
-print(len(report), "disagreements")
+            problems = field_problems(res, b["answer"], file, f.split("/")[-2] if f.count("/") > 1 else "")
+            row["v"][tool] = "P" if problems else "C"
+            if problems:
+                row["f"][tool] = problems
+
+for c in conflicts:
+    if c[1] not in settled.get(c[0], ()) and bench.by_folder[c[0]]["answer"]:  # an unscored book needs none
+        print("hand audit judged one listing two ways:", *c)
 print("final:", {tool: dict(Counter(r["v"][tool] for r in final.values())) for tool in TOOLS})
+print(len(to_judge), "choices to judge by hand")
+if opts.judge:
+    with open(opts.judge, "w", encoding="utf-8") as fh:
+        for f, tool, key, res, answer in to_judge:
+            fh.write("\t".join([f, key, tool, json.dumps(res, ensure_ascii=False),
+                                json.dumps({k: answer[k] for k in ("asin", "title", "author", "narrator", "series", "minutes")},
+                                           ensure_ascii=False)]) + "\n")
+
+
+# The same listing and the same fields on the same book get the same verdict.
+broken = 0
+for b in bench.books:
+    seen = {}
+    for tool in TOOLS:
+        if tool == "rmab":
+            continue
+        res, written = result(tool, {k: ((runs["public_gr"].get(b["folder"]) or {}).get("local") or {}).get(k) or "" for k in FIELDS},
+                              runs[tool].get(b["folder"]))
+        v = final[b["folder"]]["v"][tool]
+        if res is None or v in "SsU?":
+            continue
+        sig = ((written or "").upper(), tuple(norm(res[k]) for k in FIELDS))  # the ASIN it left on the book
+        if seen.setdefault(sig, v) != v:
+            broken += 1
+            print("same result, different verdict:", b["folder"], tool, v, seen[sig])
+if broken:
+    raise SystemExit(f"{broken} verdicts differ for the same result")
+
+
 def tally_findings(name, books_in_sample):
-    """How many verdicts a second audit found wrong: data/reaudit/<name>, one 'idx TOOL a->b | why (rule|hand)' per line."""
+    """How many verdicts a second audit found wrong: one 'idx TOOL a->b | why (rule|hand)' per line."""
     path = os.path.join(bench.file("audit", "reaudit"), name)
     if not os.path.exists(path):
         return {}
-    lines = [l for l in open(path) if re.match(r"\d+ \w+ \w->\w", l)]
+    lines = [l for l in open(path) if re.match(r"\d+ \w+ \S->\S", l)]
     return {"books": books_in_sample, "verdicts": books_in_sample * len(TOOLS), "wrong": len(lines),
             "rule": sum("(rule" in l for l in lines), "hand": sum("(rule" not in l for l in lines)}
 
 
 if opts.write:
-    validation = os.path.join(bench.file("audit", "reaudit"), "validation_sample.json")
-    sample = os.path.join(bench.file("audit", "reaudit"), "sample.json")
-    final["_meta"] = {
-        "reaudit": tally_findings("findings.txt", len(json.load(open(sample))) if os.path.exists(sample) else 0),
-        "validation": tally_findings("validation_findings.txt", len(json.load(open(validation)))
-                                     if os.path.exists(validation) else 0),
-    }
+    if to_judge:
+        raise SystemExit("judge every listed choice first (audit.extra), then write")
+    reaudit = bench.file("audit", "reaudit")
+    meta = {}
+    for name, sample in (("reaudit", "sample.json"), ("validation", "validation_sample.json")):
+        s = os.path.join(reaudit, sample)
+        meta[name] = tally_findings(sample.replace("sample.json", "findings.txt"),
+                                    len(json.load(open(s))) if os.path.exists(s) else 0)
+    final["_meta"] = meta
     json.dump(final, open(bench.file("audit", "final"), "w"), ensure_ascii=False, indent=0)
     print("wrote", bench.file("audit", "final"))
-if opts.out:
-    with open(opts.out, "w") as fh:
-        for r in report:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")

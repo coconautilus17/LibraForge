@@ -8,19 +8,21 @@ references:
   target: dev/benchmark/audit.py
 - kind: code
   role: implementation
-  target: dev/benchmark/audit_check.py#checks
+  target: dev/benchmark/audit_check.py#field_problems
 - kind: code
   role: implementation
   target: dev/benchmark/bench_data.py#result
 ---
 
-# A verdict takes the book from the hand audit and the fields from the checks
+# A verdict follows from what the tool left on the book
 
-Which book a tool chose, and whether it wrote, held or left it, is judged by hand: C the right book, E another
-recording of it, W the wrong book, S or s a series-only write into the right or wrong series, H or h held with a
-right or wrong pick, N nothing written. What the tool then left on the book is rebuilt by each tool's own way of
-writing and checked field by field against the right answer and the file, by the same rules for every tool; a right
-book with any field wrong or missing is P. The final verdict is the only verdict the page shows.
+Which book a tool chose, and whether it wrote, held or left it, decides the verdict's kind: the right book, another
+recording of it, the wrong book, a series-only write into the right or wrong series, held with a right or wrong
+pick, or nothing written. A tool that chose the confirmed listing's ASIN chose the right book; any other choice is
+judged by hand. What the tool then left on the book is rebuilt by each tool's own way of writing and checked field
+by field against the right answer, by the same rules for every tool; a right book with any field wrong or missing
+is partly right. Two tools that leave the same book with the same listing and the same fields get the same verdict.
+The final verdict is the only verdict the page shows.
 
 ## Rationale
 

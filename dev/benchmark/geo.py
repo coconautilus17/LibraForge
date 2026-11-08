@@ -53,7 +53,7 @@ else:
     hidden = [b for b in confirmed if (r := rights.get(b["asin"].upper()))
               and not r["world"] and r["regions"] and opts.market.upper() not in r["regions"]]
     summary = {
-        "confirmed": len({b["asin"].upper() for b in confirmed}),
+        "confirmed": len(confirmed),  # books with a confirmed listing
         "hidden": len(hidden),
         "hidden_with_asin": sum(1 for b in hidden if any(k.lower() == "asin" for k in b.get("tags") or {})),
         "books": len(bench.books),

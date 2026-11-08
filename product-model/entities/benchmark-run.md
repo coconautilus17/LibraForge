@@ -19,3 +19,4 @@ One tool's pass over every benchmark book.
 - **Settings** — Provider, workers and options it ran with.
 - **Results** — Per book: whether it wrote, held or left the book, the listing it chose and the details it gives the book.
 - **Run time** — The run's total wall time.
+- **Run date** — The day the run was made.

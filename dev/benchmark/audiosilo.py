@@ -115,6 +115,8 @@ def rows(books_path, out_path):
         pick = {"asin": v.get("asin") or "", "title": v.get("title") or "", "author": v.get("author") or "",
                 "narrator": v.get("narrator") or "", "series": v.get("series") or "",
                 "sequence": v.get("series_index") or "",
+                # Since 2.6 a match can carry only an ISBN, or only the community work it is.
+                "isbn": v.get("isbn") or "", "work": p.get("work_id") or "",
                 # The community's own runtime and store for the recording: an ASIN
                 # from another store is the same recording under that store's id.
                 "runtime_min": p.get("runtime_min"), "asin_region": p.get("asin_region") or ""} if p else None
@@ -135,7 +137,7 @@ def rows(books_path, out_path):
                 else:
                     m = {"outcome": "not_indexed" if st == 404 else "no_asin", "score": None, "pick": None}
             row = {"folder": book["folder"], "outcome": m["outcome"], "score": m["score"]}
-            if m["pick"] and m["pick"]["asin"]:
+            if m["pick"] and (m["pick"]["asin"] or m["pick"].get("isbn") or m["pick"].get("work")):
                 # Confident matches are applied unasked; "to review" waits for the admin.
                 row["status"] = "matched" if m["outcome"] in ("auto", "own_asin") else "held"
                 row["match"] = m["pick"]

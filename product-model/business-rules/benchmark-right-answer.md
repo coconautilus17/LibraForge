@@ -8,23 +8,24 @@ appliesTo:
 references:
 - kind: code
   role: implementation
-  target: dev/benchmark/collect.py#collect
+  target: dev/benchmark/answers.py#fetch
 - kind: code
   role: implementation
-  target: dev/benchmark/collect.py#parse_dump_name
+  target: dev/benchmark/collect.py#collect
 - kind: code
   role: implementation
   target: dev/benchmark/review_lib.py#confirm
 ---
 
-# A book's right answer is its applied listing, or else its file name
+# A book's right answer is its confirmed listing's own record
 
-A library book's right answer is the match applied to it in the library: that listing's ASIN and the title, author,
-narrator, series and number LibraForge wrote when it applied it. An imported book's right answer is the series,
-number and title its `Author; Series; Book NN; Title` file name states, with no narrator, until the review library
-confirms a listing. A book with neither has no right answer and is reported, not scored.
+A book's right answer is the listing confirmed as that book, as the catalog itself records it, read by its ASIN:
+its title, every author, every narrator, every series it is listed in with its number there, and its runtime. A
+listing confirmed in the library, in the review library or by hand from a candidate is a confirmed listing; a file
+name is not. A book in several series is answered by any of them. A book with no confirmed listing has no right
+answer: it is reported, not scored, and shows no answer.
 
 ## Rationale
 
-The applied matches were reviewed in the library, so they are the best record of which listing a book is. The
-fields beside the ASIN are what was written at the time, so they can carry that older run's mistakes.
+The catalog's record is complete and the same for every tool, while what was once written to a book can carry that
+run's mistakes. A lookup by ASIN is not limited to the market the runs were made from.

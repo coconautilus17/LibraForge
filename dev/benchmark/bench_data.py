@@ -1,6 +1,6 @@
 """The benchmark's one view of its data: which books, which runs, which audit.
 
-Every script after the runs (audit_check.py, reaudit_run.py, reaudit_sample.py, geo.py,
+Every script after the runs (answers.py, audit_check.py, reaudit_sample.py, geo.py,
 report.py) reads the same manifest through this module, so they can't disagree on which
 files make up a benchmark.
 
@@ -10,11 +10,15 @@ data/manifest.json (gitignored like the rest of data/; manifest.example.json sho
   commit    the LibraForge build its LibraForge run used
   runs      per tool: "rows" (the run's jsonl), optional "time" (its total runtime in
             seconds, default the rows file with .time), "online_time" (AudioSilo against
-            its online service) and "folders_from" (an older dataset whose folders the
-            run reports: its books are found again by their original tags and runtime)
+            its online service), "folders_from" (an older dataset whose folders the
+            run reports: its books are found again by their original tags and runtime),
+            "version" and "date" (the tool's version and the day of the run, shown on the page)
   audit     "verdicts" (the hand verdict files' folder), "hand" (audit.py's output),
-            "final" (audit_check.py's output, what the page shows), "reaudit" (the
-            second-audit samples and findings)
+            "judged_runs" (per tool, the run the hand verdicts were made on when its
+            current run is newer), "extra" (later hand judgments: "<folder>\t<listing>\t
+            right|other|wrong"), "final" (audit_check.py's output, what the page shows),
+            "reaudit" (the second-audit samples and findings)
+  answers   every book's right answer: its confirmed listing's catalog record (answers.py)
   rights    Audible's sales rights for every confirmed answer (geo.py rights)
   geo       the summary of answers Audible's search hid where the runs were made (geo.py summary)
 """
@@ -64,13 +68,29 @@ def identity(book):
     return json.dumps([book["tags"], round(book["minutes"], 3)], sort_keys=True)
 
 
+def answer_fields(record):
+    """A listing record as the fields a book is checked on; "series" is every series it is in."""
+    return {"asin": record["asin"], "title": record["title"], "subtitle": record["subtitle"],
+            "author": ", ".join(record["authors"]), "narrator": ", ".join(record["narrators"]),
+            "series": record["series"], "minutes": record["minutes"]}
+
+
 class Benchmark:
-    def __init__(self, manifest="manifest.json"):
+    def __init__(self, manifest="manifest.json", answers=True):
+        """Every book gets "answer" (answer_fields of its confirmed listing, or None), "asin" (that
+        listing's, or "") and "answer_source" from the manifest's answers."""
         self.manifest_path = path(manifest)
         self.m = json.load(open(self.manifest_path))
         self.books = json.load(open(path(self.m["books"])))
         self.by_folder = {b["folder"]: b for b in self.books}
         self._runs = {}
+        if answers:
+            known = json.load(open(self.file("answers")))
+            for b in self.books:
+                a = known.get(b["folder"]) or {}
+                b["answer"] = answer_fields(a["record"]) if a.get("record") else None
+                b["asin"] = b["answer"]["asin"] if b["answer"] else ""
+                b["answer_source"] = a.get("source") if b["answer"] else "none"
 
     def file(self, key, *sub):
         """A data file the manifest names (audit.final, rights...)."""
@@ -101,7 +121,8 @@ class Benchmark:
 
 
 def pick(tool, row):
-    """The ASIN the tool chose for a book, written or held; "" when it chose none."""
+    """The listing the tool chose for a book, written or held: its ASIN, else (AudioSilo from 2.6)
+    "isbn:..." or "work:..."; "" when it chose none."""
     row = row or {}
     if tool == "bo":
         asin = (row.get("asin") or "").upper()
@@ -112,7 +133,8 @@ def pick(tool, row):
             return ""  # refused, not held: the row carries the closest candidate it turned down
         return (row.get("series_match_asin") or m.get("asin")
                 or (row.get("different_edition") or {}).get("match_asin") or "").upper()
-    return (m.get("asin") or "").upper()
+    asin = (m.get("asin") or "").upper()
+    return asin or (f"isbn:{m['isbn']}" if m.get("isbn") else f"work:{m['work']}" if m.get("work") else "")
 
 
 def result(tool, file, row):

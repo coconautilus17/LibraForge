@@ -1,16 +1,18 @@
 {
  "books": "combined.json",
  "commit": "abc1234",
+ "answers": "answers.json",
  "runs": {
-  "public_gr": {"rows": "lf_run.jsonl"},
-  "audiosilo": {"rows": "audiosilo.jsonl", "online_time": "audiosilo_online.time"},
-  "absqm": {"rows": "absqm.jsonl"},
-  "grimmory": {"rows": "grimmory.jsonl"},
-  "rmab": {"rows": "rmab.jsonl"},
-  "bo": {"rows": "bo_rows.jsonl", "folders_from": "older_dataset.json"},
-  "beets": {"rows": "beets.jsonl"}
+  "public_gr": {"rows": "lf_run.jsonl", "version": "build abc1234", "date": "2026-11-04"},
+  "audiosilo": {"rows": "audiosilo.jsonl", "online_time": "audiosilo_online.time", "version": "2.6.0", "date": "2026-11-08"},
+  "absqm": {"rows": "absqm.jsonl", "version": "2.35.1", "date": "2026-10-29"},
+  "grimmory": {"rows": "grimmory.jsonl", "version": "3.5.0", "date": "2026-10-29"},
+  "rmab": {"rows": "rmab.jsonl", "version": "1.2.12", "date": "2026-10-29"},
+  "bo": {"rows": "bo_rows.jsonl", "folders_from": "older_dataset.json", "date": "2026-11-02"},
+  "beets": {"rows": "beets.jsonl", "version": "2.14", "date": "2026-10-28"}
  },
- "audit": {"verdicts": "audit", "hand": "audit.json", "final": "audit_final.json", "reaudit": "reaudit"},
+ "audit": {"verdicts": "audit", "hand": "audit.json", "judged_runs": {"audiosilo": "audiosilo_old.jsonl"},
+           "extra": "audit_extra.tsv", "final": "audit_final.json", "reaudit": "reaudit"},
  "rights": "rights.json",
  "geo": "geo.json"
 }

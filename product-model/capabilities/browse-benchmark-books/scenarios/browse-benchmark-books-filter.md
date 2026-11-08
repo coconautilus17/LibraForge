@@ -11,7 +11,7 @@ steps:
     page:
       place: benchmark-page::books
 - kind: product
-  text: The Product lists the matching books with LibraForge's outcome and pick, the filters kept in the address.
+  text: The Product lists the matching books with every tool's verdict, the filters kept in the address.
   entities:
   - entity: benchmark-book
     effect: reads
@@ -38,8 +38,8 @@ steps:
     page:
       place: benchmark-page::book
 - kind: product
-  text: The Product shows the book's tags, the right answer beside what LibraForge wrote, and every tool's verdict
-    and pick.
+  text: The Product shows the book's tags, the right answer and every tool's result after its write side by side,
+    each value marked right or wrong, and every tool's verdict with its reason.
   entities:
   - entity: benchmark-book
     effect: reads
@@ -49,6 +49,7 @@ steps:
     - Original tags
     - Runtime
     - Right answer
+    - Answer source
   - entity: audit-verdict
     effect: reads
     facts:

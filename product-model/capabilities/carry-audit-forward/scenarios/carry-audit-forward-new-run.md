@@ -5,7 +5,7 @@ routes:
 steps:
 - kind: actor
   actor: library-owner
-  text: The owner compares the new LibraForge results with the audited ones.
+  text: The owner compares a tool's new results with its audited ones.
   entities: []
   contexts: &id001
     cli:
@@ -27,14 +27,14 @@ steps:
 references:
 - kind: code
   role: implementation
-  target: dev/benchmark/reaudit_run.py
+  target: dev/benchmark/audit_check.py
 ---
 
-# Judge a new LibraForge run
+# Judge a tool's new run
 
 ## Trigger
 
-A new LibraForge run was made over the same dataset.
+A tool was run again over the same dataset, as a new build or version.
 
 ## Outcome
 
@@ -42,6 +42,6 @@ Verdict files for the new run exist, with every changed book either settled by r
 
 ## Edge cases
 
-- An unchanged result is the same status, mode, chosen listing, and other-recording flag.
+- An unchanged result is the same status, chosen listing and written fields.
 - A changed result is settled by rule only when it is the confirmed answer's listing, a listing another tool was judged right or another recording on, or a series-only write into the book's own series.
 - A held or skipped book is never judged a held right pick by rule; only by hand.
