@@ -50,6 +50,7 @@ from app.folder_scan_cache import (
     scan_cache_key as folder_scan_cache_key,
 )
 import app.library_index as library_index
+from app import media_probe
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
 from app.enrichment import (
@@ -693,69 +694,11 @@ def source_audio_files(path: Path) -> list[Path]:
 
 
 def probe_audio_file(audio_file: Path) -> dict[str, Any]:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=codec_name,codec_long_name,profile,bit_rate,channels,sample_rate:format=format_name,format_long_name,bit_rate",
-            "-of",
-            "json",
-            str(audio_file),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    try:
-        probe = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return {"probed": False}
-    stream = (probe.get("streams") or [{}])[0]
-    format_info = probe.get("format") or {}
-    bitrate = stream.get("bit_rate") or format_info.get("bit_rate")
-    codec = str(stream.get("codec_name", "") or "").lower()
-    codec_label = str(stream.get("codec_long_name", "") or codec.upper())
-    profile = str(stream.get("profile", "") or "")
-    if profile and profile.lower() not in codec_label.lower():
-        codec_label = f"{codec_label} ({profile})"
-    container = str(format_info.get("format_long_name", "") or format_info.get("format_name", "") or "")
-    return {
-        "probed": bool(stream),
-        "codec": codec,
-        "codec_label": codec_label,
-        "container": container,
-        "bitrate_kbps": round(int(bitrate) / 1000) if bitrate else None,
-        "channels": int(stream["channels"]) if stream.get("channels") else None,
-        "sample_rate_hz": int(stream["sample_rate"]) if stream.get("sample_rate") else None,
-    }
+    return media_probe.audio_properties_of(audio_file)
 
 
 def probe_audio_file_duration(audio_file: Path) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(audio_file),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    try:
-        return max(0.0, float((result.stdout or "0").strip()))
-    except ValueError:
-        return 0.0
+    return media_probe.duration_seconds(audio_file) or 0.0
 
 
 _CPU_SAMPLE_LOCK = threading.Lock()
@@ -3881,28 +3824,7 @@ def enforce_m4b_output_metadata(
 
 
 def probe_duration_seconds(path: Path) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    try:
-        return max(0.0, float(result.stdout.strip()))
-    except ValueError:
-        return 0.0
+    return media_probe.duration_seconds(path) or 0.0
 
 
 def m4b_input_duration_seconds(input_path: Path, output_path: Path) -> float:
