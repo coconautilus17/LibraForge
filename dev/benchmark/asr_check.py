@@ -18,7 +18,7 @@ HEARD = 0.75
 NOT_HEARD = 0.6  # below this a name is not what was said; between the two it is unclear
 # Where the credits end: the story starts, or a cast list begins.
 CREDITS_END = re.compile(r"\b(chapter|prologue|part one|introduction|foreword|preface|with performances|starring)\b", re.I)
-NARRATOR_CREDIT = re.compile(r"\b(?:narrated|read|performed)\s+by\s+(.{3,120}?)(?=\.|,? with |,? an? [a-z]+ production|$|\b(?:chapter|prologue)\b)", re.I)
+NARRATOR_CREDIT = re.compile(r"\b(?:narrated|read|performed)(?:\s+for\s+you)?\s+by\s+(.{3,120}?)(?=\.|,? with |,? an? [a-z]+ production|$|\b(?:chapter|prologue|this book|copyright|library of congress)\b)", re.I)
 
 
 def norm(x):
@@ -119,12 +119,20 @@ def credit_words(credits):
     return norm(re.sub(r"(\d)\.(\d)", r"\1point\2", credits)).split()
 
 
+def credits_of(text):
+    """The opening credits: up to the first chapter-like word, but always through the narrator credit
+    (a title can say "Introduction", and a disclaimer can push the credit past 400 characters)."""
+    said = NARRATOR_CREDIT.search(text[:1200])
+    start = said.end() if said else 20
+    end = CREDITS_END.search(text, start)
+    return text[:end.start()] if end else text[:max(400, start)]
+
+
 def judge(fields, text, book_minutes=None):
     """How the opening credits stand against a listing's fields ({title, author, narrator, series,
     minutes}): each name's closeness, whether the book number said is one the listing has, whether the
     runtime agrees, and the verdict."""
-    end = CREDITS_END.search(text)
-    credits = text[:end.start()] if end and end.start() > 20 else text[:400]
+    credits = credits_of(text)
     w = credit_words(credits)
     c = {"title": closeness(title_core(fields.get("title", "")), w) if fields.get("title") else None,
          "authors": {p: closeness(p, w) for p in people(fields.get("author"))},
@@ -132,7 +140,10 @@ def judge(fields, text, book_minutes=None):
     title_words = norm(f"{fields.get('title', '')} {fields.get('subtitle', '')}").split()
     in_title = {n for i in range(len(title_words)) if (n := number_at(title_words, i)) is not None}
     names = [n for n, _ in fields.get("series") or [] if n] + [title_core(fields.get("title", ""))]
-    said, listed = said_numbers(w, names, in_title), listed_numbers(fields.get("series"))
+    # A book number comes before the narrator credit; after it come recaps ("Book 1 Recap") and parts.
+    credited = NARRATOR_CREDIT.search(credits)
+    said = said_numbers(credit_words(credits[:credited.end()]) if credited else w, names, in_title)
+    listed = listed_numbers(fields.get("series"))
     c["number"] = None if not said or not listed else bool(said & listed)
     m = fields.get("minutes")
     c["runtime"] = None if not m or not book_minutes else abs(m - book_minutes) <= max(3, 0.03 * book_minutes)
@@ -173,8 +184,7 @@ def main():
         if not b or row.get("error"):
             continue
         text = row.get("text", "")
-        end = CREDITS_END.search(text)
-        entry = {"credits": (text[:end.start()] if end and end.start() > 20 else text[:400]).strip()}
+        entry = {"credits": credits_of(text).strip()}
         if b["answer"]:
             entry["answer"] = judge(b["answer"], text, b["minutes"])
         out[row["folder"]] = entry
