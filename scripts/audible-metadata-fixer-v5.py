@@ -4631,7 +4631,71 @@ def ffmpeg_write_tags(source: Path, metadata: dict, backup: bool) -> None:
 
     tmp_path.replace(source)
 
+class CoverPrefetch:
+    """Cover downloads started while the run is still matching, so Apply's
+    writes find them ready instead of waiting on the network one at a time.
+    Only a book whose write will embed a cover is fetched for."""
+
+    def __init__(self, workers: int, cover_if_missing: bool, replace_cover: bool):
+        self._pool = ThreadPoolExecutor(max_workers=max(1, workers))
+        self._futures: dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self.cover_if_missing = cover_if_missing
+        self.replace_cover = replace_cover
+
+    def start(self, result: "ItemResult") -> None:
+        metadata = result.metadata or {}
+        url = metadata.get("cover_url") or ""
+        if result.status != "matched" or metadata.get("edit_mode") != "full" or not url:
+            return
+        with self._lock:
+            if url not in self._futures:
+                self._futures[url] = self._pool.submit(self._fetch_if_needed, result.file_path, result.clues, url)
+
+    def _fetch_if_needed(self, source: Path, clues: dict | None, url: str) -> tuple[bytes, str] | None:
+        if _cancel_requested:
+            return None
+        if not self.replace_cover and file_has_cover(source, clues) is not False:
+            return None  # cover_if_missing, and the book has one (or cannot be read)
+        return fetch_cover_bytes(url)
+
+    def take(self, url: str) -> tuple[bytes, str] | None:
+        with self._lock:
+            future = self._futures.get(url)
+        if future is None:
+            return None
+        try:
+            return future.result()
+        except Exception:
+            return None  # fetched again by the write, which reports its own failure
+
+    def shutdown(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+_cover_prefetch: CoverPrefetch | None = None
+
+
+def file_has_cover(source: Path, clues: dict | None) -> bool | None:
+    """Whether the tags a write would update already hold a cover; None when
+    this book's write embeds no cover (a json sidecar) or its tags cannot be read."""
+    try:
+        if is_mutagen_mp4_candidate(source) and not should_write_json_sidecar(source, clues):
+            tags = MP4(str(source)).tags
+            return bool(tags is not None and mp4_has_cover(tags))
+        if is_single_file_mp3(source, clues) and is_mutagen_mp3_candidate(source):
+            return mp3_has_cover(ID3(str(source)))
+    except Exception:
+        return None
+    return None
+
+
 def download_cover_bytes(url: str) -> tuple[bytes, str]:
+    prefetched = _cover_prefetch.take(url) if _cover_prefetch is not None and url else None
+    return prefetched if prefetched is not None else fetch_cover_bytes(url)
+
+
+def fetch_cover_bytes(url: str) -> tuple[bytes, str]:
     import tempfile
     from pathlib import Path
     from urllib.parse import unquote, urlparse
@@ -5736,6 +5800,8 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     if to_probe:
         def read_one(item: tuple[str, float | None]) -> tuple[str, float | None, str]:
             key, mtime = item
+            if _cancel_requested:
+                return key, mtime, ""
             fp = Path(key)
             # Cheap sources first; probe the media file only when neither has it.
             asin = asin_without_probe(fp)
@@ -5750,6 +5816,8 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
                 probed = list(executor.map(read_one, to_probe))
         else:
             probed = [read_one(item) for item in to_probe]
+        if _cancel_requested:
+            return {}  # runs alongside the search now: a cancel leaves the cache as it was
 
         for key, mtime, asin in probed:
             resolved[key] = asin
@@ -6280,7 +6348,7 @@ def main():
     args = parser.parse_args()
     # Share what was read about each file with the web app and other runs.
     media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
-    global _exit_on_cancel
+    global _exit_on_cancel, _cover_prefetch
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
     if args.audible_public_region:
@@ -6434,6 +6502,14 @@ def main():
             print(f"  NOTE: {note}", flush=True)
         print(f"Dry run matches on record: {len(plan_records)} books (others are searched).", flush=True)
 
+    # What Apply's writes will need from the network or the whole disk does not
+    # depend on any other book: start it while the books are still being matched.
+    # The writes themselves wait for every match, which the duplicate-ASIN guard needs.
+    if args.apply and (args.cover_if_missing or args.replace_cover) and not args.metadata_json_only:
+        _cover_prefetch = CoverPrefetch(args.workers, args.cover_if_missing, args.replace_cover)
+    disk_asin_scan = ThreadPoolExecutor(max_workers=1)
+    disk_asin_future = disk_asin_scan.submit(build_disk_asin_map, full_library_files, args.asin_scan_workers)
+
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
@@ -6490,6 +6566,8 @@ def main():
             print(f"REPORT_ITEM_JSON: {json.dumps(_build_report_item(result))}", flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
+            if _cover_prefetch is not None:
+                _cover_prefetch.start(result)
 
         if cancelled_in_pass1:
             print(
@@ -6527,8 +6605,9 @@ def main():
             "Checking the library for existing ASINs to prevent duplicates...",
             flush=True,
         )
-        disk_asin_map = build_disk_asin_map(full_library_files, args.asin_scan_workers)
+        disk_asin_map = disk_asin_future.result()
         detect_global_asin_duplicates(all_results, disk_asin_map)
+    disk_asin_scan.shutdown(wait=False, cancel_futures=True)
 
     # Pass 2: concurrent writes via a per-book queue.
     # Each worker pops one book at a time; output and shared counters are
@@ -6875,6 +6954,9 @@ def main():
         _futs = [_pool.submit(_write_worker) for _ in range(_n_write_workers)]
         for _f in _futs:
             _f.result()
+    if _cover_prefetch is not None:
+        _cover_prefetch.shutdown()
+        _cover_prefetch = None
 
     matched           = _write_shared["matched"]
     skipped           = _write_shared["skipped"]
