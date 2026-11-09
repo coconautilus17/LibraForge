@@ -1914,10 +1914,20 @@ def write_marker(
     alone: bool = False,
     written_fields: list[str] | None = None,
     field_policy: str = "legacy",
+    applied_tags_metadata: dict | None = None,
 ) -> None:
+    """Record the applied match in the book's libraforge.json.
+
+    applied_tags_metadata, when the tags were just written, also stamps them
+    into the original-tags backup (as update_backup_with_applied_metadata
+    does), in the same sidecar write.
+    """
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
+    if applied_tags_metadata is not None and isinstance(payload.get("backup"), dict):
+        payload["backup"]["applied_tags"] = _synthesize_applied_tags(applied_tags_metadata)
+        payload["backup"]["applied_at"] = datetime.now(timezone.utc).isoformat()
     existing_marker = payload.get("marker") or {}
     # Preserve any previously-recorded written fields so a fill-missing run that
     # adds one field doesn't erase the record of fields written by an earlier run.
@@ -6730,6 +6740,7 @@ def main():
                     else:
                         applied_parts: list[str] = []
                         primary_output_kind = "tags"
+                        tags_written = False
 
                         if metadata_json_pending:
                             abs_path = sync_or_write_abs_metadata(
@@ -6756,7 +6767,7 @@ def main():
                                         cover_if_missing=args.cover_if_missing,
                                         replace_cover=args.replace_cover,
                                     )
-                                    update_backup_with_applied_metadata(file_path, effective_metadata)
+                                    tags_written = True
                                     applied_parts.append(f"writer={writer_used}")
                                 sidecar_path = write_m4b_tool_metadata_sidecar(
                                     file_path, effective_metadata, clues, score
@@ -6770,7 +6781,7 @@ def main():
                                     cover_if_missing=args.cover_if_missing,
                                     replace_cover=args.replace_cover,
                                 )
-                                update_backup_with_applied_metadata(file_path, effective_metadata)
+                                tags_written = True
                                 applied_parts.append(f"writer={writer_used}")
                                 primary_output_kind = "tags"
 
@@ -6787,6 +6798,7 @@ def main():
                             aggressive=aggressive_edit,
                             output_kind=primary_output_kind, alone=_alone,
                             written_fields=_written_fields,
+                            applied_tags_metadata=effective_metadata if tags_written else None,
                         )
                         _sfx = f" [{write_note}]" if write_note else ""
                         _rec = " [recovered from marker]" if result.from_marker else ""
