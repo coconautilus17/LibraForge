@@ -12,7 +12,8 @@ It creates the root user and a book library with the Audible provider, scans it,
 then calls POST /api/items/{id}/match per book: the Quick Match button, which takes
 the first result of ABS's Audible search (by the file's ASIN when it has one).
 overrideDetails is on so the item's ASIN is always the one ABS picked. Rows use the
-lf_bench.py shape (folder, status, match), so score.py reads them as-is.
+lf_bench.py shape (folder, status, match), so bench_data.py reads them as-is; the matching's
+total runtime goes to <out>.time.
 """
 import json
 import sys
@@ -47,7 +48,10 @@ call("POST", f"/api/libraries/{lib['id']}/scan", {}, token=token)
 last, stable = -1, 0
 while stable < 3:  # the scan runs in the background: wait until the count settles
     time.sleep(20)
-    total = call("GET", f"/api/libraries/{lib['id']}/items?limit=1", token=token)["total"]
+    try:  # mid-scan, ABS can answer without a count: just ask again
+        total = call("GET", f"/api/libraries/{lib['id']}/items?limit=1", token=token)["total"]
+    except (KeyError, TypeError, OSError):
+        continue
     stable = stable + 1 if total == last else 0
     last = total
     print("scanned", total, flush=True)
@@ -81,11 +85,13 @@ def match(item):
         "series": series.get("name", ""), "sequence": series.get("sequence", "") or ""}}
 
 
-done = 0
+done, start = 0, time.time()
 with open(OUT, "w") as out, ThreadPoolExecutor(WORKERS) as pool:
     for row in pool.map(match, items):
         out.write(json.dumps(row, ensure_ascii=False) + "\n")
         done += 1
         if done % 200 == 0:
             print("matched", done, "of", len(items), flush=True)
+# Total runtime of the matching (not the scan).
+open(OUT.removesuffix(".jsonl") + ".time", "w").write(f"{time.time() - start:.0f}\n")
 print("done", done, flush=True)

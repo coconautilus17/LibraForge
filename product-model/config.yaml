@@ -2,4 +2,4 @@ schema: 11
 sdd:
   paths: []
 lint:
-  verbs: [compile, preview, revert]
+  verbs: [compile, preview, revert, identify]

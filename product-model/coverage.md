@@ -63,6 +63,12 @@ covered:
   - app/settings_paths.py
   - config/
   - scripts/normalize-author-names.py
+- description: The matching benchmark, its audit and its public comparison page, and the recording check its
+    verdicts use.
+  paths:
+  - dev/benchmark/
+  - dev/tools/chapter_match.py
+  - dev/README.md
 exclusions:
 - description: Build, deployment and dependency packaging rather than library preparation behavior.
   paths:
@@ -72,9 +78,6 @@ exclusions:
   - docker-compose.yml
   - docker-compose.dist.yml
   - .github/
-- description: Developer benchmark and comparison tooling kept out of the published image.
-  paths:
-  - dev/
 - description: Appearance preferences, styling, icons and demo media; appearance choices do not alter
     product workflow.
   paths:
@@ -93,6 +96,9 @@ exclusions:
   - app/debug_trace.py
   - app/progress_phases.py
 unmapped:
+- description: Rebuilding the Audiobook Guild catalog LibraForge ships; release preparation for Metadata Forge.
+  paths:
+  - dev/tools/build_guild_catalog.py
 - description: One-time series-number suffix backfill; historical migration beyond the core preparation
     workflow.
   paths:
