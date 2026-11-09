@@ -4,11 +4,16 @@ import hashlib
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
 FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
 DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
+# Folders listed, and book folders signed, at the same time: on a network share
+# each listing and stat is a round trip, so they are overlapped (as AudioSilo's
+# scanner does with 8).
+LISTING_WORKERS = 8
 
 
 def is_audio_file(path: Path) -> bool:
@@ -178,28 +183,73 @@ def build_library_index(
     # folder (and its disc subfolders) a second time.
     listings: dict[str, list[os.DirEntry]] = {}
 
-    def walk(directory: Path) -> None:
-        # Like os.walk: a folder that can't be listed is skipped, not fatal,
-        # and a symlinked folder is listed by name but not descended into.
+    def list_folder(directory: Path) -> tuple[Path, list[os.DirEntry] | None]:
+        # Like os.walk: a folder that can't be listed is skipped, not fatal.
         try:
             listing = sorted(os.scandir(directory), key=lambda e: e.name)
         except OSError:
-            return
+            return directory, None
+        if any(is_audio_file(Path(e.name)) for e in listing if not _is_dir(e)):
+            # A folder with audio is signed below. Its entries are stat'ed now,
+            # while the share still holds their attributes from the listing
+            # (a network share forgets them within a second); each DirEntry
+            # keeps its stat for the signature.
+            for entry in listing:
+                try:
+                    entry.stat()
+                except OSError:
+                    pass  # stat'ed again, and handled, by the signature
+        return directory, listing
+
+    def take(directory: Path, listing: list[os.DirEntry]) -> list[Path]:
+        """Record a folder's listing; returns the subfolders to walk (a
+        symlinked folder is listed by name but not descended into)."""
         listings[str(directory)] = listing
         names = [e.name for e in listing if not _is_dir(e)]
         if directory == root:
             loose_root_files.extend(directory / f for f in names if is_audio_file(directory / f))
         elif any(is_audio_file(directory / f) for f in names):
             audio_folders.add(directory)
-        for entry in listing:
-            if (
-                _is_dir(entry)
-                and not entry.is_symlink()
-                and not any(entry.name.startswith(s) for s in skip_prefixes)
-            ):
-                walk(Path(entry.path))
+        return [
+            Path(entry.path) for entry in listing
+            if _is_dir(entry)
+            and not entry.is_symlink()
+            and not any(entry.name.startswith(s) for s in skip_prefixes)
+        ]
 
-    walk(root)
+    # Each listed folder queues its own subfolders; the walk ends when no
+    # folder is left in the queue or being listed.
+    lock = threading.Lock()
+    outstanding = [0]
+    finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def visit(directory: Path) -> None:
+        try:
+            directory, listing = list_folder(directory)
+            if listing is not None:
+                with lock:
+                    subfolders = take(directory, listing)
+                for sub in subfolders:
+                    queue(sub)
+        except BaseException as exc:  # surfaced below, as the serial walk would
+            errors.append(exc)
+        finally:
+            with lock:
+                outstanding[0] -= 1
+                if outstanding[0] == 0:
+                    finished.set()
+
+    with ThreadPoolExecutor(LISTING_WORKERS) as pool:
+        def queue(directory: Path) -> None:
+            with lock:
+                outstanding[0] += 1
+            pool.submit(visit, directory)
+
+        queue(root)
+        finished.wait()
+    if errors:
+        raise errors[0]
 
     book_folders: set[Path] = set()
     for folder in audio_folders:
@@ -214,7 +264,9 @@ def build_library_index(
             return folder_listing_signature(Path(path))
         return _signature_of_listing(listing, signature)
 
-    signatures = {str(folder): signature(str(folder)) for folder in book_folders}
+    with ThreadPoolExecutor(LISTING_WORKERS) as pool:
+        folders = [str(folder) for folder in book_folders]
+        signatures = dict(zip(folders, pool.map(signature, folders)))
     entries = [(folder, False) for folder in sorted(book_folders)]
     entries.extend((f, True) for f in sorted(loose_root_files))
     return entries, signatures

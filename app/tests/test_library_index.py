@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from app.library_index import (
@@ -219,6 +220,35 @@ class BuildLibraryIndexTests(unittest.TestCase):
         (self.root / "Link").symlink_to(self.root / "A", target_is_directory=True)
         entries, _ = build_library_index(self.root)
         self.assertEqual(entries, [(self.root / "A" / "Book1", False)])
+
+
+    def test_folders_are_listed_and_signed_several_at_a_time(self):
+        # On a network share each listing and stat is a round trip: the walk
+        # overlaps them (AudioSilo lists 8 folders at once).
+        for i in range(12):
+            self._touch(f"Author {i}/Book/Book.m4b")
+        import app.library_index as library_index
+        real_scandir = os.scandir
+        lock, active, peak = threading.Lock(), [0], [0]
+
+        def slow_scandir(path):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            try:
+                time.sleep(0.02)
+                return real_scandir(path)
+            finally:
+                with lock:
+                    active[0] -= 1
+
+        with unittest.mock.patch.object(library_index.os, "scandir", slow_scandir):
+            entries, signatures = build_library_index(self.root)
+        self.assertGreater(peak[0], 1)
+        self.assertLessEqual(peak[0], library_index.LISTING_WORKERS)
+        self.assertEqual(len(entries), 12)
+        for folder, signature in signatures.items():
+            self.assertEqual(signature, folder_listing_signature(Path(folder)))
 
 
 class EnsureLibraryIndexFreshTests(unittest.TestCase):
