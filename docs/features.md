@@ -15,9 +15,9 @@ Searches Audible (or another provider) and writes matched metadata to your files
 
 - **Dry-run first**, then enable **Apply** to write. **Backup and cache** on the first
   apply preserves originals and speeds up later runs.
-- **Concurrent workers** (v5): parallel Audible search with a per-thread client pool,
-  per-query de-duplication, and a persistent chapter-count cache that makes repeat
-  discovery near-instant.
+- **Concurrent workers** (v5): 8 books searched at once by default, with a per-thread
+  client pool, per-query de-duplication, one shared back-off for every worker when Audible
+  throttles, and a persistent chapter-count cache that makes repeat discovery near-instant.
 - **Write modes:** `smart` (skip the write when embedded tags already match),
   `fill-missing` (only write currently-empty fields), `overwrite` (always write).
 - **ASIN aware:** the matched ASIN is embedded in every file; if a file already carries
@@ -64,8 +64,8 @@ Searches Audible (or another provider) and writes matched metadata to your files
   rate-limits aggressively; a circuit breaker opens after repeated failures and skips
   Goodreads/Kindle lookups for a cooldown window rather than hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
-  popup warns if you enabled the fallback with more than 5 search workers, since that's
-  what usually trips it.
+  popup explains it at the end of the run. Goodreads requests are paced one at a time
+  however many search workers run.
 - **Series members:** when Audible finds no confident full match and the book belongs to
   a series, LibraForge reads that series' own Audible listing, which names every book in it,
   and looks them all up by ASIN. Audible's search leaves out books that can't be bought
