@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SCRIPTS_DIR: ${{ github.workspace }}/scripts
       REPORTS_DIR: /tmp/libraforge-reports
@@ -35,7 +35,7 @@ jobs:
           find scripts -name "*.py" -exec python -m py_compile {} +
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose config
