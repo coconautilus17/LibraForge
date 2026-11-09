@@ -98,6 +98,11 @@ class FallbackTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         media_probe.reset()
         self.addCleanup(media_probe.reset)
+        # The native reader runs only beside the ffprobe release it follows; the image ships it,
+        # a test machine may not (Ubuntu 26.04 has FFmpeg 8.0).
+        patcher = mock.patch.object(media_probe, "ffprobe_release", return_value=mp4_native.FFMPEG_RELEASE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_codec_it_does_not_read_goes_to_ffprobe(self):
         book = self.dir / "a.m4a"
