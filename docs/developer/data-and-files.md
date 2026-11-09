@@ -89,7 +89,9 @@ the app adds, switches and deregisters accounts. Never commit these.
   remain.
 - The shared library index (`app/library_index.py`): a background walk of the library that
   records, per book folder, a signature of its direct children (`folder_listing_signature`,
-  computed from the walk's own listing) so other features can tell what changed. The M4B
+  computed from the walk's own listing) so other features can tell what changed. It lists
+  8 folders at a time (`LISTING_WORKERS`) and stats a book folder's files right after
+  listing it, while a network share still holds their attributes. The M4B
   discovery cache compares these signatures to decide whether a cached search is still
   fresh, and which book folders to search again when it is not.
 - Media facts read in this process (`app/media_probe.py`): each file's last inspection,
