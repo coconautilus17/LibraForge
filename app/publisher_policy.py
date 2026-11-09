@@ -18,11 +18,13 @@ the catalog stays in sync across the UI and the runs.
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from app.settings_paths import user_settings_file
 from app.json_files import write_json_atomic
+from app.versioned_memo import memo_while
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +47,14 @@ SPECIAL_PROVIDERS = {
     "soundbooththeater": "Soundbooth Theater",
 }
 
-_CACHE_KEY: tuple[int, int] | None = None
+_CACHE_KEY: tuple[str, int, str, int] | None = None
 _CACHE_ENTRIES: tuple[dict[str, Any], ...] = ()
 _CACHE_PATTERNS: tuple[tuple[re.Pattern[str], dict[str, Any]], ...] = ()
+# The catalog files change rarely and are consulted for every name the matcher
+# cleans, so their modification times are looked at no more than this often.
+RECHECK_SECONDS = 1.0
+_CHECKED_AT = 0.0
+_CHECKED_FILES: tuple[Path, Path] | None = None
 
 
 def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -231,13 +238,19 @@ def _active() -> tuple[
     tuple[dict[str, Any], ...],
     tuple[tuple[re.Pattern[str], dict[str, Any]], ...],
 ]:
-    """Return enabled entries plus their compiled name/alias matchers (mtime-cached)."""
-    global _CACHE_KEY, _CACHE_ENTRIES, _CACHE_PATTERNS
+    """Return enabled entries plus their compiled name/alias matchers (mtime-cached;
+    the files are looked at no more than once every RECHECK_SECONDS)."""
+    global _CACHE_KEY, _CACHE_ENTRIES, _CACHE_PATTERNS, _CHECKED_AT, _CHECKED_FILES
+    files = (DEFAULT_POLICY_FILE, LOCAL_POLICY_FILE)
+    now = time.monotonic()
+    if _CACHE_KEY is not None and files == _CHECKED_FILES and now - _CHECKED_AT < RECHECK_SECONDS:
+        return _CACHE_ENTRIES, _CACHE_PATTERNS
     default_mtime = (
         DEFAULT_POLICY_FILE.stat().st_mtime_ns if DEFAULT_POLICY_FILE.exists() else 0
     )
     local_mtime = LOCAL_POLICY_FILE.stat().st_mtime_ns if LOCAL_POLICY_FILE.exists() else 0
-    cache_key = (default_mtime, local_mtime)
+    cache_key = (str(DEFAULT_POLICY_FILE), default_mtime, str(LOCAL_POLICY_FILE), local_mtime)
+    _CHECKED_AT, _CHECKED_FILES = now, files
     if cache_key == _CACHE_KEY:
         return _CACHE_ENTRIES, _CACHE_PATTERNS
 
@@ -269,6 +282,13 @@ def _active() -> tuple[
     return _CACHE_ENTRIES, _CACHE_PATTERNS
 
 
+def publisher_version() -> tuple[str, int, str, int] | None:
+    """Changes whenever the active publisher catalog may have changed."""
+    _active()
+    return _CACHE_KEY
+
+
+@memo_while(publisher_version)
 def strip_publisher_noise(text: str) -> str:
     """Remove known publisher/imprint/source tokens from a string.
 

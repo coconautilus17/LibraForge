@@ -171,10 +171,25 @@ _ALIASES.update(FOREIGN_STORE_ALIASES)
 _COMPOUND_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\band\b)\s*", re.I)
 
 
+# The tables above are fixed once this module has loaded, but the matcher asks
+# about genre names thousands of times per book: the name sets are built once,
+# and built again after the table's last change at the end of the module.
+_NAME_TABLES: tuple[dict[str, str], set[str]] | None = None
+
+
+def _name_tables() -> tuple[dict[str, str], set[str]]:
+    global _NAME_TABLES
+    if _NAME_TABLES is None:
+        names = set(MAIN_ORDER) | {n for m, sub in LABEL_MAP.values() for n in m + sub}
+        output = {n.lower(): n for n in names if not n.endswith("?")}
+        known = set(LABEL_MAP) | {n.lower() for n in names}
+        _NAME_TABLES = (output, known)
+    return _NAME_TABLES
+
+
 def _output_names() -> dict[str, str]:
-    """Controlled genre names, lowercase -> canonical spelling."""
-    names = set(MAIN_ORDER) | {n for m, sub in LABEL_MAP.values() for n in m + sub}
-    return {n.lower(): n for n in names if not n.endswith("?")}
+    """Controlled genre names, lowercase -> canonical spelling. Shared: read only."""
+    return _name_tables()[0]
 
 
 def label_for_slug(slug: str) -> str | None:
@@ -218,7 +233,7 @@ FORMAT_WORDS = {"audiobook", "audiobooks", "audio book", "audio books"}
 
 
 def _is_known_genre(text: str) -> bool:
-    known = set(LABEL_MAP) | {n.lower() for m, sub in LABEL_MAP.values() for n in m + sub}
+    known = _name_tables()[1]
     label = normalize_label(text)
     return label in known or (label.endswith("s") and label[:-1] in known)
 
@@ -518,3 +533,4 @@ LABEL_MAP.update({
     for label, (mains, subs) in LABEL_MAP.items()
     if split_compound_genres(subs, canonical=False) != subs
 })
+_NAME_TABLES = None  # the update above changed the table

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,13 @@ LOCAL_POLICY_FILE = Path(
     )
 )
 
-_CACHE_KEY: tuple[int, int] | None = None
+_CACHE_KEY: tuple[str, int, str, int] | None = None
 _CACHE_PATTERNS: tuple[re.Pattern[str], ...] = ()
+# The policy files change rarely and are consulted for every title the matcher
+# cleans, so their modification times are looked at no more than this often.
+RECHECK_SECONDS = 1.0
+_CHECKED_AT = 0.0
+_CHECKED_FILES: tuple[Path, Path] | None = None
 
 
 def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -240,10 +246,15 @@ def clear_title_noise_cache() -> None:
 
 
 def active_title_noise_patterns() -> tuple[re.Pattern[str], ...]:
-    global _CACHE_KEY, _CACHE_PATTERNS
+    global _CACHE_KEY, _CACHE_PATTERNS, _CHECKED_AT, _CHECKED_FILES
+    files = (DEFAULT_POLICY_FILE, LOCAL_POLICY_FILE)
+    now = time.monotonic()
+    if _CACHE_KEY is not None and files == _CHECKED_FILES and now - _CHECKED_AT < RECHECK_SECONDS:
+        return _CACHE_PATTERNS
     default_mtime = DEFAULT_POLICY_FILE.stat().st_mtime_ns if DEFAULT_POLICY_FILE.exists() else 0
     local_mtime = LOCAL_POLICY_FILE.stat().st_mtime_ns if LOCAL_POLICY_FILE.exists() else 0
-    cache_key = (default_mtime, local_mtime)
+    cache_key = (str(DEFAULT_POLICY_FILE), default_mtime, str(LOCAL_POLICY_FILE), local_mtime)
+    _CHECKED_AT, _CHECKED_FILES = now, files
     if cache_key == _CACHE_KEY:
         return _CACHE_PATTERNS
 
@@ -258,6 +269,12 @@ def active_title_noise_patterns() -> tuple[re.Pattern[str], ...]:
     _CACHE_KEY = cache_key
     _CACHE_PATTERNS = tuple(compiled)
     return _CACHE_PATTERNS
+
+
+def title_noise_version() -> tuple[str, int, str, int] | None:
+    """Changes whenever the active title-noise patterns may have changed."""
+    active_title_noise_patterns()
+    return _CACHE_KEY
 
 
 def is_title_noise(value: str) -> bool:
