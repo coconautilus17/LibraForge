@@ -728,6 +728,55 @@ PUBLIC_AUDIBLE_DOMAINS = {
 }
 
 
+class AudibleThrottle:
+    """One back-off shared by every Audible catalog request in the process.
+
+    When Audible throttles a request (429/503), every worker waits before its
+    next request, rather than each retrying on its own while the others keep
+    asking. The wait is Audible's Retry-After when it sends one, else 2 s,
+    doubling (to 30 s) while throttling continues after a wait, and back to
+    2 s after a request succeeds."""
+
+    FIRST_WAIT_S = 2.0
+    MAX_WAIT_S = 30.0
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] | None = None):
+        self._clock, self._sleep = clock, sleep or (lambda seconds: time.sleep(seconds))
+        self._lock = threading.Lock()
+        self.resume_at = 0.0
+        self._wait = 0.0
+
+    def wait_turn(self) -> None:
+        with self._lock:
+            delay = self.resume_at - self._clock()
+        if delay > 0:
+            self._sleep(delay)
+
+    def throttled(self, retry_after: float | None) -> None:
+        with self._lock:
+            now = self._clock()
+            if now < self.resume_at:
+                return  # already backing off: the other workers' requests were in flight
+            self._wait = min(self.MAX_WAIT_S, self._wait * 2 if self._wait else self.FIRST_WAIT_S)
+            self.resume_at = now + (retry_after if retry_after else self._wait)
+
+    def succeeded(self) -> None:
+        with self._lock:
+            self._wait = 0.0
+
+
+_AUDIBLE_THROTTLE = AudibleThrottle()
+_THROTTLED = (429, 503)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    try:
+        value = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        return None
+    return min(value, AudibleThrottle.MAX_WAIT_S) if value > 0 else None
+
+
 class PublicAudibleClient:
     """Login-free stand-in for audible.Client, for catalog calls only.
 
@@ -737,31 +786,44 @@ class PublicAudibleClient:
     """
 
     def __init__(self, region: str = "", timeout: float = 20.0, retries: int = 2,
-                 transport: httpx.BaseTransport | None = None):
+                 transport: httpx.BaseTransport | None = None, throttled_retries: int = 6):
         region = (region or os.environ.get("AUDIBLE_PUBLIC_REGION", "") or "us").lower()
         self.base_url = f"https://api.{PUBLIC_AUDIBLE_DOMAINS.get(region, 'audible.com')}/1.0/"
         self.timeout = timeout
         self.retries = retries
+        # Throttling ends when Audible says so: up to ~1.5 min of shared waits.
+        self.throttled_retries = throttled_retries
         # One connection kept open for every request: opening a new one each
         # time (urllib) made a catalog call ~500 ms instead of ~210 ms.
         self._http = httpx.Client(timeout=timeout, headers={"Accept": "application/json"}, transport=transport)
 
     def get(self, path: str, params: dict | None = None) -> dict:
         url = self.base_url + path.lstrip("/")
-        for attempt in range(self.retries + 1):
+        failures = throttles = 0
+        while True:
+            _AUDIBLE_THROTTLE.wait_turn()
             try:
                 resp = self._http.get(url, params=params)
                 resp.raise_for_status()
+                _AUDIBLE_THROTTLE.succeeded()
                 return resp.json()
             except httpx.HTTPStatusError as exc:
-                # Throttling or a transient upstream error: back off and retry.
-                if exc.response.status_code not in (429, 500, 502, 503, 504) or attempt == self.retries:
+                status = exc.response.status_code
+                if status in _THROTTLED:
+                    # Audible is throttling: everyone waits, then this request again.
+                    throttles += 1
+                    if throttles > self.throttled_retries:
+                        raise
+                    _AUDIBLE_THROTTLE.throttled(_retry_after_seconds(exc.response))
+                    continue
+                # A transient upstream error: back off and retry.
+                if status not in (500, 502, 504) or failures == self.retries:
                     raise
             except httpx.TransportError:
-                if attempt == self.retries:
+                if failures == self.retries:
                     raise
-            time.sleep(1.5 * (attempt + 1))
-        return {}
+            failures += 1
+            time.sleep(1.5 * failures)
 
 
 def get_catalog_client(auth_file: str, password: str | None = None, public_region: str = ""):
@@ -811,15 +873,17 @@ def cached_audible_search(
                 break
             event = in_flight[key]
         event.wait(timeout=60)
+    failed = False
     try:
         results = audible_search(client, query, limit, title=title, author=author)
         if api_delay_ms > 0:
             time.sleep(api_delay_ms / 1000)
     except Exception:
-        results = []
+        results, failed = [], True
     finally:
         with cache_lock:
-            cache[key] = results
+            if not failed:  # a failed search is asked again, never remembered as "no results"
+                cache[key] = results
             in_flight.pop(key, None)
         event.set()
     return results

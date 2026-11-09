@@ -6203,8 +6203,8 @@ def main():
         dest="enable_goodreads_fallback",
         help=(
             "Allow automatic Goodreads fallback when Audible does not "
-            "return a confident full match. Goodreads rate-limits aggressively; use "
-            "--workers 5 or lower when enabling this."
+            "return a confident full match. Goodreads requests are paced one at a "
+            "time whatever --workers is."
         ),
     )
     parser.add_argument(
@@ -6219,9 +6219,9 @@ def main():
         type=int,
         default=None,
         help=(
-            "Parallel search/match workers. Bottleneck is API latency. "
-            "Recommended 10-20 for fast runs; raise to 50 only if not hitting rate limits. "
-            "Defaults to 5 when --metadata-json-only is set, otherwise 1."
+            "Parallel search/match workers. Beyond about 16 a run stops getting "
+            "faster: Audible throttles and every worker waits for it. "
+            "Defaults to 5 when --metadata-json-only is set, otherwise 8."
         ),
     )
 
@@ -6288,7 +6288,7 @@ def main():
         trace_configure(enabled=True, file_path=args.debug_trace_file, categories=cats)
 
     if args.workers is None:
-        args.workers = 5 if args.metadata_json_only else 1
+        args.workers = 5 if args.metadata_json_only else 8
     if args.write_workers is None:
         args.write_workers = args.workers
 
@@ -6382,11 +6382,6 @@ def main():
     print(f"Write workers:  {args.write_workers}")
     if args.enable_goodreads_fallback:
         print("Goodreads fallback: ENABLED")
-        if args.workers > 5:
-            print(
-                "WARNING: Goodreads fallback is rate-limited; use 5 search "
-                f"workers or fewer when enabling it (current: {args.workers})."
-            )
     print()
 
     found = len(processing_items)

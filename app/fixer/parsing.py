@@ -20,14 +20,21 @@ from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from app.title_noise_policy import close_dangling_bracket, is_title_noise, remove_trailing_title_noise
+from app.title_noise_policy import (
+    close_dangling_bracket,
+    is_title_noise,
+    remove_trailing_title_noise,
+    title_noise_version,
+)
 from app.publisher_policy import (
     SPECIAL_PROVIDERS,
     match_canonical_publisher,
+    publisher_version,
     special_provider_for,
     strip_publisher_noise,
 )
 from app.debug_trace import trace, ALTER, CHOOSE
+from app.versioned_memo import memo_while
 
 # "NOREALASIN" is a placeholder for "this book has no Audible listing": LibraForge's
 # marker records it, and some tools wrote it into the asin tag. It is never an ASIN.
@@ -39,6 +46,11 @@ GENERIC_AUTHORS = {"unknown", "unknown author", "various", "various authors", "a
 # ---------------------------------------------------------------------------
 # Text normalization
 # ---------------------------------------------------------------------------
+
+def _text_policy_version() -> tuple:
+    """Title cleanup depends on the title-noise and publisher lists alone."""
+    return title_noise_version(), publisher_version()
+
 
 def clean_text(value: str) -> str:
     if not value:
@@ -110,6 +122,7 @@ def strip_publisher_affixes(value: str) -> str:
 
 
 @trace(ALTER, capture=["value"])
+@memo_while(_text_policy_version)
 def sanitize_technical_labels(value: str) -> str:
     """Remove codec/release noise without deleting ambiguous title words."""
     value = clean_text(value)
@@ -148,6 +161,7 @@ def sanitize_technical_labels(value: str) -> str:
 
 
 @trace(ALTER, capture=["value"])
+@memo_while(_text_policy_version)
 def sanitize_book_title(value: str) -> str:
     """Remove technical and generic marketing text from a book title."""
     value = sanitize_technical_labels(value)
@@ -171,6 +185,7 @@ def sanitize_book_title(value: str) -> str:
 
 
 @trace(ALTER, capture=["value"])
+@memo_while(_text_policy_version)
 def normalize_for_match(value: str) -> str:
     value = sanitize_book_title(value).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
@@ -246,7 +261,13 @@ def drop_publisher_credits(value: str) -> str:
 
 def _split_author_names(value: str) -> list[str]:
     """Split a credit string into individual normalized author names."""
-    return [n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n]
+    return list(_author_names(value))
+
+
+@memo_while(_text_policy_version)
+def _author_names(value: str) -> tuple[str, ...]:
+    # Remembered: every candidate is compared against the same local credit.
+    return tuple(n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n)
 
 
 def _authors_compatible(local: str, candidate: str) -> bool | None:

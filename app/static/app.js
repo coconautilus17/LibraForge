@@ -120,7 +120,7 @@ function collectRequest() {
     metadata_json_only: $('metadataJsonOnly').checked,
     trust_abs_metadata: Boolean($('trustAbsMetadata')?.checked),
     weight_abs_metadata: Boolean($('weightAbsMetadata')?.checked),
-    workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '1', 10) : undefined,
+    workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '8', 10) : undefined,
     write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
@@ -237,21 +237,9 @@ async function poll() {
     $('cancelBtn').disabled = true;
     if (state.stats?.goodreads_circuit_tripped && goodreadsBreakerHandledForRun !== currentRun) {
       goodreadsBreakerHandledForRun = currentRun;
-      showGoodreadsBreakerWarning(state.stats.search_workers);
+      showGoodreadsBreakerWarning();
     }
   }
-}
-
-// Given the effective search-worker count this run used, decide what to
-// suggest for the next Goodreads-enabled run: cap at 5, then step down by one
-// each time the breaker keeps tripping; at 1 worker there is nothing left to
-// lower, so the likely cause is Goodreads-side congestion, not our own rate.
-function computeGoodreadsWorkerSuggestion(currentWorkers) {
-  const n = Number(currentWorkers);
-  if (!Number.isFinite(n) || n <= 0) return { kind: 'unknown' };
-  if (n > 5) return { kind: 'lower', current: n, suggested: 5 };
-  if (n > 1) return { kind: 'lower', current: n, suggested: n - 1 };
-  return { kind: 'wait_only', current: n };
 }
 
 function buildGoodreadsBreakerDialog() {
@@ -272,25 +260,15 @@ function buildGoodreadsBreakerDialog() {
   document.body.appendChild(dlg);
 }
 
-function showGoodreadsBreakerWarning(searchWorkers) {
+function showGoodreadsBreakerWarning() {
   buildGoodreadsBreakerDialog();
   const dlg = $('goodreadsBreakerDialog');
-  const suggestion = computeGoodreadsWorkerSuggestion(searchWorkers);
-  let advice;
-  if (suggestion.kind === 'lower') {
-    advice = `Wait about 2 minutes after this run finishes before starting another
-      Goodreads-enabled run, and lower search workers from ${suggestion.current} to
-      ${suggestion.suggested} to ease off Goodreads next time.`;
-  } else if (suggestion.kind === 'wait_only') {
-    advice = `This run already used just 1 search worker, so lowering it further won't
-      help. Goodreads may simply be under heavy traffic right now, independent of our
-      request rate -- it's best to wait and try again another time rather than retrying
-      immediately.`;
-  } else {
-    advice = `Wait about 2 minutes after this run finishes before starting another
-      Goodreads-enabled run, and consider lowering the search worker count if this
-      keeps happening.`;
-  }
+  // Goodreads requests are paced one at a time whatever the worker count, so
+  // fewer workers would not ease off Goodreads: only waiting does.
+  const advice = `Wait about 2 minutes after this run finishes before starting another
+    Goodreads-enabled run. Lowering the search workers won't help: Goodreads lookups are
+    already paced one request at a time, however many workers run. If it keeps happening,
+    Goodreads may simply be under heavy traffic; try again later.`;
   $('goodreadsBreakerAdvice').textContent = advice;
   return new Promise((resolve) => {
     const onOk = () => { cleanup(); resolve(); };
