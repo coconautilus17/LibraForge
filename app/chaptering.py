@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from app import media_probe
 from app.abs_client import build_item_index, lookup_item_in_index, normalize_abs_media_to_internal
 from app.settings_paths import user_settings_file
 
@@ -221,26 +222,8 @@ def audio_files(path: Path) -> list[Path]:
 
 
 def ffprobe_duration(path: Path) -> float:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    try:
-        return max(0.0, float((result.stdout or "0").strip()))
-    except ValueError:
-        return 0.0
+    """The file's duration in seconds, 0.0 when unreadable (the shared inspection reads it once)."""
+    return media_probe.duration_seconds(path) or 0.0
 
 
 def hms(seconds: float, comma: bool = False) -> str:
@@ -1147,12 +1130,12 @@ def limited_audio_files(
     return limited, temp_dir, source_labels
 
 
-def source_file_offsets(files: list[Path]) -> dict[str, float]:
+def source_file_offsets(files: list[Path], durations: dict[str, float] | None = None) -> dict[str, float]:
     offsets: dict[str, float] = {}
     current = 0.0
     for file_path in files:
         offsets[str(file_path)] = current
-        current += ffprobe_duration(file_path)
+        current += durations[str(file_path)] if durations is not None else ffprobe_duration(file_path)
     return offsets
 
 
@@ -1164,8 +1147,8 @@ def make_focus_clips(
 ) -> tuple[list[Path], Path | None, dict[str, str], dict[str, float], dict[str, int]]:
     if not gaps:
         return [], None, {}, {}, {}
-    source_offsets = source_file_offsets(files)
     source_durations = {str(file_path): ffprobe_duration(file_path) for file_path in files}
+    source_offsets = source_file_offsets(files, source_durations)
     temp_dir = Path(tempfile.mkdtemp(prefix="libraforge-chapter-rescan-"))
     clips: list[Path] = []
     labels: dict[str, str] = {}

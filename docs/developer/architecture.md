@@ -42,6 +42,7 @@ browser ──HTTP──> app/main.py (FastAPI, uvicorn)
 | `app/abs_client.py` | Direct Audiobookshelf API sync (used by the fixer and by Enrichment Forge). |
 | `app/*_policy.py`, `author_names.py` | User-editable pattern sets (title noise, publishers, author-name scheme) and the code that applies them. |
 | `app/library_index.py`, `folder_scan_cache.py`, `conversion_*.py` | Library walking and the caches built on it. |
+| `app/media_probe.py`, `mp4_native.py`, `media_facts_store.py` | Reading audio files: one inspection per file answers tags, duration, stream properties and chapter count for every tool and script, remembered while the file is unchanged and kept across runs in `media-facts.sqlite`. MP4/M4B files are read in-process by a port of FFmpeg 6.1's MP4 rules, used only when the installed ffprobe is 6.1; every other file, and any MP4 shape the port does not model, is one ffprobe call. |
 | `app/debug_trace.py` | Opt-in tracing decorators for code that chooses, alters or scores data. |
 | `app/json_files.py` | `write_json_atomic`: every cache, policy and state file is saved through it (a temporary file swapped into place). |
 

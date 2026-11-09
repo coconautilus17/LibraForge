@@ -15,6 +15,23 @@ class SourceOffsetsTests(unittest.TestCase):
             offsets = c.source_file_offsets([Path(p) for p in durations])
         self.assertEqual(offsets, {"/b/1.mp3": 0.0, "/b/2.mp3": 100.0, "/b/3.mp3": 150.5})
 
+    def test_focus_clips_read_each_source_duration_once(self):
+        durations = {"/b/1.mp3": 100.0, "/b/2.mp3": 50.5, "/b/3.mp3": 10.0}
+        asked = []
+        gap = c.SequenceGap(expected_number=2, start=90.0, end=130.0, reason="missing")
+
+        def duration(p):
+            asked.append(str(p))
+            return durations[str(p)]
+
+        with mock.patch.object(c, "ffprobe_duration", side_effect=duration), \
+             mock.patch.object(c.subprocess, "run"):
+            clips, temp_dir, labels, offsets, _ = c.make_focus_clips([Path(p) for p in durations], [gap])
+        self.addCleanup(lambda: temp_dir and __import__("shutil").rmtree(temp_dir, ignore_errors=True))
+        self.assertEqual(sorted(asked), sorted(durations))
+        # The gap spans the end of file 1 and the start of file 2, at their own offsets.
+        self.assertEqual(sorted(offsets.values()), [90.0, 100.0])
+
 class LimitedAudioFilesTests(unittest.TestCase):
     FILES = [Path("/b/1.mp3"), Path("/b/2.mp3"), Path("/b/3.mp3")]
 

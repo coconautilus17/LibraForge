@@ -59,8 +59,10 @@ try:
         normalize_abs_media_to_internal,
     )
     from app.enrichment import fetch_all_abs_book_items
+    from app import media_probe
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app import media_probe
     from app.epub_metadata import extract_epub_metadata
     from app.fixer.parsing import GENERIC_AUTHORS, remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
@@ -2083,33 +2085,8 @@ def is_generic_track_title(value: str) -> bool:
 
 
 def run_ffprobe(file_path: Path) -> dict[str, str]:
-    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)]
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=60,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return {}
-
-    if result.returncode != 0:
-        return {}
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
-
-    tags = data.get("format", {}).get("tags", {}) or {}
-    return {
-        str(key).lower(): str(value).strip()
-        for key, value in tags.items()
-        if str(value).strip()
-    }
+    """The container's tags (lowercased keys), from the shared inspection; {} when unreadable."""
+    return media_probe.inspect(file_path, {"tags"}).format_tags
 
 
 def first_tag(tags: dict[str, str], keys: list[str], default: str = "") -> str:
@@ -2141,39 +2118,9 @@ def natural_audio_sort_key(file_path: Path) -> list[tuple[int, object]]:
     ]
 
 
-@lru_cache(maxsize=None)
 def read_file_chapter_count(file_path: Path) -> int | None:
-    """Return embedded chapter count using ffprobe, or None when unreadable."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_chapters",
-        str(file_path),
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return None
-
-    if result.returncode != 0:
-        return None
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
-
-    return len(data.get("chapters", []) or [])
+    """Embedded chapter count from the shared inspection, or None when unreadable."""
+    return media_probe.chapter_count(file_path)
 
 
 def normalize_part_filename(value: str) -> str:
@@ -6078,6 +6025,8 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    # Share what was read about each file with the web app and other runs.
+    media_probe.configure_store(Path(os.environ.get("REPORTS_DIR", "/app/reports")) / "media-facts.sqlite")
 
     # The template only matters when a custom scheme is in play; the built-in
     # scheme ignores it, so an empty/odd field there is not an error.

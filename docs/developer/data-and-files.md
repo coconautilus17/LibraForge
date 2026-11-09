@@ -46,7 +46,8 @@ sidecar the first time it reads them.
 |---|---|
 | `<run id>.log.txt` | Raw output of one run. |
 | `<run id>.report.json` | Structured result of one run (`schema_version` 2): status, phases, stats, per-file items, categories, manual-review items. |
-| `m4b-discovery-cache.json` | M4B Tool discovery results, keyed by (root path, fixer script name) and invalidated when the script file's modification time changes. |
+| `media-facts.sqlite` | What was read from each audio file (container and stream tags, duration, stream properties, chapter count), shared by the web app and the fixer and Folder Forge scripts (`app/media_facts_store.py`). Keyed by path, size, nanosecond modification time and the reader with its ffprobe release, so a changed file, a new reader or another ffprobe release reads the file again. Only successful reads are kept; facts for files that no longer exist are dropped at startup unless the library folder is missing or empty. Safe to delete. |
+| `m4b-discovery-cache.json` | M4B Tool discovery results, keyed by (root path, fixer script name) and invalidated when the script file's modification time changes. After a change, only the book folders whose signature changed are searched again; each search keeps per-folder signatures and audio file counts for that. |
 | `folder-scan-cache.json` | Start Here scan results, keyed by path and ignored folders (`FOLDER_SCAN_CACHE_VERSION`). |
 | `audible-store-genres.json` | Audible's foreign-store genre names with their English names and top-level category (`app/store_genres.py`), built from each store's category tree and refetched monthly by Enrichment Forge. Safe to delete. |
 | `audiobook-guild-catalog.json` | Audiobook Guild's catalog (about 1.3 MB) and the runtimes read from its book pages so far (`app/audiobook_guild.py`), refreshed weekly, keeping the runtime of every book still in the store. Safe to delete: LibraForge then starts again from the catalog it ships (`app/data/audiobook-guild-catalog.json`, every book with its runtime). |
@@ -87,9 +88,13 @@ the app adds, switches and deregisters accounts. Never commit these.
 - The run registry (`RunState`). A restart loses running state; the log and report files
   remain.
 - The shared library index (`app/library_index.py`): a background walk of the library that
-  records, per book folder, a signature of its direct children (`folder_listing_signature`)
-  so other features can tell what changed. The M4B discovery cache compares these
-  signatures to decide whether a cached search is still fresh.
+  records, per book folder, a signature of its direct children (`folder_listing_signature`,
+  computed from the walk's own listing) so other features can tell what changed. The M4B
+  discovery cache compares these signatures to decide whether a cached search is still
+  fresh, and which book folders to search again when it is not.
+- Media facts read in this process (`app/media_probe.py`): each file's last inspection,
+  reused while its size and modification time are unchanged, in front of
+  `media-facts.sqlite`.
 - The Manual Review search index, rebuilt in the background and shown as "Search index: N
   books".
 

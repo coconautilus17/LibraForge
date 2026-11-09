@@ -214,6 +214,68 @@ class M4BDiscoveryStalenessTests(unittest.TestCase):
         second = discover_m4b_candidates(path=str(self.root), mode="non_m4b", cache_action="refresh")
         self.assertEqual(second["total"], 2)
 
+    def _refresh_root(self):
+        return discover_m4b_candidates(path=str(self.root), mode="all", cache_action="refresh")
+
+    def _from_scratch(self):
+        main_module.M4B_DISCOVERY_CACHE.unlink()
+        return self._refresh_root()
+
+    @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
+    def test_a_change_rereads_only_the_changed_book_folder(self):
+        self._touch("A/Book1/b1.mp3")
+        self._touch("B/Book2/b2.mp3")
+        self._touch("C/Book3/b3.mp3")
+        self._settle_shared_index()
+        self._refresh_root()
+        self._touch("A/Book1/b1 part 2.mp3")
+        self._settle_shared_index()
+        fixer = main_module.load_fixer_module(main_module.default_fixer_script())
+        read_from = []
+        real_collect = fixer.collect_audio_files
+
+        def collect(root, *args, **kwargs):
+            read_from.append(str(root))
+            return real_collect(root, *args, **kwargs)
+
+        with patch.object(fixer, "collect_audio_files", side_effect=collect):
+            second = self._refresh_root()
+        self.assertEqual(read_from, [str(self.root / "A" / "Book1")])
+        self.assertEqual((second["cache"]["folders_rebuilt"], second["cache"]["folders_kept"]), (1, 2))
+        items = {item["display_path"]: item["file_count"] for item in second["results"]["non_m4b"]["items"]}
+        self.assertEqual(items[str(self.root / "A" / "Book1")], 2)
+        self.assertEqual(len(items), 3)
+        self.assertEqual(second["results"], self._from_scratch()["results"])
+
+    @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
+    def test_a_removed_book_folder_leaves_the_results(self):
+        self._touch("A/Book1/b1.mp3")
+        self._touch("B/Book2/b2.mp3")
+        self._touch("C/Book3/b3.mp3")
+        self._settle_shared_index()
+        self._refresh_root()
+        shutil.rmtree(self.root / "B")
+        self._settle_shared_index()
+        second = self._refresh_root()
+        self.assertEqual(second["results"]["non_m4b"]["total"], 2)
+        self.assertEqual(second["cache"]["audio_file_count"], 2)
+        self.assertEqual(second["results"], self._from_scratch()["results"])
+
+    @unittest.skipUnless(_ffprobe_available(), "ffprobe not available on this runner")
+    def test_loose_root_audio_is_read_again_on_every_refresh(self):
+        self._touch("A/Book1/b1.mp3")
+        self._touch("B/Book2/b2.mp3")
+        self._touch("C/Book3/b3.mp3")
+        self._settle_shared_index()
+        self._refresh_root()
+        self._touch("Loose.mp3")
+        self._settle_shared_index()
+        second = self._refresh_root()
+        self.assertEqual(second["cache"]["folders_rebuilt"], 0)
+        self.assertIn(str(self.root / "Loose.mp3"),
+                      [item["display_path"] for item in second["results"]["non_m4b"]["items"]])
+        self.assertEqual(second["results"], self._from_scratch()["results"])
+
     def test_pre_migration_version_cache_is_discarded_wholesale_not_partially_trusted(self):
         # A cache file written before CACHE_VERSION 3 (no folder_signatures
         # on any entry) is discarded in full by load_discovery_cache's

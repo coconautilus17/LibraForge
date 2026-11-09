@@ -13,4 +13,4 @@ domain: m4b-tool
 
 # Discover conversion sources
 
-Find recognized multipart books or audio not already in M4B format. Cached discovery is reusable only while the root and matching-script identity remain current.
+Find recognized multipart books or audio not already in M4B format. Cached discovery is reusable only while the root and matching-script identity remain current. After a change in the searched folder, only the affected books are found again, and unchanged books keep their results.

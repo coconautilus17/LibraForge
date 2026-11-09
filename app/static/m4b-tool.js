@@ -265,6 +265,8 @@ function renderDiscoveryResults(data) {
   const cache = discoveryCache?.info || {};
   const cacheDetail = cache.source === 'cache'
     ? ` Loaded saved search from ${new Date(cache.refreshed_at).toLocaleString()}; no library scan was performed.`
+    : cache.source === 'refresh' && cache.folders_kept != null
+      ? ` Search refreshed: re-read ${cache.folders_rebuilt} changed book folder${cache.folders_rebuilt === 1 ? '' : 's'} and kept ${cache.folders_kept} unchanged; ran ${cache.chapter_probes_run || 0} chapter and ${cache.audio_probes_run || 0} audio probes.`
     : cache.source === 'refresh'
       ? ` Search refreshed; reused ${cache.chapter_probes_reused || 0} chapter and ${cache.audio_probes_reused || 0} audio probes; ran ${cache.chapter_probes_run || 0} chapter and ${cache.audio_probes_run || 0} audio probes.`
       : '';

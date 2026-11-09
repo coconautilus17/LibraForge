@@ -122,15 +122,32 @@ def folder_listing_signature(folder: Path) -> str:
     own signature into its parent's closes that gap.
     """
     try:
+        entries = list(os.scandir(folder))
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        return ""
+    return _signature_of_listing(entries, lambda path: folder_listing_signature(Path(path)))
+
+
+def _signature_of_listing(entries, disc_signature) -> str:
+    """folder_listing_signature from an already-read listing; disc_signature(path)
+    signs a disc/part subfolder."""
+    try:
         parts = []
-        for entry in os.scandir(folder):
+        for entry in entries:
             stat = entry.stat()
             parts.append(f"{entry.name}:{stat.st_size}:{stat.st_mtime_ns}")
             if entry.is_dir() and DISC_RE.match(entry.name):
-                parts.append(f"{entry.name}/:{folder_listing_signature(Path(entry.path))}")
+                parts.append(f"{entry.name}/:{disc_signature(entry.path)}")
     except (FileNotFoundError, NotADirectoryError, PermissionError):
         return ""
     return hashlib.sha256("|".join(sorted(parts)).encode("utf-8")).hexdigest()
+
+
+def _is_dir(entry: os.DirEntry) -> bool:
+    try:
+        return entry.is_dir()
+    except OSError:
+        return False
 
 
 def build_library_index(
@@ -156,22 +173,33 @@ def build_library_index(
     """
     audio_folders: set[Path] = set()
     loose_root_files: list[Path] = []
-    try:
-        for dirpath, dirnames, filenames in os.walk(str(root)):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not any(d.startswith(s) for s in skip_prefixes)
-            )
-            p = Path(dirpath)
-            if p == root:
-                loose_root_files.extend(
-                    p / f for f in sorted(filenames) if is_audio_file(p / f)
-                )
-                continue
-            if any(is_audio_file(p / f) for f in filenames):
-                audio_folders.add(p)
-    except PermissionError:
-        pass
+    # Each directory is listed once: the walk keeps its listings, and the
+    # signatures below are computed from them instead of listing every book
+    # folder (and its disc subfolders) a second time.
+    listings: dict[str, list[os.DirEntry]] = {}
+
+    def walk(directory: Path) -> None:
+        # Like os.walk: a folder that can't be listed is skipped, not fatal,
+        # and a symlinked folder is listed by name but not descended into.
+        try:
+            listing = sorted(os.scandir(directory), key=lambda e: e.name)
+        except OSError:
+            return
+        listings[str(directory)] = listing
+        names = [e.name for e in listing if not _is_dir(e)]
+        if directory == root:
+            loose_root_files.extend(directory / f for f in names if is_audio_file(directory / f))
+        elif any(is_audio_file(directory / f) for f in names):
+            audio_folders.add(directory)
+        for entry in listing:
+            if (
+                _is_dir(entry)
+                and not entry.is_symlink()
+                and not any(entry.name.startswith(s) for s in skip_prefixes)
+            ):
+                walk(Path(entry.path))
+
+    walk(root)
 
     book_folders: set[Path] = set()
     for folder in audio_folders:
@@ -180,10 +208,13 @@ def build_library_index(
         else:
             book_folders.add(folder)
 
-    signatures = {
-        str(folder): folder_listing_signature(folder)
-        for folder in book_folders
-    }
+    def signature(path: str) -> str:
+        listing = listings.get(path)
+        if listing is None:  # not walked (a skipped name): list it as before
+            return folder_listing_signature(Path(path))
+        return _signature_of_listing(listing, signature)
+
+    signatures = {str(folder): signature(str(folder)) for folder in book_folders}
     entries = [(folder, False) for folder in sorted(book_folders)]
     entries.extend((f, True) for f in sorted(loose_root_files))
     return entries, signatures

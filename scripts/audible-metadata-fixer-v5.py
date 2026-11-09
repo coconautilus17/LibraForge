@@ -182,8 +182,10 @@ try:
     from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
+    from app import media_probe
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app import media_probe
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
     from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
@@ -998,39 +1000,12 @@ def read_file_chapter_count(file_path: Path) -> int | None:
         if key in _chapter_count_cache:
             return _chapter_count_cache[key]
 
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_chapters",
-        str(file_path),
-    ]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"  WARNING: ffprobe chapter check timed out for: {file_path}")
-        count = None
+    facts = media_probe.inspect(file_path, {"chapters"})
+    if "chapters" in facts.fields:
+        count = facts.chapter_count
     else:
-        if result.returncode != 0:
-            print(f"  WARNING: ffprobe chapter check failed for: {file_path}")
-            count = None
-        else:
-            try:
-                data = json.loads(result.stdout)
-                count = len(data.get("chapters", []) or [])
-            except json.JSONDecodeError:
-                print(f"  WARNING: ffprobe returned invalid chapter JSON for: {file_path}")
-                count = None
+        print(f"  WARNING: chapter check failed ({facts.error}) for: {file_path}")
+        count = None
 
     with _chapter_count_cache_lock:
         _chapter_count_cache[key] = count
@@ -2141,54 +2116,7 @@ def is_single_file_mp3(source: Path, clues: dict | None = None) -> bool:
     return not group_search.get("applied")
 
 def probe_audio_stream_properties(file_path: Path) -> dict:
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "a:0",
-        "-show_entries",
-        "stream=codec_name,codec_long_name,profile,bit_rate,channels,sample_rate:format=format_name,format_long_name,bit_rate",
-        "-of",
-        "json",
-        str(file_path),
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-        probe = json.loads(result.stdout or "{}")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError):
-        return {"probed": False}
-
-    stream = (probe.get("streams") or [{}])[0]
-    format_info = probe.get("format") or {}
-    bitrate = stream.get("bit_rate") or format_info.get("bit_rate")
-    codec = str(stream.get("codec_name", "") or "").lower()
-    codec_label = str(stream.get("codec_long_name", "") or codec.upper())
-    profile = str(stream.get("profile", "") or "")
-    if profile and profile.lower() not in codec_label.lower():
-        codec_label = f"{codec_label} ({profile})"
-    return {
-        "probed": bool(stream),
-        "codec": codec,
-        "codec_label": codec_label,
-        "container": str(
-            format_info.get("format_long_name", "")
-            or format_info.get("format_name", "")
-            or ""
-        ),
-        "bitrate_kbps": round(int(bitrate) / 1000) if bitrate else None,
-        "channels": int(stream["channels"]) if stream.get("channels") else None,
-        "sample_rate_hz": (
-            int(stream["sample_rate"]) if stream.get("sample_rate") else None
-        ),
-    }
+    return media_probe.audio_properties_of(file_path)
 
 def summarize_audio_stream_properties(file_paths: list[Path]) -> dict:
     probes = [probe_audio_stream_properties(file_path) for file_path in file_paths]
@@ -2632,78 +2560,18 @@ def refresh_multipart_sidecar_audio_profile(
     _write_libraforge(lf_path, lf_payload)
     return lf_path
 
-PROBE_TIMEOUTS_SECONDS = (30, 180)
-
-
 def probe_file(file_path: Path) -> tuple[dict, float | None]:
-    """Single ffprobe call returning (tags_dict, duration_minutes).
+    """(tags_dict, duration_minutes) from the shared inspection.
 
-    -show_format gives the container's tag block and duration; the first
-    audio stream's tags fill in what the container lacks (Opus/OGG keep
-    their tags there).
+    The container's tag block wins; the first audio stream's tags fill in
+    what the container lacks (Opus/OGG keep their tags there).
     """
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_format",
-        "-show_streams",
-        "-select_streams",
-        "a:0",
-        str(file_path),
-    ]
-
-    # A big file whose index sits at its end can take long to read over a
-    # network share under load; a timeout means slow, not untagged, so one
-    # retry gets more time (Mythos, 440 MB, timed out at 30 s).
-    result = None
-    for timeout in PROBE_TIMEOUTS_SECONDS:
-        try:
-            result = subprocess.run(
-                cmd,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=timeout,
-            )
-            break
-        except subprocess.TimeoutExpired:
-            print(f"  WARNING: ffprobe timed out after {timeout}s for: {file_path}")
-    if result is None:
+    facts = media_probe.inspect(file_path, {"tags", "duration"})
+    if not facts.fields:
+        print(f"  WARNING: {facts.error} for: {file_path}")
         return {}, None
-
-    if result.returncode != 0:
-        print(f"  WARNING: ffprobe failed for: {file_path}")
-        return {}, None
-
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        print(f"  WARNING: ffprobe returned invalid JSON for: {file_path}")
-        return {}, None
-
-    fmt = data.get("format", {}) or {}
-    # Opus/OGG keep their tags on the audio stream, not the container; those
-    # fill whatever the container lacks.
-    stream_tags = ((data.get("streams") or [{}])[0] or {}).get("tags", {}) or {}
-    tags = {}
-    for source in (stream_tags, fmt.get("tags", {}) or {}):
-        tags.update({
-            str(key).lower(): str(value).strip()
-            for key, value in source.items()
-            if str(value).strip()
-        })
-
-    try:
-        seconds = float(fmt.get("duration") or 0)
-        duration_minutes = (seconds / 60) if seconds > 0 else None
-    except (TypeError, ValueError):
-        duration_minutes = None
-
-    return tags, duration_minutes
+    seconds = facts.duration_seconds
+    return facts.merged_tags(), (seconds / 60) if seconds else None
 
 def read_file_tags(file_path: Path) -> dict:
     return probe_file(file_path)[0]
@@ -6401,6 +6269,8 @@ def main():
     )
 
     args = parser.parse_args()
+    # Share what was read about each file with the web app and other runs.
+    media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
     global _exit_on_cancel
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
