@@ -195,7 +195,7 @@
             <input id="workers" type="number" min="1" max="30" value="8" />
           </label>
           <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Capped at 10 (stress-tested limit). For NAS over SMB 4-8 is typical; local SSD can handle the full 10. Raising above your storage throughput ceiling gives no benefit."></span></span>
-            <input id="writeWorkers" type="number" min="1" max="10" value="1" />
+            <input id="writeWorkers" type="number" min="1" max="10" value="4" />
           </label>
           <label class="advanced-run-setting"><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
             <input id="apiDelayMs" type="number" min="0" value="0" />

@@ -121,7 +121,7 @@ function collectRequest() {
     trust_abs_metadata: Boolean($('trustAbsMetadata')?.checked),
     weight_abs_metadata: Boolean($('weightAbsMetadata')?.checked),
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '8', 10) : undefined,
-    write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
+    write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '4', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualProvider')?.value || 'audible') : 'audible',
