@@ -293,6 +293,7 @@ class WritePolicyTests(unittest.TestCase):
                 tags_metadata=metadata, tags_field_policy=kwargs.get("field_policy")
             ),
             write_marker=lambda **kwargs: written.update(marker_kwargs=kwargs),
+            write_original_metadata_backup=lambda source, **kwargs: written.setdefault("backup_of", source),
         )
 
     def _request(self, write_policy: str, metadata_override: dict):

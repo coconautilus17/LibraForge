@@ -1181,7 +1181,7 @@ class RunRequest(BaseModel):
     auth_file: str = Field(default="/auth/audible-metadata.json")
 
     apply: bool = False
-    backup: bool = False
+    backup: bool = True
     restore_metadata: bool = False
     force: bool = False
     force_original: bool = False
@@ -1292,7 +1292,7 @@ class ManualReviewApplyRequest(BaseModel):
     script_name: str = Field(default_factory=default_fixer_script)
     selected_result: dict[str, Any]
     edit_mode: str
-    backup: bool = False
+    backup: bool = True
     cover_if_missing: bool = False
     replace_cover: bool = False
     writer: str = "auto"
@@ -2133,6 +2133,9 @@ def build_command(req: RunRequest) -> tuple[list[str], float]:
         cmd.append("--apply")
     if req.backup:
         cmd.append("--backup")
+    elif _fixer_major_version(req.script_name) >= 5:
+        # v5 backs up by default; older fixers only when asked.
+        cmd.append("--no-backup")
     if req.force:
         cmd.append("--force")
     if req.force_original:

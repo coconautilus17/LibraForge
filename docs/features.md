@@ -15,8 +15,8 @@ workflow through Metadata Forge and Folder Forge.
 Searches Audible (or another provider) and writes matched metadata to your files.
 
 - **Dry-run first**, then enable **Apply** to write. A dry run writes nothing into the
-  library. **Backup and cache** on the first apply preserves originals and speeds up later
-  runs.
+  library. **Backup and cache** (on by default) keeps each book's original tags before its first
+  write, so they can be restored, and speeds up later runs.
 - **Concurrent workers** (v5): 8 books searched at once by default, with a per-thread
   client pool, per-query de-duplication, one shared back-off for every worker when Audible
   throttles, and a cache of what was read from each file (in the reports folder) that

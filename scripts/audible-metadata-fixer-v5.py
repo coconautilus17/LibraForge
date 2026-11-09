@@ -5923,8 +5923,12 @@ def main():
 
     parser.add_argument(
         "--backup",
-        action="store_true",
-        help="Create a per-file JSON backup of the original metadata before writing tags. Recommended on first apply.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Keep the original metadata in the book's libraforge.json before writing tags, "
+            "and save a replaced cover. On by default; --no-backup turns it off."
+        ),
     )
 
     parser.add_argument(
