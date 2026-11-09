@@ -111,6 +111,43 @@ class PickBestMatchTests(unittest.TestCase):
         self.assertEqual((best["asin"], amb["resolved"]), ("A", True))
         self.assertIn("on publisher", amb["reason"])
 
+    def goodreads(self, *titles):
+        # Goodreads lists no narrator or runtime, so only the title can tell its candidates apart.
+        return [{"asin": "", "title": t, "authors": [{"name": "Arthur C. Clarke"}], "_abs_provider": "goodreads"}
+                for t in titles]
+
+    def test_the_exact_title_beats_a_collection_that_contains_it(self):
+        # Richter 10 (#507): the book, and "Selected Works ...: ..., Richter 10".
+        best, _, amb = self.pick({"title": "Richter 10", "author": "Arthur C. Clarke"}, self.goodreads(
+            "Selected Works of Arthur C. Clarke: The Deep Range, The Trigger, The Ghost from the Grand Banks, Richter 10",
+            "Richter 10"), minutes=778.5)
+        self.assertEqual((best["title"], amb["resolved"]), ("Richter 10", True))
+        self.assertIn("on title", amb["reason"])
+
+    def test_the_plain_title_beats_one_with_a_sellers_note(self):
+        best, _, amb = self.pick({"title": "Invasion", "author": "Dean Koontz"},
+                                 self.goodreads("Invasion (Inspiration for Winter Moon)", "Invasion"), minutes=None)
+        self.assertEqual((best["title"], amb["resolved"]), ("Invasion", True))
+
+    def test_a_sellers_note_aside_the_title_still_beats_a_collection(self):
+        best, _, amb = self.pick({"title": "After the Last Race", "author": "Dean Koontz"},
+                                 self.goodreads("Night Chills / After the Last Race / Shattered",
+                                                "After the Last Race (Not Ex-Lib)"), minutes=None)
+        self.assertEqual((best["title"], amb["resolved"]), ("After the Last Race (Not Ex-Lib)", True))
+
+    def test_the_title_decides_nothing_when_no_candidate_carries_it(self):
+        _, _, amb = self.pick({"title": "Shattered", "author": "Dean Koontz"},
+                              self.goodreads("Shattered / Whispers / Watchers", "Shattered / The Vision / Night Chills"),
+                              minutes=None)
+        self.assertIs(amb["resolved"], False)
+
+    def test_the_title_decides_nothing_when_several_carry_it(self):
+        # Two recordings of one title, nothing in the file naming either.
+        _, _, amb = self.pick({"title": "Night Chills", "author": "Dean Koontz"},
+                              [candidate("A", None, narrators=("X",), title="Night Chills"),
+                               candidate("B", None, narrators=("Y",), title="Night Chills")], minutes=None)
+        self.assertIs(amb["resolved"], False)
+
 
 class ChooseBestTitleTests(unittest.TestCase):
     def test_a_missing_local_title_uses_audibles_and_a_missing_audible_title_uses_the_local_one(self):

@@ -1592,6 +1592,23 @@ def _publisher_matches(clues: dict, product: dict) -> bool:
     return bool(local_n and remote_n) and (local_n in remote_n or remote_n in local_n)
 
 
+def _title_is_the_files(clues: dict, product: dict, drop_note: bool = False) -> bool:
+    """The product's title is the file's own title, not one containing it ("Richter 10",
+    not "Selected Works of Arthur C. Clarke: ..., Richter 10"). drop_note sets aside a
+    trailing bracketed note a seller adds ("After the Last Race (Not Ex-Lib)")."""
+    title = str(product.get("title", "") or "")
+    if drop_note:
+        title = re.sub(r"\s*[\[(][^\])]*[\])]\s*$", "", title)
+    # literal_text keeps bracketed words, which normalize_for_match drops, so a
+    # note only counts as set aside when drop_note says so.
+    remote = literal_text(title)
+    local = {
+        literal_text(value)
+        for value in (clues.get("title", ""), strip_leading_sequence_from_title(clues.get("title", "")))
+    }
+    return bool(remote) and remote in local
+
+
 # A runtime rival has to be a real candidate, not a scrap that only shares a title,
 # and match the audio closely enough to overrule the tags: the real cases sit
 # within 0.2%, while a same-cast file trimmed a little runs ~1% off another cast.
@@ -1729,6 +1746,12 @@ def pick_best_match_for_metadata(
             ("narrator", lambda p: narrator_match_score(clues, p) >= NARRATOR_GOOD_SCORE),
             ("sku", lambda p: _sku_matches(clues, p)),
             ("publisher", lambda p: _publisher_matches(clues, p)),
+            # A collection that lists the book scores like the book itself
+            # (its title contains the file's), and Goodreads has nothing
+            # else to tell them apart: the one carrying the file's title is
+            # the book, first as written, then a seller's note aside.
+            ("title", lambda p: _title_is_the_files(clues, p)),
+            ("title", lambda p: _title_is_the_files(clues, p, drop_note=True)),
         ):
             fitting = [item for item in top if fits(item[1])]
             if len(fitting) == 1:
