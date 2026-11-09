@@ -88,6 +88,17 @@ class CleanupMemoTests(unittest.TestCase):
                     {"id": "zorblax-audio", "name": "Zorblax Audio"}])
                 self.assertEqual(publisher_policy.strip_publisher_noise("Jo Bloggs - Zorblax Audio"), "Jo Bloggs")
 
+    def test_an_author_credit_is_split_once(self):
+        credit = "Brandon Sanderson & Dan Wells"
+        first = parsing._split_author_names(credit)
+        parsing._authors_compatible(credit, "Dan Wells")
+        with patch.object(parsing, "split_credit_names", side_effect=AssertionError("split again")):
+            self.assertEqual(parsing._split_author_names(credit), first)
+            self.assertTrue(parsing._authors_compatible(credit, "Dan Wells"))
+        returned = parsing._split_author_names(credit)
+        returned.append("someone else")  # a caller's copy, never the remembered names
+        self.assertEqual(parsing._split_author_names(credit), first)
+
     def test_unhashable_input_is_still_cleaned(self):
         self.assertEqual(parsing.normalize_for_match(None), "")
 

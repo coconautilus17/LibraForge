@@ -261,7 +261,13 @@ def drop_publisher_credits(value: str) -> str:
 
 def _split_author_names(value: str) -> list[str]:
     """Split a credit string into individual normalized author names."""
-    return [n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n]
+    return list(_author_names(value))
+
+
+@memo_while(_text_policy_version)
+def _author_names(value: str) -> tuple[str, ...]:
+    # Remembered: every candidate is compared against the same local credit.
+    return tuple(n for n in (normalize_for_match(p) for p in split_credit_names(value)) if n)
 
 
 def _authors_compatible(local: str, candidate: str) -> bool | None:
