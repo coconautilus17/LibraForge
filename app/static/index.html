@@ -224,6 +224,7 @@
 
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
+        <label class="search-again-setting" style="padding-left:20px" hidden><input id="searchAgain" type="checkbox" /> Search and match again <span class="info-tip" data-tooltip="Apply writes the matches your last dry run of this folder showed, without searching again. Books that dry run did not cover, or whose files changed since, are searched. Tick this to search every book again instead. The results can then differ from the dry run, since Audible and Goodreads can throttle or answer differently from one run to the next."></span></label>
         <label><input id="backup" type="checkbox" checked /> Back up and cache original metadata <span class="info-tip" data-tooltip="Saves a per-file JSON with the original embedded tags and full audio probe data (duration, chapters, ASIN, codec info). After a successful apply, the matched metadata is also written into this cache so future re-runs skip re-probing. Only Apply writes it; a dry run writes nothing into the library. Apply runs create the backup automatically if one does not exist yet. Required for Search from original backup to work."></span></label>
         <label class="advanced-run-setting"><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
         <label><input id="metadataJsonOnly" type="checkbox" /> Don't modify audio files' tags <span class="info-tip" data-tooltip="Audiobookshelf metadata is always pushed for matched books, directly via its API when it already knows the book, otherwise to a metadata.json bootstrap file. Check this to leave the audio files' embedded tags untouched either way. Loose/multi-file books still get their M4B-tool merge sidecar."></span></label>
@@ -248,7 +249,7 @@
         <ol>
           <li><strong>Dry run</strong> - pick a write mode (Smart / Fill / Overwrite) and see every change. Nothing is written.</li>
           <li><strong>Review</strong> - inspect manual review items and correct any flags.</li>
-          <li><strong>Apply</strong> - re-run with Apply changes checked. Backup is created automatically if not already done.</li>
+          <li><strong>Apply</strong> - re-run with Apply changes checked. It writes the matches the dry run showed, without searching again; books it did not cover or that changed since are searched.</li>
         </ol>
       </div>
       <p class="note">Encrypted Audible auth files are intentionally not supported by this UI. Use a metadata-only dummy account with an unencrypted auth JSON mounted into the container.</p>

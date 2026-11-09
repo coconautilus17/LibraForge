@@ -45,6 +45,7 @@ sidecar the first time it reads them.
 | File | Purpose |
 |---|---|
 | `<run id>.log.txt` | Raw output of one run. |
+| `<run id>.plan.jsonl` | A dry run's search decision for each book, with the signature (path, size, mtime) of its audio files (`app/fixer/plan.py`). Apply passes the plans covering its folder with `--from-plan` and reuses a book's decision while its files are unchanged and the matching settings are the same. Pruned with its report. |
 | `<run id>.report.json` | Structured result of one run (`schema_version` 2): status, phases, stats, per-file items, categories, manual-review items. |
 | `media-facts.sqlite` | What was read from each audio file (container and stream tags, duration, stream properties, chapter count), shared by the web app and the fixer and Folder Forge scripts (`app/media_facts_store.py`). Keyed by path, size, nanosecond modification time and the reader with its ffprobe release, so a changed file, a new reader or another ffprobe release reads the file again. Only successful reads are kept; facts for files that no longer exist are dropped at startup unless the library folder is missing or empty. Safe to delete. |
 | `m4b-discovery-cache.json` | M4B Tool discovery results, keyed by (root path, fixer script name) and invalidated when the script file's modification time changes. After a change, only the book folders whose signature changed are searched again; each search keeps per-folder signatures and audio file counts for that. |

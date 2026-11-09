@@ -1,7 +1,8 @@
 """Run the Metadata Fixer's main() on a small temporary library, for tests.
 
-Books are short silent M4B files made with ffmpeg; the search is replaced by a
-function returning each book's ItemResult, so a run needs no network.
+Books are short silent M4B files made with ffmpeg. A run needs no network:
+either the whole per-book search is replaced (search=), or only the Audible
+catalog it asks (catalog=), so everything else a search does still runs.
 """
 import contextlib
 import io
@@ -25,12 +26,19 @@ def library_listing(root: Path) -> dict[str, tuple[int, int]]:
             for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def run_fixer(fixer, root: Path, *args: str, search=None) -> str:
+def run_fixer(fixer, root: Path, *args: str, search=None, catalog=None) -> str:
     """Run main() over root with the given flags; returns everything it printed.
 
     search(fixer, index, file_path, total) -> ItemResult stands in for search_item.
+    catalog(query, title, author) -> [product] stands in for Audible's catalog search.
     """
     patches = []
+    if catalog is not None:
+        def fake_audible_search(client, query, limit, api_delay_ms, cache, cache_lock, in_flight,
+                                title="", author=""):
+            return catalog(query, title, author)
+        patches.append(mock.patch.object(fixer, "get_thread_client", return_value=object()))
+        patches.append(mock.patch.object(fixer, "cached_audible_search", side_effect=fake_audible_search))
     if search is not None:
         def fake_search_item(*, index, file_path, total, **_):
             return search(fixer, index, file_path, total)

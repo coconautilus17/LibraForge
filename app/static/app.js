@@ -111,6 +111,7 @@ function collectRequest() {
     target_path: $('targetPath').value.trim(),
     auth_file: $('authFile').value.trim(),
     apply: $('apply').checked,
+    search_again: $('apply').checked && $('searchAgain').checked,
     backup: $('backup').checked,
     restore_metadata: $('restore').checked,
     force: $('force').checked,
@@ -1408,6 +1409,15 @@ function syncForceOriginal() {
   if (note) note.hidden = !(forceOn && fo.checked);
 }
 $('force').addEventListener('change', syncForceOriginal);
+
+function syncSearchAgain() {
+  const applyOn = $('apply').checked;
+  const label = $('searchAgain').closest('label');
+  if (label) label.hidden = !applyOn;
+  if (!applyOn) $('searchAgain').checked = false;
+}
+$('apply').addEventListener('change', syncSearchAgain);
+syncSearchAgain();
 $('forceOriginal').addEventListener('change', syncForceOriginal);
 
 function syncAbsMetadataInputMode(justChecked) {

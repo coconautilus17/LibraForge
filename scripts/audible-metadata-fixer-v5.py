@@ -184,10 +184,12 @@ try:
     from app.enrichment import fetch_all_abs_book_items
     from app import media_probe
     from app.tag_padding import save_padding as tag_save_padding
+    from app.fixer import plan as match_plan
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app import media_probe
     from app.tag_padding import save_padding as tag_save_padding
+    from app.fixer import plan as match_plan
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
     from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
@@ -507,6 +509,7 @@ class ItemResult:
     error: str = ""
     source_provider: str = ""  # provider id when matched via fallback/special source
     from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
+    from_plan: str = ""  # run id of the dry run whose match this book reuses (no fresh search)
     goodreads_rate_limited: bool = False  # abs-tract breaker was open during this book's attempt
 
 def get_marker_path(source: Path) -> Path:
@@ -3388,6 +3391,13 @@ def get_processing_display_path(
         return file_path.parent
     return file_path
 
+def book_audio_files(file_path: Path, multi_part_group_map: dict[Path, list[Path]]) -> list[Path]:
+    """Every audio file the book at file_path is made of (its group, or itself)."""
+    group_files = multi_part_group_map.get(file_path.parent)
+    if group_files and is_multi_part_audio_candidate(file_path):
+        return list(group_files)
+    return [file_path]
+
 def build_search_context(
     file_path: Path,
     multi_part_group_map: dict[Path, list[Path]],
@@ -3691,6 +3701,7 @@ def search_item(
     folder_audio_counts: dict | None = None,
     abs_index: dict | None = None,
     asin_lookahead: AsinLookahead | None = None,
+    plan_records: dict | None = None,
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
@@ -3831,6 +3842,19 @@ def search_item(
                 f"(score={rec_score:g}, asin={_rec_asin})"
             )
             return result
+
+        # Apply reuses the dry run's decision for this book when its files are
+        # unchanged (see app/fixer/plan.py); the checks above still ran first.
+        if plan_records:
+            record = plan_records.get(str(file_path))
+            decided = match_plan.usable_record(
+                record, match_plan.file_signatures(book_audio_files(file_path, multi_part_group_map))
+            )
+            if decided is not None:
+                match_plan.apply_record(result, decided)
+                result.from_plan = record["run"]
+                log.append(f"  FROM DRY RUN {record['run']}: {result.status}, not searched again")
+                return result
 
         skip_due_to_folder, skip_folder = matches_ignored_folders(
             file_path=file_path,
@@ -5047,6 +5071,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "goodreads_rate_limited": result.goodreads_rate_limited,
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
+        "from_dry_run": result.from_plan,
         "local": local,
         "is_grouped": bool((clues.get("group_search") or {}).get("applied"))
         or (bool(stored) and stored.get("output_kind") == "json_sidecar"),
@@ -5932,6 +5957,23 @@ def main():
     )
 
     parser.add_argument(
+        "--save-plan",
+        default="",
+        help="Dry run: save each book's search decision to this file, for --from-plan.",
+    )
+
+    parser.add_argument(
+        "--from-plan",
+        action="append",
+        default=[],
+        help=(
+            "Apply: write the decisions a dry run saved with --save-plan instead of searching "
+            "again, for books whose files are unchanged. Repeat for several plans, newest first. "
+            "A plan made with other matching settings is not used."
+        ),
+    )
+
+    parser.add_argument(
         "--restore-metadata",
         action="store_true",
         help="Restore original metadata from JSON backups created by --backup, then exit. Does not contact Audible.",
@@ -6385,6 +6427,13 @@ def main():
         prefill_search_contexts(processing_items, multi_part_group_map, args,
                                 search_context_cache, search_context_lock)
 
+    plan_records: dict = {}
+    if args.apply and args.from_plan:
+        plan_records, plan_notes = match_plan.load_records(args.from_plan, match_plan.matching_settings(args))
+        for note in plan_notes:
+            print(f"  NOTE: {note}", flush=True)
+        print(f"Dry run matches on record: {len(plan_records)} books (others are searched).", flush=True)
+
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
@@ -6408,6 +6457,7 @@ def main():
                 folder_audio_counts=folder_audio_counts,
                 abs_index=abs_index,
                 asin_lookahead=asin_lookahead,
+                plan_records=plan_records,
             )
             for index, file_path in enumerate(processing_items, start=1)
         ]
@@ -6449,6 +6499,21 @@ def main():
             executor.shutdown(wait=False, cancel_futures=True)
 
     all_results.sort(key=lambda result: result.index)
+
+    # A dry run keeps what its search decided for each book, before the
+    # run-wide checks below change it, so Apply can write it unsearched.
+    # Books stopped by a marker or duplicate check, or re-applied from their
+    # marker, are left out: Apply decides those afresh.
+    if args.save_plan and not args.apply:
+        saved = match_plan.PlanWriter(args.save_plan, root, match_plan.matching_settings(args)).write(
+            (
+                result.file_path,
+                match_plan.file_signatures(book_audio_files(result.file_path, multi_part_group_map)),
+                match_plan.result_record(result) if result.clues and not result.from_marker else None,
+            )
+            for result in all_results
+        )
+        print(f"Saved this dry run's matches for {saved} of {len(all_results)} books, for Apply.", flush=True)
 
     # Detect same-series ASIN conflicts across all results before writing.
     # Must run outside the ThreadPoolExecutor block (workers have finished).

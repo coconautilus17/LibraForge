@@ -45,6 +45,7 @@ from app.conversion_cache import (
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
 from app.book_tag_cache import BookTagCache
+from app.fixer import plan as match_plan
 from app.folder_scan_cache import (
     load_scan_cache_file,
     save_scan_cache_file,
@@ -244,7 +245,7 @@ def _prune_reports() -> list[str]:
     deleted: list[str] = []
     for report_path in to_delete:
         run_id = report_path.name.replace(".report.json", "")
-        for suffix in (".report.json", ".log.txt", ".report.suspect-review.json"):
+        for suffix in (".report.json", ".log.txt", ".report.suspect-review.json", ".plan.jsonl"):
             companion = REPORTS_DIR / f"{run_id}{suffix}"
             try:
                 companion.unlink(missing_ok=True)
@@ -1181,6 +1182,8 @@ class RunRequest(BaseModel):
     auth_file: str = Field(default="/auth/audible-metadata.json")
 
     apply: bool = False
+    # Apply: search every book again instead of writing the last dry run's matches.
+    search_again: bool = False
     backup: bool = True
     restore_metadata: bool = False
     force: bool = False
@@ -4347,6 +4350,38 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
     return cmd
 
 
+def dry_run_plans_for(target: Path, reports_dir: Path | None = None) -> list[Path]:
+    """Saved dry-run plans whose folder overlaps target, newest first."""
+    reports_dir = reports_dir or REPORTS_DIR
+    try:
+        target = target.resolve()
+    except OSError:
+        return []
+    found = []
+    for plan_path in reports_dir.glob("*.plan.jsonl"):
+        header = match_plan.read_header(plan_path)
+        if header is None:
+            continue
+        root = Path(header.get("root") or "")
+        if root == target or root in target.parents or target in root.parents:
+            found.append((header.get("created_at") or "", plan_path))
+    return [plan_path for _, plan_path in sorted(found, reverse=True)]
+
+
+def match_plan_args(req: RunRequest, run_id: str) -> list[str]:
+    """A dry run saves its matches; Apply writes them unless asked to search again."""
+    if req.restore_metadata or _fixer_major_version(req.script_name) < 5:
+        return []
+    if not req.apply:
+        return ["--save-plan", str(REPORTS_DIR / f"{run_id}.plan.jsonl")]
+    if req.search_again:
+        return []
+    args: list[str] = []
+    for plan_path in dry_run_plans_for(Path(req.target_path)):
+        args += ["--from-plan", str(plan_path)]
+    return args
+
+
 def run_script_worker(run_id: str, req: RunRequest) -> None:
     with runs_lock:
         state = runs[run_id]
@@ -4364,6 +4399,7 @@ def run_script_worker(run_id: str, req: RunRequest) -> None:
 
     try:
         cmd, threshold = build_command(req)
+        cmd += match_plan_args(req, run_id)
         state.command = cmd
         state.status = "running"
         stream_process_output(state, cmd, threshold=threshold)
