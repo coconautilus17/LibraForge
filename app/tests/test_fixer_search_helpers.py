@@ -122,6 +122,11 @@ class ThreadClientTests(unittest.TestCase):
 
 
 class PublicAudibleClientTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(search, "_AUDIBLE_THROTTLE", search.AudibleThrottle())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def client(self, answer, region=""):
         """A client whose requests go to answer(request) -> httpx.Response, not the network."""
         return search.PublicAudibleClient(region, transport=httpx.MockTransport(answer))
@@ -165,6 +170,51 @@ class PublicAudibleClientTests(unittest.TestCase):
         with mock.patch.object(search.time, "sleep"), self.assertRaises(httpx.ConnectError):
             self.client(answer).get("catalog/products/B0X")
         self.assertEqual(len(calls), 3)
+
+    def test_throttling_waits_for_the_shared_back_off_and_is_patient(self):
+        calls = []
+        def answer(request):
+            calls.append(1)
+            return httpx.Response(503) if len(calls) <= 4 else httpx.Response(200, json={"ok": 1})
+        throttle = search.AudibleThrottle(clock=lambda: 0.0, sleep=lambda s: None)
+        with mock.patch.object(search, "_AUDIBLE_THROTTLE", throttle), mock.patch.object(search.time, "sleep"):
+            self.assertEqual(self.client(answer).get("catalog/products/B0X"), {"ok": 1})
+        self.assertEqual(len(calls), 5)
+
+    def test_retry_after_sets_the_wait(self):
+        clock, slept = [100.0], []
+        throttle = search.AudibleThrottle(clock=lambda: clock[0], sleep=slept.append)
+        throttle.throttled(7.0)
+        throttle.wait_turn()
+        self.assertEqual(slept, [7.0])
+
+    def test_one_throttled_request_makes_every_worker_wait(self):
+        clock, slept = [100.0], []
+        throttle = search.AudibleThrottle(clock=lambda: clock[0], sleep=slept.append)
+        throttle.throttled(None)
+        for _ in range(3):  # other workers, before their next request
+            throttle.wait_turn()
+        self.assertEqual(slept, [2.0, 2.0, 2.0])
+
+    def test_the_wait_grows_only_when_throttling_continues_after_a_wait(self):
+        clock = [100.0]
+        throttle = search.AudibleThrottle(clock=lambda: clock[0], sleep=lambda s: None)
+        for _ in range(8):  # many workers throttled at once: one back-off, not eight
+            throttle.throttled(None)
+        self.assertEqual(throttle.resume_at, 102.0)
+        clock[0] = 102.5
+        throttle.throttled(None)
+        self.assertEqual(throttle.resume_at, 106.5)
+        throttle.succeeded()
+        clock[0] = 110.0
+        throttle.throttled(None)
+        self.assertEqual(throttle.resume_at, 112.0)
+
+    def test_throttling_that_never_ends_is_raised(self):
+        throttle = search.AudibleThrottle(clock=lambda: 0.0, sleep=lambda s: None)
+        with mock.patch.object(search, "_AUDIBLE_THROTTLE", throttle), mock.patch.object(search.time, "sleep"), \
+                self.assertRaises(httpx.HTTPStatusError):
+            self.client(lambda request: httpx.Response(503)).get("catalog/products/B0X")
 
     def test_not_found_is_not_retried(self):
         calls = []
@@ -258,6 +308,15 @@ class CachedAudibleSearchTests(unittest.TestCase):
         sleeper.assert_called_once_with(0.25)
         _, _, _, _, sleeper = self.call(results=[], delay=0)
         sleeper.assert_not_called()
+
+    def test_a_failed_search_is_not_remembered(self):
+        out, cache, in_flight, _, _ = self.call(error=httpx.ConnectError("down"))
+        self.assertEqual(out, [])
+        self.assertEqual(cache, {})
+        self.assertEqual(in_flight, {})
+        out, cache, _, searched, _ = self.call(cache=cache, results=[{"asin": "B0X"}])
+        self.assertEqual(out, [{"asin": "B0X"}])
+        searched.assert_called_once()
 
     def test_a_structured_search_is_cached_apart_from_the_keyword_one(self):
         import threading
