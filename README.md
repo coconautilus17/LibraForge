@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.jpg" alt="LibraForge: a cozy bookshop workbench where messy audiobooks get restored" width="100%">
+  <img src="docs/images/banner.jpg" alt="LibraForge: your audiobook library, forged into shape. Clean up. Organize. Enrich." width="100%">
 </p>
 
 <h1 align="center">LibraForge</h1>
@@ -7,9 +7,10 @@
 <p align="center"><b>Your audiobook library, forged into shape.</b><br>
 Clean up. Organize. Enrich.</p>
 
-LibraForge is a self-hosted web app that tidies an audiobook library. It finds each book
-on Audible, fixes its tags and cover, finds its chapters, merges loose parts into one M4B, and files
-everything into neat `Author/Series/Book` folders, ready for
+LibraForge is a self-hosted web app that tidies an audiobook library. It identifies each
+book from several sources (Audible, Audiobook Guild, GraphicAudio, AudioSilo, Goodreads and
+more), fixes its tags and cover, finds its chapters, merges loose parts into one M4B, and
+files everything into neat `Author/Series/Book` folders, ready for
 [Audiobookshelf](https://www.audiobookshelf.org/).
 
 Every run is a **dry run first**: you see exactly what would change, and nothing is
@@ -22,15 +23,22 @@ written until you choose Apply.
 
 **Start Here** scans a folder and tells you what each book still needs.
 
-![Start Here: a scan of nine books, all missing metadata](docs/images/start-here.png)
+![Start Here: a scan of 366 books, 359 with incomplete metadata](docs/images/start-here.png)
 
-**Metadata Forge** matches every book against Audible and shows the change, field by
-field, before writing anything. Here a book tagged "The Murderbot Diaries, Book 01 - All
-Systems Red" gets its real title, series, genres and ASIN.
+**Metadata Forge** looks every book up across several sources, checks each candidate's
+title, author, series number, narrator and runtime, and shows what would change before
+writing anything. This dry run over 356 books, still carrying their original tags, took
+21 seconds:
 
-![Match report: a messy title matched to All Systems Red, Murderbot Diaries book 1](docs/images/match-report.png)
+![Run statistics: 356 books found, 349 matched, 7 skipped, in 21 seconds](docs/images/run-stats.png)
 
-**Folder Forge** plans where each book belongs and shows every move before making it.
+Every book's change is shown field by field. Here *Children of Strife* was tagged as book 1
+of a series named "Children of Time, Book #4"; it gets the real series, number and genres.
+
+![Match report: hundreds of matched books, one opened to show its fields before and after](docs/images/match-report.png)
+
+**Folder Forge** plans where each book belongs and shows every move before making it. A
+move that would land on a book already in your library is blocked, not merged.
 
 ![Folder Forge: planned moves from the unorganized folder into Author/Series/Book folders](docs/images/folder-forge.png)
 
@@ -44,7 +52,7 @@ and lets you edit them with a player.
 | Tool | What it does |
 |---|---|
 | **Start Here** | Scans a folder: what needs metadata, conversion, or a new home. |
-| **Metadata Forge** | Matches books on Audible (no login needed) and other sources, then writes the tags and cover. Includes a manual review for the hard cases. |
+| **Metadata Forge** | Matches each book across Audible (no login needed), Audiobook Guild, GraphicAudio and SoundBooth Theater, AudioSilo and, if you turn it on, Goodreads, then writes the tags and cover. Includes a manual review for the hard cases. |
 | **M4B Tool** | Merges multi-part books and converts other formats into a single M4B. |
 | **Chapter Forge** | Finds, edits and saves a book's chapters. |
 | **Folder Forge** | Moves books into `Author/Series/Book N - Title` folders, using a naming template you can change. |
