@@ -212,7 +212,7 @@
           <div class="checks goodreads-fallback-check">
             <label><input id="enableGoodreadsFallback" type="checkbox" /> Enable Goodreads fallback <span class="info-tip" data-tooltip="Allows batch runs to try Goodreads when Audible does not return a confident full match. Also the first source for ebooks."></span></label>
           </div>
-          <div class="inline-warning">Goodreads rate-limits aggressively. Use only 5 search workers when enabling this fallback.</div>
+          <div class="inline-warning">Goodreads rate-limits aggressively, so its lookups go one at a time, however many search workers run; books that need it take longer.</div>
         </div>
         <div class="goodreads-fallback-row">
           <div class="checks goodreads-fallback-check">
