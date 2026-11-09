@@ -1026,22 +1026,6 @@ def _load_chapter_count_persistent(folder: Path) -> dict[str, dict]:
     except (json.JSONDecodeError, OSError):
         return {}
 
-def _save_chapter_count_persistent(folder: Path, entries: dict[str, dict]) -> None:
-    cache_path = _chapter_count_cache_path(folder)
-    try:
-        payload = {
-            "schema_version": 1,
-            "tool": "audible-metadata-fixer",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "entries": entries,
-        }
-        cache_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
 def normalize_part_filename(value: str) -> str:
     value = html.unescape(str(value or "")).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
@@ -3321,27 +3305,19 @@ def build_multi_part_group_map(
     return accepted
 
 def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
-    """Pre-warm read_file_chapter_count from disk cache, probing only new/changed files.
+    """Pre-warm read_file_chapter_count for every multi-part folder.
 
-    On recurring runs, chapter counts are read from per-folder JSON cache files
-    (<folder>/<folder>.chapter-count-cache.json) keyed by path + mtime. No
-    ffprobe is run for files whose mtime has not changed since the last probe.
-
-    On a clean run (or for files not yet cached), ffprobe calls are batched and
-    run concurrently with `workers` threads. Results are written back to disk so
-    the next run is instant.
-
-    All multi-part audio files are written to the cache regardless of type.
-    chapter_count is populated only for is_chapter_metadata_candidate files
-    (m4a/m4b/mp4); other types (ogg/mp3/opus) are recorded with chapter_count=None
-    so the cache covers every multi-file book for m4b merging and format support.
+    Counts come from the shared media facts store (reports folder), so files
+    that have not changed are not probed again. Per-folder cache files
+    (<folder>/<folder>.chapter-count-cache.json) left by older versions are
+    still read when their mtime matches, but no longer written: a run never
+    writes into the library just to remember what it read.
     """
     grouped: dict[Path, list[Path]] = {}
     for fp in files:
         if is_multi_part_audio_candidate(fp):
             grouped.setdefault(fp.parent, []).append(fp)
 
-    folder_persistent: dict[Path, dict[str, dict]] = {}
     to_probe: list[Path] = []
 
     for parent, group in sorted(grouped.items()):
@@ -3349,29 +3325,20 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
             continue
 
         persistent = _load_chapter_count_persistent(parent)
-        folder_persistent[parent] = persistent
 
         for fp in group:
-            key = str(fp)
-            entry = persistent.get(key)
+            if not is_chapter_metadata_candidate(fp):
+                continue
+            entry = persistent.get(str(fp))
             if entry is not None:
                 try:
                     if entry.get("mtime") == fp.stat().st_mtime:
-                        if is_chapter_metadata_candidate(fp):
-                            with _chapter_count_cache_lock:
-                                _chapter_count_cache[key] = entry.get("chapter_count")
+                        with _chapter_count_cache_lock:
+                            _chapter_count_cache[str(fp)] = entry.get("chapter_count")
                         continue
                 except OSError:
                     pass
-            if is_chapter_metadata_candidate(fp):
-                to_probe.append(fp)
-            else:
-                # No ffprobe needed; record with chapter_count=None
-                try:
-                    mtime = fp.stat().st_mtime
-                except OSError:
-                    mtime = None
-                persistent[key] = {"chapter_count": None, "mtime": mtime}
+            to_probe.append(fp)
 
     if to_probe:
         if workers > 1:
@@ -3385,22 +3352,6 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
         else:
             for fp in to_probe:
                 read_file_chapter_count(fp)
-
-        for parent, persistent in folder_persistent.items():
-            for fp in to_probe:
-                if fp.parent != parent:
-                    continue
-                key = str(fp)
-                with _chapter_count_cache_lock:
-                    count = _chapter_count_cache.get(key)
-                try:
-                    mtime = fp.stat().st_mtime
-                except OSError:
-                    mtime = None
-                persistent[key] = {"chapter_count": count, "mtime": mtime}
-
-    for parent, persistent in folder_persistent.items():
-        _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
     files: list[Path],
@@ -3810,7 +3761,7 @@ def search_item(
                 multi_part_group_map,
                 use_backup_tags=args.force_original,
                 reprobe=args.reprobe,
-                save_probe_cache=args.backup,
+                save_probe_cache=args.backup and args.apply,
             )
             with search_context_lock:
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
@@ -5719,7 +5670,7 @@ def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: 
                 multi_part_group_map,
                 use_backup_tags=args.force_original,
                 reprobe=args.reprobe,
-                save_probe_cache=args.backup,
+                save_probe_cache=args.backup and args.apply,
             )
         except Exception:
             return  # the search reads it again and reports the failure there
@@ -6596,8 +6547,10 @@ def main():
                         query=query_str, status="skipped",
                     )
                     w_manual_review.extend(_local_mr)
-                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-                    write_skip_marker(file_path, clues, alone=_alone)
+                    # A dry run writes nothing into the library.
+                    if args.apply:
+                        _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                        write_skip_marker(file_path, clues, alone=_alone)
 
             elif result.status == "failed":
                 w_failed = 1

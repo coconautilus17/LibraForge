@@ -44,6 +44,7 @@ from app.conversion_cache import (
     utc_timestamp,
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
+from app.book_tag_cache import BookTagCache
 from app.folder_scan_cache import (
     load_scan_cache_file,
     save_scan_cache_file,
@@ -189,6 +190,7 @@ M4B_DISCOVERY_CACHE_LOCK = threading.Lock()
 
 FOLDER_SCAN_CACHE = REPORTS_DIR / "folder-scan-cache.json"
 FOLDER_SCAN_CACHE_LOCK = threading.Lock()
+BOOK_TAG_CACHE = BookTagCache(REPORTS_DIR / "book-tag-cache.json")
 
 AUDIO_PREVIEW_CACHE_DIR = REPORTS_DIR / "chapter-preview-cache"
 
@@ -5210,7 +5212,7 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        # Dedicated scan cache key -- written only by _write_scan_asin_cache,
+        # Dedicated scan cache key -- left by older Start Here scans (read only now),
         # never by the fixer or organizer, so safe to read for scan purposes.
         scan_asin = str((data.get("scan_cache") or {}).get("asin") or "").strip()
         if scan_asin:
@@ -5226,31 +5228,6 @@ def _asin_from_libraforge_json(path: Path) -> bool | None:
         return asin != ASIN_PLACEHOLDER
     except Exception:
         return None
-
-
-def _write_scan_asin_cache(folder: Path, audio_file: Path, asin: str) -> None:
-    """Cache scan ASIN result in an existing libraforge.json under scan_cache.asin.
-
-    Only updates existing sidecars -- never creates new ones -- to avoid
-    producing thin sidecars that break manual_review_sidecar_context.
-    Writes to a dedicated scan_cache key so organizer fields are untouched.
-    """
-    candidates = [
-        audio_file.parent / (audio_file.name + ".libraforge.json"),
-        folder / "libraforge.json",
-    ]
-    sidecar = next((p for p in candidates if p.is_file()), None)
-    if sidecar is None:
-        return  # no existing sidecar -- don't create thin ones
-    try:
-        data = json.loads(sidecar.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    data.setdefault("scan_cache", {})["asin"] = asin
-    try:
-        sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    except Exception:
-        pass
 
 
 # Core metadata fields the scan requires for a book to count as "complete".
@@ -5317,80 +5294,6 @@ def _probe_book_metadata(audio_file: Path) -> dict:
     return {"asin": asin, "fields": fields}
 
 
-def _scan_sidecar_target(
-    audio_files: list[Path], book_dir: Path, audio_file: Path, fixer=None
-) -> Path:
-    """Canonical libraforge.json path for the scan, decided by the fixer itself.
-
-    Delegates to the fixer's ``get_libraforge_path`` so the scan and a real run
-    always agree on placement: multi-file (grouped) books and single files alone
-    in their folder use a folder-level ``libraforge.json``; a single file sharing
-    its folder with other books uses a per-file ``<name>.libraforge.json``.
-    """
-    fixer = fixer or scan_fixer_module()
-    grouped = len(audio_files) > 1
-    if grouped:
-        alone = False
-    else:
-        try:
-            alone = sum(
-                1 for x in audio_file.parent.iterdir()
-                if x.is_file() and x.suffix.lower() in _SCAN_AUDIO_EXTS
-            ) <= 1
-        except OSError:
-            alone = True
-    clues = {"group_search": {"applied": grouped}}
-    return fixer.get_libraforge_path(audio_file, clues, alone)
-
-
-def _ensure_scan_sidecar(
-    audio_files: list[Path], book_dir: Path, audio_file: Path, asin: str, fields: dict,
-    fixer=None,
-) -> None:
-    """Persist the probe result to the canonical libraforge.json, in the fixer's format.
-
-    Writes only to the path the fixer would use (``get_libraforge_path``) and only
-    the ``scan_cache`` key, using the fixer's own writer for byte-for-byte format
-    parity. It never adopts a folder-level file for a per-file book, so distinct
-    single-file books sharing a folder can no longer clobber one shared sidecar.
-    The audio file's mtime is stored so a later tag change invalidates the cache.
-    """
-    fixer = fixer or scan_fixer_module()
-    target = _scan_sidecar_target(audio_files, book_dir, audio_file, fixer)
-    # If the canonical file is missing but this book's own per-file sidecar exists
-    # (e.g. a pending fixer file->folder migration for a now-alone book), update it
-    # in place rather than create a duplicate. Never reach for a folder-level file.
-    if not target.is_file():
-        own_file_lf = audio_file.with_name(audio_file.name + ".libraforge.json")
-        if target == book_dir / "libraforge.json" and own_file_lf.is_file():
-            target = own_file_lf
-    payload: dict = {}
-    if target.is_file():
-        try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    payload.setdefault("schema_version", 2)
-    payload.setdefault("tool", "audible-metadata-fixer")
-    try:
-        mtime = audio_file.stat().st_mtime_ns
-    except OSError:
-        mtime = None
-    payload["scan_cache"] = {
-        **(payload.get("scan_cache") or {}),
-        "asin": asin or ASIN_PLACEHOLDER,
-        "fields": fields,
-        "mtime": mtime,
-    }
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fixer._write_libraforge(target, payload)
-    except Exception:
-        pass
-
-
 def _marker_says_no_asin(data: dict) -> bool:
     """True iff the fixer's marker records NOREALASIN -- a confirmed determination
     that no Audible match exists. A marker that names a *real* ASIN is ignored
@@ -5417,6 +5320,9 @@ def _sidecar_marker_no_asin(audio_file: Path, book_dir: Path) -> bool:
 
 def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, dict] | None:
     """Return cached ``(asin_satisfied, fields)`` from a fresh scan_cache, or None.
+
+    scan_cache entries are left in libraforge.json files by older versions;
+    scans now remember their reads in BOOK_TAG_CACHE instead and only read these.
 
     ``asin_satisfied`` is True when a real ASIN is embedded OR the fixer confirmed
     NOREALASIN (no Audible match exists). The NOREALASIN determination is re-read
@@ -5453,19 +5359,26 @@ def _scan_cache_from_sidecar(audio_file: Path, book_dir: Path) -> tuple[bool, di
 def _book_metadata_state(book_dir: Path, audio_files: list[Path]) -> tuple[bool, dict]:
     """Return ``(asin_satisfied, {field: present})`` for a book.
 
-    Reads the embedded tags (cached in a libraforge.json scan_cache). ASIN is
+    Reads the embedded tags (remembered in BOOK_TAG_CACHE, in the reports folder,
+    while the file is unchanged; a scan writes nothing into the library). ASIN is
     "satisfied" when a real ASIN is embedded OR the fixer marked NOREALASIN, so a
     book that genuinely has no Audible match stops being flagged Incomplete once
     its core fields are present. A marker's *claimed* real ASIN is not trusted --
     only the actual embedded tag counts for a real ASIN."""
     audio_file = audio_files[0]
-    cached = _scan_cache_from_sidecar(audio_file, book_dir)
-    if cached is not None:
-        return cached
-    probe = _probe_book_metadata(audio_file)
+    try:
+        mtime = audio_file.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    probe = BOOK_TAG_CACHE.get(audio_file, mtime)
+    if probe is None:
+        cached = _scan_cache_from_sidecar(audio_file, book_dir)
+        if cached is not None:
+            return cached
+        probe = _probe_book_metadata(audio_file)
+        BOOK_TAG_CACHE.put(audio_file, mtime, probe)
     asin_embedded = bool(probe["asin"]) and probe["asin"] != ASIN_PLACEHOLDER
     asin_satisfied = asin_embedded or _sidecar_marker_no_asin(audio_file, book_dir)
-    _ensure_scan_sidecar(audio_files, book_dir, audio_file, probe["asin"], probe["fields"])
     return asin_satisfied, probe["fields"]
 
 
@@ -5912,16 +5825,11 @@ def _categorized_book_units(
     # Deliberately NOT replaced with a direct, synchronous
     # folder_listing_signature() call at persist time (see #238): that reads
     # real disk state at a different moment than the async shared index's
-    # own next walk will, and _categorise_book_unit's own scan-cache sidecar
-    # write (_ensure_scan_sidecar) mutates the very folder being signed
-    # during this same request -- a synchronous read here can capture that
-    # sidecar while the shared index's background walk (started earlier in
-    # this request, racing the sidecar write) captured the folder without
-    # it. Persisting that "with sidecar" value while shared.signatures keeps
-    # reporting "without sidecar" (until some future unrelated background
-    # walk happens to run after the sidecar write) permanently desyncs the
-    # persisted signature from what the read-side check compares against,
-    # so from_cache never goes true again for that folder. Keeping both the
+    # own next walk will, so anything that changes a folder during this
+    # request (a run writing beside the books) can be captured by one and
+    # not the other, permanently desyncing the persisted signature from what
+    # the read-side check compares against, so from_cache never goes true
+    # again for that folder. Keeping both the
     # read side (shared.signatures, above) and the write side (fresh_shared,
     # here) sourced from the same get_state() avoids that: they can lag
     # real disk state by one background-walk cycle, but they lag it
@@ -5960,6 +5868,10 @@ def _categorized_book_units(
         cache = load_scan_cache_file(FOLDER_SCAN_CACHE)
         cache["scans"][cache_key] = {"folders": updated_folders}
         save_scan_cache_file(FOLDER_SCAN_CACHE, cache)
+    try:
+        BOOK_TAG_CACHE.save()
+    except OSError:
+        pass
 
     book_results = [
         (unit[0], unit[2], category) for unit, (_, _, category, _, _) in zip(units, resolved)
@@ -7971,7 +7883,7 @@ def _asin_string_from_libraforge_json(path: Path) -> str:
     return ""
 
 
-def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, str]], list[Path]]:
+def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, str, Path]], list[Path]]:
     """Single-pass walk of one subtree.
 
     Collects [B0XXXXXXXX] filename ASINs directly (no second directory listing)
@@ -7979,7 +7891,7 @@ def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, 
     libraforge.json sidecar, or those with audio but no cheap ASIN (media open).
     """
     owned: set[str] = set()
-    sidecar_dirs: list[tuple[Path, str]] = []
+    sidecar_dirs: list[tuple[Path, str, Path]] = []
     media_files: list[Path] = []
     try:
         for dirpath, dirnames, filenames in os.walk(str(start)):
@@ -7999,7 +7911,7 @@ def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, 
             if dir_found or first_audio is None:
                 continue  # ASIN already found here, or no audio -> nothing to resolve
             if sidecar_name:
-                sidecar_dirs.append((Path(dirpath), sidecar_name))
+                sidecar_dirs.append((Path(dirpath), sidecar_name, first_audio))
             else:
                 media_files.append(first_audio)
     except OSError:
@@ -8027,7 +7939,7 @@ def _scan_owned_asins(root: Path) -> set[str]:
             owned.add(hit.group(1).upper())
 
     subtrees = [c for c in top if c.is_dir()]
-    sidecar_dirs: list[tuple[Path, str]] = []
+    sidecar_dirs: list[tuple[Path, str, Path]] = []
     media_files: list[Path] = []
     if subtrees:
         with ThreadPoolExecutor(max_workers=16) as pool:
@@ -8037,11 +7949,16 @@ def _scan_owned_asins(root: Path) -> set[str]:
                 media_files.extend(sub_media)
 
     # Fallback 1: read sidecars (cheap JSON, parallel) for dirs lacking a filename ASIN.
+    # A sidecar that records no ASIN (a backup only, say) sends its book to fallback 2.
     if sidecar_dirs:
         with ThreadPoolExecutor(max_workers=16) as pool:
-            for asin in pool.map(lambda item: _asin_string_from_libraforge_json(item[0] / item[1]), sidecar_dirs):
+            for (_, _, first_audio), asin in zip(
+                sidecar_dirs, pool.map(lambda item: _asin_string_from_libraforge_json(item[0] / item[1]), sidecar_dirs)
+            ):
                 if asin:
                     owned.add(asin)
+                else:
+                    media_files.append(first_audio)
 
     # Fallback 2: open the media file (slow) only for the residual dirs.
     if media_files:

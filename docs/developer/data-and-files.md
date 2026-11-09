@@ -11,7 +11,7 @@ can tell state from cache and know what is safe to delete.
 | `libraforge.json` | Metadata Forge, Manual Review, Chapter Forge | Folder-level sidecar for a grouped book or a file alone in its folder. |
 | `<file>.libraforge.json` | the same | Per-file sidecar for a loose file that shares its folder with other books. |
 | `metadata.json` / `<file>.metadata.json` | Metadata Forge, Manual Review | Audiobookshelf's own metadata file. Same folder-level vs per-file rule as above. Enrichment Forge no longer writes it when Audiobookshelf is configured and removes old copies it finds. |
-| `<folder name>.chapter-count-cache.json` (inside the book folder) | Metadata Forge | Persistent chapter-count probe cache (see `CHAPTER_COUNT_CACHE_SUFFIX` in the fixer). |
+| `<folder name>.chapter-count-cache.json` (inside the book folder) | older Metadata Forge versions | Chapter-count probe cache (see `CHAPTER_COUNT_CACHE_SUFFIX` in the fixer). Still read when its entry is current, no longer written (chapter counts live in `media-facts.sqlite`); Folder Forge's cleanup deletes them. |
 | `*.libraforge-chapters.cue`, `.srt`, `*.libraforge-transcript.txt`, `*.libraforge-ai-review.md` | Chapter Forge | Saved chapter output. |
 
 The sidecar path rule is `get_libraforge_path()` in the fixer: folder-level
@@ -34,7 +34,7 @@ each written by the step that owns it:
   `created_at`, `source_file` and `duration_minutes`. `--restore-metadata` reads this.
 - `sidecar`: the metadata plan for an M4B conversion (`book`, `audible`, source file list,
   audio stream summary).
-- `scan_cache`: the ASIN the Start Here scan found for the book (`scan_cache.asin`), kept in its own key so the organizer's fields are untouched.
+- `scan_cache`: the ASIN and core fields older Start Here scans found for the book. Still read while the audio file's mtime matches; scans now keep this in `book-tag-cache.json` in the reports folder and never write into the library.
 - `chapter_forge`: the chapter list Chapter Forge saved, with the settings that produced it.
 
 Older versions kept `marker` and `backup` in separate files; the fixer migrates those into the
@@ -49,6 +49,7 @@ sidecar the first time it reads them.
 | `media-facts.sqlite` | What was read from each audio file (container and stream tags, duration, stream properties, chapter count), shared by the web app and the fixer and Folder Forge scripts (`app/media_facts_store.py`). Keyed by path, size, nanosecond modification time and the reader with its ffprobe release, so a changed file, a new reader or another ffprobe release reads the file again. Only successful reads are kept; facts for files that no longer exist are dropped at startup unless the library folder is missing or empty. Safe to delete. |
 | `m4b-discovery-cache.json` | M4B Tool discovery results, keyed by (root path, fixer script name) and invalidated when the script file's modification time changes. After a change, only the book folders whose signature changed are searched again; each search keeps per-folder signatures and audio file counts for that. |
 | `folder-scan-cache.json` | Start Here scan results, keyed by path and ignored folders (`FOLDER_SCAN_CACHE_VERSION`). |
+| `book-tag-cache.json` | Start Here's per-book tag check (embedded ASIN, title, author, narrator present), keyed by audio file path and trusted while its mtime is unchanged (`app/book_tag_cache.py`). Safe to delete. |
 | `audible-store-genres.json` | Audible's foreign-store genre names with their English names and top-level category (`app/store_genres.py`), built from each store's category tree and refetched monthly by Enrichment Forge. Safe to delete. |
 | `audiobook-guild-catalog.json` | Audiobook Guild's catalog (about 1.3 MB) and the runtimes read from its book pages so far (`app/audiobook_guild.py`), refreshed weekly, keeping the runtime of every book still in the store. Safe to delete: LibraForge then starts again from the catalog it ships (`app/data/audiobook-guild-catalog.json`, every book with its runtime). |
 | `organizer-structure-cache.json` | Folder Forge's picture of the destination library (`DEFAULT_STRUCTURE_CACHE`). It is stamped with the naming template that built it. |
