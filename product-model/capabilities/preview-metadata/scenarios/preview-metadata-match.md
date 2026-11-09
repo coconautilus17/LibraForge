@@ -14,6 +14,42 @@ steps:
     cli:
       place: cli
 - kind: product
+  text: The Product reads the tags of every book it has not processed before it searches any, except with the
+    Audiobookshelf provider.
+  entities:
+  - entity: audiobook
+    effect: reads
+    facts:
+    - Path
+    - Title
+    - Author
+    - Narrator
+    - Series
+    - Identifiers
+    - Audio
+  contexts:
+    web:
+      place: web::metadata-forge
+    cli:
+      place: cli
+  actor: library-owner
+- kind: product
+  text: For a book by one of the Guild's authors, the Product reads the Guild catalog, reading the store again
+    first when the catalog is more than a week old.
+  entities:
+  - entity: audiobook-guild-catalog
+    effect: changes
+    facts:
+    - Books
+    - Runtimes
+    - Read at
+  contexts:
+    web:
+      place: web::metadata-forge
+    cli:
+      place: cli
+  actor: library-owner
+- kind: product
   text: The Product reads the audiobook clues, finds a metadata match and presents proposed values and write
     destinations without applying those values.
   entities:
