@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 
 from app import media_probe, mp4_native
 from app.tests.test_media_probe import make_m4b
@@ -90,6 +90,40 @@ class NativeMatchesFfprobeTests(unittest.TestCase):
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "2",
                         "-c:a", "aac", "-b:a", "64k", str(book), "-y"], check=True)
         self.assertSameAsFfprobe(book)
+
+
+class LightReadTests(unittest.TestCase):
+    """A light read skips the sample tables and cover images, yet reports the same
+    tags, duration and chapters as a full read."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def assertLightMatchesFull(self, path: Path):
+        full, light = mp4_native.read(path), mp4_native.read(path, light=True)
+        for key in ("format_tags", "stream_tags", "duration_seconds", "chapter_count"):
+            self.assertEqual(light[key], full[key], key)
+
+    def test_a_long_book_with_a_chapter_track_and_a_cover(self):
+        book = make_m4b(self.dir / "long.m4b", chapters=40, seconds=600)
+        audio = MP4(str(book))
+        audio.tags["covr"] = [MP4Cover(b"\xff\xd8\xff" + b"\1" * 300_000, MP4Cover.FORMAT_JPEG)]
+        audio.tags["----:com.apple.iTunes:ASIN"] = [MP4FreeForm(b"B0TESTASIN")]
+        audio.save()
+        self.assertLightMatchesFull(book)
+        # With small blocks, the 300 KB cover is plainly never read.
+        with mock.patch.object(mp4_native, "LIGHT_BLOCK", 4096), \
+                mock.patch.object(mp4_native.os, "pread", wraps=mp4_native.os.pread) as pread:
+            mp4_native.read(book, light=True)
+            light_bytes = sum(c.args[1] for c in pread.call_args_list)
+        self.assertLess(light_bytes, 100_000)
+
+    def test_a_file_without_chapters_or_tags(self):
+        book = self.dir / "plain.m4a"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "30",
+                        "-c:a", "aac", "-b:a", "64k", str(book), "-y"], check=True)
+        self.assertLightMatchesFull(book)
 
 
 class FallbackTests(unittest.TestCase):

@@ -29,7 +29,7 @@ def make_m4b(path: Path, *, title: str = "Book", chapters: int = 2, seconds: int
 def reads() -> int:
     """Files actually read, in-process or by ffprobe."""
     stats = media_probe.stats()
-    return stats.get("ffprobe_runs", 0) + stats.get("native_reads", 0)
+    return stats.get("ffprobe_runs", 0) + stats.get("native_reads", 0) + stats.get("native_light_reads", 0)
 
 
 class MediaProbeTests(unittest.TestCase):
@@ -41,14 +41,38 @@ class MediaProbeTests(unittest.TestCase):
 
     def test_one_read_answers_every_field_and_is_remembered(self):
         book = make_m4b(self.dir / "a.m4b", chapters=3)
+        audio = media_probe.audio_properties_of(book)
+        self.assertEqual((audio["codec"], audio["channels"], audio["sample_rate_hz"]), ("aac", 1, 8000))
         facts = media_probe.inspect(book, {"tags"})
         self.assertEqual(facts.format_tags.get("title"), "Book")
         self.assertEqual(media_probe.chapter_count(book), 3)
         self.assertAlmostEqual(media_probe.duration_seconds(book), 2.0, delta=0.1)
-        audio = media_probe.audio_properties_of(book)
-        self.assertEqual((audio["codec"], audio["channels"], audio["sample_rate_hz"]), ("aac", 1, 8000))
         self.assertEqual(reads(), 1)
         self.assertEqual(media_probe.stats()["memo_hits"], 3)
+
+    def test_without_audio_wanted_the_sample_tables_are_skipped(self):
+        book = make_m4b(self.dir / "a.m4b", chapters=3)
+        light = media_probe.inspect(book, {"tags", "duration", "chapters"})
+        self.assertEqual(media_probe.stats().get("native_light_reads"), 1)
+        self.assertNotIn("audio", light.fields)
+        # Asking for audio afterwards reads the file in full once; the rest agrees.
+        full = media_probe.inspect(book)
+        self.assertEqual(media_probe.stats().get("native_reads"), 1)
+        self.assertEqual((full.format_tags, full.duration_seconds, full.chapter_count),
+                         (light.format_tags, light.duration_seconds, light.chapter_count))
+        self.assertIsNotNone(media_probe.audio_properties_of(book))
+        self.assertEqual(reads(), 2)
+
+    def test_stored_facts_without_audio_are_not_served_for_audio(self):
+        store = self.dir / "facts.sqlite"
+        media_probe.configure_store(store)
+        self.addCleanup(media_probe.configure_store, None)
+        book = make_m4b(self.dir / "a.m4b")
+        media_probe.inspect(book, {"tags"})
+        media_probe.reset()
+        media_probe.configure_store(store)
+        self.assertEqual(media_probe.audio_properties_of(book)["codec"], "aac")
+        self.assertEqual(media_probe.stats().get("native_reads"), 1)
 
     def test_a_changed_file_is_read_again(self):
         book = make_m4b(self.dir / "a.m4b", title="First")
@@ -82,10 +106,10 @@ class MediaProbeTests(unittest.TestCase):
         real = media_probe._read
         started = threading.Event()
 
-        def slow(path):
+        def slow(path, *args):
             started.set()
             threading.Event().wait(0.3)
-            return real(path)
+            return real(path, *args)
 
         with mock.patch.object(media_probe, "_read", side_effect=slow):
             threads = [threading.Thread(target=media_probe.inspect, args=(book,)) for _ in range(6)]

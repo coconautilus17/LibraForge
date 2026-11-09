@@ -221,13 +221,14 @@ def inspect(path: Path | str, fields: frozenset[str] | set[str] | tuple[str, ...
         key_lock = _key_locks.setdefault(key, threading.Lock())
     try:
         with key_lock:
-            return _read_and_remember(path, key, signature, remembered)
+            return _read_and_remember(path, key, signature, remembered, wanted)
     finally:
         with _memo_lock:
             _key_locks.pop(key, None)
 
 
-def _read_and_remember(path: Path, key: str, signature: tuple[int, int] | None, remembered) -> MediaFacts:
+def _read_and_remember(path: Path, key: str, signature: tuple[int, int] | None, remembered,
+                       wanted: frozenset[str] = FIELDS) -> MediaFacts:
     with _memo_lock:
         facts = remembered()  # another thread may have just read it
         if facts:
@@ -235,12 +236,12 @@ def _read_and_remember(path: Path, key: str, signature: tuple[int, int] | None, 
             return facts
     store = _store
     stored = store.get(key, *signature) if store and signature else None
-    if stored:
+    if stored and wanted <= frozenset(stored.get("fields") or ()):
         _count("store_hits")
         facts = MediaFacts(path=key, size=signature[0], mtime_ns=signature[1], **_from_payload(stored))
         _remember(key, facts)
         return facts
-    facts = _read(path)
+    facts = _read(path, wanted)
     if not facts.fields:
         _count("failures")
         return facts
@@ -272,25 +273,30 @@ def _from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {**payload, "fields": frozenset(payload.get("fields") or ())}
 
 
-def _read(path: Path) -> MediaFacts:
-    """In-process for MP4 files the native reader fully reproduces, else ffprobe."""
+def _read(path: Path, wanted: frozenset[str] = FIELDS) -> MediaFacts:
+    """In-process for MP4 files the native reader fully reproduces, else ffprobe.
+
+    Without "audio" wanted, the native reader skips the sample tables (most of a
+    long book's index) and establishes every field but "audio"; asking for audio
+    later reads the file again in full."""
     if path.suffix.lower() in NATIVE_SUFFIXES and native_allowed():
+        light = "audio" not in wanted
         try:
-            native = mp4_native.read(path)
+            native = mp4_native.read(path, light=light)
         except mp4_native.Unsupported:
             _count("native_fallbacks")
         except (OSError, ValueError, IndexError, struct_error):
             _count("native_errors")
         else:
-            _count("native_reads")
+            _count("native_light_reads" if light else "native_reads")
             return MediaFacts(
                 path=str(path),
                 backend="native",
-                fields=FIELDS,
+                fields=FIELDS - {"audio"} if light else FIELDS,
                 format_tags=_clean_tags(native["format_tags"]),
                 stream_tags=_clean_tags(native["stream_tags"]),
                 duration_seconds=native["duration_seconds"],
-                audio=audio_properties(native["stream"], native["format"]),
+                audio=None if light else audio_properties(native["stream"], native["format"]),
                 chapter_count=native["chapter_count"],
             )
     return _read_ffprobe(path)
