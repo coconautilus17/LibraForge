@@ -1726,8 +1726,8 @@ function buildMatchCard(item) {
   const titleMatch = m.title ? (m.title + (m.subtitle ? ': ' + m.subtitle : '')) : '';
   const durationDiff = m.duration_diff_pct != null
     ? `${m.duration_diff_pct > 0 ? '+' : ''}${m.duration_diff_pct}%` : '';
-  const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
-  const matchDur = m.duration_minutes != null ? `${m.duration_minutes} min` : '';
+  const localDur = local.duration_minutes != null ? `${Math.round(local.duration_minutes)} min` : '';
+  const matchDur = m.duration_minutes != null ? `${Math.round(m.duration_minutes)} min` : '';
 
   const queryHtml = item.used_query
     ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';

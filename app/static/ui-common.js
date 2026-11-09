@@ -731,8 +731,8 @@
 
     const providerHead = escapeHtml(providerLabel || 'Match');
     const titleMatch = match.title ? (match.title + (match.subtitle ? ': ' + match.subtitle : '')) : '';
-    const localDur = local.duration_minutes != null ? `${local.duration_minutes} min` : '';
-    const matchDur = match.duration_minutes != null ? `${match.duration_minutes} min` : '';
+    const localDur = local.duration_minutes != null ? `${Math.round(local.duration_minutes)} min` : '';
+    const matchDur = match.duration_minutes != null ? `${Math.round(match.duration_minutes)} min` : '';
     const queryHtml = item.used_query
       ? `<div class="mrep-query">Query: <span>${escapeHtml(item.used_query)}</span></div>` : '';
 
