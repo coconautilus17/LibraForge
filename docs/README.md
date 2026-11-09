@@ -4,7 +4,8 @@
 
 - [Features](features.md): what each tool does and how its settings behave.
 - [Reporting an issue](reporting-issues.md): what to attach to a bug report.
-- The [project README](../README.md): install, images, safety.
+- [Installing](install.md): from a clone, the published images, companion services, container paths.
+- The [project README](../README.md): what LibraForge does, quick start, safety.
 
 ## For developers
 
