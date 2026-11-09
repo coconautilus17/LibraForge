@@ -41,14 +41,6 @@ HAREMLIT_PACER = SourcePacer(gap_s=0.5, fail_threshold=3, cooldown_s=60)
 AUDIOSILO_SEARCH_URL = "https://meta.audiosilo.app/abs/search"
 OPENLIBRARY_SEARCH_URL = "https://openlibrary.org/search.json"
 _USER_AGENT = "Mozilla/5.0"  # progressionfantasy.co.uk 403s descriptive UAs
-# Audible's older ASINs have the ISBN-10 shape (Dune: House Atreides is
-# 1004027907). abs_client._is_real_asin stays B0-only because it guards writes
-# (#291); a read-only lookup can also try this shape, a miss is just a 404.
-_ISBN10_SHAPED_ASIN_RE = re.compile(r"[0-9]{9}[0-9X]")
-
-
-def _lookup_asin(asin: str) -> bool:
-    return _is_real_asin(asin) or bool(_ISBN10_SHAPED_ASIN_RE.fullmatch(asin))
 SOURCE_WORKERS = 2
 
 HttpGet = Callable[[str, float], Any]
@@ -111,7 +103,7 @@ def audiosilo_lookup(book: dict[str, Any], *, pacer: GoodreadsPacer = AUDIOSILO_
     wanted = clean_query_title(str(book.get("title") or ""))
     author = _primary_author(book)
     asin = str(book.get("asin") or "").upper()
-    if _lookup_asin(asin):
+    if _is_real_asin(asin):
         status, data = _paced_get(AUDIOSILO_LOOKUP_URL + "?" + urllib.parse.urlencode({"asin": asin}), pacer, http_get)
         if status in ("failed", "skipped"):
             return _result(status)
