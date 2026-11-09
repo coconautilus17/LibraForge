@@ -183,9 +183,11 @@ try:
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
     from app import media_probe
+    from app.tag_padding import save_padding as tag_save_padding
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app import media_probe
+    from app.tag_padding import save_padding as tag_save_padding
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
     from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
@@ -1547,7 +1549,7 @@ def mutagen_write_mp4_tags(
         )
     else:
         print("  Mutagen MP4 write: saving metadata in place...", flush=True)
-    audio.save()
+    audio.save(padding=tag_save_padding)
     print(
         f"  Mutagen MP4 write complete in {time.monotonic() - write_started:.1f}s",
         flush=True,
@@ -1669,7 +1671,7 @@ def mutagen_write_mp3_tags(
             else:
                 print("  Cover skipped: no Audible cover URL")
 
-    tags.save(str(source))
+    tags.save(str(source), padding=tag_save_padding)
 
 def mutagen_restore_metadata_from_backup(source: Path) -> Path:
     backup_path, tags = load_metadata_backup_payload(source)
@@ -1701,7 +1703,7 @@ def mutagen_restore_metadata_from_backup(source: Path) -> Path:
         mp4_set_text(audio.tags, "\xa9cmt", tags.get("comment", ""))
         mp4_set_track(audio.tags, tags.get("track", ""))
 
-        audio.save()
+        audio.save(padding=tag_save_padding)
 
     elif is_mutagen_mp3_candidate(source):
         if not mutagen_mp3_is_available():
@@ -1728,7 +1730,7 @@ def mutagen_restore_metadata_from_backup(source: Path) -> Path:
         id3_set_text(audio, "TDRC", TDRC, tags.get("date", ""))
         id3_set_text(audio, "TCON", TCON, tags.get("genre", ""))
         id3_set_track(audio, tags.get("track", ""))
-        audio.save(str(source))
+        audio.save(str(source), padding=tag_save_padding)
 
     else:
         raise RuntimeError(

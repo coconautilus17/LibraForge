@@ -51,6 +51,7 @@ from app.folder_scan_cache import (
 )
 import app.library_index as library_index
 from app import media_probe
+from app.tag_padding import save_padding as tag_save_padding
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
 from app.enrichment import (
@@ -4016,7 +4017,7 @@ def enforce_m4b_output_metadata(
     set_mp4_freeform(tags, "NARRATOR", metadata.narrator)
     set_mp4_freeform(tags, "ASIN", metadata.asin)
     set_mp4_freeform(tags, "AUDIBLE_ASIN", metadata.asin)
-    audio.save()
+    audio.save(padding=tag_save_padding)
 
 
 def probe_duration_seconds(path: Path) -> float:
@@ -8304,7 +8305,7 @@ def _embed_asin_tag(m4b_path: Path, asin: str) -> None:
         if mp4.tags is None:
             mp4.add_tags()
         mp4.tags[_ASIN_TAG_KEYS[0]] = [MP4FreeForm(asin.encode("utf-8"))]
-        mp4.save()
+        mp4.save(padding=tag_save_padding)
     except Exception:
         pass
 
