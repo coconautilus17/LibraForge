@@ -1,4 +1,4 @@
-"""Scan completeness: sidecar naming, scan_cache read/validity, and creation.
+"""Scan completeness: the reports-side tag cache, legacy scan_cache reads, and no library writes.
 
 Pure-logic coverage (no media decoding needed); end-to-end probing of real tags
 is exercised separately. Empty .m4b files stand in for audio: _probe returns all
@@ -13,89 +13,53 @@ from fastapi.testclient import TestClient
 
 import app.library_index as library_index
 import app.main as main_module
+from app.book_tag_cache import BookTagCache
 from app.main import (
     _CORE_FIELDS,
-    _ensure_scan_sidecar,
+    _book_metadata_state,
     _marker_says_no_asin,
     _probe_book_metadata,
     _scan_cache_from_sidecar,
-    _scan_sidecar_target,
 )
 
 client = TestClient(main_module.app)
 
 
-class SidecarTargetTests(unittest.TestCase):
+class BookTagCacheTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.cache_path = self.root / "reports" / "book-tag-cache.json"
+        self.cache_path.parent.mkdir()
+        self.cache = BookTagCache(self.cache_path)
+        original = main_module.BOOK_TAG_CACHE
+        main_module.BOOK_TAG_CACHE = self.cache
+        self.addCleanup(setattr, main_module, "BOOK_TAG_CACHE", original)
+        self.audio = self.root / "lib" / "Book" / "Book.m4b"
+        self.audio.parent.mkdir(parents=True)
+        self.audio.write_bytes(b"not a real m4b")
 
-    def tearDown(self):
-        self.tmp.cleanup()
+    def test_a_read_is_remembered_in_the_reports_folder_not_the_library(self):
+        _book_metadata_state(self.audio.parent, [self.audio])
+        self.cache.save()
+        self.assertEqual([p.name for p in self.audio.parent.iterdir()], ["Book.m4b"])
+        reloaded = BookTagCache(self.cache_path)
+        mtime = self.audio.stat().st_mtime_ns
+        self.assertEqual(reloaded.get(self.audio, mtime), {"asin": "", "fields": {f: False for f in _CORE_FIELDS}})
 
-    def _touch(self, rel):
-        p = self.root / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(b"")
-        return p
+    def test_a_remembered_read_is_used_until_the_file_changes(self):
+        mtime = self.audio.stat().st_mtime_ns
+        self.cache.put(self.audio, mtime, {"asin": "B0AAAA1111", "fields": {f: True for f in _CORE_FIELDS}})
+        self.assertEqual(_book_metadata_state(self.audio.parent, [self.audio]),
+                         (True, {f: True for f in _CORE_FIELDS}))
+        self.assertIsNone(self.cache.get(self.audio, mtime + 1))
 
-    def test_single_file_alone_is_folder_level(self):
-        a = self._touch("Book/Book.m4b")
-        self.assertEqual(_scan_sidecar_target([a], a.parent, a), a.parent / "libraforge.json")
-
-    def test_single_file_shared_folder_is_per_file(self):
-        a = self._touch("Shared/A.m4b")
-        self._touch("Shared/B.m4b")
-        self.assertEqual(
-            _scan_sidecar_target([a], a.parent, a),
-            a.with_name(a.name + ".libraforge.json"),
-        )
-
-    def test_multifile_is_folder_level(self):
-        p1 = self._touch("Multi/part1.m4b")
-        p2 = self._touch("Multi/part2.m4b")
-        self.assertEqual(_scan_sidecar_target([p1, p2], p1.parent, p1), p1.parent / "libraforge.json")
-
-
-class EnsureSidecarTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def test_creates_folder_level_with_fields_and_mtime(self):
-        a = self.root / "Book" / "Book.m4b"
-        a.parent.mkdir(parents=True)
-        a.write_bytes(b"")
-        fields = {"title": True, "author": True, "narrator": False}
-        _ensure_scan_sidecar([a], a.parent, a, "B0AAAA1111", fields)
-        sc = json.loads((a.parent / "libraforge.json").read_text())["scan_cache"]
-        self.assertEqual(sc["asin"], "B0AAAA1111")
-        self.assertEqual(sc["fields"], fields)
-        self.assertIsNotNone(sc["mtime"])
-
-    def test_shared_folder_uses_per_file_not_folder_level(self):
-        # A and B are distinct books sharing one folder. A stray folder-level
-        # libraforge.json (e.g. belonging to a real multi-part book, or left over)
-        # must NOT be adopted for A -- that is exactly the clobber that funnelled
-        # Iron Guild's three books into one corrupt sidecar. A gets its own per-file
-        # sidecar and the folder-level file is left untouched.
-        a = self.root / "Shared" / "A.m4b"
-        a.parent.mkdir(parents=True)
-        a.write_bytes(b"")
-        (self.root / "Shared" / "B.m4b").write_bytes(b"")
-        (a.parent / "libraforge.json").write_text('{"marker": {"applied": true}}', encoding="utf-8")
-        _ensure_scan_sidecar([a], a.parent, a, "B0BBBB2222", {f: True for f in _CORE_FIELDS})
-        # A's own per-file sidecar was created with the scan_cache.
-        per_file = a.with_name(a.name + ".libraforge.json")
-        self.assertTrue(per_file.is_file())
-        self.assertEqual(json.loads(per_file.read_text())["scan_cache"]["asin"], "B0BBBB2222")
-        # The folder-level file was not adopted or polluted with A's scan_cache.
-        folder = json.loads((a.parent / "libraforge.json").read_text())
-        self.assertNotIn("scan_cache", folder)
-        self.assertTrue(folder["marker"]["applied"])
+    def test_a_no_match_marker_still_counts_as_asin_satisfied(self):
+        (self.audio.parent / "libraforge.json").write_text(
+            json.dumps({"marker": {"audible": {"asin": "NOREALASIN"}, "source_file": "Book.m4b"}}), encoding="utf-8")
+        satisfied, _ = _book_metadata_state(self.audio.parent, [self.audio])
+        self.assertIs(satisfied, True)
 
 
 class ScanCacheReadTests(unittest.TestCase):
@@ -200,11 +164,14 @@ class ScanStalenessTests(unittest.TestCase):
         main_module.AUDIOBOOKS_ROOT = self.root
         self._orig_cache_path = main_module.FOLDER_SCAN_CACHE
         main_module.FOLDER_SCAN_CACHE = self.root / "folder-scan-cache.json"
+        self._orig_tag_cache = main_module.BOOK_TAG_CACHE
+        main_module.BOOK_TAG_CACHE = BookTagCache(self.root / "book-tag-cache.json")
         library_index.reset_state_for_tests()
 
     def tearDown(self):
         main_module.AUDIOBOOKS_ROOT = self._orig_root
         main_module.FOLDER_SCAN_CACHE = self._orig_cache_path
+        main_module.BOOK_TAG_CACHE = self._orig_tag_cache
         library_index.reset_state_for_tests()
         self.tmp.cleanup()
 
@@ -245,6 +212,15 @@ class ScanStalenessTests(unittest.TestCase):
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertTrue(second.json()["from_cache"])
 
+    def test_a_scan_writes_nothing_into_the_library(self):
+        self._touch("Author/Book1/Book1.m4b")
+        self._touch("Author/Shared/A.m4b")
+        self._touch("Author/Shared/B.m4b")
+        before = sorted(p.relative_to(self.root) for p in (self.root / "Author").rglob("*"))
+        client.post("/api/scan", json={"path": str(self.root / "Author"), "ignored_folders": []})
+        after = sorted(p.relative_to(self.root) for p in (self.root / "Author").rglob("*"))
+        self.assertEqual(after, before)
+
     def test_cache_persists_to_disk(self):
         self._touch("Author/Book1/Book1.m4b")
         client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
@@ -282,9 +258,9 @@ class ScanStalenessTests(unittest.TestCase):
         # next (cache-hit) call.
         complete = self._touch("Unorganized/A.mp3")
         incomplete = self._touch("Unorganized/B.m4b")
-        main_module._ensure_scan_sidecar(
-            [complete], complete.parent, complete, "B0COMPLETE1",
-            {"title": True, "author": True, "narrator": True},
+        main_module.BOOK_TAG_CACHE.put(
+            complete, complete.stat().st_mtime_ns,
+            {"asin": "B0COMPLETE1", "fields": {"title": True, "author": True, "narrator": True}},
         )
         scan_root = self.root / "Unorganized"
 
@@ -309,9 +285,9 @@ class ScanStalenessTests(unittest.TestCase):
         # onto a single category counted twice while the other silently drops to zero.
         complete = self._touch("Dump/A.mp3")
         self._touch("Dump/B.m4b")
-        main_module._ensure_scan_sidecar(
-            [complete], complete.parent, complete, "B0COMPLETE2",
-            {"title": True, "author": True, "narrator": True},
+        main_module.BOOK_TAG_CACHE.put(
+            complete, complete.stat().st_mtime_ns,
+            {"asin": "B0COMPLETE2", "fields": {"title": True, "author": True, "narrator": True}},
         )
         scan_root = self.root / "Dump"
 

@@ -1,4 +1,4 @@
-"""Tests for _asin_from_libraforge_json and _write_scan_asin_cache."""
+"""Tests for _asin_from_libraforge_json and the owned-ASIN scan."""
 import json
 import tempfile
 import unittest
@@ -10,7 +10,6 @@ from app.main import (
     _asin_from_libraforge_json,
     _asin_string_from_libraforge_json,
     _scan_owned_asins,
-    _write_scan_asin_cache,
 )
 
 
@@ -71,80 +70,6 @@ class AsinFromLibraforgeJsonTests(unittest.TestCase):
             self.assertIsNone(_asin_from_libraforge_json(p))
 
 
-class WriteScanAsinCacheTests(unittest.TestCase):
-    def test_writes_to_existing_sidecar_audible_field(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d)
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            sidecar = folder / "libraforge.json"
-            sidecar.write_text(json.dumps({"audible": {}}), encoding="utf-8")
-
-            _write_scan_asin_cache(folder, audio, "B0CACHED12")
-
-            data = json.loads(sidecar.read_text())
-            self.assertEqual(data["scan_cache"]["asin"], "B0CACHED12")
-
-    def test_writes_norealasin_to_existing_sidecar(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d)
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            sidecar = folder / "libraforge.json"
-            sidecar.write_text(json.dumps({}), encoding="utf-8")
-
-            _write_scan_asin_cache(folder, audio, ASIN_PLACEHOLDER)
-
-            data = json.loads(sidecar.read_text())
-            self.assertEqual(data["scan_cache"]["asin"], ASIN_PLACEHOLDER)
-
-    def test_does_not_create_new_sidecar(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d)
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            sidecar = folder / "libraforge.json"
-
-            _write_scan_asin_cache(folder, audio, "B0CACHED12")
-
-            # No sidecar existed -- should NOT be created
-            self.assertFalse(sidecar.exists())
-
-    def test_does_not_overwrite_existing_marker_asin(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d)
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            sidecar = folder / "libraforge.json"
-            original = {"marker": {"audible": {"asin": "B0ORIGINAL"}}}
-            sidecar.write_text(json.dumps(original), encoding="utf-8")
-
-            _write_scan_asin_cache(folder, audio, "B0CACHED12")
-
-            data = json.loads(sidecar.read_text())
-            # scan_cache written, but marker.audible.asin untouched
-            self.assertEqual(data["scan_cache"]["asin"], "B0CACHED12")
-            self.assertEqual(data["marker"]["audible"]["asin"], "B0ORIGINAL")
-
-    def test_prefers_per_file_sidecar_when_present(self):
-        with tempfile.TemporaryDirectory() as d:
-            folder = Path(d)
-            audio = folder / "book.m4b"
-            audio.write_bytes(b"")
-            per_file = folder / "book.m4b.libraforge.json"
-            per_file.write_text(json.dumps({}), encoding="utf-8")
-            folder_sidecar = folder / "libraforge.json"
-            folder_sidecar.write_text(json.dumps({}), encoding="utf-8")
-
-            _write_scan_asin_cache(folder, audio, "B0PERFILE1")
-
-            per_file_data = json.loads(per_file.read_text())
-            folder_data = json.loads(folder_sidecar.read_text())
-            self.assertEqual(per_file_data["scan_cache"]["asin"], "B0PERFILE1")
-            # folder sidecar not written when per-file exists
-            self.assertNotIn("scan_cache", folder_data)
-
-
 class AsinStringFromLibraforgeJsonTests(unittest.TestCase):
     def _write(self, tmp: Path, data: dict) -> Path:
         p = tmp / "libraforge.json"
@@ -184,6 +109,17 @@ class ScanOwnedAsinsTests(unittest.TestCase):
             with patch("app.main._read_asin_from_audio", return_value=""):
                 owned = _scan_owned_asins(root)
             self.assertEqual(owned, {"B0AAA11111", "B0BBB22222"})
+
+    def test_a_sidecar_without_an_asin_falls_back_to_the_audio_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            book = Path(d) / "Author" / "Book"
+            book.mkdir(parents=True)
+            (book / "book.m4b").write_bytes(b"")
+            (book / "libraforge.json").write_text(json.dumps({"backup": {"format_tags": {}}}), encoding="utf-8")
+            with patch("app.main._read_asin_from_audio", return_value="B0CCC33333") as read:
+                owned = _scan_owned_asins(Path(d))
+            self.assertEqual(owned, {"B0CCC33333"})
+            read.assert_called_once_with(book / "book.m4b")
 
 
 if __name__ == "__main__":

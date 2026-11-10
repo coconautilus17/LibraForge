@@ -111,6 +111,7 @@ function collectRequest() {
     target_path: $('targetPath').value.trim(),
     auth_file: $('authFile').value.trim(),
     apply: $('apply').checked,
+    search_again: $('apply').checked && $('searchAgain').checked,
     backup: $('backup').checked,
     restore_metadata: $('restore').checked,
     force: $('force').checked,
@@ -121,7 +122,7 @@ function collectRequest() {
     trust_abs_metadata: Boolean($('trustAbsMetadata')?.checked),
     weight_abs_metadata: Boolean($('weightAbsMetadata')?.checked),
     workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('workers').value || '8', 10) : undefined,
-    write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '1', 10) : undefined,
+    write_workers: fixerMajorVersion($('script').value) >= 5 ? parseInt($('writeWorkers').value || '4', 10) : undefined,
     api_delay_ms: fixerMajorVersion($('script').value) >= 5 ? parseInt($('apiDelayMs').value || '0', 10) : 0,
     write_mode: fixerMajorVersion($('script').value) >= 5 ? ($('writeMode').value || 'smart') : 'smart',
     provider: fixerMajorVersion($('script').value) >= 5 ? ($('manualProvider')?.value || 'audible') : 'audible',
@@ -1408,6 +1409,15 @@ function syncForceOriginal() {
   if (note) note.hidden = !(forceOn && fo.checked);
 }
 $('force').addEventListener('change', syncForceOriginal);
+
+function syncSearchAgain() {
+  const applyOn = $('apply').checked;
+  const label = $('searchAgain').closest('label');
+  if (label) label.hidden = !applyOn;
+  if (!applyOn) $('searchAgain').checked = false;
+}
+$('apply').addEventListener('change', syncSearchAgain);
+syncSearchAgain();
 $('forceOriginal').addEventListener('change', syncForceOriginal);
 
 function syncAbsMetadataInputMode(justChecked) {

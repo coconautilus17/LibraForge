@@ -42,7 +42,8 @@ browser ──HTTP──> app/main.py (FastAPI, uvicorn)
 | `app/abs_client.py` | Direct Audiobookshelf API sync (used by the fixer and by Enrichment Forge). |
 | `app/*_policy.py`, `author_names.py` | User-editable pattern sets (title noise, publishers, author-name scheme) and the code that applies them. |
 | `app/library_index.py`, `folder_scan_cache.py`, `conversion_*.py` | Library walking and the caches built on it. |
-| `app/media_probe.py`, `mp4_native.py`, `media_facts_store.py` | Reading audio files: one inspection per file answers tags, duration, stream properties and chapter count for every tool and script, remembered while the file is unchanged and kept across runs in `media-facts.sqlite`. MP4/M4B files are read in-process by a port of FFmpeg 6.1's MP4 rules, used only when the installed ffprobe is 6.1; every other file, and any MP4 shape the port does not model, is one ffprobe call. |
+| `app/media_probe.py`, `mp4_native.py`, `media_facts_store.py` | Reading audio files: one inspection per file answers tags, duration, stream properties and chapter count for every tool and script, remembered while the file is unchanged and kept across runs in `media-facts.sqlite`. MP4/M4B files are read in-process by a port of FFmpeg 6.1's MP4 rules, used only when the installed ffprobe is 6.1; every other file, and any MP4 shape the port does not model, is read in-process with FFmpeg's own libraries through PyAV (`av`, which bundles a newer FFmpeg than the image's 6.1 and so also reads xHE-AAC books 6.1 can't open), about 6 ms a file instead of an ffprobe run's 50 to 100 ms, most of which is starting the program. A file PyAV can't open is one ffprobe call. When the caller does not need stream properties (matching, Folder Forge), an MP4 is read light: its sample tables, cover image and free space are skipped, about 250 KB in 4 reads instead of the whole index (median 3 MB); a later request for stream properties reads it in full once. |
+| `app/book_covers.py` | A book file's own cover (the first `covr`/`APIC` entry) and its thumbnail, kept in `cover-thumbs/` while the file is unchanged; served by `/api/book/cover` and made by the fixer during the search. |
 | `app/debug_trace.py` | Opt-in tracing decorators for code that chooses, alters or scores data. |
 | `app/json_files.py` | `write_json_atomic`: every cache, policy and state file is saved through it (a temporary file swapped into place). |
 
@@ -120,7 +121,9 @@ the next books' ASINs, up to 50 to a request, read from their parsed clues or th
 cheap sources by `upcoming_asins_for_run`, so a run sends at most one request per looked-up
 book and usually far fewer; before the search starts, `prefill_search_contexts` reads the
 tags of every book with no marker and no ASIN in its name, so a clean run's embedded ASINs
-are all known up front), the Audible title+author search and keyword queries (`audible_searches`,
+are all known up front; for 64 books or more it forks processes, because building clues is
+Python work threads can't run at once, and the files they read reach the parent through the
+media facts store; books of many files go first, each reading its parts side by side), the Audible title+author search and keyword queries (`audible_searches`,
 or `abs_search` in ABS mode), then the fallbacks below while the match isn't full, and
 last the review gates (min score, ambiguity, missing title or author). Audible's
 `catalog/products` search is filtered by where the request comes from (and, signed in, by

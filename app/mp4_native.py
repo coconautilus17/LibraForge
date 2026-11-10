@@ -627,9 +627,10 @@ def _sample_bytes(movie: _Movie, st: _Stream) -> int:
     return sum(sizes)
 
 
-def _settle(movie: _Movie, st: _Stream) -> tuple[int | None, int, int]:
+def _settle(movie: _Movie, st: _Stream, light: bool = False) -> tuple[int | None, int, int]:
     """mov_read_trak's end (stts, mov_build_index, mov_fix_index): (start time, duration,
-    bit rate) in the stream's own time base; start time None when FFmpeg leaves it unset."""
+    bit rate) in the stream's own time base; start time None when FFmpeg leaves it unset.
+    A light read has no sample sizes, so its bit rate is 0."""
     if st.time_scale <= 0:
         st.time_scale = movie.time_scale if movie.time_scale > 0 else 1
     if not st.stts:
@@ -656,7 +657,7 @@ def _settle(movie: _Movie, st: _Stream) -> tuple[int | None, int, int]:
     if covered != st.stsz[1] or sum(c for c, _ in st.stts) != st.stsz[1]:
         raise Unsupported("sample tables disagree")
     bit_rate = 0
-    if duration > 0 and st.kind == "audio":
+    if duration > 0 and st.kind == "audio" and not light:
         bit_rate = _sample_bytes(movie, st) * 8 * st.time_scale // duration
     start_time = None
     if st.elst and st.stsz[1]:
@@ -743,8 +744,9 @@ def _format_duration(streams: list[tuple[_Stream, int | None, int]]) -> int | No
     return duration if duration != int64_min and duration > 0 else None
 
 
-def parse(ftyp: bytes, moov: bytes, file_size: int) -> dict[str, Any]:
-    """The facts ffprobe would report for a file with these ftyp and moov atoms."""
+def parse(ftyp: bytes, moov: bytes, file_size: int, light: bool = False) -> dict[str, Any]:
+    """The facts ffprobe would report for a file with these ftyp and moov atoms (light:
+    moov without its sample-table bodies, and no stream bit rate)."""
     movie = _Movie(moov)
     if len(ftyp) < 8:
         raise Unsupported("no ftyp")
@@ -769,7 +771,7 @@ def parse(ftyp: bytes, moov: bytes, file_size: int) -> dict[str, Any]:
     settled = []
     stream_bit_rate = 0
     for st in movie.streams:
-        start_time, duration, bit_rate = _settle(movie, st)
+        start_time, duration, bit_rate = _settle(movie, st, light)
         if st is first:
             stream_bit_rate = bit_rate or first.esds_bit_rate
             if start_time is None:
@@ -805,8 +807,106 @@ def parse(ftyp: bytes, moov: bytes, file_size: int) -> dict[str, Any]:
     }
 
 
-def read_atoms(path: Path) -> tuple[bytes, bytes, int]:
-    """The file's ftyp and moov payloads and its size, with readahead off."""
+# A light read (no audio bit rate) leaves out the bodies of these sample tables, by
+# far the largest part of a long book's moov (median 3 MB, up to 18 MB): parse()
+# reads only how many entries stsz and stco/co64 hold, and the rest are skipped, as
+# are free space (often 100 KB or more, left for tag edits) and unused tables.
+# The value is how many payload bytes of each are still read.
+LIGHT_TABLE_HEADS = {b"stsz": 12, b"stco": 8, b"co64": 8, b"stss": 8, b"stps": 8, b"sdtp": 4,
+                     b"sgpd": 8, b"sbgp": 8, b"free": 0, b"skip": 0, b"wide": 0}
+LIGHT_CONTAINERS = {b"trak", b"mdia", b"minf", b"stbl", b"udta", b"ilst"}
+# An embedded cover's image (up to about 900 KB) is never read: only its data header.
+LIGHT_ITEM_HEADS = {b"covr": 16}
+LIGHT_BLOCK = 64 * 1024
+
+
+class _Blocks:
+    """A light read's view of the file: whole 64 KB blocks, each read once, so the
+    top-level headers and neighbouring small atoms share reads (on a network share
+    every read is a round trip)."""
+
+    def __init__(self, fd: int, size: int):
+        self.fd, self.size = fd, size
+        self.blocks: dict[int, bytes] = {}
+
+    def get(self, offset: int, count: int) -> bytes:
+        end = min(offset + count, self.size)
+        if end <= offset:
+            return b""
+        first, last = offset // LIGHT_BLOCK, (end - 1) // LIGHT_BLOCK
+        block = first
+        while block <= last:
+            if block in self.blocks:
+                block += 1
+                continue
+            stop = block
+            while stop + 1 <= last and stop + 1 not in self.blocks:
+                stop += 1
+            lo, hi = block * LIGHT_BLOCK, min((stop + 1) * LIGHT_BLOCK, self.size)
+            chunk = os.pread(self.fd, hi - lo, lo)
+            if len(chunk) != hi - lo:
+                raise Unsupported("file shorter than its size")
+            for i in range(block, stop + 1):
+                self.blocks[i] = chunk[(i - block) * LIGHT_BLOCK:(i - block + 1) * LIGHT_BLOCK]
+            block = stop + 1
+        if first == last:
+            o = offset - first * LIGHT_BLOCK
+            return self.blocks[first][o:o + (end - offset)]
+        joined = b"".join(self.blocks[i] for i in range(first, last + 1))
+        o = offset - first * LIGHT_BLOCK
+        return joined[o:o + (end - offset)]
+
+
+def _read_moov_light(blocks: _Blocks, start: int, length: int) -> bytearray:
+    """The moov payload with the bodies LIGHT_TABLE_HEADS and LIGHT_ITEM_HEADS name
+    left as zeros."""
+    data = bytearray(length)
+
+    def ensure(offset: int, count: int) -> None:
+        end = min(offset + count, length)
+        if end > offset:
+            data[offset:end] = blocks.get(start + offset, end - offset)
+
+    def visit(pos: int, end: int, depth: int) -> None:
+        if depth > 10:
+            raise Unsupported("atoms nested too deeply")
+        while pos + 8 <= end:
+            ensure(pos, 16)
+            size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+            header = 8
+            if size == 1 and pos + 16 <= end:
+                size = struct.unpack(">Q", data[pos + 8:pos + 16])[0]
+                header = 16
+            elif size == 0:
+                size = end - pos
+            if size < header:
+                return
+            box_end = min(pos + size, end)
+            if kind in LIGHT_CONTAINERS:
+                visit(pos + header, box_end, depth + 1)
+            elif kind == b"meta":
+                # parse() finds meta's children from its hdlr (mov_read_meta); so does this.
+                ensure(pos, min(box_end - pos, header + 64))
+                hdlr = data.find(b"hdlr", pos + header, min(box_end, pos + header + 64))
+                if hdlr < 0:
+                    ensure(pos, box_end - pos)
+                else:
+                    visit(hdlr - 4, box_end, depth + 1)
+            elif kind in LIGHT_TABLE_HEADS:
+                ensure(pos, header + LIGHT_TABLE_HEADS[kind])
+            elif kind in LIGHT_ITEM_HEADS:
+                ensure(pos, header + LIGHT_ITEM_HEADS[kind])
+            else:
+                ensure(pos, box_end - pos)
+            pos += size
+
+    visit(0, length, 0)
+    return data
+
+
+def read_atoms(path: Path, light: bool = False) -> tuple[bytes, bytes, int]:
+    """The file's ftyp and moov payloads and its size, with readahead off; light
+    leaves out the sample-table bodies (see LIGHT_TABLE_HEADS)."""
     fd = os.open(path, os.O_RDONLY)
     try:
         try:
@@ -814,10 +914,12 @@ def read_atoms(path: Path) -> tuple[bytes, bytes, int]:
         except (AttributeError, OSError):
             pass
         file_size = os.fstat(fd).st_size
+        blocks = _Blocks(fd, file_size) if light else None
+        pread = blocks.get if blocks else (lambda offset, count: os.pread(fd, count, offset))
         ftyp = moov = None
         pos = 0
         while pos + 8 <= file_size:
-            head = os.pread(fd, 16, pos)
+            head = pread(pos, 16)
             if len(head) < 8:
                 break
             size, kind = struct.unpack(">I4s", head[:8])
@@ -832,13 +934,16 @@ def read_atoms(path: Path) -> tuple[bytes, bytes, int]:
             if kind == b"ftyp":
                 if ftyp is not None or moov is not None:
                     raise Unsupported("ftyp after moov")
-                ftyp = os.pread(fd, min(size - header, 4096), pos + header)
+                ftyp = pread(pos + header, min(size - header, 4096))
             elif kind == b"moov":
                 if moov is not None:
                     raise Unsupported("two moov atoms")
                 if size - header > MAX_MOOV_BYTES:
                     raise Unsupported("moov too large")
-                moov = os.pread(fd, size - header, pos + header)
+                if blocks:
+                    moov = _read_moov_light(blocks, pos + header, size - header)
+                else:
+                    moov = os.pread(fd, size - header, pos + header)
                 if len(moov) != size - header:
                     raise Unsupported("truncated moov")
             elif kind == b"moof":
@@ -853,6 +958,9 @@ def read_atoms(path: Path) -> tuple[bytes, bytes, int]:
         os.close(fd)
 
 
-def read(path: Path) -> dict[str, Any]:
-    """{format_tags, stream_tags, duration_seconds, stream, format, chapter_count}, as ffprobe reports them."""
-    return parse(*read_atoms(path))
+def read(path: Path, light: bool = False) -> dict[str, Any]:
+    """{format_tags, stream_tags, duration_seconds, stream, format, chapter_count}, as ffprobe reports them.
+
+    light reads a fraction of a long book's moov; its stream bit rate is then not
+    the file's (it needs every sample's size), so a light read reports no audio."""
+    return parse(*read_atoms(path, light), light=light)

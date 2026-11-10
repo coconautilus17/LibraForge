@@ -195,7 +195,7 @@
             <input id="workers" type="number" min="1" max="30" value="8" />
           </label>
           <label><span class="field-label">Write workers <span class="info-tip" data-tooltip="Parallel write workers (Pass 2). Bottleneck is disk/NAS throughput. Capped at 10 (stress-tested limit). For NAS over SMB 4-8 is typical; local SSD can handle the full 10. Raising above your storage throughput ceiling gives no benefit."></span></span>
-            <input id="writeWorkers" type="number" min="1" max="10" value="1" />
+            <input id="writeWorkers" type="number" min="1" max="10" value="4" />
           </label>
           <label class="advanced-run-setting"><span class="field-label">API delay per worker (ms) <span class="info-tip" data-tooltip="Milliseconds to sleep after each Audible API call per worker. Use 0 unless you hit rate limits."></span></span>
             <input id="apiDelayMs" type="number" min="0" value="0" />
@@ -224,7 +224,8 @@
 
       <div class="checks">
         <label class="danger-check"><input id="apply" type="checkbox" /> Apply changes <span class="info-tip" data-tooltip="Writes the selected metadata to audiobook files or sidecars. Leave disabled for a read-only dry run."></span></label>
-        <label><input id="backup" type="checkbox" /> Back up and cache original metadata <span class="info-tip" data-tooltip="Saves a per-file JSON with the original embedded tags and full audio probe data (duration, chapters, ASIN, codec info). After a successful apply, the matched metadata is also written into this cache so future re-runs skip re-probing. Run a dry-run with Backup first to pre-populate the cache. Apply runs create the backup automatically if one does not exist yet. Required for Search from original backup to work."></span></label>
+        <label class="search-again-setting" style="padding-left:20px" hidden><input id="searchAgain" type="checkbox" /> Search and match again <span class="info-tip" data-tooltip="Apply writes the matches your last dry run of this folder showed, without searching again. Books that dry run did not cover, or whose files changed since, are searched. Tick this to search every book again instead. The results can then differ from the dry run, since Audible and Goodreads can throttle or answer differently from one run to the next."></span></label>
+        <label><input id="backup" type="checkbox" checked /> Back up and cache original metadata <span class="info-tip" data-tooltip="Saves a per-file JSON with the original embedded tags and full audio probe data (duration, chapters, ASIN, codec info). After a successful apply, the matched metadata is also written into this cache so future re-runs skip re-probing. Only Apply writes it; a dry run writes nothing into the library. Apply runs create the backup automatically if one does not exist yet. Required for Search from original backup to work."></span></label>
         <label class="advanced-run-setting"><input id="restore" type="checkbox" /> Restore metadata from JSON backups <span class="info-tip" data-tooltip="Restores tags from previously created metadata backup JSON files. This mode does not search Audible."></span></label>
         <label><input id="metadataJsonOnly" type="checkbox" /> Don't modify audio files' tags <span class="info-tip" data-tooltip="Audiobookshelf metadata is always pushed for matched books, directly via its API when it already knows the book, otherwise to a metadata.json bootstrap file. Check this to leave the audio files' embedded tags untouched either way. Loose/multi-file books still get their M4B-tool merge sidecar."></span></label>
         <label class="advanced-run-setting"><input id="trustAbsMetadata" type="checkbox" /> Trust Audiobookshelf's data for known books <span class="info-tip" data-tooltip="For a book Audiobookshelf already has, skip provider search/matching entirely and use its current record directly -- still cleaned up (series wording, etc.) before writing back. For an existing, already-organized library where you've manually corrected books in the Audiobookshelf UI and want that trusted outright. Requires Audiobookshelf to be configured (Settings). Mutually exclusive with the option below."></span></label>
@@ -246,9 +247,9 @@
       <div class="action-guide">
         <strong>Recommended workflow</strong>
         <ol>
-          <li><strong>Dry run</strong> - pick a write mode (Smart / Fill / Overwrite) and enable Back up and cache to build the probe cache.</li>
+          <li><strong>Dry run</strong> - pick a write mode (Smart / Fill / Overwrite) and see every change. Nothing is written.</li>
           <li><strong>Review</strong> - inspect manual review items and correct any flags.</li>
-          <li><strong>Apply</strong> - re-run with Apply changes checked. Backup is created automatically if not already done.</li>
+          <li><strong>Apply</strong> - re-run with Apply changes checked. It writes the matches the dry run showed, without searching again; books it did not cover or that changed since are searched.</li>
         </ol>
       </div>
       <p class="note">Encrypted Audible auth files are intentionally not supported by this UI. Use a metadata-only dummy account with an unencrypted auth JSON mounted into the container.</p>

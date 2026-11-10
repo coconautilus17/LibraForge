@@ -7,6 +7,7 @@ import os
 import html
 import io
 import json
+import multiprocessing
 import queue as _queue
 import re
 import signal
@@ -16,7 +17,7 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import Counter
@@ -182,10 +183,14 @@ try:
     from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
-    from app import media_probe
+    from app import book_covers, media_probe
+    from app.tag_padding import save_padding as tag_save_padding
+    from app.fixer import plan as match_plan
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app import media_probe
+    from app import book_covers, media_probe
+    from app.tag_padding import save_padding as tag_save_padding
+    from app.fixer import plan as match_plan
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
     from app.author_names import initials_only_change, scheme_enabled
     from app.publisher_policy import (
@@ -438,6 +443,7 @@ def _handle_sigterm(signum: int, frame: object) -> None:
     global _cancel_requested
     _cancel_requested = True
     if _exit_on_cancel:
+        _stop_prefill_processes()
         print("\nCancelled - dry run stopped.", flush=True)
         os._exit(143)
 
@@ -505,6 +511,7 @@ class ItemResult:
     error: str = ""
     source_provider: str = ""  # provider id when matched via fallback/special source
     from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
+    from_plan: str = ""  # run id of the dry run whose match this book reuses (no fresh search)
     goodreads_rate_limited: bool = False  # abs-tract breaker was open during this book's attempt
 
 def get_marker_path(source: Path) -> Path:
@@ -1024,22 +1031,6 @@ def _load_chapter_count_persistent(folder: Path) -> dict[str, dict]:
     except (json.JSONDecodeError, OSError):
         return {}
 
-def _save_chapter_count_persistent(folder: Path, entries: dict[str, dict]) -> None:
-    cache_path = _chapter_count_cache_path(folder)
-    try:
-        payload = {
-            "schema_version": 1,
-            "tool": "audible-metadata-fixer",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "entries": entries,
-        }
-        cache_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
 def normalize_part_filename(value: str) -> str:
     value = html.unescape(str(value or "")).lower()
     value = re.sub(r"\[[^\]]+\]", " ", value)
@@ -1547,7 +1538,7 @@ def mutagen_write_mp4_tags(
         )
     else:
         print("  Mutagen MP4 write: saving metadata in place...", flush=True)
-    audio.save()
+    audio.save(padding=tag_save_padding)
     print(
         f"  Mutagen MP4 write complete in {time.monotonic() - write_started:.1f}s",
         flush=True,
@@ -1669,7 +1660,7 @@ def mutagen_write_mp3_tags(
             else:
                 print("  Cover skipped: no Audible cover URL")
 
-    tags.save(str(source))
+    tags.save(str(source), padding=tag_save_padding)
 
 def mutagen_restore_metadata_from_backup(source: Path) -> Path:
     backup_path, tags = load_metadata_backup_payload(source)
@@ -1701,7 +1692,7 @@ def mutagen_restore_metadata_from_backup(source: Path) -> Path:
         mp4_set_text(audio.tags, "\xa9cmt", tags.get("comment", ""))
         mp4_set_track(audio.tags, tags.get("track", ""))
 
-        audio.save()
+        audio.save(padding=tag_save_padding)
 
     elif is_mutagen_mp3_candidate(source):
         if not mutagen_mp3_is_available():
@@ -1728,7 +1719,7 @@ def mutagen_restore_metadata_from_backup(source: Path) -> Path:
         id3_set_text(audio, "TDRC", TDRC, tags.get("date", ""))
         id3_set_text(audio, "TCON", TCON, tags.get("genre", ""))
         id3_set_track(audio, tags.get("track", ""))
-        audio.save(str(source))
+        audio.save(str(source), padding=tag_save_padding)
 
     else:
         raise RuntimeError(
@@ -1912,10 +1903,20 @@ def write_marker(
     alone: bool = False,
     written_fields: list[str] | None = None,
     field_policy: str = "legacy",
+    applied_tags_metadata: dict | None = None,
 ) -> None:
+    """Record the applied match in the book's libraforge.json.
+
+    applied_tags_metadata, when the tags were just written, also stamps them
+    into the original-tags backup (as update_backup_with_applied_metadata
+    does), in the same sidecar write.
+    """
     lf_path, payload = _load_libraforge_raw(source, clues, alone=alone)
     payload.setdefault("schema_version", 2)
     payload.setdefault("tool", "audible-metadata-fixer")
+    if applied_tags_metadata is not None and isinstance(payload.get("backup"), dict):
+        payload["backup"]["applied_tags"] = _synthesize_applied_tags(applied_tags_metadata)
+        payload["backup"]["applied_at"] = datetime.now(timezone.utc).isoformat()
     existing_marker = payload.get("marker") or {}
     # Preserve any previously-recorded written fields so a fill-missing run that
     # adds one field doesn't erase the record of fields written by an earlier run.
@@ -2938,6 +2939,9 @@ def build_search_queries_from_metadata(file_path: Path, tags: dict | None = None
     clues = build_search_clues_from_file(file_path, tags=tags)
     return build_search_queries_from_clues(clues), clues
 
+GROUP_READ_MIN_FILES = 4
+GROUP_READ_WORKERS = 8
+
 @trace(ALTER, capture=[], show_result=False)
 def build_multi_file_search_context(
     file_paths: list[Path],
@@ -2945,10 +2949,16 @@ def build_multi_file_search_context(
     reprobe: bool = False,
     save_probe_cache: bool = False,
 ) -> tuple[list[str], dict]:
-    per_file = [
-        read_tags_and_duration(fp, use_backup_tags=use_backup_tags, reprobe=reprobe)
-        for fp in file_paths
-    ]
+    def read(fp: Path) -> tuple[dict, float | None, bool]:
+        return read_tags_and_duration(fp, use_backup_tags=use_backup_tags, reprobe=reprobe)
+
+    # An MP3 or Opus part is an ffprobe run each, so a book of many parts reads
+    # them side by side rather than one after another.
+    if len(file_paths) >= GROUP_READ_MIN_FILES:
+        with ThreadPoolExecutor(max_workers=GROUP_READ_WORKERS) as executor:
+            per_file = list(executor.map(read, file_paths))
+    else:
+        per_file = [read(fp) for fp in file_paths]
     if save_probe_cache:
         _save_group_file_cache(file_paths, [(tags, duration) for tags, duration, _ in per_file])
     clues_list = [
@@ -3309,27 +3319,19 @@ def build_multi_part_group_map(
     return accepted
 
 def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
-    """Pre-warm read_file_chapter_count from disk cache, probing only new/changed files.
+    """Pre-warm read_file_chapter_count for every multi-part folder.
 
-    On recurring runs, chapter counts are read from per-folder JSON cache files
-    (<folder>/<folder>.chapter-count-cache.json) keyed by path + mtime. No
-    ffprobe is run for files whose mtime has not changed since the last probe.
-
-    On a clean run (or for files not yet cached), ffprobe calls are batched and
-    run concurrently with `workers` threads. Results are written back to disk so
-    the next run is instant.
-
-    All multi-part audio files are written to the cache regardless of type.
-    chapter_count is populated only for is_chapter_metadata_candidate files
-    (m4a/m4b/mp4); other types (ogg/mp3/opus) are recorded with chapter_count=None
-    so the cache covers every multi-file book for m4b merging and format support.
+    Counts come from the shared media facts store (reports folder), so files
+    that have not changed are not probed again. Per-folder cache files
+    (<folder>/<folder>.chapter-count-cache.json) left by older versions are
+    still read when their mtime matches, but no longer written: a run never
+    writes into the library just to remember what it read.
     """
     grouped: dict[Path, list[Path]] = {}
     for fp in files:
         if is_multi_part_audio_candidate(fp):
             grouped.setdefault(fp.parent, []).append(fp)
 
-    folder_persistent: dict[Path, dict[str, dict]] = {}
     to_probe: list[Path] = []
 
     for parent, group in sorted(grouped.items()):
@@ -3337,29 +3339,20 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
             continue
 
         persistent = _load_chapter_count_persistent(parent)
-        folder_persistent[parent] = persistent
 
         for fp in group:
-            key = str(fp)
-            entry = persistent.get(key)
+            if not is_chapter_metadata_candidate(fp):
+                continue
+            entry = persistent.get(str(fp))
             if entry is not None:
                 try:
                     if entry.get("mtime") == fp.stat().st_mtime:
-                        if is_chapter_metadata_candidate(fp):
-                            with _chapter_count_cache_lock:
-                                _chapter_count_cache[key] = entry.get("chapter_count")
+                        with _chapter_count_cache_lock:
+                            _chapter_count_cache[str(fp)] = entry.get("chapter_count")
                         continue
                 except OSError:
                     pass
-            if is_chapter_metadata_candidate(fp):
-                to_probe.append(fp)
-            else:
-                # No ffprobe needed; record with chapter_count=None
-                try:
-                    mtime = fp.stat().st_mtime
-                except OSError:
-                    mtime = None
-                persistent[key] = {"chapter_count": None, "mtime": mtime}
+            to_probe.append(fp)
 
     if to_probe:
         if workers > 1:
@@ -3373,22 +3366,6 @@ def prefetch_chapter_counts(files: list[Path], workers: int) -> None:
         else:
             for fp in to_probe:
                 read_file_chapter_count(fp)
-
-        for parent, persistent in folder_persistent.items():
-            for fp in to_probe:
-                if fp.parent != parent:
-                    continue
-                key = str(fp)
-                with _chapter_count_cache_lock:
-                    count = _chapter_count_cache.get(key)
-                try:
-                    mtime = fp.stat().st_mtime
-                except OSError:
-                    mtime = None
-                persistent[key] = {"chapter_count": count, "mtime": mtime}
-
-    for parent, persistent in folder_persistent.items():
-        _save_chapter_count_persistent(parent, persistent)
 
 def build_processing_items(
     files: list[Path],
@@ -3424,6 +3401,13 @@ def get_processing_display_path(
     if group_files and is_multi_part_audio_candidate(file_path):
         return file_path.parent
     return file_path
+
+def book_audio_files(file_path: Path, multi_part_group_map: dict[Path, list[Path]]) -> list[Path]:
+    """Every audio file the book at file_path is made of (its group, or itself)."""
+    group_files = multi_part_group_map.get(file_path.parent)
+    if group_files and is_multi_part_audio_candidate(file_path):
+        return list(group_files)
+    return [file_path]
 
 def build_search_context(
     file_path: Path,
@@ -3728,6 +3712,7 @@ def search_item(
     folder_audio_counts: dict | None = None,
     abs_index: dict | None = None,
     asin_lookahead: AsinLookahead | None = None,
+    plan_records: dict | None = None,
 ) -> ItemResult:
     log: list[str] = []
     display_path = get_processing_display_path(file_path, multi_part_group_map)
@@ -3798,7 +3783,7 @@ def search_item(
                 multi_part_group_map,
                 use_backup_tags=args.force_original,
                 reprobe=args.reprobe,
-                save_probe_cache=args.backup,
+                save_probe_cache=args.backup and args.apply,
             )
             with search_context_lock:
                 search_context_cache.setdefault(match_cache_key, (queries, clues))
@@ -3868,6 +3853,19 @@ def search_item(
                 f"(score={rec_score:g}, asin={_rec_asin})"
             )
             return result
+
+        # Apply reuses the dry run's decision for this book when its files are
+        # unchanged (see app/fixer/plan.py); the checks above still ran first.
+        if plan_records:
+            record = plan_records.get(str(file_path))
+            decided = match_plan.usable_record(
+                record, match_plan.file_signatures(book_audio_files(file_path, multi_part_group_map))
+            )
+            if decided is not None:
+                match_plan.apply_record(result, decided)
+                result.from_plan = record["run"]
+                log.append(f"  FROM DRY RUN {record['run']}: {result.status}, not searched again")
+                return result
 
         skip_due_to_folder, skip_folder = matches_ignored_folders(
             file_path=file_path,
@@ -4644,7 +4642,71 @@ def ffmpeg_write_tags(source: Path, metadata: dict, backup: bool) -> None:
 
     tmp_path.replace(source)
 
+class CoverPrefetch:
+    """Cover downloads started while the run is still matching, so Apply's
+    writes find them ready instead of waiting on the network one at a time.
+    Only a book whose write will embed a cover is fetched for."""
+
+    def __init__(self, workers: int, cover_if_missing: bool, replace_cover: bool):
+        self._pool = ThreadPoolExecutor(max_workers=max(1, workers))
+        self._futures: dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self.cover_if_missing = cover_if_missing
+        self.replace_cover = replace_cover
+
+    def start(self, result: "ItemResult") -> None:
+        metadata = result.metadata or {}
+        url = metadata.get("cover_url") or ""
+        if result.status != "matched" or metadata.get("edit_mode") != "full" or not url:
+            return
+        with self._lock:
+            if url not in self._futures:
+                self._futures[url] = self._pool.submit(self._fetch_if_needed, result.file_path, result.clues, url)
+
+    def _fetch_if_needed(self, source: Path, clues: dict | None, url: str) -> tuple[bytes, str] | None:
+        if _cancel_requested:
+            return None
+        if not self.replace_cover and file_has_cover(source, clues) is not False:
+            return None  # cover_if_missing, and the book has one (or cannot be read)
+        return fetch_cover_bytes(url)
+
+    def take(self, url: str) -> tuple[bytes, str] | None:
+        with self._lock:
+            future = self._futures.get(url)
+        if future is None:
+            return None
+        try:
+            return future.result()
+        except Exception:
+            return None  # fetched again by the write, which reports its own failure
+
+    def shutdown(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+_cover_prefetch: CoverPrefetch | None = None
+
+
+def file_has_cover(source: Path, clues: dict | None) -> bool | None:
+    """Whether the tags a write would update already hold a cover; None when
+    this book's write embeds no cover (a json sidecar) or its tags cannot be read."""
+    try:
+        if is_mutagen_mp4_candidate(source) and not should_write_json_sidecar(source, clues):
+            tags = MP4(str(source)).tags
+            return bool(tags is not None and mp4_has_cover(tags))
+        if is_single_file_mp3(source, clues) and is_mutagen_mp3_candidate(source):
+            return mp3_has_cover(ID3(str(source)))
+    except Exception:
+        return None
+    return None
+
+
 def download_cover_bytes(url: str) -> tuple[bytes, str]:
+    prefetched = _cover_prefetch.take(url) if _cover_prefetch is not None and url else None
+    return prefetched if prefetched is not None else fetch_cover_bytes(url)
+
+
+def fetch_cover_bytes(url: str) -> tuple[bytes, str]:
     import tempfile
     from pathlib import Path
     from urllib.parse import unquote, urlparse
@@ -5084,6 +5146,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "goodreads_rate_limited": result.goodreads_rate_limited,
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
+        "from_dry_run": result.from_plan,
         "local": local,
         "is_grouped": bool((clues.get("group_search") or {}).get("applied"))
         or (bool(stored) and stored.get("output_kind") == "json_sidecar"),
@@ -5676,6 +5739,10 @@ def upcoming_asins_for_run(processing_items: list[Path], multi_part_group_map: d
     return upcoming
 
 
+# Covers are read off the library share: a few at a time beside the search.
+COVER_THUMB_WORKERS = 4
+
+
 def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: dict, args,
                             search_context_cache: dict, search_context_lock: threading.Lock) -> None:
     """Read the tags of every book LibraForge hasn't processed (no libraforge.json
@@ -5695,27 +5762,114 @@ def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: 
         todo.setdefault(get_search_context_cache_key(file_path, multi_part_group_map), file_path)
     if not todo:
         return
-    print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+    options = (args.force_original, args.reprobe, args.backup and args.apply)
+    processes = prefill_process_count(len(todo), args.workers)
+    if processes:
+        print(f"Reading the tags of {len(todo)} books before searching ({processes} processes)...", flush=True)
+        built = prefill_in_processes(list(todo.items()), multi_part_group_map, options, processes)
+    else:
+        print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+            built = executor.map(lambda item: _prefill_one(item, multi_part_group_map, options), todo.items())
+    for entry in built:
+        if entry:
+            key, queries, clues = entry
+            with search_context_lock:
+                search_context_cache.setdefault(key, (queries, clues))
 
-    def read_one(item: tuple[str, Path]) -> None:
-        key, file_path = item
-        if _cancel_requested:
-            return
+
+# Reading tags and building clues is mostly Python work, which threads can't run
+# at once; below this many books starting processes isn't worth it.
+PREFILL_PROCESS_MIN_BOOKS = 64
+
+
+def prefill_process_count(books: int, workers: int) -> int:
+    """How many processes read the books before the search, or 0 for threads.
+    Processes are forked from this one, so they start with everything main()
+    set up; that is only safe while no other thread could be holding a lock."""
+    processes = min(workers, os.cpu_count() or 1)
+    if (processes < 2 or books < PREFILL_PROCESS_MIN_BOOKS or threading.active_count() > 1
+            or "fork" not in multiprocessing.get_all_start_methods()):
+        return 0
+    return processes
+
+
+def _prefill_one(item: tuple[str, Path], multi_part_group_map: dict, options: tuple) -> tuple | None:
+    key, file_path = item
+    if _cancel_requested:
+        return None
+    force_original, reprobe, save_probe_cache = options
+    try:
+        queries, clues, _ = build_search_context(
+            file_path,
+            multi_part_group_map,
+            use_backup_tags=force_original,
+            reprobe=reprobe,
+            save_probe_cache=save_probe_cache,
+        )
+    except Exception:
+        return None  # the search reads it again and reports the failure there
+    return key, queries, clues
+
+
+_prefill_group_map: dict = {}
+
+
+def _prefill_process_start(multi_part_group_map: dict) -> None:
+    global _prefill_group_map
+    _prefill_group_map = multi_part_group_map
+    # The parent stops these on cancel; they only read, so they can stop anywhere.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def _prefill_chunk(items: list, options: tuple) -> list:
+    return [_prefill_one(item, _prefill_group_map, options) for item in items]
+
+
+def prefill_in_processes(items: list, multi_part_group_map: dict, options: tuple, processes: int) -> list:
+    """_prefill_one for every item, spread over forked processes. The files they
+    read are kept in the shared media facts store, so the search and the writes
+    read them from there instead of from the library again."""
+    sys.stdout.flush()
+    # The books of many files go first, one at a time, so none is left for last;
+    # single files go in small batches to keep the hand-offs few.
+    def file_count(item: tuple[str, Path]) -> int:
+        return len(multi_part_group_map.get(item[1].parent) or ()) if item[0].startswith("group::") else 1
+    groups = sorted((item for item in items if file_count(item) > 1), key=file_count, reverse=True)
+    singles = [item for item in items if file_count(item) <= 1]
+    size = max(1, min(32, len(singles) // (processes * 8)))
+    chunks = [[item] for item in groups] + [singles[i:i + size] for i in range(0, len(singles), size)]
+    built: list = []
+    global _prefill_executor
+    with ProcessPoolExecutor(max_workers=processes, mp_context=multiprocessing.get_context("fork"),
+                             initializer=_prefill_process_start, initargs=(multi_part_group_map,)) as executor:
+        _prefill_executor = executor
         try:
-            queries, clues, _ = build_search_context(
-                file_path,
-                multi_part_group_map,
-                use_backup_tags=args.force_original,
-                reprobe=args.reprobe,
-                save_probe_cache=args.backup,
-            )
-        except Exception:
-            return  # the search reads it again and reports the failure there
-        with search_context_lock:
-            search_context_cache.setdefault(key, (queries, clues))
+            futures = [executor.submit(_prefill_chunk, chunk, options) for chunk in chunks]
+            for future in as_completed(futures):
+                if _cancel_requested:
+                    _stop_prefill_processes()
+                    break
+                try:
+                    built.extend(future.result())
+                except Exception:
+                    pass  # a process that failed leaves its books to the search
+        finally:
+            _prefill_executor = None
+    return built
 
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        list(executor.map(read_one, todo.items()))
+
+_prefill_executor: ProcessPoolExecutor | None = None
+
+
+def _stop_prefill_processes() -> None:
+    executor = _prefill_executor
+    if executor is None:
+        return
+    executor.shutdown(wait=False, cancel_futures=True)
+    for process in list((getattr(executor, "_processes", None) or {}).values()):
+        with contextlib.suppress(Exception):
+            process.terminate()
 
 
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
@@ -5748,6 +5902,8 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
     if to_probe:
         def read_one(item: tuple[str, float | None]) -> tuple[str, float | None, str]:
             key, mtime = item
+            if _cancel_requested:
+                return key, mtime, ""
             fp = Path(key)
             # Cheap sources first; probe the media file only when neither has it.
             asin = asin_without_probe(fp)
@@ -5762,6 +5918,8 @@ def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
                 probed = list(executor.map(read_one, to_probe))
         else:
             probed = [read_one(item) for item in to_probe]
+        if _cancel_requested:
+            return {}  # runs alongside the search now: a cancel leaves the cache as it was
 
         for key, mtime, asin in probed:
             resolved[key] = asin
@@ -5960,8 +6118,29 @@ def main():
 
     parser.add_argument(
         "--backup",
-        action="store_true",
-        help="Create a per-file JSON backup of the original metadata before writing tags. Recommended on first apply.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Keep the original metadata in the book's libraforge.json before writing tags, "
+            "and save a replaced cover. On by default; --no-backup turns it off."
+        ),
+    )
+
+    parser.add_argument(
+        "--save-plan",
+        default="",
+        help="Dry run: save each book's search decision to this file, for --from-plan.",
+    )
+
+    parser.add_argument(
+        "--from-plan",
+        action="append",
+        default=[],
+        help=(
+            "Apply: write the decisions a dry run saved with --save-plan instead of searching "
+            "again, for books whose files are unchanged. Repeat for several plans, newest first. "
+            "A plan made with other matching settings is not used."
+        ),
     )
 
     parser.add_argument(
@@ -6271,7 +6450,8 @@ def main():
     args = parser.parse_args()
     # Share what was read about each file with the web app and other runs.
     media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
-    global _exit_on_cancel
+    global _exit_on_cancel, _cover_prefetch
+    book_covers.configure(REPORTS_DIR / "cover-thumbs")
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
     if args.audible_public_region:
@@ -6418,6 +6598,21 @@ def main():
         prefill_search_contexts(processing_items, multi_part_group_map, args,
                                 search_context_cache, search_context_lock)
 
+    plan_records: dict = {}
+    if args.apply and args.from_plan:
+        plan_records, plan_notes = match_plan.load_records(args.from_plan, match_plan.matching_settings(args))
+        for note in plan_notes:
+            print(f"  NOTE: {note}", flush=True)
+        print(f"Dry run matches on record: {len(plan_records)} books (others are searched).", flush=True)
+
+    # What Apply's writes will need from the network or the whole disk does not
+    # depend on any other book: start it while the books are still being matched.
+    # The writes themselves wait for every match, which the duplicate-ASIN guard needs.
+    if args.apply and (args.cover_if_missing or args.replace_cover) and not args.metadata_json_only:
+        _cover_prefetch = CoverPrefetch(args.workers, args.cover_if_missing, args.replace_cover)
+    disk_asin_scan = ThreadPoolExecutor(max_workers=1)
+    disk_asin_future = disk_asin_scan.submit(build_disk_asin_map, full_library_files, args.asin_scan_workers)
+
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
@@ -6441,6 +6636,7 @@ def main():
                 folder_audio_counts=folder_audio_counts,
                 abs_index=abs_index,
                 asin_lookahead=asin_lookahead,
+                plan_records=plan_records,
             )
             for index, file_path in enumerate(processing_items, start=1)
         ]
@@ -6458,11 +6654,18 @@ def main():
         all_results: list[ItemResult] = []
         completed = 0
         cancelled_in_pass1 = False
+        # The match report shows each searched book's cover; make its thumbnail
+        # now, while the search waits on the network (see app/book_covers.py).
+        # Pending ones finish before the process exits.
+        cover_thumbs = ThreadPoolExecutor(max_workers=COVER_THUMB_WORKERS)
         for future in as_completed(futures):
             if _cancel_requested:
                 cancelled_in_pass1 = True
+                cover_thumbs.shutdown(wait=False, cancel_futures=True)
                 break
             result = future.result()
+            if result.clues:
+                cover_thumbs.submit(book_covers.embedded_thumbnail, result.file_path)
             completed += 1
             print(
                 f"PASS 1 PROGRESS: completed {completed}/{total}",
@@ -6473,6 +6676,8 @@ def main():
             print(f"REPORT_ITEM_JSON: {json.dumps(_build_report_item(result))}", flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
+            if _cover_prefetch is not None:
+                _cover_prefetch.start(result)
 
         if cancelled_in_pass1:
             print(
@@ -6482,6 +6687,21 @@ def main():
             executor.shutdown(wait=False, cancel_futures=True)
 
     all_results.sort(key=lambda result: result.index)
+
+    # A dry run keeps what its search decided for each book, before the
+    # run-wide checks below change it, so Apply can write it unsearched.
+    # Books stopped by a marker or duplicate check, or re-applied from their
+    # marker, are left out: Apply decides those afresh.
+    if args.save_plan and not args.apply:
+        saved = match_plan.PlanWriter(args.save_plan, root, match_plan.matching_settings(args)).write(
+            (
+                result.file_path,
+                match_plan.file_signatures(book_audio_files(result.file_path, multi_part_group_map)),
+                match_plan.result_record(result) if result.clues and not result.from_marker else None,
+            )
+            for result in all_results
+        )
+        print(f"Saved this dry run's matches for {saved} of {len(all_results)} books, for Apply.", flush=True)
 
     # Detect same-series ASIN conflicts across all results before writing.
     # Must run outside the ThreadPoolExecutor block (workers have finished).
@@ -6495,8 +6715,9 @@ def main():
             "Checking the library for existing ASINs to prevent duplicates...",
             flush=True,
         )
-        disk_asin_map = build_disk_asin_map(full_library_files, args.asin_scan_workers)
+        disk_asin_map = disk_asin_future.result()
         detect_global_asin_duplicates(all_results, disk_asin_map)
+    disk_asin_scan.shutdown(wait=False, cancel_futures=True)
 
     # Pass 2: concurrent writes via a per-book queue.
     # Each worker pops one book at a time; output and shared counters are
@@ -6584,8 +6805,10 @@ def main():
                         query=query_str, status="skipped",
                     )
                     w_manual_review.extend(_local_mr)
-                    _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
-                    write_skip_marker(file_path, clues, alone=_alone)
+                    # A dry run writes nothing into the library.
+                    if args.apply:
+                        _alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
+                        write_skip_marker(file_path, clues, alone=_alone)
 
             elif result.status == "failed":
                 w_failed = 1
@@ -6728,6 +6951,7 @@ def main():
                     else:
                         applied_parts: list[str] = []
                         primary_output_kind = "tags"
+                        tags_written = False
 
                         if metadata_json_pending:
                             abs_path = sync_or_write_abs_metadata(
@@ -6754,7 +6978,7 @@ def main():
                                         cover_if_missing=args.cover_if_missing,
                                         replace_cover=args.replace_cover,
                                     )
-                                    update_backup_with_applied_metadata(file_path, effective_metadata)
+                                    tags_written = True
                                     applied_parts.append(f"writer={writer_used}")
                                 sidecar_path = write_m4b_tool_metadata_sidecar(
                                     file_path, effective_metadata, clues, score
@@ -6768,7 +6992,7 @@ def main():
                                     cover_if_missing=args.cover_if_missing,
                                     replace_cover=args.replace_cover,
                                 )
-                                update_backup_with_applied_metadata(file_path, effective_metadata)
+                                tags_written = True
                                 applied_parts.append(f"writer={writer_used}")
                                 primary_output_kind = "tags"
 
@@ -6785,6 +7009,7 @@ def main():
                             aggressive=aggressive_edit,
                             output_kind=primary_output_kind, alone=_alone,
                             written_fields=_written_fields,
+                            applied_tags_metadata=effective_metadata if tags_written else None,
                         )
                         _sfx = f" [{write_note}]" if write_note else ""
                         _rec = " [recovered from marker]" if result.from_marker else ""
@@ -6839,6 +7064,9 @@ def main():
         _futs = [_pool.submit(_write_worker) for _ in range(_n_write_workers)]
         for _f in _futs:
             _f.result()
+    if _cover_prefetch is not None:
+        _cover_prefetch.shutdown()
+        _cover_prefetch = None
 
     matched           = _write_shared["matched"]
     skipped           = _write_shared["skipped"]

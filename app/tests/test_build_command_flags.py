@@ -40,6 +40,14 @@ class BaseCommandTests(unittest.TestCase):
                 cmd, _ = command(**{field: True})
                 self.assertEqual(cmd.count(flag), 1)
 
+    def test_backup_is_on_unless_turned_off(self):
+        self.assertIn("--backup", command()[0])
+        cmd = command(backup=False)[0]
+        self.assertNotIn("--backup", cmd)
+        self.assertEqual(cmd.count("--no-backup"), 1)
+        # Older fixers back up only when asked and do not know --no-backup.
+        self.assertNotIn("--no-backup", command(script_name="fixer-v4.py", backup=False)[0])
+
     def test_skip_patterns_and_ignored_folders_are_trimmed_and_blanks_dropped(self):
         flags = pairs(command(skip_patterns=["  casual farming ", "", "   ", "x"], ignored_folders=[" . ", "@eaDir", ""])[0])
         self.assertEqual(flags["--skip-pattern"], ["casual farming", "x"])

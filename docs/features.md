@@ -6,6 +6,7 @@ install instructions.
 ## Start Here (`/`)
 Pick a folder and get a one-glance scan summary: how many books need metadata, need
 conversion, and are ready to organise. Links through to the right tool for each stage.
+The scan only reads the library; what it read is remembered in the reports folder.
 A collapsible guide explains Edit and Write modes, Match badges, `metadata.json` vs the
 Audiobookshelf Scanner, Report types, the Owned badge, and a suggested end-to-end
 workflow through Metadata Forge and Folder Forge.
@@ -13,11 +14,18 @@ workflow through Metadata Forge and Folder Forge.
 ## Metadata Forge (`/forge`)
 Searches Audible (or another provider) and writes matched metadata to your files.
 
-- **Dry-run first**, then enable **Apply** to write. **Backup and cache** on the first
-  apply preserves originals and speeds up later runs.
+- **Dry-run first**, then enable **Apply** to write. A dry run writes nothing into the
+  library. Apply writes the matches the last dry run of that folder showed, without
+  searching again; only books that dry run did not cover, or whose audio files changed
+  since, are searched. A dry run made with other matching settings (minimum score,
+  provider, Goodreads, skip patterns and so on) is not used. Tick **Search and match
+  again** to search every book instead; results can then differ from the dry run, as
+  Audible and Goodreads can throttle or answer differently from run to run. **Backup and cache** (on by default) keeps each book's original tags before its first
+  write, so they can be restored, and speeds up later runs.
 - **Concurrent workers** (v5): 8 books searched at once by default, with a per-thread
   client pool, per-query de-duplication, one shared back-off for every worker when Audible
-  throttles, and a persistent chapter-count cache that makes repeat discovery near-instant.
+  throttles, and a cache of what was read from each file (in the reports folder) that
+  makes repeat discovery near-instant.
 - **Write modes:** `smart` (skip the write when embedded tags already match),
   `fill-missing` (only write currently-empty fields), `overwrite` (always write).
 - **ASIN aware:** the matched ASIN is embedded in every file; if a file already carries
