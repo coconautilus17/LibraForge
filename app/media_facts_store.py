@@ -9,6 +9,7 @@ cannot be opened or written is skipped, never an error for the caller.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS facts (
 )
 """
 
+# Connections a forked process inherited from its parent.
+_inherited: list[sqlite3.Connection] = []
+
 
 class MediaFactsStore:
     def __init__(self, path: Path, reader_version: str) -> None:
@@ -40,11 +44,17 @@ class MediaFactsStore:
 
     def _connect(self) -> sqlite3.Connection:
         db = getattr(self._local, "db", None)
+        if db is not None and self._local.pid != os.getpid():
+            # A connection must not cross a fork. Kept, never closed: closing it here
+            # could disturb the parent's use of the same database.
+            _inherited.append(db)
+            db = None
         if db is None:
             db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=NORMAL")
             self._local.db = db
+            self._local.pid = os.getpid()
         return db
 
     def get(self, path: str, size: int, mtime_ns: int) -> dict[str, Any] | None:

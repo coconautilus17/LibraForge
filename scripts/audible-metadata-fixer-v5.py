@@ -7,6 +7,7 @@ import os
 import html
 import io
 import json
+import multiprocessing
 import queue as _queue
 import re
 import signal
@@ -16,7 +17,7 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import Counter
@@ -442,6 +443,7 @@ def _handle_sigterm(signum: int, frame: object) -> None:
     global _cancel_requested
     _cancel_requested = True
     if _exit_on_cancel:
+        _stop_prefill_processes()
         print("\nCancelled - dry run stopped.", flush=True)
         os._exit(143)
 
@@ -2937,6 +2939,9 @@ def build_search_queries_from_metadata(file_path: Path, tags: dict | None = None
     clues = build_search_clues_from_file(file_path, tags=tags)
     return build_search_queries_from_clues(clues), clues
 
+GROUP_READ_MIN_FILES = 4
+GROUP_READ_WORKERS = 8
+
 @trace(ALTER, capture=[], show_result=False)
 def build_multi_file_search_context(
     file_paths: list[Path],
@@ -2944,10 +2949,16 @@ def build_multi_file_search_context(
     reprobe: bool = False,
     save_probe_cache: bool = False,
 ) -> tuple[list[str], dict]:
-    per_file = [
-        read_tags_and_duration(fp, use_backup_tags=use_backup_tags, reprobe=reprobe)
-        for fp in file_paths
-    ]
+    def read(fp: Path) -> tuple[dict, float | None, bool]:
+        return read_tags_and_duration(fp, use_backup_tags=use_backup_tags, reprobe=reprobe)
+
+    # An MP3 or Opus part is an ffprobe run each, so a book of many parts reads
+    # them side by side rather than one after another.
+    if len(file_paths) >= GROUP_READ_MIN_FILES:
+        with ThreadPoolExecutor(max_workers=GROUP_READ_WORKERS) as executor:
+            per_file = list(executor.map(read, file_paths))
+    else:
+        per_file = [read(fp) for fp in file_paths]
     if save_probe_cache:
         _save_group_file_cache(file_paths, [(tags, duration) for tags, duration, _ in per_file])
     clues_list = [
@@ -5747,27 +5758,114 @@ def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: 
         todo.setdefault(get_search_context_cache_key(file_path, multi_part_group_map), file_path)
     if not todo:
         return
-    print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+    options = (args.force_original, args.reprobe, args.backup and args.apply)
+    processes = prefill_process_count(len(todo), args.workers)
+    if processes:
+        print(f"Reading the tags of {len(todo)} books before searching ({processes} processes)...", flush=True)
+        built = prefill_in_processes(list(todo.items()), multi_part_group_map, options, processes)
+    else:
+        print(f"Reading the tags of {len(todo)} books before searching ({args.workers} workers)...", flush=True)
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+            built = executor.map(lambda item: _prefill_one(item, multi_part_group_map, options), todo.items())
+    for entry in built:
+        if entry:
+            key, queries, clues = entry
+            with search_context_lock:
+                search_context_cache.setdefault(key, (queries, clues))
 
-    def read_one(item: tuple[str, Path]) -> None:
-        key, file_path = item
-        if _cancel_requested:
-            return
+
+# Reading tags and building clues is mostly Python work, which threads can't run
+# at once; below this many books starting processes isn't worth it.
+PREFILL_PROCESS_MIN_BOOKS = 64
+
+
+def prefill_process_count(books: int, workers: int) -> int:
+    """How many processes read the books before the search, or 0 for threads.
+    Processes are forked from this one, so they start with everything main()
+    set up; that is only safe while no other thread could be holding a lock."""
+    processes = min(workers, os.cpu_count() or 1)
+    if (processes < 2 or books < PREFILL_PROCESS_MIN_BOOKS or threading.active_count() > 1
+            or "fork" not in multiprocessing.get_all_start_methods()):
+        return 0
+    return processes
+
+
+def _prefill_one(item: tuple[str, Path], multi_part_group_map: dict, options: tuple) -> tuple | None:
+    key, file_path = item
+    if _cancel_requested:
+        return None
+    force_original, reprobe, save_probe_cache = options
+    try:
+        queries, clues, _ = build_search_context(
+            file_path,
+            multi_part_group_map,
+            use_backup_tags=force_original,
+            reprobe=reprobe,
+            save_probe_cache=save_probe_cache,
+        )
+    except Exception:
+        return None  # the search reads it again and reports the failure there
+    return key, queries, clues
+
+
+_prefill_group_map: dict = {}
+
+
+def _prefill_process_start(multi_part_group_map: dict) -> None:
+    global _prefill_group_map
+    _prefill_group_map = multi_part_group_map
+    # The parent stops these on cancel; they only read, so they can stop anywhere.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def _prefill_chunk(items: list, options: tuple) -> list:
+    return [_prefill_one(item, _prefill_group_map, options) for item in items]
+
+
+def prefill_in_processes(items: list, multi_part_group_map: dict, options: tuple, processes: int) -> list:
+    """_prefill_one for every item, spread over forked processes. The files they
+    read are kept in the shared media facts store, so the search and the writes
+    read them from there instead of from the library again."""
+    sys.stdout.flush()
+    # The books of many files go first, one at a time, so none is left for last;
+    # single files go in small batches to keep the hand-offs few.
+    def file_count(item: tuple[str, Path]) -> int:
+        return len(multi_part_group_map.get(item[1].parent) or ()) if item[0].startswith("group::") else 1
+    groups = sorted((item for item in items if file_count(item) > 1), key=file_count, reverse=True)
+    singles = [item for item in items if file_count(item) <= 1]
+    size = max(1, min(32, len(singles) // (processes * 8)))
+    chunks = [[item] for item in groups] + [singles[i:i + size] for i in range(0, len(singles), size)]
+    built: list = []
+    global _prefill_executor
+    with ProcessPoolExecutor(max_workers=processes, mp_context=multiprocessing.get_context("fork"),
+                             initializer=_prefill_process_start, initargs=(multi_part_group_map,)) as executor:
+        _prefill_executor = executor
         try:
-            queries, clues, _ = build_search_context(
-                file_path,
-                multi_part_group_map,
-                use_backup_tags=args.force_original,
-                reprobe=args.reprobe,
-                save_probe_cache=args.backup and args.apply,
-            )
-        except Exception:
-            return  # the search reads it again and reports the failure there
-        with search_context_lock:
-            search_context_cache.setdefault(key, (queries, clues))
+            futures = [executor.submit(_prefill_chunk, chunk, options) for chunk in chunks]
+            for future in as_completed(futures):
+                if _cancel_requested:
+                    _stop_prefill_processes()
+                    break
+                try:
+                    built.extend(future.result())
+                except Exception:
+                    pass  # a process that failed leaves its books to the search
+        finally:
+            _prefill_executor = None
+    return built
 
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        list(executor.map(read_one, todo.items()))
+
+_prefill_executor: ProcessPoolExecutor | None = None
+
+
+def _stop_prefill_processes() -> None:
+    executor = _prefill_executor
+    if executor is None:
+        return
+    executor.shutdown(wait=False, cancel_futures=True)
+    for process in list((getattr(executor, "_processes", None) or {}).values()):
+        with contextlib.suppress(Exception):
+            process.terminate()
 
 
 def build_disk_asin_map(files: list[Path], workers: int) -> dict[str, set[str]]:
