@@ -17,6 +17,7 @@ image and test workflow.
 | `uvicorn` | `0.34.0` | BSD-3-Clause | ASGI server |
 | `audible` | `0.10.0` | AGPL-3.0-only | Audible API client |
 | `mutagen` | `1.47.0` | GPL-2.0-or-later | Audio metadata library |
+| `av` (PyAV) | `19.0.2` | BSD-3-Clause; its wheels bundle FFmpeg's libraries (LGPL-3.0-or-later) | Reads audio files in-process |
 
 ## Runtime Dependencies Installed With The Image
 

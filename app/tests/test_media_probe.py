@@ -29,7 +29,8 @@ def make_m4b(path: Path, *, title: str = "Book", chapters: int = 2, seconds: int
 def reads() -> int:
     """Files actually read, in-process or by ffprobe."""
     stats = media_probe.stats()
-    return stats.get("ffprobe_runs", 0) + stats.get("native_reads", 0) + stats.get("native_light_reads", 0)
+    return (stats.get("ffprobe_runs", 0) + stats.get("native_reads", 0) + stats.get("native_light_reads", 0)
+            + stats.get("av_reads", 0))
 
 
 class MediaProbeTests(unittest.TestCase):

@@ -7,9 +7,10 @@ the process, and across processes once configure_store() names the shared store.
 threads asking about the same file wait for one read instead of starting two.
 
 MP4/M4B/M4A files are read in-process (app/mp4_native.py) when the file has nothing that
-reader does not reproduce exactly as ffprobe would; everything else is one ffprobe call
-collecting every field, so asking for the chapter count after the tags costs nothing
-more. A failed read is never remembered, and a field it could not establish stays
+reader does not reproduce exactly as ffprobe would; everything else is read once with
+FFmpeg's libraries inside the process (PyAV), or one ffprobe call when PyAV is missing or
+can't open it, collecting every field, so asking for the chapter count after the tags
+costs nothing more. A failed read is never remembered, and a field it could not establish stays
 unknown (None), never zero.
 """
 from __future__ import annotations
@@ -28,8 +29,13 @@ from typing import Any
 from app import mp4_native
 from app.media_facts_store import MediaFactsStore
 
+try:
+    import av
+except ImportError:  # optional: without it every non-native read is an ffprobe run
+    av = None
+
 # Bump when what a read reports changes, so stored facts from the old reader are dropped.
-READER_VERSION = 1
+READER_VERSION = 2
 NATIVE_SUFFIXES = {".m4b", ".m4a", ".mp4"}
 FIELDS = frozenset({"tags", "duration", "audio", "chapters"})
 # A big file whose index sits at its end can take long to read over a network
@@ -84,8 +90,10 @@ def ffprobe_release() -> str | None:
 
 
 def reader_identity() -> str:
-    """What a stored fact was read with: a different reader or ffprobe release may report it differently."""
-    return f"{READER_VERSION}:{ffprobe_release() or 'none'}"
+    """What a stored fact was read with: a different reader, ffprobe release or FFmpeg
+    library in PyAV may report it differently."""
+    libav = ".".join(map(str, av.library_versions["libavformat"])) if av else "none"
+    return f"{READER_VERSION}:{ffprobe_release() or 'none'}:{libav}"
 
 
 def native_allowed() -> bool:
@@ -299,7 +307,44 @@ def _read(path: Path, wanted: frozenset[str] = FIELDS) -> MediaFacts:
                 audio=None if light else audio_properties(native["stream"], native["format"]),
                 chapter_count=native["chapter_count"],
             )
-    return _read_ffprobe(path)
+    return _read_av(path) or _read_ffprobe(path)
+
+
+def _read_av(path: Path) -> MediaFacts | None:
+    """Every field from FFmpeg's own libraries inside this process (PyAV), the same
+    answers ffprobe gives without starting a program per file, which is most of an
+    ffprobe run's time. None when PyAV is missing or can't open the file, which then
+    goes to ffprobe."""
+    if av is None:
+        return None
+    try:
+        with av.open(str(path), timeout=PROBE_TIMEOUTS_SECONDS[-1]) as container:
+            stream = container.streams.audio[0] if container.streams.audio else None
+            fmt = {"format_name": container.format.name, "format_long_name": container.format.long_name,
+                   "bit_rate": container.bit_rate or None}
+            probed: dict[str, Any] = {}
+            if stream is not None:
+                context = stream.codec_context
+                codec = context.codec
+                probed = {"codec_name": codec.canonical_name, "codec_long_name": codec.long_name,
+                          "profile": stream.profile, "bit_rate": context.bit_rate or None,
+                          "channels": context.channels, "sample_rate": context.sample_rate}
+            seconds = container.duration / av.time_base if container.duration else 0.0
+            facts = MediaFacts(
+                path=str(path),
+                backend="av",
+                fields=FIELDS,
+                format_tags=_clean_tags(container.metadata),
+                stream_tags=_clean_tags(stream.metadata if stream is not None else {}),
+                duration_seconds=seconds if seconds > 0 else None,
+                audio=audio_properties(probed, fmt),
+                chapter_count=len(container.chapters()),
+            )
+    except Exception:
+        _count("av_fallbacks")
+        return None
+    _count("av_reads")
+    return facts
 
 
 def forget(path: Path | str) -> None:
