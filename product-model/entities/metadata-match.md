@@ -23,5 +23,5 @@ A provider candidate or batch result that can be reviewed for a particular book.
 - **Provider** — Source of the proposal.
 - **Score** — Confidence and matching evidence.
 - **Edit mode** — Full metadata, series only, or no editable match.
-- **Review reasons** — Ambiguity, duration, identity or duplicate concerns.
+- **Review reasons** — Ambiguity, duration, identity or duplicate concerns, or a source that could not be reached.
 - **Write outcome** — Planned, written, skipped, unchanged or failed fields and their destination.

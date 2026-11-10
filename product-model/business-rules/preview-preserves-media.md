@@ -8,6 +8,8 @@ appliesTo:
   id: preview-legacy-metadata-migration
 - type: capability
   id: preview-author-normalization
+- type: capability
+  id: scan-library
 references:
 - kind: code
   role: implementation
@@ -17,6 +19,6 @@ references:
   target: scripts/organize-audiobooks-by-metadata-v3_13.py#main
 ---
 
-# Preview does not apply book metadata or moves
+# Previews and scans do not change books
 
-Metadata and organizer previews compute proposed work without applying it to books. Reports and working caches can still be saved. Explicit apply, direct edits, restoration, conversion and downloading are distinct actions.
+Metadata and organizer previews and library scans compute proposed work without applying it to books, and write nothing next to the books: their reports and working caches stay with the Product's own reports. Explicit apply, direct edits, restoration, conversion and downloading are distinct actions.

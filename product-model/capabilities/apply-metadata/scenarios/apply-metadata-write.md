@@ -80,3 +80,4 @@ The Product changes the audiobook’s eligible metadata, saves the applicable or
 - Known Audiobookshelf items use direct metadata synchronization; books not yet known use bootstrap metadata files.
 - Metadata-only mode leaves embedded audio tags untouched.
 - An individual failure is reported with its target.
+- Original tags are saved unless the owner turns backup off.
