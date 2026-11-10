@@ -179,6 +179,8 @@ try:
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
+        start_book_lookups,
+        unanswered_audible_lookups,
     )
     from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
@@ -342,6 +344,8 @@ except ModuleNotFoundError:
         cached_audible_search,
         audible_search_cache_key,
         PUBLIC_AUDIBLE_DOMAINS,
+        start_book_lookups,
+        unanswered_audible_lookups,
     )
     from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
@@ -513,6 +517,7 @@ class ItemResult:
     from_marker: bool = False  # recovered from the existing marker (no fresh Audible match)
     from_plan: str = ""  # run id of the dry run whose match this book reuses (no fresh search)
     goodreads_rate_limited: bool = False  # abs-tract breaker was open during this book's attempt
+    audible_unavailable: bool = False  # Audible left a lookup unanswered: no match, retried next run
 
 def get_marker_path(source: Path) -> Path:
     """Return the preferred per-file marker path.
@@ -3694,6 +3699,10 @@ def match_ebook(
     return result
 
 
+# A book Audible could not answer for (business rule audible-unavailable).
+AUDIBLE_UNAVAILABLE_REASON = "skipped: Audible unavailable, try again"
+
+
 def search_item(
     index: int,
     file_path: Path,
@@ -3913,12 +3922,15 @@ def search_item(
             score = cached_match["score"]
             used_query = cached_match["used_query"]
             match_ambiguity = cached_match.get("ambiguity")
+            audible_unavailable = cached_match.get("audible_unavailable", False)
             log.append("  Reusing cached match for shared search context")
         else:
             product = None
             score = 0.0
             used_query = ""
             match_ambiguity = None
+            audible_unavailable = False
+            start_book_lookups()
 
             # Audiobook Guild lists its authors' books with series, narrators
             # and runtime, many of them missing from Audible: a book by one of
@@ -4249,9 +4261,19 @@ def search_item(
                 bool(product) and score >= args.min_score and audible_edit_mode == "full"
             )
 
+            def audible_did_not_answer() -> bool:
+                # A lookup Audible left unanswered means its silence is not "no
+                # listing", so no later source stands in for it; a confident
+                # match from a source before Audible still counts.
+                earlier_match = bool(product and result.source_provider and score >= effective_min_score)
+                return (not use_abs and not audible_is_full and not earlier_match
+                        and unanswered_audible_lookups() > 0)
+
+            audible_unavailable = audible_did_not_answer()
+
             # Series members, before AudioSilo: the book's own series, named by
             # any result, lists every book in it, including ones the search hides.
-            if not use_abs and clues.get("title") and not audible_is_full:
+            if not use_abs and clues.get("title") and not audible_is_full and not audible_unavailable:
                 if product and audible_edit_mode == "series_only":
                     series_asins += [a for a in series_asins_for_book([product], clues) if a not in series_asins]
                 # No result named the series: search for it by name ("Rise of
@@ -4283,17 +4305,25 @@ def search_item(
                         audible_edit_mode = "full"
                         audible_is_full = True
 
+            audible_unavailable = audible_unavailable or audible_did_not_answer()
+
             # AudioSilo fallback, before Goodreads: the community database has
             # narrator and runtime, so its match is judged like an Audible one.
             audiosilo_url = getattr(args, "audiosilo_url", "")
-            if audiosilo_url and clues.get("title") and not audible_is_full:
+            if audiosilo_url and clues.get("title") and not audible_is_full and not audible_unavailable:
                 log.append(
                     f"  Audible match not full (score={score:.4f}, mode={audible_edit_mode}) -> trying AudioSilo"
                     if product else "  No Audible match -> trying AudioSilo"
                 )
+                unanswered_before = unanswered_audible_lookups()
                 as_candidate, as_score, as_ambiguity, as_query = find_audiosilo_match(
                     clues, audiosilo_url, lookup_asin, args.limit, log, local_duration_minutes,
                 )
+                if (as_candidate and as_candidate.get("_abs_provider")
+                        and unanswered_audible_lookups() > unanswered_before):
+                    # Audible could not be asked for the listing: the community
+                    # record would stand in for it.
+                    as_candidate = None
                 if as_candidate and as_score >= args.min_score:
                     product = as_candidate
                     score = as_score
@@ -4303,10 +4333,12 @@ def search_item(
                     result.source_provider = as_candidate.get("_abs_provider", "")
                     audible_edit_mode = "full"
                     audible_is_full = True
+            audible_unavailable = audible_unavailable or audible_did_not_answer()
             if (
                 goodreads_fallback_enabled
                 and clues.get("title")
                 and not audible_is_full
+                and not audible_unavailable
             ):
                 if evaluate_goodreads_breaker_state(log):
                     result.goodreads_rate_limited = True
@@ -4356,6 +4388,11 @@ def search_item(
                         result.source_provider = "goodreads"
                         effective_min_score = min(effective_min_score, gr_score)
 
+            if audible_unavailable:
+                log.append("  Audible left a lookup unanswered after waiting -> no match this run, no fallback")
+                product, score, used_query, match_ambiguity = None, 0.0, "", None
+                result.source_provider = ""
+
             # Store in match_cache; if another thread beat us, use its result
             with match_cache_lock:
                 match_cache.setdefault(match_cache_key, {
@@ -4363,15 +4400,26 @@ def search_item(
                     "score": score,
                     "used_query": used_query,
                     "ambiguity": match_ambiguity,
+                    "audible_unavailable": audible_unavailable,
                 })
                 stored = match_cache[match_cache_key]
                 product = stored["product"]
                 score = stored["score"]
                 used_query = stored["used_query"]
                 match_ambiguity = stored.get("ambiguity")
+                audible_unavailable = stored.get("audible_unavailable", False)
 
         result.score = score
         result.used_query = used_query
+
+        if not product and audible_unavailable:
+            # Not a no-match: nothing is written or marked, so the next run looks it up again.
+            log.append("  SKIP: Audible unavailable, try again")
+            log.append("")
+            result.status = "skipped"
+            result.skip_reason = AUDIBLE_UNAVAILABLE_REASON
+            result.audible_unavailable = True
+            return result
 
         if not product:
             log.append("  SKIP: no usable Audible match")
@@ -5144,6 +5192,7 @@ def _build_report_item(result: "ItemResult") -> dict:
         "duration_status": result.duration_status,
         "provider": result.source_provider,
         "goodreads_rate_limited": result.goodreads_rate_limited,
+        "audible_unavailable": result.audible_unavailable,
         "used_query": result.used_query or "",
         "was_manually_applied": result.was_manually_applied,
         "from_dry_run": result.from_plan,

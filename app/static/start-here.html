@@ -156,6 +156,10 @@
               <td>Which source produced the match, such as Audible, Audiobookshelf, abs-agg, GraphicAudio, SoundBooth Theater, Goodreads, Pocket FM, Hardcover, or Kindle.</td>
             </tr>
             <tr>
+              <td><span class="match-audible-unavailable-badge">AUDIBLE UNAVAILABLE</span></td>
+              <td>Audible did not answer for this book after LibraForge waited (it was throttling or could not be reached), so the book was not matched from another source and nothing was written for it. It is not a no-match: the next run looks it up again.</td>
+            </tr>
+            <tr>
               <td><span class="match-gr-limited-badge">GR LIMITED</span></td>
               <td>Goodreads was tried for this book but the circuit breaker was open (Goodreads was rate-limiting us), so the lookup was skipped rather than counted as a genuine no-match. A warning explains this and suggests a lower search-worker count when a run trips the breaker.</td>
             </tr>

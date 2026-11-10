@@ -73,7 +73,11 @@ Searches Audible (or another provider) and writes matched metadata to your files
   Goodreads/Kindle lookups for a cooldown window rather than hammering a blocked upstream. Affected books are flagged with a **GR LIMITED** badge in
   the match report (skipped for rate-limiting, not counted as a genuine no-match), and a
   popup explains it at the end of the run. Goodreads requests are paced one at a time
-  however many search workers run.
+  however many search workers run. When Audible throttles, every search worker waits
+  together; a book Audible still has not answered for after that waiting is marked
+  **AUDIBLE UNAVAILABLE**: it is not matched from AudioSilo, Goodreads or the series
+  listing in Audible's place, nothing is written for it, and the next run looks it up
+  again. A confident Audiobook Guild, GraphicAudio or SoundBooth match still counts.
 - **Series members:** when Audible finds no confident full match and the book belongs to
   a series, LibraForge reads that series' own Audible listing, which names every book in it,
   and looks them all up by ASIN. Audible's search leaves out books that can't be bought
