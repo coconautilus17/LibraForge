@@ -183,12 +183,12 @@ try:
     from app.audiobook_guild import is_store_author
     from app.abs_client import abs_get_json, build_item_index, has_real_genres, is_dirty_series_name, lookup_item_in_index, normalize_abs_media_to_internal, sync_book_metadata, upsert_bootstrapped_file
     from app.enrichment import fetch_all_abs_book_items
-    from app import media_probe
+    from app import book_covers, media_probe
     from app.tag_padding import save_padding as tag_save_padding
     from app.fixer import plan as match_plan
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app import media_probe
+    from app import book_covers, media_probe
     from app.tag_padding import save_padding as tag_save_padding
     from app.fixer import plan as match_plan
     from app.title_noise_policy import is_title_noise, remove_trailing_title_noise
@@ -5739,6 +5739,10 @@ def upcoming_asins_for_run(processing_items: list[Path], multi_part_group_map: d
     return upcoming
 
 
+# Covers are read off the library share: a few at a time beside the search.
+COVER_THUMB_WORKERS = 4
+
+
 def prefill_search_contexts(processing_items: list[Path], multi_part_group_map: dict, args,
                             search_context_cache: dict, search_context_lock: threading.Lock) -> None:
     """Read the tags of every book LibraForge hasn't processed (no libraforge.json
@@ -6447,6 +6451,7 @@ def main():
     # Share what was read about each file with the web app and other runs.
     media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
     global _exit_on_cancel, _cover_prefetch
+    book_covers.configure(REPORTS_DIR / "cover-thumbs")
     _exit_on_cancel = not args.apply and not args.restore_metadata
 
     if args.audible_public_region:
@@ -6649,11 +6654,18 @@ def main():
         all_results: list[ItemResult] = []
         completed = 0
         cancelled_in_pass1 = False
+        # The match report shows each searched book's cover; make its thumbnail
+        # now, while the search waits on the network (see app/book_covers.py).
+        # Pending ones finish before the process exits.
+        cover_thumbs = ThreadPoolExecutor(max_workers=COVER_THUMB_WORKERS)
         for future in as_completed(futures):
             if _cancel_requested:
                 cancelled_in_pass1 = True
+                cover_thumbs.shutdown(wait=False, cancel_futures=True)
                 break
             result = future.result()
+            if result.clues:
+                cover_thumbs.submit(book_covers.embedded_thumbnail, result.file_path)
             completed += 1
             print(
                 f"PASS 1 PROGRESS: completed {completed}/{total}",

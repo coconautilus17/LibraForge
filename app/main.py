@@ -52,7 +52,7 @@ from app.folder_scan_cache import (
     scan_cache_key as folder_scan_cache_key,
 )
 import app.library_index as library_index
-from app import media_probe
+from app import book_covers, media_probe
 from app.tag_padding import save_padding as tag_save_padding
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
@@ -163,6 +163,7 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 store_genres.configure(REPORTS_DIR / "audible-store-genres.json")
 media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
+book_covers.configure(REPORTS_DIR / "cover-thumbs")
 
 
 
@@ -5995,45 +5996,15 @@ def _book_author(folder: Path, scan_root: Path) -> str:
     return library_author_folder(folder, [AUDIOBOOKS_ROOT, scan_root])
 
 
-def _embedded_cover_bytes(audio_file: Path) -> tuple[bytes, str] | None:
-    """Return (cover_bytes, media_type) from an audio file's own cover tag (covr/APIC).
-
-    Reads the semantic cover tag via mutagen rather than picking an arbitrary
-    embedded picture/video stream by position -- an M4B can carry several
-    embedded images (per-chapter thumbnails, stray art), and only the first
-    covr/APIC entry is the actual front cover.
-    """
-    try:
-        suffix = audio_file.suffix.lower()
-        if suffix in (".m4b", ".m4a", ".mp4"):
-            tags = MP4(str(audio_file)).tags
-            if tags and "covr" in tags and tags["covr"]:
-                cover_item = tags["covr"][0]
-                from mutagen.mp4 import MP4Cover  # noqa: PLC0415
-                fmt = getattr(cover_item, "imageformat", MP4Cover.FORMAT_JPEG)
-                media = "image/png" if fmt == MP4Cover.FORMAT_PNG else "image/jpeg"
-                return (bytes(cover_item), media)
-        elif suffix == ".mp3":
-            from mutagen.id3 import ID3  # noqa: PLC0415
-            tags = ID3(str(audio_file))
-            for key in tags.keys():
-                if key.startswith("APIC"):
-                    apic = tags[key]
-                    mime = getattr(apic, "mime", "image/jpeg")
-                    media = "image/png" if "png" in mime else "image/jpeg"
-                    return (bytes(apic.data), media)
-    except Exception:
-        pass
-    return None
+_embedded_cover_bytes = book_covers.embedded_cover_bytes
 
 
-def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
-    """Return (cover_bytes, media_type) from a file cover or embedded audio tag."""
+def _book_cover_source(folder: Path) -> Path | None:
+    """The file a book folder's cover comes from: a cover image file, else the first audio file."""
     for name in _COVER_NAMES:
         cover = folder / name
         if cover.is_file():
-            media = "image/png" if cover.suffix.lower() == ".png" else "image/jpeg"
-            return (cover.read_bytes(), media)
+            return cover
     # Find first audio file (prefer m4b > m4a > mp3 > mp4), one level deep
     candidates: list[Path] = []
     for ext in ("*.m4b", "*.m4a", "*.mp3", "*.mp4"):
@@ -6051,11 +6022,15 @@ def _book_cover_data(folder: Path) -> tuple[bytes, str] | None:
                         break
                 if candidates:
                     break
-    for audio_file in candidates[:1]:
-        result = _embedded_cover_bytes(audio_file)
-        if result:
-            return result
-    return None
+    return candidates[0] if candidates else None
+
+
+def _cover_from_source(source: Path) -> tuple[bytes, str] | None:
+    """Return (cover_bytes, media_type) from a cover image file or an audio file's embedded tag."""
+    if source.name in _COVER_NAMES:
+        media = "image/png" if source.suffix.lower() == ".png" else "image/jpeg"
+        return (source.read_bytes(), media)
+    return _embedded_cover_bytes(source)
 
 
 @app.post("/api/scan/books")
@@ -6091,9 +6066,14 @@ def scan_books_route(req: ScanRequest) -> dict[str, Any]:
 
 @app.get("/api/book/cover")
 def book_cover(path: str) -> Response:
+    """A book's cover as a thumbnail (every page shows it small), kept until its file
+    changes; the full image when a thumbnail can't be made."""
     p = validate_audiobook_path(path)
     if p.is_file():
         # Loose audio file: extract embedded cover from the specific file
+        thumb = book_covers.embedded_thumbnail(p)
+        if thumb:
+            return Response(content=thumb, media_type=book_covers.THUMB_MEDIA_TYPE)
         try:
             data, media = extract_current_cover(p)
             return Response(content=data, media_type=media)
@@ -6101,9 +6081,17 @@ def book_cover(path: str) -> Response:
             raise HTTPException(status_code=404, detail="No cover found")
     if not p.is_dir():
         raise HTTPException(status_code=404, detail="Not a directory")
-    result = _book_cover_data(p)
+    source = _book_cover_source(p)
+    thumb = book_covers.cached_thumbnail(source) if source else None
+    if thumb:
+        return Response(content=thumb, media_type=book_covers.THUMB_MEDIA_TYPE)
+    sig = book_covers.signature(source) if source else None
+    result = _cover_from_source(source) if source else None
     if result:
         data, media = result
+        thumb = book_covers.remember_thumbnail(source, data, sig)
+        if thumb:
+            return Response(content=thumb, media_type=book_covers.THUMB_MEDIA_TYPE)
         return Response(content=data, media_type=media)
     raise HTTPException(status_code=404, detail="No cover found")
 
