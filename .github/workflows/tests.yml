@@ -19,8 +19,24 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # The image's own FFmpeg build (scripts/build-ffmpeg.sh), so the in-process MP4
+      # reader is tested against the ffprobe release it follows.
+      - name: Cache FFmpeg build
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg-bin
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Build FFmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          docker build --target ffmpeg-build -t libraforge-ffmpeg .
+          id=$(docker create libraforge-ffmpeg)
+          mkdir -p ~/ffmpeg-bin
+          docker cp "$id:/opt/ffmpeg/bin/ffmpeg" ~/ffmpeg-bin/
+          docker cp "$id:/opt/ffmpeg/bin/ffprobe" ~/ffmpeg-bin/
+          docker rm "$id"
+      - run: echo ~/ffmpeg-bin >> "$GITHUB_PATH"
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s app/tests -t . -p "test_*.py"
       - run: |

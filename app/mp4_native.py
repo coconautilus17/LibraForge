@@ -1,7 +1,7 @@
 """Read an MP4/M4B/M4A file's tags, duration, audio properties and chapter count in-process,
-exactly as ffprobe 6.1 reports them, so the shared media inspection can skip launching it.
+exactly as ffprobe 9.0 reports them, so the shared media inspection can skip launching it.
 
-This is a port of the parts of FFmpeg 6.1's MP4 demuxer (libavformat/mov.c) and stream
+This is a port of the parts of FFmpeg 9.0's MP4 demuxer (libavformat/mov.c) and stream
 timing (libavformat/demux.c, update_stream_timings) that decide those values, limited to
 the shapes audiobooks use: one AAC-LC or Opus audio track, optional chapter text tracks, at
 most one edit with optional leading empty edits, iTunes metadata and Nero chapters. Any
@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-FFMPEG_RELEASE = "6.1"
+FFMPEG_RELEASE = "9.0"
 MAX_MOOV_BYTES = 64 * 1024 * 1024
 MP4_EPOCH_OFFSET = 2082844800  # seconds from 1904-01-01 to 1970-01-01
 UINT32_MAX = 0xFFFFFFFF
@@ -47,6 +47,7 @@ ITEM_KEYS = {
     b"\xa9prf": "performers", b"\xa9req": "playback_requirements", b"\xa9src": "original_source",
     b"\xa9st3": "subtitle", b"\xa9swr": "encoder", b"\xa9too": "encoder", b"\xa9trk": "track",
     b"\xa9url": "URL", b"\xa9wrn": "warning", b"\xa9wrt": "composer", b"\xa9xyz": "location",
+    b"name": "name",
 }
 INT8_NO_PADDING = {b"akID": "account_type", b"cpil": "compilation", b"egid": "episode_uid",
                    b"hdvd": "hd_video", b"pcst": "podcast", b"pgap": "gapless_playback",
@@ -65,7 +66,9 @@ PARSE_TABLE = {
     b"cmov", b"chan", b"chnl", b"dvc1", b"sgpd", b"sbgp", b"hvcC", b"uuid", b"Cin\x8e", b"free", b"----",
     b"sinf", b"frma", b"senc", b"saiz", b"saio", b"pssh", b"schm", b"schi", b"tenc", b"dfLa", b"st3d",
     b"sv3d", b"dOps", b"dmlp", b"SmDm", b"CoLL", b"vpcC", b"mdcv", b"clli", b"dvcC", b"dvvC", b"dvwC",
-    b"kind", b"SA3D", b"SAND", b"iloc", b"pcmC", b"pitm", b"evcC",
+    b"kind", b"SA3D", b"SAND", b"iloc", b"pcmC", b"pitm", b"evcC", b"amve", b"apvC", b"clap", b"hfov",
+    b"hvcE", b"iacb", b"idat", b"iinf", b"imir", b"iprp", b"iref", b"irot", b"ispe", b"lhvC", b"lvcC",
+    b"sbas", b"srat", b"vdep", b"vexu", b"vvcC",
 }
 # Parse-table atoms whose parser changes nothing this reader reports.
 HARMLESS = {b"free", b"wide", b"dinf", b"dref", b"stss", b"stps", b"sdtp", b"sgpd", b"sbgp", b"kind",
@@ -137,6 +140,12 @@ class _Movie:
         for existing in [k for k in tags if k.lower() == key.lower()]:
             del tags[existing]
         tags[key] = value
+
+    def append(self, key: str, value: str, target: dict[str, str]) -> None:
+        """av_dict_set with AV_DICT_APPEND, preceded by a ";" when the key is there already
+        (mov_read_udta_string inside ilst): repeated items join instead of replacing."""
+        old = next((v for k, v in target.items() if k.lower() == key.lower()), None)
+        self.set(key, value if old is None else f"{old};{value}", target)
 
 
 def _c_string(raw: bytes) -> str:
@@ -296,6 +305,8 @@ def _parse(movie: _Movie, kind: bytes, s: int, e: int, depth: int) -> None:
         _hdlr(movie, st if movie.trak_index >= 0 else None, s, e)
     elif kind == b"stsd":
         _stsd(movie, st, s, e)
+    elif kind in (b"stts", b"stsz", b"stsc", b"stco", b"co64") and movie.trak_index < 0:
+        return  # "outside TRAK": ignored
     elif kind == b"stts":
         count = struct.unpack(">I", data[s + 4:s + 8])[0]
         if s + 8 + 8 * count > e:
@@ -368,6 +379,8 @@ def _elst(movie: _Movie, st: _Stream, s: int, e: int) -> None:
         else:
             duration, time, rate_raw = struct.unpack(">IiI", data[p:p + 12])
             rate = rate_raw / 65536.0
+        if duration >= 1 << 63:
+            raise Unsupported("negative edit duration")  # mov_read_elst refuses the file
         entries.append((duration, time, rate))
     if entries:
         st.elst = entries
@@ -412,10 +425,7 @@ def _stsd(movie: _Movie, st: _Stream, s: int, e: int) -> None:
     version = struct.unpack(">H", data[es + 8:es + 10])[0]
     if version != 0 or not movie.isom or "qt  " in movie.tags.get("compatible_brands", ""):
         raise Unsupported("QuickTime sound description")
-    vendor = data[es + 12:es + 16]
-    # av_fourcc2str
-    movie.set("vendor_id", "".join(chr(b) if (chr(b).isascii() and chr(b).isalnum()) or chr(b) in ". -_"
-                                   else f"[{b}]" for b in vendor), st.metadata)
+    # vendor_id is reported only for QuickTime files, which go to ffprobe above.
     st.channels = struct.unpack(">H", data[es + 16:es + 18])[0]
     st.sample_rate = struct.unpack(">I", data[es + 24:es + 28])[0] >> 16
     children = list(_atoms(data, es + 28, ee))
@@ -504,9 +514,10 @@ def _esds_aac(data: bytes, start: int, end: int) -> tuple[int, int, int]:
 
 
 def _udta_string(movie: _Movie, kind: bytes, s: int, e: int) -> None:
-    """mov_read_udta_string."""
+    """mov_read_udta_string. Text goes to the track it sits in, or to the file; inside ilst
+    every data atom of an item is read, and repeated keys join with ";". The integer and
+    genre items always go to the file, last one winning."""
     data = movie.data
-    size = e - s
     key = (ITEM_KEYS.get(kind) or INT8_NO_PADDING.get(kind) or INT8_BYPASS_PADDING.get(kind)
            or TRACK_OR_DISC.get(kind) or ("genre" if kind == b"gnre" else None))
     raw = kind in RAW_KEYS
@@ -514,69 +525,80 @@ def _udta_string(movie: _Movie, kind: bytes, s: int, e: int) -> None:
         key = RAW_KEYS[kind]
     if kind in (b"HMMT", b"loci"):
         raise Unsupported(f"user data {kind!r}")
-    data_type = 0
-    langcode = 0
-    language = ""
-    pos = s
-    if movie.itunes and size > 8:
-        data_size, tag = struct.unpack(">I4s", data[pos:pos + 8])
-        if not (tag == b"data" and 16 <= data_size <= size):
+    target = movie.streams[movie.trak_index].metadata if movie.trak_index >= 0 else movie.tags
+    pos, size = s, e - s
+    while True:
+        data_type = 0
+        langcode = 0
+        language = ""
+        if movie.itunes and size > 8:
+            data_size, tag = struct.unpack(">I4s", data[pos:pos + 8])
+            if not (tag == b"data" and 16 <= data_size <= size):
+                return
+            data_type = struct.unpack(">I", data[pos + 8:pos + 12])[0]
+            pos += 16
+            size -= 16
+            str_size = data_size - 16
+            if kind == b"covr":
+                return
+        elif size > 4 and key and not movie.itunes and not raw:
+            str_size, langcode = struct.unpack(">HH", data[pos:pos + 4])
+            if str_size > size:
+                raise Unsupported("QuickTime user-data string retried raw")
+            language = _language(langcode) or ""
+            pos += 4
+            size -= 4
+        else:
+            str_size = size
+        if not key:
             return
-        data_type = struct.unpack(">I", data[pos + 8:pos + 12])[0]
-        pos += 16
-        str_size = data_size - 16
-        if kind == b"covr":
+        payload = data[pos:pos + str_size]
+        if kind in TRACK_OR_DISC:
+            if len(payload) < 4:
+                raise Unsupported("short track number")
+            current = struct.unpack(">h", payload[2:4])[0]
+            total = struct.unpack(">h", payload[4:6])[0] if str_size >= 6 else 0
+            movie.set(key, f"{current}/{total}" if total else f"{current}")
             return
-    elif size > 4 and key and not movie.itunes and not raw:
-        str_size, langcode = struct.unpack(">HH", data[pos:pos + 4])
-        if str_size > size:
-            raise Unsupported("QuickTime user-data string retried raw")
-        language = _language(langcode) or ""
-        pos += 4
-    else:
-        str_size = size
-    if not key:
-        return
-    payload = data[pos:pos + str_size]
-    if kind in TRACK_OR_DISC:
-        if len(payload) < 4:
-            raise Unsupported("short track number")
-        current = struct.unpack(">h", payload[2:4])[0]
-        total = struct.unpack(">h", payload[4:6])[0] if str_size >= 6 else 0
-        movie.set(key, f"{current}/{total}" if total else f"{current}")
-        return
-    if kind in INT8_NO_PADDING:
-        if not payload:
-            raise Unsupported("empty integer item")
-        movie.set(key, str(payload[0]))
-        return
-    if kind in INT8_BYPASS_PADDING:
-        if len(payload) < 4:
-            raise Unsupported("short integer item")
-        movie.set(key, str(payload[3]))
-        return
-    if kind == b"gnre":
-        if len(payload) < 2:
-            raise Unsupported("short gnre")
-        genre = payload[1]
-        if 1 <= genre <= len(ID3V1_GENRES):
-            movie.set(key, ID3V1_GENRES[genre - 1])
-        return
-    if not raw and (data_type == 3 or (data_type == 0 and (langcode < 0x400 or langcode == 0x7FFF))):
-        value = _mac_string(payload)
-    elif data_type == 21:
-        value = str(int.from_bytes(payload, "big", signed=True)) if len(payload) in (1, 2, 3, 4) else "0"
-    elif data_type == 22:
-        value = str(int.from_bytes(payload, "big")) if len(payload) in (1, 2, 3, 4) else "0"
-    elif data_type == 23 and str_size >= 4:
-        value = "%f" % struct.unpack(">f", payload[:4])[0]
-    elif data_type > 1 and data_type != 4:
-        return
-    else:
-        value = _c_string(payload)
-    movie.set(key, value)
-    if language and language != "und":
-        movie.set(f"{key}-{language}", value)
+        if kind in INT8_NO_PADDING:
+            if not payload:
+                raise Unsupported("empty integer item")
+            movie.set(key, str(payload[0]))
+            return
+        if kind in INT8_BYPASS_PADDING:
+            if len(payload) < 4:
+                raise Unsupported("short integer item")
+            movie.set(key, str(payload[3]))
+            return
+        if kind == b"gnre":
+            if len(payload) < 2:
+                raise Unsupported("short gnre")
+            genre = payload[1]
+            if 1 <= genre <= len(ID3V1_GENRES):
+                movie.set(key, ID3V1_GENRES[genre - 1])
+            return
+        if not raw and (data_type == 3 or (data_type == 0 and (langcode < 0x400 or langcode == 0x7FFF))):
+            value = _mac_string(payload)
+        elif data_type == 21:
+            value = str(int.from_bytes(payload, "big", signed=True)) if len(payload) in (1, 2, 3, 4) else "0"
+        elif data_type == 22:
+            value = str(int.from_bytes(payload, "big")) if len(payload) in (1, 2, 3, 4) else "0"
+        elif data_type == 23 and str_size >= 4:
+            value = "%f" % struct.unpack(">f", payload[:4])[0]
+        elif data_type > 1 and data_type != 4:
+            return
+        else:
+            value = _c_string(payload)
+        if movie.itunes:
+            movie.append(key, value, target)
+        else:
+            movie.set(key, value, target)
+        if language and language != "und":
+            movie.set(f"{key}-{language}", value, target)
+        pos += str_size
+        size -= str_size
+        if not (movie.itunes and size > 8):
+            return
 
 
 def _custom(movie: _Movie, s: int, e: int) -> None:
@@ -605,12 +627,20 @@ def _custom(movie: _Movie, s: int, e: int) -> None:
         return
     key = _c_string(parts[b"name"])
     value = _c_string(parts[b"data"])
+    st = movie.streams[-1]
     if key == "iTunSMPB":
         m = re.match(r"\s*[0-9A-Fa-f]+\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)", value)
         if m:
             priming = int(m.group(1), 16)
-            if 0 < priming < 16384:
-                movie.streams[-1].start_pad = priming
+            if 0 < priming < 16384 and st.kind == "audio":
+                # initial_padding: the priming in samples of the decoded rate
+                if not st.time_scale or not st.sample_rate:
+                    raise Unsupported("iTunSMPB before the track's timing")
+                st.start_pad = _rescale(priming, st.sample_rate, st.time_scale)
+    if _c_string(parts[b"mean"]) == "com.apple.iTunes" and key == "DISCSUBTITLE":
+        movie.set("disc_subtitle", value)
+        movie.tags = {k: v for k, v in movie.tags.items() if k.lower() != key.lower()}
+        return  # the value moved to disc_subtitle, so the key itself is removed
     if key != "cdec":
         movie.set(key, value)
 

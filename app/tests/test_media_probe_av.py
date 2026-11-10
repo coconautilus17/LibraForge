@@ -35,12 +35,8 @@ class InProcessReadTests(unittest.TestCase):
         ours = media_probe._read_av(path)
         theirs = media_probe._read_ffprobe(path)
         self.assertEqual(ours.backend, "av")
-        # PyAV carries a newer FFmpeg than the image's ffprobe 6.1, which no longer
-        # reports an all-zero MP4 vendor_id; nothing in LibraForge reads it.
-        their_stream_tags = {k: v for k, v in theirs.stream_tags.items()
-                             if not (k == "vendor_id" and v == "[0][0][0][0]")}
         self.assertEqual((ours.fields, ours.format_tags, ours.stream_tags, ours.chapter_count),
-                         (theirs.fields, theirs.format_tags, their_stream_tags, theirs.chapter_count))
+                         (theirs.fields, theirs.format_tags, theirs.stream_tags, theirs.chapter_count))
         self.assertAlmostEqual(ours.duration_seconds, theirs.duration_seconds, delta=0.05)
         for key in ("probed", "codec", "container", "bitrate_kbps", "channels", "sample_rate_hz"):
             self.assertEqual(ours.audio[key], theirs.audio[key], key)

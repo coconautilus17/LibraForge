@@ -33,6 +33,16 @@ above. The most relevant ones are:
 | `h11` | `0.16.0` | MIT | Uvicorn extra dependency |
 | `click` | `8.4.1` | BSD-3-Clause | Uvicorn extra dependency |
 
+## FFmpeg
+
+Both images carry `ffmpeg` and `ffprobe` 9.0.2, built from FFmpeg's signed
+release by `scripts/build-ffmpeg.sh` as static binaries, with Fraunhofer FDK AAC
+2.0.3 (`libfdk_aac`, M4B building's default encoder), LAME, Opus 1.5.2 and
+Vorbis. FDK AAC is under the Fraunhofer FDK AAC license, which FFmpeg's build
+counts as non-free next to its GPL parts; the m4b-tool base image's own ffmpeg,
+which these replace, was built the same way. PyAV's wheels bundle their own
+FFmpeg 9.0.2 libraries without FDK AAC.
+
 ## Notes
 
 - License data above is taken from the installed package metadata used by this
