@@ -13,7 +13,7 @@ name: Publish image
 #     Hybrid and Full transcription ASR backends work out of the box (Audible
 #     chapters, the third backend, needs no models and works in either
 #     image). arm64 is left out here because Dockerfile.unified's
-#     cross-copied Alpine binaries (mp4v2/fdkaac/ffmpeg) are untested on that
+#     cross-copied Alpine binaries (mp4v2/fdkaac/tone) are untested on that
 #     platform -- see its own header comment.
 on:
   release:

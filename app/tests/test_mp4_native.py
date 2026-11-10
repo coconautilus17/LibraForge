@@ -51,7 +51,7 @@ class NativeMatchesFfprobeTests(unittest.TestCase):
         book = make_m4b(self.dir / "a.m4b", chapters=3)
         audio = MP4(str(book))
         audio.tags["\xa9nam"] = ["Dao Divinity"]
-        audio.tags["\xa9gen"] = ["Fantasy", "Sci-Fi"]  # ffprobe keeps the first
+        audio.tags["\xa9gen"] = ["Fantasy", "Sci-Fi"]  # ffprobe joins them: "Fantasy;Sci-Fi"
         audio.tags["\xa9wrt"] = ["Bordeaux Black"]
         audio.tags["\xa9cmt"] = ["A long description.\nWith a second line."]
         audio.tags["trkn"] = [(3, 12)]
@@ -63,6 +63,9 @@ class NativeMatchesFfprobeTests(unittest.TestCase):
         audio.tags["----:com.apple.iTunes:mvnm"] = [MP4FreeForm(b"First Immortal")]
         audio.tags["\xa9mvn"] = ["First Immortal"]
         audio.tags["\xa9mvi"] = [1]
+        audio.tags["cprt"] = ["©2020 Someone"]
+        audio.tags["\xa9cpy"] = ["©2020 Someone"]  # both are "copyright": joined
+        audio.tags["----:com.apple.iTunes:DISCSUBTITLE"] = [MP4FreeForm(b"Part One")]  # becomes disc_subtitle
         audio.save()
         self.assertSameAsFfprobe(book)
 
@@ -137,7 +140,7 @@ class FallbackTests(unittest.TestCase):
         media_probe.reset()
         self.addCleanup(media_probe.reset)
         # The native reader runs only beside the ffprobe release it follows; the image ships it,
-        # a test machine may not (Ubuntu 26.04 has FFmpeg 8.0).
+        # a test machine may not.
         patcher = mock.patch.object(media_probe, "ffprobe_release", return_value=mp4_native.FFMPEG_RELEASE)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -154,7 +157,7 @@ class FallbackTests(unittest.TestCase):
 
     def test_with_another_ffprobe_release_ffmpeg_reads_everything(self):
         book = make_m4b(self.dir / "a.m4b")
-        with mock.patch.object(media_probe, "ffprobe_release", return_value="7.1"):
+        with mock.patch.object(media_probe, "ffprobe_release", return_value="8.0"):
             self.assertEqual(media_probe.inspect(book).backend, FFMPEG_BACKEND)
         media_probe.reset()
         self.assertEqual(media_probe.inspect(book).backend, "native")

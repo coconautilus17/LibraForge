@@ -78,7 +78,7 @@ _release: list[str | None] = []
 
 
 def ffprobe_release() -> str | None:
-    """The installed ffprobe's major.minor release ("6.1"), read once per process; None if it can't be read."""
+    """The installed ffprobe's major.minor release ("9.0"), read once per process; None if it can't be read."""
     if not _release:
         try:
             out = subprocess.run(["ffprobe", "-version"], capture_output=True, text=True, timeout=10).stdout

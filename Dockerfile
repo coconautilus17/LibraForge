@@ -1,3 +1,9 @@
+# FFmpeg 9.0.2, static (scripts/build-ffmpeg.sh). It replaces the base image's
+# ffmpeg 5.0.1 and Alpine's ffprobe 6.1.
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ffmpeg-build
+COPY scripts/build-ffmpeg.sh /tmp/build-ffmpeg.sh
+RUN sh /tmp/build-ffmpeg.sh
+
 FROM sandreas/m4b-tool@sha256:3154399019ed6a2d26fd477f71a1367e4c60e605d0188699028ad3444afd3c70
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -7,8 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/venv/bin:$PATH
 
 RUN apk upgrade --no-cache \
-    && apk add --no-cache ffmpeg python3 py3-pip \
+    && apk add --no-cache python3 py3-pip \
     && python3 -m venv /opt/venv
+COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /usr/local/bin/
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
