@@ -424,6 +424,11 @@ TEMP_OUTPUT_MARKERS = {".metadata-fixed", ".metadata-restored"}
 # the current book's writes complete rather than being killed mid-write.
 _cancel_requested = False
 
+# Whether reading a book's libraforge.json may also tidy it: convert old-format
+# sidecar files into it and delete the ones left behind. Off for a dry run,
+# which writes nothing into the library (#547).
+LIBRARY_WRITES = True
+
 def needs_duplicate_asin_check(all_results: list) -> bool:
     """Whether the library-wide duplicate-ASIN scan has anything to guard.
     Never after a cancel: nothing is written then, and the scan probes every
@@ -555,8 +560,8 @@ def read_book_sidecar(source: Path) -> dict | None:
     returns None (the book has no applied record yet at all).
     """
     try:
-        lf_path, lf = _load_libraforge_raw(source)
-        if not lf_path.is_file():
+        _, lf = _load_libraforge_raw(source)
+        if not lf:
             return None
         sidecar = lf.get("sidecar") or {}
         book = sidecar.get("book")
@@ -648,6 +653,8 @@ def _load_libraforge_raw(
     ]
 
     def _cleanup_orphans() -> None:
+        if not LIBRARY_WRITES:
+            return
         for orphan in _old_per_file:
             if orphan.is_file():
                 try:
@@ -677,7 +684,7 @@ def _load_libraforge_raw(
             pass
         # If the book is now alone in its folder, migrate file-level to
         # folder-level -- unless that path is already claimed by another file.
-        if alone and not folder_lf_blocked:
+        if alone and not folder_lf_blocked and LIBRARY_WRITES:
             _write_libraforge(folder_lf, payload)
             try:
                 file_lf.unlink()
@@ -752,6 +759,8 @@ def _load_libraforge_raw(
         payload["schema_version"] = 2
         payload["tool"] = "audible-metadata-fixer"
         payload["migrated_at"] = datetime.now(timezone.utc).isoformat()
+        if not LIBRARY_WRITES:
+            return lf_path, payload
         _write_libraforge(lf_path, payload)
         for old_file in old_to_remove:
             try:
@@ -1785,8 +1794,11 @@ def should_skip_due_to_marker(
     aggressive_run: bool,
     force: bool,
     minimum_score: float = AGGRESSIVE_SCORE_THRESHOLD,
+    marker: dict | None = None,
 ) -> tuple[bool, str]:
-    marker = load_marker(source)
+    # `marker`: the book's marker when the caller already read it ({} for none).
+    if marker is None:
+        marker = load_marker(source)
 
     # A human explicitly reviewed and applied this book's metadata. That
     # decision must never be silently overridden by a batch run -- not by
@@ -1858,13 +1870,15 @@ def metadata_from_marker(marker: dict) -> dict:
     }
 
 def marker_skip_is_clean(
-    source: Path, marker: dict, alone: bool, meta_target: Path
+    source: Path, marker: dict, alone: bool, meta_target: Path, abs_known: bool = False
 ) -> bool:
     """True when an applied-marker book needs no maintenance and can be skipped fast.
 
     Uses only cheap filesystem stats (no media probe). A book is clean when its
     ASIN is recorded as written (or there is no real ASIN to write), its
-    metadata.json already exists, and its sidecar is already at the final
+    metadata is in place -- Audiobookshelf knows the book (``abs_known``: it is
+    synced through the API and has no metadata.json of its own, #546) or its
+    metadata.json exists -- and its sidecar is already at the final
     consolidated location. Anything else routes to the recovery path so missing
     tags / metadata.json / sidecars get repaired. Legacy markers (no
     ``written_fields``) are never clean, so they are repaired once and then
@@ -1872,7 +1886,7 @@ def marker_skip_is_clean(
     """
     if marker_real_asin(marker) and "asin" not in set(marker.get("written_fields") or []):
         return False
-    if not meta_target.exists():
+    if not abs_known and not meta_target.exists():
         return False
     if alone and source.with_name(f"{source.name}{LIBRAFORGE_SUFFIX}").is_file():
         return False
@@ -3760,6 +3774,7 @@ def search_item(
             aggressive_run=args.aggressive,
             force=args.force,
             minimum_score=args.min_score,
+            marker=existing_marker,
         )
         recovering_from_marker = False
         if skip_due_to_marker:
@@ -3771,7 +3786,11 @@ def search_item(
                 return result
             _rec_alone = bool(folder_audio_counts) and folder_audio_counts.get(file_path.parent, 1) == 1
             _rec_meta_target = resolve_recovery_meta_target(file_path, _rec_alone, multi_part_group_map)
-            if marker_skip_is_clean(file_path, existing_marker, _rec_alone, _rec_meta_target):
+            # The same check the metadata write makes (see abs_known below).
+            _rec_abs_known = abs_index is not None and lookup_item_in_index(
+                abs_index, asin=marker_real_asin(existing_marker), path=str(file_path.parent)
+            ) is not None
+            if marker_skip_is_clean(file_path, existing_marker, _rec_alone, _rec_meta_target, _rec_abs_known):
                 log.append(f"  SKIP: {marker_reason}")
                 log.append("")
                 result.status = "skipped"
@@ -6499,9 +6518,10 @@ def main():
     args = parser.parse_args()
     # Share what was read about each file with the web app and other runs.
     media_probe.configure_store(REPORTS_DIR / "media-facts.sqlite")
-    global _exit_on_cancel, _cover_prefetch
+    global _exit_on_cancel, _cover_prefetch, LIBRARY_WRITES
     book_covers.configure(REPORTS_DIR / "cover-thumbs")
     _exit_on_cancel = not args.apply and not args.restore_metadata
+    LIBRARY_WRITES = bool(args.apply or args.restore_metadata)
 
     if args.audible_public_region:
         # get_catalog_client falls back to PublicAudibleClient when there is no
@@ -6523,13 +6543,11 @@ def main():
 
     # Built once for the whole run (never per-book): every book's metadata
     # write checks this to decide PATCH-direct-to-ABS vs. the metadata.json
-    # bootstrap fallback (see sync_or_write_abs_metadata). Also needed for a
-    # dry run when --trust-abs-metadata/--weight-abs-metadata is set, since
-    # those affect matching/scoring (which a dry run still does), not just
-    # the write path.
+    # bootstrap fallback (see sync_or_write_abs_metadata). A dry run needs it
+    # too: whether an applied book is finished depends on it (#546), and
+    # --trust-abs-metadata/--weight-abs-metadata affect matching/scoring.
     abs_index: dict | None = None
-    _needs_abs_index = args.apply or args.trust_abs_metadata or args.weight_abs_metadata
-    if _needs_abs_index and args.abs_api_key:
+    if args.abs_api_key:
         try:
             abs_items = fetch_all_abs_book_items(
                 lambda path, params: abs_get_json(path, params, args.abs_url, args.abs_api_key)
@@ -6662,12 +6680,26 @@ def main():
     disk_asin_scan = ThreadPoolExecutor(max_workers=1)
     disk_asin_future = disk_asin_scan.submit(build_disk_asin_map, full_library_files, args.asin_scan_workers)
 
+    save_plan = bool(args.save_plan and not args.apply)
+
+    def search_and_report(**kwargs) -> tuple[ItemResult, dict, list | None]:
+        # The book's report item and plan signatures read its sidecar and audio
+        # files: on a network library that is too slow to do one book at a
+        # time on the main thread, so the search worker does it (#548).
+        result = search_item(**kwargs)
+        signatures = None
+        if save_plan:
+            signatures = match_plan.file_signatures(book_audio_files(result.file_path, multi_part_group_map))
+        return result, _build_report_item(result), signatures
+
+    plan_signatures: dict[Path, list | None] = {}
+
     # Scatter phase submits all items; gather phase consumes futures as they
     # complete so one slow book cannot stall visible progress for later workers.
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [
             executor.submit(
-                search_item,
+                search_and_report,
                 index=index,
                 file_path=file_path,
                 total=total,
@@ -6712,7 +6744,8 @@ def main():
                 cancelled_in_pass1 = True
                 cover_thumbs.shutdown(wait=False, cancel_futures=True)
                 break
-            result = future.result()
+            result, report_item, signatures = future.result()
+            plan_signatures[result.file_path] = signatures
             if result.clues:
                 cover_thumbs.submit(book_covers.embedded_thumbnail, result.file_path)
             completed += 1
@@ -6722,7 +6755,7 @@ def main():
             )
             for line in result.log_lines:
                 print(line, flush=True)
-            print(f"REPORT_ITEM_JSON: {json.dumps(_build_report_item(result))}", flush=True)
+            print(f"REPORT_ITEM_JSON: {json.dumps(report_item)}", flush=True)
             print("─" * 72, flush=True)
             all_results.append(result)
             if _cover_prefetch is not None:
@@ -6741,11 +6774,11 @@ def main():
     # run-wide checks below change it, so Apply can write it unsearched.
     # Books stopped by a marker or duplicate check, or re-applied from their
     # marker, are left out: Apply decides those afresh.
-    if args.save_plan and not args.apply:
+    if save_plan:
         saved = match_plan.PlanWriter(args.save_plan, root, match_plan.matching_settings(args)).write(
             (
                 result.file_path,
-                match_plan.file_signatures(book_audio_files(result.file_path, multi_part_group_map)),
+                plan_signatures.get(result.file_path),
                 match_plan.result_record(result) if result.clues and not result.from_marker else None,
             )
             for result in all_results
