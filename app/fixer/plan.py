@@ -150,11 +150,12 @@ def load_records(plan_paths: Iterable[Path], settings: dict[str, Any]) -> tuple[
 
 
 def usable_record(record: dict[str, Any] | None, signatures: list[list[Any]] | None) -> dict[str, Any] | None:
-    """The record's saved result when the book's files are unchanged since the dry run."""
+    """The record's saved result when the book's files are unchanged since the dry run.
+    A book Audible did not answer for in the dry run was not decided, so it is searched."""
     if not record or signatures is None or record.get("files") != signatures:
         return None
     result = record.get("result")
-    return result if isinstance(result, dict) else None
+    return result if isinstance(result, dict) and not result.get("audible_unavailable") else None
 
 
 def apply_record(result, decided: dict[str, Any]) -> None:

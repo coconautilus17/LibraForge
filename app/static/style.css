@@ -3644,6 +3644,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge,
 .match-write-badge,
 .match-gr-limited-badge,
+.match-audible-unavailable-badge,
 .match-initials-badge,
 .match-edition-badge,
 .match-grouped-badge,
@@ -3662,6 +3663,7 @@ button.danger:hover:not(:disabled) {
 .match-manual-badge     { background: rgb(0 160 100 / 15%);         color: #00c878;        }
 .match-write-badge      { background: var(--accent-dim);            color: var(--accent-dim-text); }
 .match-gr-limited-badge { background: var(--danger-soft);           color: var(--danger);  }
+.match-audible-unavailable-badge { background: var(--danger-soft);  color: var(--danger);  }
 .match-initials-badge   { background: var(--warning-soft);          color: var(--warning); }
 .match-edition-badge    { background: var(--danger-soft);           color: var(--danger);  }
 .match-grouped-badge    { background: rgb(80 140 220 / 15%);        color: #6ea8f0;        }

@@ -407,6 +407,7 @@ function renderStats(stats, startedAt, finishedAt) {
     provider.soundbooththeater ? stat('Via Soundbooth Theater', provider.soundbooththeater, 'Books matched via the Soundbooth Theater abs-agg endpoint.') : '',
     provider.goodreads ? stat('Via Goodreads', provider.goodreads, 'Books matched via the Goodreads fallback, used when Audible did not return a confident match.') : '',
     stats.goodreads_circuit_tripped ? stat('GR rate-limited', matchReportItems.filter((i) => i.goodreads_rate_limited).length, 'Goodreads circuit breaker opened during this run; these books were skipped for Goodreads instead of counted as a real no-match. See the GR LIMITED badge in the match report.') : '',
+    matchReportItems.some((i) => i.audible_unavailable) ? stat('Audible unavailable', matchReportItems.filter((i) => i.audible_unavailable).length, 'Audible did not answer for these books after LibraForge waited, so they were not matched from another source and nothing was written. The next run looks them up again. See the AUDIBLE UNAVAILABLE badge in the match report.') : '',
     matchReportItems.some((i) => i.author_initials_fixed) ? stat('Author initials fixed', matchReportItems.filter((i) => i.author_initials_fixed).length, 'Author names whose initials were unified by the author-name scheme (Settings, Author names). Filter the match report by Author Initials Fixed to list them.') : '',
     perfectNarratorCount ? stat('100%: narrator kept', perfectNarratorCount, 'Full matches scored 100%, but local narrator evidence differs from the selected recording. The book\'s own narrator was kept. Filter by Different edition to see these books.') : '',
     matchReportItems.some((i) => i.different_edition) ? stat('Different edition', matchReportItems.filter((i) => i.different_edition).length, 'Matched to another recording of the same book with a different narrator. The match\'s title, series and details were used, but the book\'s own narrator was kept. Filter the match report by Different edition to list them.') : '',
@@ -1619,6 +1620,7 @@ function buildMatchReportCards() {
       if (statusFilter === 'matched' && !hasMatch) continue;
       if (statusFilter === 'goodreads' && (item.provider || '').toLowerCase() !== 'goodreads') continue;
       if (statusFilter === 'gr_limited' && !item.goodreads_rate_limited) continue;
+      if (statusFilter === 'audible_unavailable' && !item.audible_unavailable) continue;
       if (statusFilter === 'initials_fixed' && !item.author_initials_fixed) continue;
       if (statusFilter === 'different_edition' && !item.different_edition) continue;
       if (statusFilter === 'smart_skipped' && writeAction !== 'smart_skipped') continue;
@@ -1715,6 +1717,7 @@ function buildMatchCard(item) {
       ${item.provider ? `<span class="match-provider-badge">${providerLabel}</span>` : ''}
       ${item.is_grouped ? '<span class="match-grouped-badge">Multi-file</span>' : ''}
       ${item.goodreads_rate_limited ? '<span class="match-gr-limited-badge" title="Goodreads was tried for this book but the circuit breaker was open (rate-limited by Goodreads), so it was skipped instead of counted as a real no-match.">GR LIMITED</span>' : ''}
+      ${item.audible_unavailable ? '<span class="match-audible-unavailable-badge" title="Audible did not answer for this book after LibraForge waited (throttled or unreachable), so it was not matched from another source and nothing was written. It is not a no-match: the next run looks it up again.">AUDIBLE UNAVAILABLE</span>' : ''}
       ${item.author_initials_fixed ? `<span class="match-initials-badge" title="${escapeHtml(`The author initials were unified by the author-name scheme: ${local.author || ''} to ${m.author || ''}`)}">Initials Fixed</span>` : ''}
       ${edition ? `<span class="match-edition-badge" title="${escapeHtml(editionNote)}">${perfectNarratorMismatch ? '100% · Narrator kept' : 'Different edition'}</span>` : ''}
       ${writeAction && item.write_action !== 'smart_skipped' ? `<span class="match-write-badge"${writeNote}>${escapeHtml(writeAction)}</span>` : ''}

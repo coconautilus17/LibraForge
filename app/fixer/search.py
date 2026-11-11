@@ -46,6 +46,36 @@ RESPONSE_GROUPS = ",".join(
 ENRICHMENT_RESPONSE_GROUPS = RESPONSE_GROUPS + ",rating"
 
 
+def audible_unreachable(exc: BaseException) -> bool:
+    """Audible did not answer: still throttling or failing after the client's
+    retries, or not reachable at all. A "not found" or a refused request is an
+    answer, not this."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 500, 502, 503, 504)
+    return isinstance(exc, (httpx.TransportError, audible.exceptions.RatelimitError,
+                            audible.exceptions.ServerError, audible.exceptions.NotResponding,
+                            audible.exceptions.NetworkError))
+
+
+# Audible lookups that went unanswered for the book this thread is matching:
+# search_item starts the count, and a book with any is never matched as if
+# Audible had no listing for it.
+_book_lookups = threading.local()
+
+
+def start_book_lookups() -> None:
+    _book_lookups.unanswered = 0
+
+
+def unanswered_audible_lookups() -> int:
+    return getattr(_book_lookups, "unanswered", 0)
+
+
+def _note_unanswered(exc: BaseException) -> None:
+    if audible_unreachable(exc):
+        _book_lookups.unanswered = unanswered_audible_lookups() + 1
+
+
 def audible_search(
     client: audible.Client, query: str, limit: int, response_groups: str = RESPONSE_GROUPS,
     title: str = "", author: str = "",
@@ -76,6 +106,7 @@ def audible_lookup_by_asin(
     endpoints, so both are needed for complete coverage.
     """
     asin_upper = asin.strip().upper()
+    unanswered: BaseException | None = None
     try:
         response = client.get(
             f"catalog/products/{asin_upper}",
@@ -84,16 +115,18 @@ def audible_lookup_by_asin(
         product = response.get("product") or None
         if product:
             return product
-    except Exception:
-        pass
+    except Exception as exc:
+        unanswered = exc if audible_unreachable(exc) else None
     # Fallback: keyword search -- some ASINs surface here but not via direct lookup
     try:
         results = audible_search(client, asin_upper, 5, response_groups)
         for p in results:
             if str(p.get("asin", "") or "").upper() == asin_upper:
                 return p
-    except Exception:
-        pass
+    except Exception as exc:
+        unanswered = unanswered or (exc if audible_unreachable(exc) else None)
+    if unanswered is not None:
+        _note_unanswered(unanswered)
     return None
 
 
@@ -115,7 +148,8 @@ def audible_series_members(client: audible.Client, series_asin: str) -> list[str
             return _SERIES_MEMBERS[series_asin]
     try:
         response = client.get(f"catalog/products/{series_asin}", params={"response_groups": "relationships"})
-    except Exception:
+    except Exception as exc:
+        _note_unanswered(exc)
         return []
     members = [
         str(rel["asin"]).upper()
@@ -128,10 +162,12 @@ def audible_series_members(client: audible.Client, series_asin: str) -> list[str
 
 
 def audible_lookup_many(
-    client: audible.Client, asins: list[str], response_groups: str = RESPONSE_GROUPS
+    client: audible.Client, asins: list[str], response_groups: str = RESPONSE_GROUPS,
+    count_unanswered: bool = True,
 ) -> list[dict]:
     """Full listings for several ASINs, 50 to a request (catalog/products?asins=),
-    which like a single lookup isn't limited by the requester's country."""
+    which like a single lookup isn't limited by the requester's country.
+    count_unanswered=False when each ASIN left out is looked up on its own after."""
     products: list[dict] = []
     for start in range(0, len(asins), 50):
         batch = asins[start:start + 50]
@@ -140,7 +176,9 @@ def audible_lookup_many(
                 "catalog/products",
                 params={"asins": ",".join(batch), "num_results": len(batch), "response_groups": response_groups},
             )
-        except Exception:
+        except Exception as exc:
+            if count_unanswered:
+                _note_unanswered(exc)
             continue
         products += (response or {}).get("products") or []
     return products
@@ -183,7 +221,7 @@ class AsinLookahead:
         if batch:
             products: list[dict] = []
             try:
-                products = audible_lookup_many(client, batch)
+                products = audible_lookup_many(client, batch, count_unanswered=False)
             finally:
                 with self._lock:
                     for product in products:
@@ -878,8 +916,9 @@ def cached_audible_search(
         results = audible_search(client, query, limit, title=title, author=author)
         if api_delay_ms > 0:
             time.sleep(api_delay_ms / 1000)
-    except Exception:
+    except Exception as exc:
         results, failed = [], True
+        _note_unanswered(exc)
     finally:
         with cache_lock:
             if not failed:  # a failed search is asked again, never remembered as "no results"
