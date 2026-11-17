@@ -5198,3 +5198,88 @@ button.ghost:hover:not(:disabled) {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Opus Transcode (DEV / WIP) on the M4B Tool page */
+.opus-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.dev-wip-badge {
+  padding: 3px var(--space-sm);
+  border: 1px solid var(--warning);
+  border-radius: 999px;
+  color: var(--warning);
+  font-size: var(--font-2xs);
+  font-weight: 780;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.opus-subhead {
+  margin: var(--space-md) 0 var(--space-sm);
+  font-size: var(--font-sm);
+}
+
+.opus-list {
+  margin: 0;
+  padding: var(--space-sm) var(--space-md) var(--space-sm) calc(var(--space-md) + 18px);
+  color: var(--text-soft);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+
+.opus-list li + li {
+  margin-top: 4px;
+}
+
+.opus-findings {
+  padding: var(--space-sm) var(--space-md);
+  color: var(--text-soft);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+
+.opus-table-wrap {
+  overflow-x: auto;
+  margin: var(--space-sm) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.opus-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-xs);
+}
+
+.opus-table th,
+.opus-table td {
+  padding: 6px var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.opus-table th {
+  color: var(--text-soft);
+  font-weight: 750;
+  background: var(--surface-soft);
+}
+
+.opus-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.opus-tail {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  font-size: var(--font-2xs);
+}
+
+.explanation-disclosure > .opus-list {
+  padding-left: calc(var(--space-md) + 22px);
+}

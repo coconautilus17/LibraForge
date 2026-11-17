@@ -36,6 +36,10 @@ each written by the step that owns it:
   audio stream summary).
 - `scan_cache`: the ASIN and core fields older Start Here scans found for the book. Still read while the audio file's mtime matches; scans now keep this in `book-tag-cache.json` in the reports folder and never write into the library.
 - `chapter_forge`: the chapter list Chapter Forge saved, with the settings that produced it.
+- `opus_conversion` (DEV / WIP): written by `scripts/opus-transcode.py` on the converted copy in the
+  staging folder: `policy` (settings name; a different policy means "convert again"), `settings`,
+  the mono test result (`stereo_check`), source file fingerprints, output size and duration, and the
+  verify results.
 
 Older versions kept `marker` and `backup` in separate files; the fixer migrates those into the
 sidecar the first time it reads them.
@@ -117,3 +121,4 @@ the app adds, switches and deregisters accounts. Never commit these.
 | `LIBRAFORGE_DEBUG`, `LIBRAFORGE_DEBUG_FILE`, `LIBRAFORGE_DEBUG_CATEGORIES` | `app/debug_trace.py` | Turn tracing on, set its log file and categories without the UI. |
 | `AUDIOBOOKS_PATH`, `AUDIBLE_AUTH_PATH`, `UID`, `GID` | compose files | Host paths and the user the container runs as. |
 | `LIBRAFORGE_IMAGE_TAG`, `LIBRAFORGE_PORT` | `docker-compose.dist.yml` | Which published image and which host port. |
+| `LIBRAFORGE_DEV_FEATURES` | `app/opus_transcode.py` | Comma-separated unfinished (DEV / WIP) features to show, or `all`. Currently only `opus_transcode`. Unset in every published image. |

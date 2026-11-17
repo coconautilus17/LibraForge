@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - M4B Tool</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260922-3" />
+  <link rel="stylesheet" href="/static/style.css?v=20261118-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -60,6 +60,7 @@
       <a href="#metadata-search">Metadata search</a>
       <a href="#editable-metadata">Editable metadata</a>
       <a href="#merge-settings">Merge settings</a>
+      <a href="#opus-transcode" id="opusNavLink" hidden>Opus transcode (dev)</a>
       <a href="#progress">Progress</a>
       <a href="#live-output">Live output</a>
     </aside>
@@ -289,6 +290,149 @@
       <p class="action-explanation"><strong>Create M4B</strong> writes a new output file using the command above. Source audio is read, not replaced; an existing output can be replaced only when Force overwrite is enabled.</p>
     </section>
 
+    <section id="opus-transcode" class="card side-nav-card opus-transcode" hidden>
+      <div class="opus-title-row">
+        <h2>Opus Transcode</h2>
+        <span class="dev-wip-badge" title="Shown only when LIBRAFORGE_DEV_FEATURES includes opus_transcode. Unfinished: settings, wording and behavior may change.">DEV · WIP</span>
+      </div>
+      <p class="note">Re-encodes audiobooks to Opus inside an <code>.m4b</code>, usually about 70% smaller with no audible loss for narration. Multi-file books are merged into one file with one chapter per part. Everything is written to a <strong>staging folder</strong>: originals are only read, never changed or deleted, and nothing is moved into your library. Putting converted books in place is a later step that is not built yet.</p>
+
+      <div class="grid">
+        <label><span class="field-label">Folder to scan <span class="info-tip" data-tooltip="Every book under this folder is planned. A book is identified the same way the rest of LibraForge does it: a folder with a libraforge.json is one book (its files are merged), a file with its own .libraforge.json is a single-file book, other folders fall back to Metadata Forge's multi-part grouping."></span></span>
+          <input id="opusRootPath" placeholder="/audiobooks/_unorganized" />
+        </label>
+        <label><span class="field-label">Staging folder <span class="info-tip" data-tooltip="Where converted books are written, keeping the same sub-folders as the scanned folder. Must be outside the scanned folder. Keep it outside the folder Audiobookshelf scans too, or ABS will show every book twice."></span></span>
+          <input id="opusStagingPath" placeholder="/staging/opus" />
+        </label>
+        <label><span class="field-label">Only books matching <span class="info-tip" data-tooltip="Optional. Comma-separated text; a book is included when its folder or file path contains any of it. Leave empty for every book in the folder."></span></span>
+          <input id="opusOnly" placeholder="e.g. Book 3, Dragon" />
+        </label>
+        <label><span class="field-label">Parallel books <span class="info-tip" data-tooltip="Books encoded at the same time. Each one uses about one CPU core. 2 keeps the server responsive; on a dedicated 6-core machine 6 to 8 is fine (watch the CPU temperature)."></span></span>
+          <input id="opusWorkers" type="number" min="1" max="12" value="2" />
+        </label>
+      </div>
+
+      <h3 class="opus-subhead">Encoder settings</h3>
+      <div class="grid">
+        <label><span class="field-label">Encoder mode <span class="info-tip" data-tooltip="CELT-only (recommended): forces Opus's full-band coder (-application lowdelay). In our tests it kept the 4 to 8 kHz presence band at the source level at the same file size. Auto: libopus default; for speech under about 56 kbps it uses hybrid mode, whose speech coder (SILK) thinned 4 to 8 kHz by 2.5 to 4.6 dB. VOIP: tuned for calls (high-pass, formant emphasis); clearer at very low bitrates, less faithful at 32 kbps."></span></span>
+          <select id="opusMode">
+            <option value="celt" selected>CELT-only (recommended)</option>
+            <option value="auto">Auto (libopus default, hybrid for speech)</option>
+            <option value="voip">VOIP (speech tuning)</option>
+          </select>
+        </label>
+        <label><span class="field-label">Mono bitrate (kbps) <span class="info-tip" data-tooltip="For mono books and stereo books whose two channels are the same. 32 is the recommended value: Google's listening test rates 32 kbps Opus 97.2/100 (near-transparent); 24 kbps saved more space but was rejected by ear as too lossy; 20 kbps scores 77.9/100."></span></span>
+          <input id="opusMonoKbps" type="number" min="8" max="128" value="32" />
+        </label>
+        <label><span class="field-label">Stereo bitrate (kbps) <span class="info-tip" data-tooltip="For books with real stereo content (music, sound design, full-cast productions). 48 was chosen over 36 for quality."></span></span>
+          <input id="opusStereoKbps" type="number" min="12" max="192" value="48" />
+        </label>
+        <label><span class="field-label">Source cap (ratio) <span class="info-tip" data-tooltip="Never asks for more than this fraction of the source bitrate, so a book is always smaller than before. 0.8 = at most 80% of the source bitrate."></span></span>
+          <input id="opusSrcCap" type="number" min="0.3" max="1" step="0.05" value="0.8" />
+        </label>
+        <label><span class="field-label">Leave alone at or below (kbps) <span class="info-tip" data-tooltip="Sources at or under this bitrate are not converted. Re-encoding lossy audio to lossy audio always loses a little more; at low source bitrates the space saved is small and the loss is not worth it. 48 is recommended."></span></span>
+          <input id="opusLeaveAlone" type="number" min="0" max="320" value="48" />
+        </label>
+        <label><span class="field-label">Convert only if output ≤ (ratio) <span class="info-tip" data-tooltip="Skips a book when the predicted output is bigger than this fraction of the source (small gain, not worth a lossy re-encode). 0.75 = convert only when it saves at least 25%."></span></span>
+          <input id="opusMaxSize" type="number" min="0.1" max="1" step="0.05" value="0.75" />
+        </label>
+        <label><span class="field-label">Frame size (ms) <span class="info-tip" data-tooltip="Opus frame length. 60 ms (the largest) has the least per-packet overhead, which matters at audiobook bitrates; latency does not matter for files."></span></span>
+          <select id="opusFrameMs">
+            <option value="60" selected>60 ms (recommended)</option>
+            <option value="40">40 ms</option>
+            <option value="20">20 ms</option>
+          </select>
+        </label>
+        <label><span class="field-label">Mono test: margin (dB) <span class="info-tip" data-tooltip="A stereo book goes mono only if, in every 1-second window of the whole book, the side signal (left minus right) is at least this far below the mid signal. 30 dB is far below hearing; one failing window keeps the book stereo."></span></span>
+          <input id="opusSideMargin" type="number" min="6" max="80" step="1" value="30" />
+        </label>
+        <label><span class="field-label">Mono test: floor (dB) <span class="info-tip" data-tooltip="A window also passes when the side signal itself is below this level (inaudible), even if the margin is smaller. Windows that are silence (mid below -60 dB) are ignored."></span></span>
+          <input id="opusSideFloor" type="number" min="-120" max="-20" step="1" value="-60" />
+        </label>
+      </div>
+
+      <details class="explanation-disclosure" open>
+        <summary>What always happens (not configurable)</summary>
+        <ul class="opus-list">
+          <li><strong>VBR on</strong> (unconstrained): silence and pauses get almost no bits, speech gets more. Checked on real output: packets range from 8 to 240 bytes.</li>
+          <li><strong>Compression level 10</strong> (libopus maximum quality per bit; the ffmpeg default).</li>
+          <li><strong>Mono only when nothing is lost</strong>: the whole-book null test above. Mixed books keep stereo.</li>
+          <li><strong>One file per book</strong>: multi-file books are merged, one chapter per part, offsets from the decoded length of each part (container durations of MP3 are estimates). A self-test merges a synthetic 12-part book first; if this ffmpeg writes wrong merged chapters, multi-file books are skipped.</li>
+          <li><strong>Chapters kept</strong>: out-of-order MP3 chapter frames are sorted, and chapters the MP4 muxer collapses are remuxed back in.</li>
+          <li><strong>Tags and cover kept</strong>: M4B sources copy every tag verbatim (including custom atoms); other sources map tags through ffmpeg and embed the cover (folder image first).</li>
+          <li><strong>Fast start</strong>: the index (moov) is written before the audio, so players and Audiobookshelf can read tags without reading the whole file.</li>
+          <li><strong>Verified before it counts</strong>: codec, channels, duration (within 0.5 s), chapter count, offsets and titles, every tag, cover, atom order, and a full decode of the audio.</li>
+          <li><strong>Sidecar</strong>: the book's libraforge.json is carried over with an <code>opus_conversion</code> block (settings, mono test result, source fingerprints, verify results). A book already converted with the same settings is skipped next time.</li>
+        </ul>
+      </details>
+
+      <div class="card inset-card">
+        <h2>Command Preview</h2>
+        <p class="note">The script the run starts. Plan only, unless you press Transcode.</p>
+        <pre id="opusCommandPreview" class="command-preview"></pre>
+      </div>
+      <div class="actions">
+        <button id="opusPlanBtn" class="secondary">Plan (dry run)</button>
+        <button id="opusStartBtn">Transcode to staging</button>
+        <button id="opusCancelBtn" class="secondary" disabled>Cancel</button>
+      </div>
+      <p class="action-explanation"><strong>Plan</strong> reads every book and shows what would happen (convert, leave alone, skip) with predicted sizes; nothing is written. <strong>Transcode to staging</strong> encodes and verifies the books marked Convert into the staging folder. Originals are never changed.</p>
+
+      <div class="opus-status">
+        <h3 id="opusRunStatus" class="opus-subhead">Idle</h3>
+        <p id="opusRunDetail" class="note">No run yet.</p>
+        <div id="opusSummary"></div>
+        <div class="opus-table-wrap"><table class="opus-table" id="opusPlanTable" hidden>
+          <thead><tr><th>Action</th><th>Book</th><th>Source</th><th>Target</th><th>Size</th><th>Result</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <details class="explanation-disclosure">
+          <summary>Live output</summary>
+          <pre id="opusTail" class="opus-tail"></pre>
+        </details>
+      </div>
+
+      <details class="explanation-disclosure">
+        <summary>Test findings behind these defaults</summary>
+        <div class="opus-findings">
+          <p><strong>Library run (Oct to Nov 2026).</strong> About 3,500 books, 43,000 hours: 1,950 GB to 626 GB (-68%). Every book was verified before its original was replaced. Sources at or below 48 kbps (31 books) were left alone.</p>
+          <p><strong>Hybrid vs CELT-only, same 5 minutes of a 127 kbps stereo AAC narration</strong> (identical channels, so encoded mono). Band level compared with the source; 0 dB = unchanged, about 1 dB is the smallest change most people hear.</p>
+          <div class="opus-table-wrap"><table class="opus-table">
+            <thead><tr><th>Encode</th><th>Real kbps</th><th>20-250 Hz</th><th>1-4 kHz</th><th>4-6 kHz</th><th>6-8 kHz</th><th>8-16 kHz</th></tr></thead>
+            <tbody>
+              <tr><td>Auto (hybrid) 32k</td><td>28.6</td><td>-0.1</td><td>-0.5</td><td>-2.5</td><td>-4.6</td><td>0.0</td></tr>
+              <tr><td>Auto (hybrid) 48k</td><td>42.8</td><td>-0.1</td><td>-0.3</td><td>-2.6</td><td>-5.1</td><td>0.0</td></tr>
+              <tr><td>Auto 56k (CELT takes over)</td><td>49.6</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>-0.1</td></tr>
+              <tr><td><strong>CELT-only 32k</strong></td><td>28.5</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>0.0</td></tr>
+              <tr><td>CELT-only 28k</td><td>25.0</td><td>0.0</td><td>0.0</td><td>0.0</td><td>+0.1</td><td>0.0</td></tr>
+            </tbody>
+          </table></div>
+          <ul class="opus-list">
+            <li>Raising the bitrate does not fix hybrid mode's dip (still there at 48k); only the switch to CELT does. CELT-only at 32k is the same size as hybrid at 32k.</li>
+            <li>Caveat: CELT codes each band's energy explicitly, so this measurement flatters it. It is a strong sign, not proof; in a blind listen the two sounded alike, and the dip was the only measurable difference.</li>
+            <li>Stereo to mono lost nothing on that book: left and right were bit-identical (side signal at -200 dB).</li>
+            <li>VBR: file size follows the bitrate, not the mode. VOIP mode does not make files smaller; projects that report big savings with it are mostly using 24 kbps.</li>
+            <li>Encoder: the bundled ffmpeg 9 build ships a libopus newer than the 1.6.1 release, and gave about 7% smaller files than ffmpeg 5 at the same settings.</li>
+            <li>Speed: about 175x real time per machine with turbo on, 366x with Intel turbo off (cooler, so more parallel books); a 12-hour book takes about 5 minutes on one core.</li>
+            <li>Lossy to lossy: the output can only lose detail relative to the source, so never transcode an Opus book again; the source cap and the leave-alone threshold exist for this reason.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="explanation-disclosure">
+        <summary>Where this is going: the full pipeline (planned)</summary>
+        <ol class="opus-list">
+          <li><strong>Transcode</strong> (this section): first, because it also merges multi-file books, so every later step sees one file per book.</li>
+          <li><strong>Match</strong> (Metadata Forge) on the converted books.</li>
+          <li><strong>Folder Forge</strong> into the library. No issue here: its destination folder is set explicitly.</li>
+          <li><strong>Audiobookshelf scan</strong>, only when ABS has exactly one library whose folder contains the destination. With several libraries LibraForge cannot reliably tell which one to scan, so it will skip the scan and say so.</li>
+          <li><strong>Enrichment Forge</strong>.</li>
+          <li><strong>One combined report</strong> with only the items that still need a human review.</li>
+        </ol>
+        <p class="note">Not built yet: putting converted books in place of the originals (and deleting the originals) from this page, and the hand-off between steps. Seen while testing: Folder Forge's saved structure cache can be stale and miss existing series folders (for example <code>Vol. N</code> folders), so a converted book can land in a differently named sibling folder.</p>
+      </details>
+    </section>
+
     <section id="progress" class="card side-nav-card status-card">
       <div class="progress-wrap">
         <div class="ring" id="ring" style="--pct: 0"><span id="percent">0%</span></div>
@@ -311,5 +455,6 @@
   </main>
   <script src="/static/ui-common.js?v=20260929-4"></script>
   <script src="/static/m4b-tool.js?v=20260715-1"></script>
+  <script src="/static/opus-transcode.js?v=20261118-1"></script>
 </body>
 </html>

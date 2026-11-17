@@ -7,6 +7,7 @@ and the install instructions are in the [project README](../../README.md).
 |---|---|
 | [Architecture](architecture.md) | How the web app, the scripts and the front end fit together, what a run does, where decisions live. |
 | [Data and files](data-and-files.md) | Every file LibraForge writes (sidecars, reports, caches, settings), environment variables, what is safe to delete. |
+| [Opus transcode (DEV / WIP)](opus-transcode.md) | The hidden dev section on the M4B Tool page: how it is switched on, its pieces, defaults and the planned pipeline. |
 | [Testing](testing.md) | Running the suite, how tests load the scripts, and the conventions for writing tests. |
 | [Contributing](../../CONTRIBUTING.md) | Branches, what not to commit, code guidelines. |
 

@@ -53,6 +53,7 @@ from app.folder_scan_cache import (
 )
 import app.library_index as library_index
 from app import book_covers, media_probe
+from app import opus_transcode
 from app.tag_padding import save_padding as tag_save_padding
 from app.library_index import FS_SKIP_PREFIXES as _FS_SKIP_PREFIXES
 from app.library_index import is_audio_file
@@ -5205,7 +5206,8 @@ def get_version() -> dict[str, str]:
 
 @app.get("/api/config")
 def get_config() -> dict[str, Any]:
-    return {"audiobooks_root": str(AUDIOBOOKS_ROOT)}
+    # dev_features: unfinished (DEV / WIP) features switched on with LIBRAFORGE_DEV_FEATURES.
+    return {"audiobooks_root": str(AUDIOBOOKS_ROOT), "dev_features": opus_transcode.dev_features()}
 
 
 
@@ -9395,6 +9397,83 @@ def start_m4b_run(req: M4BRunRequest) -> dict[str, Any]:
         runs[run_id] = state
     thread = threading.Thread(target=run_m4b_worker, args=(run_id, req), daemon=True)
     thread.start()
+    return {"id": run_id}
+
+
+def parse_opus_transcode_line(state: RunState, line: str) -> bool:
+    payload = opus_transcode.parse_line(state.stats, line)
+    if payload is None:
+        if line.startswith("Converting: "):
+            state.current_file = line.removeprefix("Converting: ")
+        return True
+    opus = state.stats["opus"]
+    if payload["line"] == "plan":
+        set_run_phase(state, "planning", "Planning", f"{len(opus['plan'])} books planned")
+    elif payload["line"] == "results":
+        state.current = len(opus["results"])
+        if state.total:
+            state.percent = round(100.0 * state.current / state.total, 1)
+        set_run_phase(state, "converting", "Converting", f"{state.current} of {state.total} books done")
+    elif payload["line"] == "summary" and not payload.get("applied"):
+        state.percent = 100.0
+    if payload["line"] == "plan" and payload.get("action") == "CONVERT":
+        state.total += 1
+    return False  # JSON lines are folded into stats; keep the live output readable
+
+
+def run_opus_transcode_worker(run_id: str, req: opus_transcode.OpusTranscodeRunRequest) -> None:
+    with runs_lock:
+        state = runs[run_id]
+    state.stats = {"kind": "opus-transcode", "apply": req.apply}
+    state.log_path = REPORTS_DIR / f"{run_id}.log.txt"
+    try:
+        cmd = opus_transcode.build_command(req, SCRIPTS_DIR)
+        state.command = cmd
+        state.status = "running"
+        set_run_phase(state, "scanning", "Scanning for books", req.root_path)
+        stream_process_output(state, cmd, threshold=None, line_parser=parse_opus_transcode_line)
+        state.finished_at = time.time()
+        if state.status != "cancelled":
+            state.status = "completed" if state.returncode == 0 else "failed"
+            if state.status == "completed":
+                state.percent = 100.0
+        set_terminal_phase(state)
+        write_final_report(state)
+    except Exception as exc:
+        state.error = str(exc)
+        state.finished_at = time.time()
+        state.status = "failed"
+        set_terminal_phase(state)
+        try:
+            write_final_report(state)
+        except Exception:
+            pass
+    finally:
+        with runs_lock:
+            runs.pop(run_id, None)
+
+
+@app.post("/api/opus/runs")
+def start_opus_transcode_run(req: opus_transcode.OpusTranscodeRunRequest) -> dict[str, Any]:
+    """DEV / WIP: plan (dry run) or encode books to Opus in a staging folder. Never touches the originals."""
+    if not opus_transcode.opus_transcode_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    root = validate_audiobook_path(req.root_path)
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Pick a folder to scan, not a file")
+    staging = Path(req.staging_path)
+    try:
+        opus_transcode.validate_request(req, root, staging)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    run_id = datetime_id()
+    state = RunState(id=run_id, target_path=str(root))
+    with runs_lock:
+        conflict = find_conflicting_run(runs, str(root))
+        if conflict is not None:
+            raise HTTPException(status_code=409, detail=f"Run {conflict.id} is still working on {conflict.target_path}.")
+        runs[run_id] = state
+    threading.Thread(target=run_opus_transcode_worker, args=(run_id, req), daemon=True).start()
     return {"id": run_id}
 
 
