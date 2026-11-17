@@ -37,6 +37,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -91,6 +92,21 @@ COVER_NAMES = ("cover.jpg", "folder.jpg", "cover.png", "folder.png")
 SCHEMA = 1
 
 S = dict(DEFAULTS)  # active settings, replaced by main()
+IN_FLIGHT: set[Path] = set()  # .part files being written; removed on cancel
+
+
+def _handle_sigterm(signum, frame) -> None:
+    """Cancel from the UI. Only staging files are ever written, so stop at once and
+    remove the half-written ones. (Loading the fixer installs its own SIGTERM handler,
+    which only the fixer's loop checks; this replaces it.)"""
+    for part in list(IN_FLIGHT):
+        for p in (part, part.with_name(part.name + ".chfix")):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    print("\nCancelled: stopped; nothing outside the staging folder was touched.", flush=True)
+    os._exit(143)
 
 
 def policy_name(s: dict) -> str:
@@ -446,6 +462,16 @@ def convert_unit(unit: dict, staging: Path, write_sidecars: bool = True) -> dict
     meta_txt = out_dir / (out.stem + ".ffmeta.tmp")
     cmd, chapters = build_encode_command(unit, files, infos, mono, tgt, tmp, meta_txt)
     tmp.unlink(missing_ok=True)
+    IN_FLIGHT.add(tmp)
+    try:
+        return _encode_and_finish(unit, files, infos, res, cmd, chapters, tmp, out, out_dir, meta_txt, t0, write_sidecars)
+    finally:
+        IN_FLIGHT.discard(tmp)
+
+
+def _encode_and_finish(unit, files, infos, res, cmd, chapters, tmp, out, out_dir, meta_txt, t0, write_sidecars) -> dict:
+    from mutagen.mp4 import MP4, MP4Cover
+
     r = run(cmd)
     meta_txt.unlink(missing_ok=True)
     if r.returncode != 0 or "partial file" in (r.stderr or "") or "Error during demuxing" in (r.stderr or ""):
@@ -718,6 +744,7 @@ def main(argv=None) -> int:
         print("ERROR: the staging folder must be outside the scanned folder", flush=True)
         return 2
     FIXER = _load_fixer()
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     print(f"Mode: {'APPLY (encode to staging)' if args.apply else 'DRY RUN (plan only)'}", flush=True)
     print(f"Policy: {policy_name(S)}  settings: {json.dumps(S)}", flush=True)
     print(f"Scanning: {root}", flush=True)

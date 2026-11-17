@@ -42,6 +42,8 @@
     $('opusCommandPreview').textContent = parts.join(' ') + '\n# Transcode adds --apply';
   }
 
+  const fmtSize = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(2)} GB` : `${Math.round(mb)} MB`);
+
   const ACTION_LABEL = {
     'CONVERT': 'Convert', 'LEAVE-ALONE': 'Leave alone', 'SKIP-DONE': 'Already done',
     'SKIP-SMALL-GAIN': 'Small gain', 'REVIEW': 'Review',
@@ -64,10 +66,10 @@
     if (s.books !== undefined) {
       const counts = Object.entries(s.by_action || {}).map(([k, v]) => `${ACTION_LABEL[k] || k}: ${v}`).join(', ');
       let html = `<p><strong>${s.books} books</strong> (${escapeHtml(counts)}). Convert: ${s.convert_hours} h, `
-        + `${(s.convert_source_mb / 1000).toFixed(2)} GB to about ${(s.convert_predicted_mb / 1000).toFixed(2)} GB.</p>`;
+        + `${fmtSize(s.convert_source_mb)} to about ${fmtSize(s.convert_predicted_mb)}.</p>`;
       if (s.applied && s.verified !== undefined) {
-        html += `<p><strong>${s.verified} verified, ${s.failed} failed</strong>: ${(s.src_mb / 1000).toFixed(2)} GB to `
-          + `${(s.out_mb / 1000).toFixed(2)} GB. Originals untouched.</p>`;
+        html += `<p><strong>${s.verified} verified, ${s.failed} failed</strong>: ${fmtSize(s.src_mb)} to `
+          + `${fmtSize(s.out_mb)}. Originals untouched.</p>`;
       }
       $('opusSummary').innerHTML = html;
     }
