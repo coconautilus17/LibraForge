@@ -403,5 +403,91 @@ class CachedTargetCarriesBlockResultsTests(unittest.TestCase):
         self.assertEqual(resolution.target_dir.relative_to(DEST).parts[0], "Varn J.K. & Pell")
 
 
+def _move(source: str, target: str, series: str = "", block_authors=None) -> dict:
+    metadata = {"title": "x", "author": "a", "author_primary": "a", "series": series}
+    if block_authors:
+        metadata["author_block_authors"] = list(block_authors)
+    return {"source": Path(source), "target": Path(target), "metadata": metadata}
+
+
+class AuthorOrderTests(unittest.TestCase):
+    def test_reverse_order_uses_the_first_order_and_flags(self):
+        orders: dict = {}
+        template = "{+}{author}{&}/{title}/"
+        first = ORG.build_target_dir_for_template(DEST, _book("Ana Pell & Ivo Sand"), template, filename_applies=False, author_orders=orders)
+        second = ORG.build_target_dir_for_template(DEST, _book("Ivo Sand & Ana Pell", title="Other"), template, filename_applies=False, author_orders=orders)
+        self.assertEqual(_folders(first)[0], "Ana Pell & Ivo Sand")
+        self.assertEqual(_folders(second)[0], "Ana Pell & Ivo Sand")
+        self.assertNotIn(ORG.AUTHOR_ORDER_REASON, first.review_reasons)
+        self.assertIn(ORG.AUTHOR_ORDER_REASON, second.review_reasons)
+        self.assertIn(("Order used", "Ana Pell; Ivo Sand"), second.review_details)
+
+    def test_no_order_tracking_without_a_plus_block(self):
+        orders: dict = {}
+        ORG.build_target_dir_for_template(DEST, _book("Ana Pell & Ivo Sand"), "{author}/{title}/", filename_applies=False, author_orders=orders)
+        self.assertEqual(orders, {})
+
+
+class CoWrittenSplitTests(unittest.TestCase):
+    def test_co_written_book_in_a_series_is_flagged(self):
+        solo = _move("/in/a", "/library/Ana Pell/Deep Wells/Book 1", "Deep Wells", ["Ana Pell"])
+        duo = _move("/in/b", "/library/Ana Pell & Ivo Sand/Deep Wells/Book 2", "Deep Wells", ["Ana Pell", "Ivo Sand"])
+        ORG.annotate_run_consistency([solo, duo], destination_root=DEST)
+        self.assertIn(ORG.CO_WRITTEN_SPLIT_REASON, duo["metadata"].get("review_reasons", []))
+        self.assertIn({"label": "Other books are in", "value": "Ana Pell"}, duo["metadata"]["review_details"])
+        self.assertNotIn(ORG.CO_WRITTEN_SPLIT_REASON, solo["metadata"].get("review_reasons", []))
+
+    def test_series_books_already_in_the_library_count(self):
+        duo = _move("/in/b", "/library/Ana Pell & Ivo Sand/Deep Wells/Book 2", "Deep Wells", ["Ana Pell", "Ivo Sand"])
+        cache = ORG.empty_structure_cache(DEST)
+        cache["entries"] = [{"series": "Deep Wells", "series_key": ORG.normalize_series_key("Deep Wells"),
+                             "source_paths": ["/library/Ana Pell/Deep Wells/Book 1"]}]
+        ORG.annotate_run_consistency([duo], destination_root=DEST, cache=cache)
+        self.assertIn(ORG.CO_WRITTEN_SPLIT_REASON, duo["metadata"].get("review_reasons", []))
+
+    def test_standalone_next_to_the_first_authors_own_folder(self):
+        solo = _move("/in/a", "/library/Ana Pell/Solo Book", "", ["Ana Pell"])
+        duo = _move("/in/b", "/library/Ana Pell & Ivo Sand/Duo Book", "", ["Ana Pell", "Ivo Sand"])
+        ORG.annotate_run_consistency([solo, duo], destination_root=DEST)
+        self.assertIn(ORG.CO_WRITTEN_SPLIT_REASON, duo["metadata"].get("review_reasons", []))
+
+    def test_standalone_without_a_single_author_sibling_is_not_flagged(self):
+        duo = _move("/in/b", "/library/Ana Pell & Ivo Sand/Duo Book", "", ["Ana Pell", "Ivo Sand"])
+        ORG.annotate_run_consistency([duo], destination_root=DEST)
+        self.assertNotIn(ORG.CO_WRITTEN_SPLIT_REASON, duo["metadata"].get("review_reasons", []))
+
+
+class AuthorFolderMoveCountTests(unittest.TestCase):
+    def test_counts_organized_books_changing_author_folder(self):
+        moves = [
+            _move("/library/Ana Pell/X", "/library/Ana Pell & Ivo Sand/X"),
+            _move("/library/Ana Pell/Y", "/library/Ana Pell/Y2"),
+            _move("/library/_unorganized/Z", "/library/Lee Doan/Z"),
+            _move("/elsewhere/W", "/library/Lee Doan/W"),
+        ]
+        self.assertEqual(ORG.count_author_folder_moves(moves, DEST, DEST / "_unorganized"), 1)
+
+    def test_scan_root_equal_to_destination_still_counts(self):
+        moves = [_move("/library/Ana Pell/X", "/library/Ana Pell & Ivo Sand/X")]
+        self.assertEqual(ORG.count_author_folder_moves(moves, DEST, DEST), 1)
+
+
+from app.tests.test_organizer_cli_end_to_end import CliFixture  # noqa: E402
+
+
+class AuthorBlockCliRunTests(CliFixture):
+    def test_dry_run_with_a_plus_block(self):
+        self.sidecar_book(name="Deep Wells 1.m4b", title="Deep Wells", author="Ana Pell", series="Deep Wells", sequence="1")
+        self.sidecar_book(name="Deep Wells 2.m4b", title="Second Wells", author="Ana Pell & Ivo Sand", series="Deep Wells", sequence="2")
+        self.sidecar_book(name="Lone Duo.m4b", title="Lone Duo", author="Ivo Sand & Ana Pell", series="", sequence="")
+        out, err, code = self.run_cli("--naming-template", "{+}{author}{&}/{series}/{order} - {title}/{filename}",
+                                      "--initials-follow-author-scheme")
+        self.assertIn(code, (None, 0), err)
+        self.assertIn("Organized books moving to another author folder: 0", out)
+        self.assertIn("Ana Pell & Ivo Sand", out)
+        self.assertNotIn("Ivo Sand & Ana Pell", out)
+        self.assertIn("Flagged by run consistency checks:", out)
+
+
 if __name__ == "__main__":
     unittest.main()

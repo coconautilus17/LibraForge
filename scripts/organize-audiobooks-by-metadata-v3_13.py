@@ -4486,6 +4486,7 @@ def join_authors(rendered: list[str], between: str | None, last: str | None) -> 
 
 
 ABS_READBACK_REASON = "Audiobookshelf would read this author folder as different authors"
+AUTHOR_ORDER_REASON = "author order differs from another book in this run"
 OVER_AUTHOR_CAP_REASON = "more than 4 authors"
 _UNKNOWN_AUTHOR = "Unknown Author"
 
@@ -4771,6 +4772,7 @@ def build_target_dir_for_template(
     source_file: Path | None = None,
     use_default_scheme: bool = False,
     follow_author_scheme: bool = False,
+    author_orders: dict[frozenset[str], tuple[str, ...]] | None = None,
 ) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
@@ -4791,14 +4793,27 @@ def build_target_dir_for_template(
 
     tokens = resolve_naming_tokens(metadata)
     redundant = title_redundant_with_order(metadata)
+    authors = author_block_people(metadata)
+    order_reasons: list[str] = []
+    order_details: tuple[tuple[str, str], ...] = ()
+    block = find_author_block(naming_template) if author_orders is not None and len(authors) >= 2 else None
+    if block is not None and block.multi:
+        # The same co-authors always share one folder: the first order seen
+        # in the run wins, later books in another order follow it.
+        key = frozenset(normalize_for_compare(name) for name in authors)
+        stored = author_orders.setdefault(key, tuple(authors))
+        if [normalize_for_compare(n) for n in stored] != [normalize_for_compare(n) for n in authors]:
+            authors = list(stored)
+            order_reasons = [AUTHOR_ORDER_REASON]
+            order_details = (("Order used", "; ".join(stored)),)
     rendered = render_naming_template_full(
         naming_template, tokens, redundant, filename_applies=filename_applies,
         source_file=source_file, destination_root=destination_root,
-        authors=author_block_people(metadata), follow_author_scheme=follow_author_scheme,
+        authors=authors, follow_author_scheme=follow_author_scheme,
     )
     return NamingRenderResult(
-        destination_root.joinpath(*rendered.folder_segments), rendered.filename, rendered.review_reasons,
-        rendered.review_details, rendered.block_authors,
+        destination_root.joinpath(*rendered.folder_segments), rendered.filename,
+        rendered.review_reasons + order_reasons, rendered.review_details + order_details, rendered.block_authors,
     )
 
 
@@ -5385,6 +5400,7 @@ def build_cached_target_dir(
     source_file: Path | None = None,
     use_default_scheme: bool = False,
     follow_author_scheme: bool = False,
+    author_orders: dict[frozenset[str], tuple[str, ...]] | None = None,
 ) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
@@ -5393,6 +5409,7 @@ def build_cached_target_dir(
             destination_root, metadata, naming_template,
             filename_applies=filename_applies, source_file=source_file,
             use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
+            author_orders=author_orders,
         )
         metadata = _with_naming_result(metadata, result)
         return TargetResolution(result.target_dir, result.filename, "new", metadata)
@@ -5413,6 +5430,7 @@ def build_cached_target_dir(
         destination_root, effective_metadata, naming_template,
         filename_applies=filename_applies, source_file=source_file,
         use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
+        author_orders=author_orders,
     )
     effective_metadata = _with_naming_result(effective_metadata, result)
     return TargetResolution(result.target_dir, result.filename, status, effective_metadata)
@@ -6268,9 +6286,84 @@ AUTHOR_VARIANT_REASON = "author name varies across books in this run"
 LABEL_VARIANT_REASON = "sequence label differs from the rest of this series in this run"
 DUPLICATE_ASIN_REASON = "possible duplicate: same ASIN as another book in this run"
 NUMBER_WITHOUT_SERIES_REASON = "has a book number but no series"
+CO_WRITTEN_SPLIT_REASON = "co-written book lands in a different author folder than the rest of its series"
 
 
-def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
+def _top_folder(path: Path, destination_root: Path) -> str | None:
+    try:
+        parts = Path(path).relative_to(destination_root).parts
+    except ValueError:
+        return None
+    return parts[0] if parts else None
+
+
+def _co_written_split_details(
+    planned_moves: list[dict[str, Any]], destination_root: Path, cache: dict[str, Any] | None
+) -> list[tuple[dict[str, Any], str]]:
+    """Co-written books (2+ authors in a {+} block) whose author folder differs
+    from where the rest of their series is, in this run or already in the
+    library. A book with no series is compared with the first author's own
+    books in this run. Returns (move, other folder) pairs."""
+    target_by_source = {str(m["source"]): Path(str(m["target"])) for m in planned_moves}
+    folders_by_series: dict[str, list[str]] = defaultdict(list)
+    for move in planned_moves:
+        key = normalize_series_key(str(move["metadata"].get("series") or ""))
+        top = _top_folder(Path(str(move["target"])), destination_root)
+        if key and top:
+            folders_by_series[key].append(top)
+    for entry in (cache or {}).get("entries", []):
+        key = str(entry.get("series_key") or normalize_series_key(str(entry.get("series") or "")))
+        for source in entry.get("source_paths", []):
+            # A library book moved by this run counts where it is going.
+            top = _top_folder(target_by_source.get(str(source), Path(str(source))), destination_root)
+            if key and top:
+                folders_by_series[key].append(top)
+    solo_folders: dict[str, list[str]] = defaultdict(list)
+    for move in planned_moves:
+        authors = move["metadata"].get("author_block_authors") or []
+        top = _top_folder(Path(str(move["target"])), destination_root)
+        if len(authors) == 1 and top:
+            solo_folders[normalize_for_compare(authors[0])].append(top)
+
+    found: list[tuple[dict[str, Any], str]] = []
+    for move in planned_moves:
+        authors = move["metadata"].get("author_block_authors") or []
+        own = _top_folder(Path(str(move["target"])), destination_root)
+        if len(authors) < 2 or not own:
+            continue
+        key = normalize_series_key(str(move["metadata"].get("series") or ""))
+        candidates = folders_by_series.get(key, []) if key else solo_folders.get(normalize_for_compare(authors[0]), [])
+        others = Counter(folder for folder in candidates if folder != own)
+        if others:
+            found.append((move, others.most_common(1)[0][0]))
+    return found
+
+
+def count_author_folder_moves(planned_moves: list[dict[str, Any]], destination_root: Path, scan_root: Path) -> int:
+    """Books already organized in the library (under destination_root) that
+    this run moves to a different author folder. Books coming from a scan
+    root inside the library (such as _unorganized) are new arrivals, not
+    organized books, so they don't count."""
+    destination_root = Path(destination_root)
+    scan_root = Path(scan_root)
+    arrivals_root = scan_root if scan_root != destination_root and scan_root.is_relative_to(destination_root) else None
+    count = 0
+    for move in planned_moves:
+        source = Path(str(move["source"]))
+        if arrivals_root is not None and source.is_relative_to(arrivals_root):
+            continue
+        before = _top_folder(source, destination_root)
+        after = _top_folder(Path(str(move["target"])), destination_root)
+        if before and after and before != after:
+            count += 1
+    return count
+
+
+def annotate_run_consistency(
+    planned_moves: list[dict[str, Any]],
+    destination_root: Path | None = None,
+    cache: dict[str, Any] | None = None,
+) -> int:
     """Flag planned moves whose result looks wrong when compared with the rest
     of the same run. None of these block a move; they put a concrete reason
     and the values behind it on the book's review card. Returns how many
@@ -6378,6 +6471,11 @@ def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
             for move in moves:
                 others = "; ".join(str(m["source"]) for m in moves if m is not move)
                 flag(move, DUPLICATE_ASIN_REASON, [("ASIN", asin), ("Same ASIN as", others)])
+
+    # A co-written book filed apart from the rest of its series.
+    if destination_root is not None:
+        for move, other_folder in _co_written_split_details(planned_moves, Path(destination_root), cache):
+            flag(move, CO_WRITTEN_SPLIT_REASON, [("Other books are in", other_folder)])
 
     return len(flagged)
 
@@ -6637,6 +6735,8 @@ def main() -> None:
         return
 
     planned_moves: list[dict[str, Any]] = []
+    # First author order seen per set of co-authors, so they share one folder.
+    author_orders: dict[frozenset[str], tuple[str, ...]] = {}
     skipped_reviews: list[dict[str, Any]] = []
     reserved_targets: set[Path] = set()
     # Tracks destination directories claimed by any book item this run (folder
@@ -6721,6 +6821,7 @@ def main() -> None:
             filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
             use_default_scheme=args.use_default_scheme,
             follow_author_scheme=args.initials_follow_author_scheme,
+            author_orders=author_orders,
         )
         target_dir = resolution.target_dir
         structure_status = resolution.status
@@ -6884,10 +6985,11 @@ def main() -> None:
     print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
     possible_duplicates = annotate_possible_duplicates(planned_moves, skipped_reviews)
-    run_consistency_flags = annotate_run_consistency(planned_moves)
+    run_consistency_flags = annotate_run_consistency(planned_moves, destination_root=destination_root, cache=cache)
     print(f"Skipped conflicts: {skipped_conflicts}")
     print(f"Possible duplicates flagged: {possible_duplicates}")
     print(f"Flagged by run consistency checks: {run_consistency_flags}")
+    print(f"Organized books moving to another author folder: {count_author_folder_moves(planned_moves, destination_root, root)}")
     print(f"Flagged by generic marketing cleanup: {flagged_marketing_cleanup}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")
     print(f"Matched existing structure: {matched_existing_structure}")
