@@ -246,6 +246,8 @@ class NamingRenderResult:
     target_dir: Path
     filename: str | None
     review_reasons: list[str]
+    review_details: tuple[tuple[str, str], ...] = ()
+    block_authors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -4243,13 +4245,14 @@ def _template_items(template: str) -> list[tuple[str, str, int, int]]:
 _BLOCK_CONTROL_KINDS = {"multi", "between", "letters", "last"}
 
 
-def _author_block_span(items: list[tuple[str, str, int, int]]) -> tuple[int, int] | None:
-    """Item index range [first, last] of the first author block, or None."""
-    first_name = next((i for i, item in enumerate(items) if item[0] == "name"), None)
+def _author_block_span(items: list[tuple[str, str, int, int]], start: int = 0) -> tuple[int, int] | None:
+    """Item index range [first, last] of the first author block at or after
+    item `start`, or None."""
+    first_name = next((i for i in range(start, len(items)) if items[i][0] == "name"), None)
     if first_name is None:
         return None
     first = first_name
-    while first > 0 and items[first - 1][0] in _BLOCK_CONTROL_KINDS:
+    while first > start and items[first - 1][0] in _BLOCK_CONTROL_KINDS:
         first -= 1
     last = first_name
     j = first_name + 1
@@ -4272,6 +4275,35 @@ def _author_block_span(items: list[tuple[str, str, int, int]]) -> tuple[int, int
     return first, last
 
 
+def _all_author_block_spans(items: list[tuple[str, str, int, int]]) -> list[tuple[int, int]]:
+    """Item index ranges of every run of name tokens: the author block first,
+    then any later runs (rendered as one name each)."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while (span := _author_block_span(items, start)) is not None:
+        spans.append(span)
+        start = span[1] + 1
+    return spans
+
+
+def _block_from_items(items: list[tuple[str, str, int, int]], span: tuple[int, int]) -> AuthorBlock:
+    first, last = span
+    block_items = items[first:last + 1]
+    layout = tuple(
+        ("token", content) if kind == "name" else ("text", content)
+        for kind, content, _start, _end in block_items
+        if kind in ("name", "text")
+    )
+    return AuthorBlock(
+        start=items[first][2],
+        end=items[last][3],
+        layout=layout,
+        multi=any(kind == "multi" for kind, _c, _s, _e in block_items),
+        between=next((content for kind, content, _s, _e in block_items if kind == "between"), None),
+        last=next((content for kind, content, _s, _e in block_items if kind == "last"), None),
+    )
+
+
 def _block_items(template: str) -> tuple[list[tuple[str, str, int, int]], tuple[int, int] | None]:
     items = _template_items(template)
     return items, _author_block_span(items)
@@ -4282,23 +4314,7 @@ def find_author_block(template: str) -> AuthorBlock | None:
     items, span = _block_items(template)
     if span is None:
         return None
-    first, last = span
-    block_items = items[first:last + 1]
-    layout = tuple(
-        ("token", content) if kind == "name" else ("text", content)
-        for kind, content, _start, _end in block_items
-        if kind in ("name", "text")
-    )
-    between = next((content for kind, content, _s, _e in block_items if kind == "between"), None)
-    last_sep = next((content for kind, content, _s, _e in block_items if kind == "last"), None)
-    return AuthorBlock(
-        start=items[first][2],
-        end=items[last][3],
-        layout=layout,
-        multi=any(kind == "multi" for kind, _c, _s, _e in block_items),
-        between=between,
-        last=last_sep,
-    )
+    return _block_from_items(items, span)
 
 
 def strip_stray_control_tokens(template: str, block: AuthorBlock | None) -> str:
@@ -4469,6 +4485,101 @@ def join_authors(rendered: list[str], between: str | None, last: str | None) -> 
     return _spaced_separator(between).join(names[:-1]) + _spaced_separator(last) + names[-1]
 
 
+ABS_READBACK_REASON = "Audiobookshelf would read this author folder as different authors"
+OVER_AUTHOR_CAP_REASON = "more than 4 authors"
+_UNKNOWN_AUTHOR = "Unknown Author"
+
+
+@dataclass(frozen=True)
+class _BlockRendering:
+    template: str
+    token_values: dict[str, str]
+    block_authors: tuple[str, ...]
+    readback_check: bool
+    over_cap: bool
+
+
+def _render_one_author(
+    layout: tuple[tuple[str, str], ...], name: str, follow_author_scheme: bool, multi: bool = True
+) -> str:
+    """One author through a block layout. A lone {author} outside a {+}
+    block is today's value exactly, whatever the initials option says, so
+    templates written before author blocks existed never change."""
+    tokens = [content for kind, content in layout if kind == "token"]
+    if name == _UNKNOWN_AUTHOR:
+        # The placeholder is not a name: the first name token carries it
+        # whole and the others are empty, so their text drops with them.
+        first = tokens[0] if tokens else "author"
+        parts = NameParts(
+            first=name if first == "fname" else "",
+            last=name if first == "lname" else "",
+            initials=name if first == "initials" else "",
+            full=name,
+        )
+        return render_author_layout(layout, parts)
+    if set(tokens) == {"author"} and (not multi or not follow_author_scheme):
+        return render_author_layout(layout, NameParts(first="", last="", initials="", full=name))
+    parts = split_author_name(name, take_initials="initials" in tokens, follow_author_scheme=follow_author_scheme)
+    return render_author_layout(layout, parts)
+
+
+def _render_author_blocks(
+    template: str,
+    token_values: dict[str, str],
+    authors: list[str] | None,
+    follow_author_scheme: bool,
+) -> _BlockRendering:
+    """Replace every run of name tokens with one rendered value. The first
+    block renders every author when it has {+}; it and every later run
+    otherwise render today's author value (token_values["author"]), so
+    templates written before author blocks existed render unchanged. Control
+    tokens outside the runs are dropped."""
+    items = _template_items(template)
+    spans = _all_author_block_spans(items)
+    today = token_values.get("author") or _UNKNOWN_AUTHOR
+    values = dict(token_values)
+    out: list[str] = []
+    block_authors: tuple[str, ...] = ()
+    readback_check = False
+    over_cap = False
+    pos_item = 0
+    for index, span in enumerate(spans):
+        for kind, _content, start, end in items[pos_item:span[0]]:
+            if kind not in _BLOCK_CONTROL_KINDS:
+                out.append(template[start:end])
+        block = _block_from_items(items, span)
+        if index == 0 and block.multi:
+            names = [name for name in (authors or []) if name] or [today]
+            rendered = [_render_one_author(block.layout, name, follow_author_scheme) for name in names]
+            value = join_authors(rendered, block.between, block.last)
+            block_authors = tuple(names)
+            over_cap = len(names) > AUTHOR_BLOCK_CAP
+            first_slash = template.find("/")
+            in_first_folder = first_slash == -1 or block.start < first_slash
+            readback_check = in_first_folder and not over_cap and names != [_UNKNOWN_AUTHOR]
+        else:
+            value = _render_one_author(block.layout, today, follow_author_scheme, multi=False)
+        token = f"__author_block_{index}"
+        values[token] = value
+        out.append("{" + token + "}")
+        pos_item = span[1] + 1
+    for kind, _content, start, end in items[pos_item:]:
+        if kind not in _BLOCK_CONTROL_KINDS:
+            out.append(template[start:end])
+    return _BlockRendering("".join(out), values, block_authors, readback_check, over_cap)
+
+
+def _abs_readback_problem(rendered_folder: str, authors: tuple[str, ...]) -> list[str] | None:
+    """How Audiobookshelf would read the rendered first folder, when that is
+    not the intended authors (each compared in its own Audiobookshelf
+    reading, so "Holt, Mara" and "Mara Holt" are the same author)."""
+    parsed = abs_names.parse_name_string(rendered_folder)
+    intended = [reading for name in authors for reading in (abs_names.parse_name_string(name) or [name])]
+    if [normalize_for_compare(n) for n in parsed] == [normalize_for_compare(n) for n in intended]:
+        return None
+    return parsed
+
+
 class UnknownNamingTokenError(ValueError):
     """A naming template referenced a token with no known value source."""
 
@@ -4577,7 +4688,7 @@ def validate_naming_template(template: str) -> list[str]:
 
 
 def preview_naming_template_for_root(
-    root: Path, destination_root: Path, naming_template: str, limit: int = 3
+    root: Path, destination_root: Path, naming_template: str, limit: int = 3, follow_author_scheme: bool = False
 ) -> list[dict[str, Any]]:
     """Render a naming template against a few real sample books for a live preview.
 
@@ -4593,6 +4704,7 @@ def preview_naming_template_for_root(
         result = build_target_dir_for_template(
             destination_root, metadata, naming_template,
             filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
+            follow_author_scheme=follow_author_scheme,
         )
         filename = naming_template_filename_for_item(item, result.filename)
         previews.append(
@@ -4601,6 +4713,7 @@ def preview_naming_template_for_root(
                 "target_dir": str(result.target_dir),
                 "filename": filename,
                 "review_reasons": result.review_reasons,
+                "review_details": [{"label": label, "value": value} for label, value in result.review_details],
             }
         )
     return previews
@@ -4657,6 +4770,7 @@ def build_target_dir_for_template(
     filename_applies: bool = True,
     source_file: Path | None = None,
     use_default_scheme: bool = False,
+    follow_author_scheme: bool = False,
 ) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
@@ -4677,11 +4791,15 @@ def build_target_dir_for_template(
 
     tokens = resolve_naming_tokens(metadata)
     redundant = title_redundant_with_order(metadata)
-    folder_segments, filename, reasons = render_naming_template(
+    rendered = render_naming_template_full(
         naming_template, tokens, redundant, filename_applies=filename_applies,
         source_file=source_file, destination_root=destination_root,
+        authors=author_block_people(metadata), follow_author_scheme=follow_author_scheme,
     )
-    return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
+    return NamingRenderResult(
+        destination_root.joinpath(*rendered.folder_segments), rendered.filename, rendered.review_reasons,
+        rendered.review_details, rendered.block_authors,
+    )
 
 
 def title_redundant_with_order(metadata: dict[str, Any]) -> bool:
@@ -4847,6 +4965,15 @@ def _metadata_filename_base(
     return Path(clean_loose_audio_filename(source_file, target_dir)).stem
 
 
+@dataclass(frozen=True)
+class NamingTemplateRender:
+    folder_segments: list[str]
+    filename: str | None
+    review_reasons: list[str]
+    review_details: tuple[tuple[str, str], ...] = ()
+    block_authors: tuple[str, ...] = ()
+
+
 def render_naming_template(
     template: str,
     token_values: dict[str, str],
@@ -4854,8 +4981,35 @@ def render_naming_template(
     filename_applies: bool = True,
     source_file: Path | None = None,
     destination_root: Path | None = None,
+    authors: list[str] | None = None,
+    follow_author_scheme: bool = False,
 ) -> tuple[list[str], str | None, list[str]]:
+    """render_naming_template_full() as (folder_segments, filename, review_reasons)."""
+    result = render_naming_template_full(
+        template, token_values, title_redundant_with_order, filename_applies=filename_applies,
+        source_file=source_file, destination_root=destination_root,
+        authors=authors, follow_author_scheme=follow_author_scheme,
+    )
+    return result.folder_segments, result.filename, result.review_reasons
+
+
+def render_naming_template_full(
+    template: str,
+    token_values: dict[str, str],
+    title_redundant_with_order: bool = False,
+    filename_applies: bool = True,
+    source_file: Path | None = None,
+    destination_root: Path | None = None,
+    authors: list[str] | None = None,
+    follow_author_scheme: bool = False,
+) -> NamingTemplateRender:
     """Render a user-defined naming template against resolved token values.
+
+    Author blocks are rendered first (see _render_author_blocks()): `authors`
+    fills a {+} block, every other run of name tokens gets today's author
+    value. A {+} block in the first folder is read back the way
+    Audiobookshelf reads author folders, and flagged when that gives
+    different authors.
 
     Splits `template` on its final "/" into a folder-path part and a
     filename part. Each "/"-delimited folder segment collapses (is
@@ -4884,26 +5038,48 @@ def render_naming_template(
 
     Returns (folder_segments, filename_or_None, review_reasons).
     """
-    if "/" in template:
-        folder_template, _, filename_template = template.rpartition("/")
-    else:
-        folder_template, filename_template = "", template
+    def split_template(value: str) -> tuple[str, str]:
+        if "/" in value:
+            folder, _, name = value.rpartition("/")
+            return folder, name
+        return "", value
+
+    blocks = _render_author_blocks(template, token_values, authors, follow_author_scheme)
+    token_values = blocks.token_values
+    written_folder, written_filename = split_template(template)
+    folder_template, filename_template = split_template(blocks.template)
+    written_segments = written_folder.split("/") if written_folder else []
 
     review_reasons: list[str] = []
+    review_details: list[tuple[str, str]] = []
     folder_segments: list[str] = []
+    first_folder_rendered: str | None = None
     if folder_template:
-        for raw_segment in folder_template.split("/"):
+        segments = folder_template.split("/")
+        if len(written_segments) != len(segments):
+            written_segments = segments
+        for position, (raw_segment, written_segment) in enumerate(zip(segments, written_segments)):
             distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
             significant = _significant_tokens(distinct_tokens)
             segment_values = _token_values_for_segment(raw_segment, token_values, distinct_tokens, title_redundant_with_order)
             rendered, needs_review = _render_naming_segment(raw_segment, segment_values)
             if needs_review:
-                review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
+                review_reasons.append(f"not enough data to build path segment '{written_segment}'")
                 folder_segments.append(_sanitize_naming_segment(rendered))
             elif len(significant) <= 1 and _naming_segment_is_effectively_empty(rendered):
                 continue
             else:
                 folder_segments.append(_sanitize_naming_segment(rendered))
+            if position == 0:
+                first_folder_rendered = folder_segments[-1]
+
+    if blocks.over_cap:
+        review_reasons.append(OVER_AUTHOR_CAP_REASON)
+    if blocks.readback_check and first_folder_rendered:
+        parsed = _abs_readback_problem(first_folder_rendered, blocks.block_authors)
+        if parsed is not None:
+            review_reasons.append(ABS_READBACK_REASON)
+            review_details.append(("Audiobookshelf reads", "; ".join(parsed)))
 
     filename: str | None = None
     if filename_template and filename_applies:
@@ -4942,11 +5118,13 @@ def render_naming_template(
                     )
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
-            review_reasons.append(f"not enough data to build filename '{filename_template}'")
+            review_reasons.append(f"not enough data to build filename '{written_filename}'")
         elif not _naming_segment_is_effectively_empty(rendered):
             filename = _sanitize_naming_segment(rendered)
 
-    return folder_segments, filename, review_reasons
+    return NamingTemplateRender(
+        folder_segments, filename, review_reasons, tuple(review_details), blocks.block_authors
+    )
 
 
 def empty_structure_cache(
@@ -5206,6 +5384,7 @@ def build_cached_target_dir(
     filename_applies: bool = True,
     source_file: Path | None = None,
     use_default_scheme: bool = False,
+    follow_author_scheme: bool = False,
 ) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
@@ -5213,10 +5392,9 @@ def build_cached_target_dir(
         result = build_target_dir_for_template(
             destination_root, metadata, naming_template,
             filename_applies=filename_applies, source_file=source_file,
-            use_default_scheme=use_default_scheme,
+            use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
         )
-        if result.review_reasons:
-            metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
+        metadata = _with_naming_result(metadata, result)
         return TargetResolution(result.target_dir, result.filename, "new", metadata)
 
     # resolve_series_directory's Path return is used only to decide whether a
@@ -5234,13 +5412,22 @@ def build_cached_target_dir(
     result = build_target_dir_for_template(
         destination_root, effective_metadata, naming_template,
         filename_applies=filename_applies, source_file=source_file,
-        use_default_scheme=use_default_scheme,
+        use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
     )
-    if result.review_reasons:
-        effective_metadata = dict(
-            effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, result.review_reasons)
-        )
+    effective_metadata = _with_naming_result(effective_metadata, result)
     return TargetResolution(result.target_dir, result.filename, status, effective_metadata)
+
+
+def _with_naming_result(metadata: dict[str, Any], result: NamingRenderResult) -> dict[str, Any]:
+    """Carry a naming render's review reasons and details, and the authors
+    its author block named, forward on the book's metadata."""
+    if result.review_reasons:
+        metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
+    for label, value in result.review_details:
+        metadata = add_metadata_review_detail(metadata, label, value)
+    if result.block_authors:
+        metadata = dict(metadata, author_block_authors=list(result.block_authors))
+    return metadata
 
 
 def _merged_review_reasons(metadata: dict[str, Any], reasons: list[str]) -> list[str]:
@@ -6348,6 +6535,14 @@ def main() -> None:
         help="Use the built-in ABS structure scheme (author/series/title) and ignore --naming-template.",
     )
     parser.add_argument(
+        "--initials-follow-author-scheme",
+        action="store_true",
+        help=(
+            "Write the names in a naming template's author block the way the Settings author-name "
+            "scheme writes tags, so folder names match the tags. A plain {author} is never changed."
+        ),
+    )
+    parser.add_argument(
         "--abs-url",
         default=os.environ.get("ABS_URL", "http://audiobookshelf"),
         dest="abs_url",
@@ -6495,7 +6690,7 @@ def main() -> None:
         )
         if skip_due_to_pattern:
             skipped_pattern_match += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme, follow_author_scheme=args.initials_follow_author_scheme).target_dir
             reason = f"skipped: matched skip pattern: {skip_pattern}"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -6509,7 +6704,7 @@ def main() -> None:
 
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme, follow_author_scheme=args.initials_follow_author_scheme).target_dir
             reason = "skipped unknown author"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -6525,6 +6720,7 @@ def main() -> None:
             destination_root, metadata, cache, naming_template=args.naming_template,
             filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
             use_default_scheme=args.use_default_scheme,
+            follow_author_scheme=args.initials_follow_author_scheme,
         )
         target_dir = resolution.target_dir
         structure_status = resolution.status

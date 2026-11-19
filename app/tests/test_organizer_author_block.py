@@ -1,5 +1,6 @@
 """Folder Forge author block: multi-author folder names (made-up names only)."""
 import unittest
+from pathlib import Path
 
 from app.tests.script_loader import load_script
 
@@ -270,6 +271,136 @@ class JoinAuthorsTests(unittest.TestCase):
         self.assertEqual(ORG.join_authors(five, ",", "and"), "A, B, C, D and et al")
         self.assertEqual(ORG.join_authors(five, "&", None), "A & B & C & D & et al")
         self.assertEqual(ORG.join_authors(five, ",", ", &"), "A, B, C, D, & et al")
+
+
+DEST = Path("/library")
+
+
+def _book(author: str, title: str = "Iron Road", primary: str | None = None, **extra) -> dict:
+    metadata = {
+        "title": title, "author": author, "series": "", "edition_tag": "", "book_number": "", "sequence_label": "",
+    }
+    metadata["author_primary"] = primary if primary is not None else ORG.canonical_author_name(ORG.primary_author(author))
+    metadata.update(extra)
+    return metadata
+
+
+def _render(template: str, metadata: dict, **kwargs):
+    return ORG.build_target_dir_for_template(DEST, metadata, template, filename_applies=False, **kwargs)
+
+
+def _folders(result) -> list[str]:
+    return list(result.target_dir.relative_to(DEST).parts)
+
+
+class AuthorBlockRenderingTests(unittest.TestCase):
+    def test_three_authors_oxford_ampersand(self):
+        result = _render("{+}{author}<, &>/{title}/", _book("Ana Pell, Ivo Sand, Lee Doan"))
+        self.assertEqual(_folders(result), ["Ana Pell, Ivo Sand, & Lee Doan", "Iron Road"])
+        self.assertEqual(result.review_reasons, [])
+        self.assertEqual(result.block_authors, ("Ana Pell", "Ivo Sand", "Lee Doan"))
+
+    def test_single_word_author_in_a_comma_list_is_flagged(self):
+        result = _render("{+}{author}{,}/{title}/", _book("Quillon, Ivo Sand"))
+        self.assertEqual(_folders(result)[0], "Quillon, Ivo Sand")
+        self.assertIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+        self.assertIn(("Audiobookshelf reads", "Ivo Sand Quillon"), result.review_details)
+
+    def test_single_word_author_with_ampersand_is_not_flagged(self):
+        result = _render("{+}{author}{&}/{title}/", _book("Quillon, Ivo Sand"))
+        self.assertEqual(_folders(result)[0], "Quillon & Ivo Sand")
+        self.assertNotIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_last_first_layout_reads_back_as_the_same_authors(self):
+        result = _render("{+}{lname}, {fname}{&}/{title}/", _book("Mara J. Holt & Jon Le Brun"))
+        self.assertEqual(_folders(result)[0], "Holt, Mara J. & Le Brun, Jon")
+        self.assertEqual(result.review_reasons, [])
+
+    def test_block_in_a_later_folder_skips_the_guard(self):
+        result = _render("{series}/{+}{author}{,}/{title}", _book("Quillon, Ivo Sand", series="Deep Wells"))
+        self.assertEqual(_folders(result)[:2], ["Deep Wells", "Quillon, Ivo Sand"])
+        self.assertNotIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_literal_text_next_to_the_block_is_kept_and_read_back(self):
+        result = _render("{+}{author}{&} - Collection/{title}/", _book("Ana Pell & Ivo Sand"))
+        self.assertEqual(_folders(result)[0], "Ana Pell & Ivo Sand - Collection")
+        self.assertIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_over_the_cap(self):
+        result = _render("{+}{author}<, &>/{title}/", _book("Ana Pell, Ivo Sand, Lee Doan, Mara Holt, Jon Brun"))
+        self.assertEqual(_folders(result)[0], "Ana Pell, Ivo Sand, Lee Doan, Mara Holt, & et al")
+        self.assertIn(ORG.OVER_AUTHOR_CAP_REASON, result.review_reasons)
+        self.assertNotIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_initials_option(self):
+        book = _book("JK Varn & Ana Pell")
+        template = "{+}{lname} {initials}{&}/{title}/"
+        self.assertEqual(_folders(_render(template, book))[0], "Varn JK & Pell")
+        self.assertEqual(_folders(_render(template, book, follow_author_scheme=True))[0], "Varn J.K. & Pell")
+
+    def test_initials_option_does_not_change_existing_templates(self):
+        book = _book("JK Varn & Ana Pell")
+        for template in (ORG.DEFAULT_NAMING_TEMPLATE, "{author}/{title}/{author} - {title}"):
+            with self.subTest(template=template):
+                self.assertEqual(
+                    _render(template, book).target_dir, _render(template, book, follow_author_scheme=True).target_dir
+                )
+
+    def test_without_plus_only_the_first_author(self):
+        result = _render("{lname}, {fname}/{title}/", _book("Mara J. Holt & Jon Le Brun"))
+        # Folder names never end in "." (existing sanitize_path_name rule).
+        self.assertEqual(_folders(result)[0], "Holt, Mara J")
+        self.assertEqual(result.block_authors, ())
+
+    def test_single_blocks_keep_todays_author_value(self):
+        book = _book("Rook Marr - translator, Ana Pell")
+        self.assertEqual(_folders(_render("{author}/{title}/", book))[0], "Rook Marr")
+        self.assertEqual(_folders(_render("{lname}/{title}/", book))[0], "Marr")
+
+    def test_plus_block_drops_role_credits(self):
+        self.assertEqual(_folders(_render("{+}{author}{&}/{title}/", _book("Rook Marr - translator, Ana Pell")))[0], "Ana Pell")
+
+    def test_plus_block_falls_back_to_todays_value(self):
+        self.assertEqual(_folders(_render("{+}{author}{&}/{title}/", _book("Rook Marr - translator")))[0], "Rook Marr")
+        self.assertEqual(_folders(_render("{+}{author}{&}/{title}/", _book("", primary="")))[0], "Unknown Author")
+
+    def test_unknown_author_is_never_split(self):
+        for template in ("{+}{lname}, {fname}{&}/{title}", "{lname}, {fname}/{title}"):
+            with self.subTest(template=template):
+                self.assertEqual(_folders(_render(template, _book("", primary="")))[0], "Unknown Author")
+
+    def test_later_name_run_uses_the_empty_token_rule(self):
+        result = _render("{+}{author}{&}/{title} - {lname}, {fname}/x", _book("Quillon & Ana Pell"))
+        self.assertEqual(_folders(result)[1], "Iron Road - Quillon")
+
+    def test_later_author_token_renders_todays_value(self):
+        result = ORG.build_target_dir_for_template(
+            DEST, _book("Ana Pell & Ivo Sand"), "{+}{author}{&}/{title}/{author} - {title}", filename_applies=True
+        )
+        self.assertEqual(result.filename, "Ana Pell - Iron Road")
+
+    def test_stray_control_tokens_are_ignored(self):
+        result = _render("{author}/{title} {&}/", _book("Ana Pell"))
+        self.assertEqual(_folders(result), ["Ana Pell", "Iron Road"])
+
+
+class CachedTargetCarriesBlockResultsTests(unittest.TestCase):
+    def test_block_authors_and_details_reach_the_metadata(self):
+        cache = ORG.empty_structure_cache(DEST)
+        resolution = ORG.build_cached_target_dir(
+            DEST, _book("Quillon, Ivo Sand"), cache, naming_template="{+}{author}{,}/{title}/", filename_applies=False
+        )
+        self.assertEqual(resolution.metadata["author_block_authors"], ["Quillon", "Ivo Sand"])
+        self.assertIn(ORG.ABS_READBACK_REASON, resolution.metadata["review_reasons"])
+        self.assertIn({"label": "Audiobookshelf reads", "value": "Ivo Sand Quillon"}, resolution.metadata["review_details"])
+
+    def test_follow_author_scheme_reaches_the_render(self):
+        cache = ORG.empty_structure_cache(DEST)
+        resolution = ORG.build_cached_target_dir(
+            DEST, _book("JK Varn & Ana Pell"), cache, naming_template="{+}{lname} {initials}{&}/{title}/",
+            filename_applies=False, follow_author_scheme=True,
+        )
+        self.assertEqual(resolution.target_dir.relative_to(DEST).parts[0], "Varn J.K. & Pell")
 
 
 if __name__ == "__main__":
