@@ -4163,6 +4163,206 @@ NAMING_TEMPLATE_TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _EMPTY_BRACKET_RE = re.compile(r"[\(\[]\s*[\)\]]")
 
 
+# ------------------------------------------------------------------ author block
+#
+# An author block names a book's authors in one place of the template:
+#   {+}{lname}, {fname}{,}<, &>   ->  "Holt, Mara, Sand, Ivo, & Doan, Lee"
+# Name tokens ({author} or {fname}/{lname}/{initials}) render in the order
+# written, with literal text allowed only between two name tokens. Control
+# tokens touch the name tokens or each other, in any order: {+} names every
+# author (up to the cap), {?} is the separator between authors and <?> the one
+# before the last author. Only the first block in the template counts; control
+# tokens anywhere else are ignored.
+AUTHOR_NAME_TOKENS = ("author", "fname", "lname", "initials")
+AUTHOR_BETWEEN_SEPARATORS = (",", ";", "&")
+AUTHOR_LAST_SEPARATORS = (",", ";", "&", "and", ", &", ", and")
+# Which last-author separators Audiobookshelf can read with each between-author
+# separator: it splits on & first, then " and ", then ";", then commas, so the
+# two must not mix kinds it would split differently.
+AUTHOR_SEPARATOR_PAIRS = {
+    ",": (",", "&", "and", ", &", ", and"),
+    "&": ("&", ", &"),
+    ";": (";",),
+}
+_BLOCK_ITEM_RE = re.compile(r"\{[^{}]*\}|<[^<>]*>")
+_SEPARATOR_WORDS = {"and"}
+
+
+@dataclass(frozen=True)
+class AuthorBlock:
+    start: int
+    end: int
+    layout: tuple[tuple[str, str], ...]
+    multi: bool
+    between: str | None
+    last: str | None
+
+
+def _brace_kind(content: str) -> str:
+    """Classify the inside of a { } item: a token name, the {+} marker, a
+    separator, a separator written with letters, or anything else."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", content):
+        return "letters" if content.lower() in _SEPARATOR_WORDS else "name"
+    if content == "+":
+        return "multi"
+    if content and not re.search(r"[A-Za-z0-9_]", content):
+        return "between"
+    if re.search(r"[A-Za-z]", content) and content.strip():
+        return "letters"
+    return "other"
+
+
+def _template_items(template: str) -> list[tuple[str, str, int, int]]:
+    """Split a template into (kind, content, start, end) items. Kinds: "name"
+    (an author name token), "token" (any other {token}), "multi", "between",
+    "letters", "last" (an allowed <?>), "angle" (any other < >), "text"."""
+    items: list[tuple[str, str, int, int]] = []
+    pos = 0
+    for match in _BLOCK_ITEM_RE.finditer(template):
+        if match.start() > pos:
+            items.append(("text", template[pos:match.start()], pos, match.start()))
+        raw = match.group(0)
+        content = raw[1:-1]
+        if raw[0] == "{":
+            kind = _brace_kind(content)
+            if kind == "name":
+                kind = "name" if content in AUTHOR_NAME_TOKENS else "token"
+        else:
+            kind = "last" if content in AUTHOR_LAST_SEPARATORS else "angle"
+        items.append((kind, content, match.start(), match.end()))
+        pos = match.end()
+    if pos < len(template):
+        items.append(("text", template[pos:], pos, len(template)))
+    return items
+
+
+_BLOCK_CONTROL_KINDS = {"multi", "between", "letters", "last"}
+
+
+def _author_block_span(items: list[tuple[str, str, int, int]]) -> tuple[int, int] | None:
+    """Item index range [first, last] of the first author block, or None."""
+    first_name = next((i for i, item in enumerate(items) if item[0] == "name"), None)
+    if first_name is None:
+        return None
+    first = first_name
+    while first > 0 and items[first - 1][0] in _BLOCK_CONTROL_KINDS:
+        first -= 1
+    last = first_name
+    j = first_name + 1
+    while j < len(items):
+        kind, content = items[j][0], items[j][1]
+        if kind in _BLOCK_CONTROL_KINDS or kind == "name":
+            last = j
+            j += 1
+            continue
+        if (
+            kind == "text"
+            and "/" not in content
+            and items[j - 1][0] == "name"
+            and j + 1 < len(items)
+            and items[j + 1][0] == "name"
+        ):
+            j += 1
+            continue
+        break
+    return first, last
+
+
+def _block_items(template: str) -> tuple[list[tuple[str, str, int, int]], tuple[int, int] | None]:
+    items = _template_items(template)
+    return items, _author_block_span(items)
+
+
+def find_author_block(template: str) -> AuthorBlock | None:
+    """The first author block in the template, or None when it has none."""
+    items, span = _block_items(template)
+    if span is None:
+        return None
+    first, last = span
+    block_items = items[first:last + 1]
+    layout = tuple(
+        ("token", content) if kind == "name" else ("text", content)
+        for kind, content, _start, _end in block_items
+        if kind in ("name", "text")
+    )
+    between = next((content for kind, content, _s, _e in block_items if kind == "between"), None)
+    last_sep = next((content for kind, content, _s, _e in block_items if kind == "last"), None)
+    return AuthorBlock(
+        start=items[first][2],
+        end=items[last][3],
+        layout=layout,
+        multi=any(kind == "multi" for kind, _c, _s, _e in block_items),
+        between=between,
+        last=last_sep,
+    )
+
+
+def strip_stray_control_tokens(template: str, block: AuthorBlock | None) -> str:
+    """Remove {+}, {?} and allowed <?> tokens that sit outside the author
+    block: they only mean something inside it. Any other < > text is kept."""
+    out: list[str] = []
+    for kind, _content, start, end in _template_items(template):
+        inside = block is not None and block.start <= start and end <= block.end
+        if not inside and kind in ("multi", "between", "letters", "last"):
+            continue
+        out.append(template[start:end])
+    return "".join(out)
+
+
+def _author_block_problems(template: str) -> list[str]:
+    problems: list[str] = []
+    items, span = _block_items(template)
+    for kind, content, _start, _end in items:
+        if kind == "between" and content not in AUTHOR_BETWEEN_SEPARATORS:
+            problems.append(f"Author separator {{{content}}} can't be used. Between authors use {{,}} {{;}} or {{&}}.")
+        elif kind == "letters":
+            message = "Separators can't contain letters inside { }. Put words in < >, like <and>."
+            if message not in problems:
+                problems.append(message)
+    if span is None:
+        return problems
+    first, last = span
+    # An angle item touching the block is meant as its last-author separator.
+    for index in (first - 1, last + 1):
+        if 0 <= index < len(items) and items[index][0] == "angle":
+            problems.append(
+                f"Last-author separator <{items[index][1]}> can't be used. "
+                "Use <,> <;> <&> <and> <, &> or <, and>."
+            )
+    block = find_author_block(template)
+    names = {content for kind, content in block.layout if kind == "token"}
+    if "author" in names and names & {"fname", "lname", "initials"}:
+        problems.append("Use either {author} or {fname}/{lname}/{initials} in the author block, not both.")
+    between = block.between if block.between in AUTHOR_BETWEEN_SEPARATORS else None
+    if block.between is None or between is not None:
+        effective = between or ","
+        if block.last is not None and block.last not in AUTHOR_SEPARATOR_PAIRS[effective]:
+            problems.append(
+                f"Audiobookshelf can't read {{{effective}}} together with <{block.last}>: "
+                "it splits on only one kind of separator."
+            )
+    return problems
+
+
+def naming_template_warnings(template: str) -> list[str]:
+    """Non-blocking warnings about a naming template (problems from
+    validate_naming_template() block a run; these do not)."""
+    warnings: list[str] = []
+    block = find_author_block(template)
+    if block is None:
+        return warnings
+    first_slash = template.find("/")
+    in_first_folder = first_slash == -1 or block.start < first_slash
+    names = {content for kind, content in block.layout if kind == "token"}
+    if in_first_folder and "author" not in names and not {"fname", "lname"} <= names:
+        warnings.append(
+            "The author folder uses only part of each name, so different authors can end up in one folder "
+            "(for example two authors named Holt), and Audiobookshelf would read them as one author. "
+            "Use {fname} and {lname} together here, or move this block to a later folder."
+        )
+    return warnings
+
+
 class UnknownNamingTokenError(ValueError):
     """A naming template referenced a token with no known value source."""
 
@@ -4229,6 +4429,9 @@ NAMING_TOKEN_NAMES = frozenset(
         "original",
         "filename",
         "subtitle",
+        "fname",
+        "lname",
+        "initials",
     }
 )
 
@@ -4242,13 +4445,21 @@ def validate_naming_template(template: str) -> list[str]:
         # for "use the default".
         problems.append("Template is empty -- enter a template, or turn on the default scheme.")
         return problems
-    stripped = NAMING_TEMPLATE_TOKEN_RE.sub("", template)
+    # Author-block control tokens ({+}, {,}, {&}, ...) are well-formed braces.
+    stripped = "".join(
+        template[start:end] if kind in ("text", "angle", "other") else ""
+        for kind, _content, start, end in _template_items(template)
+    )
     if "{" in stripped or "}" in stripped:
         problems.append("Unbalanced or malformed curly brace in template.")
-    tokens = NAMING_TEMPLATE_TOKEN_RE.findall(template)
+    tokens = [
+        token for token in NAMING_TEMPLATE_TOKEN_RE.findall(template)
+        if token.lower() not in _SEPARATOR_WORDS
+    ]
     for token in tokens:
         if token not in NAMING_TOKEN_NAMES:
             problems.append(f"Unknown token: {{{token}}}")
+    problems.extend(_author_block_problems(template))
     if "original" in tokens and "filename" in tokens:
         problems.append(
             "Use either {original} or {filename}, not both -- they are two "
