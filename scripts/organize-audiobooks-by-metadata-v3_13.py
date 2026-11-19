@@ -844,14 +844,20 @@ def clean_author_credit(value: str) -> str:
     return sanitize_path_name(value, "")
 
 
-def split_people(value: str) -> list[str]:
+def split_people(value: str, drop_roles: bool = False) -> list[str]:
+    """People in an author credit, role labels stripped. With drop_roles, a
+    credit that carries a role label (" - translator", " - foreword", ...)
+    is left out entirely instead of kept as a person."""
     value = clean_text(value)
     if not value:
         return []
 
     # Do not split author names on ampersands aggressively unless they are clear separators.
     value = re.sub(r"\s+(?:and|&)\s+", ", ", value, flags=re.IGNORECASE)
-    parts = [clean_author_credit(part) for part in value.split(",")]
+    raw_parts = value.split(",")
+    if drop_roles:
+        raw_parts = [part for part in raw_parts if not NON_AUTHOR_ROLE_RE.search(clean_text(part))]
+    parts = [clean_author_credit(part) for part in raw_parts]
     people: list[str] = []
     seen = set()
     for person in parts:
@@ -994,6 +1000,29 @@ def primary_author(value: str) -> str:
                 return person
         return people[0]
     return sanitize_path_name(value, "Unknown Author")
+
+
+def author_block_people(metadata: dict[str, Any]) -> list[str]:
+    """The book's authors for a Folder Forge author block, in credit order:
+    role credits (translator, foreword, ...) and generic credits ("Various")
+    left out, each name canonicalized. When the first author was corrected
+    from the existing library structure (author_primary no longer matches
+    the first credited person), the corrected name takes the first place."""
+    people = [
+        canonical_author_name(person)
+        for person in split_people(metadata.get("author", ""), drop_roles=True)
+        if normalize_for_compare(person) not in GENERIC_AUTHOR_KEYS
+    ]
+    if not people:
+        return []
+    primary = canonical_author_name(str(metadata.get("author_primary") or ""))
+    # author_primary equal to the credit's own first-author pick is not a
+    # correction, even when that pick is a role credit the block leaves out.
+    credit_pick = canonical_author_name(primary_author(metadata.get("author", "")))
+    corrected = normalize_for_compare(primary) != normalize_for_compare(credit_pick)
+    if corrected and primary and primary != "Unknown Author" and normalize_for_compare(primary) != normalize_for_compare(people[0]):
+        people = [primary] + [person for person in people[1:] if normalize_for_compare(person) != normalize_for_compare(primary)]
+    return people
 
 
 _SINGLE_INITIAL_RE = re.compile(r"[A-Za-z]\.?$")
