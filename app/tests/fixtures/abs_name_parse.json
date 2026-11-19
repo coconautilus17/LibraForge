@@ -1,0 +1,576 @@
+{
+  "abs_version": "2.35.1",
+  "full_names": {
+    "Quillon": {
+      "title": "",
+      "first": "",
+      "middle": "",
+      "last": "Quillon",
+      "nick": "",
+      "suffix": ""
+    },
+    "author103": {
+      "title": "",
+      "first": "",
+      "middle": "",
+      "last": "Author103",
+      "nick": "",
+      "suffix": ""
+    },
+    "Ana Pell": {
+      "title": "",
+      "first": "Ana",
+      "middle": "",
+      "last": "Pell",
+      "nick": "",
+      "suffix": ""
+    },
+    "Mara J. Holt": {
+      "title": "",
+      "first": "Mara",
+      "middle": "J.",
+      "last": "Holt",
+      "nick": "",
+      "suffix": ""
+    },
+    "Ivo Ren Sand": {
+      "title": "",
+      "first": "Ivo",
+      "middle": "Ren",
+      "last": "Sand",
+      "nick": "",
+      "suffix": ""
+    },
+    "Lee Ann Mae Doan": {
+      "title": "",
+      "first": "Lee",
+      "middle": "Ann Mae",
+      "last": "Doan",
+      "nick": "",
+      "suffix": ""
+    },
+    "Pia Ro Lu Mae Kest": {
+      "title": "",
+      "first": "Pia",
+      "middle": "Ro Lu Mae",
+      "last": "Kest",
+      "nick": "",
+      "suffix": ""
+    },
+    "A.B. Carver": {
+      "title": "",
+      "first": "A.B.",
+      "middle": "",
+      "last": "Carver",
+      "nick": "",
+      "suffix": ""
+    },
+    "A B Carver": {
+      "title": "",
+      "first": "A",
+      "middle": "B",
+      "last": "Carver",
+      "nick": "",
+      "suffix": ""
+    },
+    "A. B. Carver": {
+      "title": "",
+      "first": "A.",
+      "middle": "B.",
+      "last": "Carver",
+      "nick": "",
+      "suffix": ""
+    },
+    "JK Varn": {
+      "title": "",
+      "first": "JK",
+      "middle": "",
+      "last": "Varn",
+      "nick": "",
+      "suffix": ""
+    },
+    "J.K.Varn": {
+      "title": "",
+      "first": "",
+      "middle": "",
+      "last": "J.K.Varn",
+      "nick": "",
+      "suffix": ""
+    },
+    "Kevin J Orrin": {
+      "title": "",
+      "first": "Kevin",
+      "middle": "J",
+      "last": "Orrin",
+      "nick": "",
+      "suffix": ""
+    },
+    "A.B.C. Dunmore": {
+      "title": "",
+      "first": "A.B.C.",
+      "middle": "",
+      "last": "Dunmore",
+      "nick": "",
+      "suffix": ""
+    },
+    "Mira van der Holt": {
+      "title": "",
+      "first": "Mira",
+      "middle": "",
+      "last": "van der Holt",
+      "nick": "",
+      "suffix": ""
+    },
+    "Jon Le Brun": {
+      "title": "",
+      "first": "Jon",
+      "middle": "",
+      "last": "Le Brun",
+      "nick": "",
+      "suffix": ""
+    },
+    "Ana de la Vega": {
+      "title": "",
+      "first": "Ana",
+      "middle": "",
+      "last": "de la Vega",
+      "nick": "",
+      "suffix": ""
+    },
+    "Otto von Barl": {
+      "title": "",
+      "first": "Otto",
+      "middle": "",
+      "last": "von Barl",
+      "nick": "",
+      "suffix": ""
+    },
+    "Lia di Sarno": {
+      "title": "",
+      "first": "Lia",
+      "middle": "",
+      "last": "di Sarno",
+      "nick": "",
+      "suffix": ""
+    },
+    "Pim van Doorn": {
+      "title": "",
+      "first": "Pim",
+      "middle": "",
+      "last": "van Doorn",
+      "nick": "",
+      "suffix": ""
+    },
+    "Tomas Reed Jr.": {
+      "title": "",
+      "first": "Tomas",
+      "middle": "",
+      "last": "Reed",
+      "nick": "",
+      "suffix": "Jr."
+    },
+    "Tomas Reed III": {
+      "title": "",
+      "first": "Tomas",
+      "middle": "",
+      "last": "Reed",
+      "nick": "",
+      "suffix": "III"
+    },
+    "Tomas Reed, Jr.": {
+      "title": "",
+      "first": "Tomas",
+      "middle": "",
+      "last": "Reed",
+      "nick": "",
+      "suffix": "Jr."
+    },
+    "Dr. Ilse Varn": {
+      "title": "Dr.",
+      "first": "Ilse",
+      "middle": "",
+      "last": "Varn",
+      "nick": "",
+      "suffix": ""
+    },
+    "Prof. Hal Grend": {
+      "title": "Prof.",
+      "first": "Hal",
+      "middle": "",
+      "last": "Grend",
+      "nick": "",
+      "suffix": ""
+    },
+    "ana pell": {
+      "title": "",
+      "first": "Ana",
+      "middle": "",
+      "last": "Pell",
+      "nick": "",
+      "suffix": ""
+    },
+    "ANA PELL": {
+      "title": "",
+      "first": "Ana",
+      "middle": "",
+      "last": "Pell",
+      "nick": "",
+      "suffix": ""
+    },
+    "mara mcvane": {
+      "title": "",
+      "first": "Mara",
+      "middle": "",
+      "last": "Mcvane",
+      "nick": "",
+      "suffix": ""
+    },
+    "jon le brun": {
+      "title": "",
+      "first": "Jon",
+      "middle": "",
+      "last": "le Brun",
+      "nick": "",
+      "suffix": ""
+    },
+    "tomas reed iii": {
+      "title": "",
+      "first": "Tomas",
+      "middle": "",
+      "last": "Reed",
+      "nick": "",
+      "suffix": "III"
+    },
+    "Hal \"Ace\" Grend": {
+      "title": "",
+      "first": "Hal",
+      "middle": "",
+      "last": "Grend",
+      "nick": "Ace",
+      "suffix": ""
+    },
+    "Ana and Ivo Pell": {
+      "title": "",
+      "first": "Ana and Ivo",
+      "middle": "",
+      "last": "Pell",
+      "nick": "",
+      "suffix": ""
+    },
+    "Holt, Mara": {
+      "title": "",
+      "first": "Mara",
+      "middle": "",
+      "last": "Holt",
+      "nick": "",
+      "suffix": ""
+    },
+    "Holt, Mara J.": {
+      "title": "",
+      "first": "Mara",
+      "middle": "J.",
+      "last": "Holt",
+      "nick": "",
+      "suffix": ""
+    },
+    "Reed, Tomas, Jr., Esq.": {
+      "title": "",
+      "first": "Tomas",
+      "middle": "",
+      "last": "Reed",
+      "nick": "",
+      "suffix": "Jr., Esq."
+    },
+    "林小雨": {
+      "title": "",
+      "first": "",
+      "middle": "",
+      "last": "林小雨",
+      "nick": "",
+      "suffix": ""
+    },
+    "Søren Kjær": {
+      "title": "",
+      "first": "Søren",
+      "middle": "",
+      "last": "Kjær",
+      "nick": "",
+      "suffix": ""
+    },
+    "": {
+      "title": "",
+      "first": "",
+      "middle": "",
+      "last": "",
+      "nick": "",
+      "suffix": ""
+    },
+    "  Ana   Pell  ": {
+      "title": "",
+      "first": "Ana",
+      "middle": " ",
+      "last": "Pell",
+      "nick": "",
+      "suffix": ""
+    },
+    "Mara-Lin Holt": {
+      "title": "",
+      "first": "Mara-Lin",
+      "middle": "",
+      "last": "Holt",
+      "nick": "",
+      "suffix": ""
+    },
+    "Ilse O'Varn": {
+      "title": "",
+      "first": "Ilse",
+      "middle": "",
+      "last": "O'Varn",
+      "nick": "",
+      "suffix": ""
+    }
+  },
+  "name_strings": {
+    "Ana Pell": [
+      "Ana Pell"
+    ],
+    "Quillon": [
+      "Quillon"
+    ],
+    "Holt, Mara": [
+      "Mara Holt"
+    ],
+    "Ana Pell, Ivo Sand": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Ana Pell, Ivo Sand, Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell, Ivo Sand & Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell, Ivo Sand, & Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell, Ivo Sand and Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell, Ivo Sand, and Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell & Ivo Sand": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Ana Pell and Ivo Sand": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Ana Pell & Ivo Sand & Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell; Ivo Sand; Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell; Ivo Sand & Lee Doan": [
+      "Ana Pell; Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell; Ivo Sand and Lee Doan": [
+      "Ana Pell; Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell & Ivo Sand and Lee Doan": [
+      "Ana Pell",
+      "Ivo Sand and Lee Doan"
+    ],
+    "Ana Pell - Ivo Sand and Lee Doan": [
+      "Ana Pell - Ivo Sand",
+      "Lee Doan"
+    ],
+    "Ana Pell with Ivo Sand": [
+      "Ana Pell with Ivo Sand"
+    ],
+    "Ana Pell And Ivo Sand": [
+      "Ana Pell And Ivo Sand"
+    ],
+    "Pell, Ana, Sand, Ivo": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Pell, Ana & Sand, Ivo": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Pell, Ana, Sand, Ivo, Doan, Lee": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan"
+    ],
+    "Pell, Ana; Sand, Ivo": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Holt, Mara J., Sand, Ivo & Le Brun, Jon": [
+      "Mara J. Holt",
+      "Ivo Sand",
+      "Jon Le Brun"
+    ],
+    "J. Holt, Mara, Ren Sand, Ivo & Le Brun, Jon": [
+      "J. Holt",
+      "Mara",
+      "Ren Sand",
+      "Ivo",
+      "Le Brun",
+      "Jon"
+    ],
+    "Pell, Ana, Sand, Ivo, Doan": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Quillon, Ivo Sand": [
+      "Ivo Sand Quillon"
+    ],
+    "Quillon & Ivo Sand": [
+      "Quillon",
+      "Ivo Sand"
+    ],
+    "author103, Ivo Sand": [
+      "Ivo Sand author103"
+    ],
+    "Quillon, Pell, Sand": [
+      "Pell Quillon"
+    ],
+    "Quillon & Pell & Sand": [
+      "Quillon",
+      "Pell",
+      "Sand"
+    ],
+    "Mira van der Holt, Jon Le Brun": [
+      "Mira van der Holt",
+      "Jon Le Brun"
+    ],
+    "van der Holt, Mira, Le Brun, Jon": [
+      "Mira van der Holt",
+      "Jon Le Brun"
+    ],
+    "Tomas Reed Jr., Ivo Sand": [
+      "Tomas Reed",
+      "Ivo Sand"
+    ],
+    "Tomas Reed Jr. & Ivo Sand": [
+      "Tomas Reed",
+      "Ivo Sand"
+    ],
+    "Dr. Ilse Varn & Ivo Sand": [
+      "Ilse Varn",
+      "Ivo Sand"
+    ],
+    "A.B. Carver & Ivo Sand": [
+      "A.B. Carver",
+      "Ivo Sand"
+    ],
+    "A.B. Carver, Ivo Sand": [
+      "A.B. Carver",
+      "Ivo Sand"
+    ],
+    "Carver, A.B. & Sand, Ivo": [
+      "A.B. Carver",
+      "Ivo Sand"
+    ],
+    "JK Varn & Ana Pell": [
+      "JK Varn",
+      "Ana Pell"
+    ],
+    "Ana Pell, Ivo Sand, Lee Doan, Mara Holt": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan",
+      "Mara Holt"
+    ],
+    "Ana Pell, Ivo Sand, Lee Doan, Mara Holt and et al": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan",
+      "Mara Holt",
+      "Et Al"
+    ],
+    "Ana Pell, Ivo Sand, Lee Doan, Mara Holt, & et al": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan",
+      "Mara Holt",
+      "Et Al"
+    ],
+    "Ana Pell & Ivo Sand & Lee Doan & Mara Holt & et al": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan",
+      "Mara Holt",
+      "Et Al"
+    ],
+    "Ana Pell; Ivo Sand; Lee Doan; Mara Holt; et al": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Lee Doan",
+      "Mara Holt",
+      "Et Al"
+    ],
+    "Ana Pell et al": [
+      "Ana Pell et al"
+    ],
+    "Ana Pell & others": [
+      "Ana Pell",
+      "Others"
+    ],
+    "Ana Pell, Ivo Sand, and others": [
+      "Ana Pell",
+      "Ivo Sand",
+      "Others"
+    ],
+    "Ana Pell & Ana Pell": [
+      "Ana Pell"
+    ],
+    "Ana Pell, Ana Pell": [
+      "Ana Pell"
+    ],
+    "Ana Pell & ": [
+      "Ana Pell"
+    ],
+    "林小雨, 王小明": [
+      "林小雨",
+      "王小明"
+    ],
+    "林小雨 & 王小明": [
+      "林小雨",
+      "王小明"
+    ],
+    "ana pell & ivo sand": [
+      "Ana Pell",
+      "Ivo Sand"
+    ],
+    "Holt, & Sand, Ivo": [
+      "Holt",
+      "Ivo Sand"
+    ],
+    "Pell-Rowe, Ana & Sand, Ivo": [
+      "Ana Pell-Rowe",
+      "Ivo Sand"
+    ]
+  }
+}

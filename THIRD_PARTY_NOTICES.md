@@ -43,6 +43,20 @@ counts as non-free next to its GPL parts; the m4b-tool base image's own ffmpeg,
 which these replace, was built the same way. PyAV's wheels bundle their own
 FFmpeg 9.0.2 libraries without FDK AAC.
 
+## Ported Code
+
+`app/abs_names.py` is a Python port of Audiobookshelf's author-name parser. The
+Folder Forge naming scheme uses it to stay aligned with how Audiobookshelf reads
+author folder names: which text it treats as separate authors, and how it splits
+a name into first and last parts. The port runs on its own and never calls
+Audiobookshelf; `tools/abs_name_fixture.js` regenerates its test data from a
+running Audiobookshelf container after an update.
+
+| Source | Files | License |
+|---|---|---|
+| [Audiobookshelf](https://github.com/advplyr/audiobookshelf) v2.37.2 | `server/utils/parsers/parseNameString.js` | GPL-3.0 (compatible with AGPL-3.0-or-later) |
+| [parse-full-name](https://github.com/RateGravity/parse-full-name) 1.2.x, as copied into Audiobookshelf | `server/utils/parsers/parseFullName.js` | MIT |
+
 ## Notes
 
 - License data above is taken from the installed package metadata used by this
