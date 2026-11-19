@@ -99,7 +99,7 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         previews = resp.json()["previews"]
-        self.assertEqual(len(previews), 6)
+        self.assertEqual(len(previews), 10)
         for preview in previews:
             self.assertTrue(preview["scenario"])
 
@@ -153,3 +153,69 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuthorBlockEndpointTests(unittest.TestCase):
+    """The four multi-author example books (made-up names) and the author
+    block options through the endpoints."""
+
+    def previews(self, template, **extra):
+        resp = client.post("/api/organizer/naming-template/example-preview", json={"template": template, **extra})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        return {p["scenario"]: p for p in body["previews"]}, body
+
+    @staticmethod
+    def top_folder(preview):
+        return Path(preview["target_dir"]).relative_to(main_module.AUDIOBOOKS_ROOT).parts[0]
+
+    def test_multi_author_scenarios(self):
+        by_scenario, _body = self.previews("{+}{author}<, &>/{title}/")
+        for label in ("Two authors", "Three authors with initials", "Single-name author", "Five authors (over the cap)"):
+            self.assertIn(label, by_scenario)
+        self.assertEqual(self.top_folder(by_scenario["Two authors"]), "Mira van der Holt & Jon Le Brun")
+        self.assertEqual(self.top_folder(by_scenario["Three authors with initials"]), "Ana Pell, JK Varn, & Mara J. Holt")
+        five = by_scenario["Five authors (over the cap)"]
+        self.assertEqual(self.top_folder(five), "Ana Pell, Ivo Sand, Lee Doan, Mara Holt, & et al")
+        self.assertIn("more than 4 authors", five["review_reasons"])
+
+    def test_single_name_author_shows_the_readback_flag(self):
+        by_scenario, _body = self.previews("{+}{author}{,}/{title}/")
+        single = by_scenario["Single-name author"]
+        self.assertIn("Audiobookshelf would read this author folder as different authors", single["review_reasons"])
+        self.assertTrue(any(d["label"] == "Audiobookshelf reads" for d in single["review_details"]))
+
+    def test_initials_option_changes_the_initials_example(self):
+        template = "{+}{lname} {initials}{&}/{title}/"
+        off, _ = self.previews(template)
+        on, _ = self.previews(template, initials_follow_author_scheme=True)
+        self.assertEqual(self.top_folder(off["Three authors with initials"]), "Pell & Varn JK & Holt J")
+        self.assertEqual(self.top_folder(on["Three authors with initials"]), "Pell & Varn J.K. & Holt J")
+
+    def test_shared_folder_warning_does_not_block(self):
+        _by, body = self.previews("{+}{lname}{&}/{title}/")
+        self.assertEqual(len(body["warnings"]), 1)
+        self.assertTrue(body["previews"])
+        resp = client.post("/api/organizer/naming-template/validate", json={"template": "{+}{lname}{&}/{title}/"})
+        self.assertTrue(resp.json()["valid"])
+        self.assertEqual(len(resp.json()["warnings"]), 1)
+
+    def test_existing_scenarios_unchanged_for_the_default_template(self):
+        by_scenario, body = self.previews(main_module.load_organizer_module(main_module.default_organizer_script()).DEFAULT_NAMING_TEMPLATE)
+        self.assertEqual(body["warnings"], [])
+        self.assertEqual(self.top_folder(by_scenario["No series"]), "C.B. Titus")
+
+
+class AuthorBlockCommandTests(unittest.TestCase):
+    def test_initials_flag_only_when_asked(self):
+        base = dict(root_path="/audiobooks/_unorganized", use_default_scheme=False, naming_template="{+}{author}{&}/{title}/")
+        self.assertNotIn("--initials-follow-author-scheme", main_module.build_organizer_command(main_module.OrganizerRunRequest(**base)))
+        self.assertIn(
+            "--initials-follow-author-scheme",
+            main_module.build_organizer_command(main_module.OrganizerRunRequest(**base, initials_follow_author_scheme=True)),
+        )
+
+    def test_initials_flag_not_sent_with_the_built_in_scheme(self):
+        req = main_module.OrganizerRunRequest(root_path="/audiobooks/_unorganized", use_default_scheme=True,
+                                              initials_follow_author_scheme=True)
+        self.assertNotIn("--initials-follow-author-scheme", main_module.build_organizer_command(req))

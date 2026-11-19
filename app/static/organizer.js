@@ -104,6 +104,7 @@ function collectRequest() {
     skip_patterns: skipPatterns,
     use_default_scheme: $('useDefaultScheme').checked,
     naming_template: $('namingTemplate').value.trim(),
+    initials_follow_author_scheme: Boolean($('initialsFollowAuthorScheme')?.checked),
   };
 }
 
@@ -639,6 +640,25 @@ function renderNamingTemplateStatus(problems) {
   el.classList.add('naming-template-status-error');
 }
 
+function renderNamingTemplateWarnings(warnings) {
+  // Warnings never block a run; they sit under the template in warning color.
+  const el = $('namingTemplateWarnings');
+  if (!el) return;
+  el.hidden = !(warnings && warnings.length);
+  el.textContent = warnings && warnings.length ? warnings.join(' ') : '';
+}
+
+function initialsFollowAuthorScheme() {
+  return Boolean($('initialsFollowAuthorScheme')?.checked);
+}
+
+function namingPreviewFlag(p) {
+  if (!p.review_reasons || !p.review_reasons.length) return '';
+  const details = (p.review_details || []).map((d) => `${d.label}: ${d.value}`);
+  const text = [p.review_reasons.join('; '), ...details].join(' | ');
+  return `<div class="naming-template-preview-flag">${escapeHtml(text)}</div>`;
+}
+
 function renderNamingTemplatePreview(previews) {
   const el = $('namingTemplatePreview');
   if (!previews || !previews.length) {
@@ -649,9 +669,7 @@ function renderNamingTemplatePreview(previews) {
   el.hidden = false;
   el.innerHTML = previews.map((p) => {
     const dest = p.filename ? `${p.target_dir}/${p.filename}` : `${p.target_dir}/`;
-    const flagged = p.review_reasons && p.review_reasons.length
-      ? `<div class="naming-template-preview-flag">${escapeHtml(p.review_reasons.join('; '))}</div>`
-      : '';
+    const flagged = namingPreviewFlag(p);
     return `<div class="naming-template-preview-row">
       <div class="naming-template-preview-source mono">${escapeHtml(p.source)}</div>
       <div class="naming-template-preview-arrow">&#8594;</div>
@@ -669,9 +687,7 @@ function renderNamingTemplateExamples(previews) {
   }
   body.innerHTML = previews.map((p) => {
     const dest = p.filename ? `${p.target_dir}/${p.filename}` : `${p.target_dir}/`;
-    const flagged = p.review_reasons && p.review_reasons.length
-      ? `<div class="naming-template-preview-flag">${escapeHtml(p.review_reasons.join('; '))}</div>`
-      : '';
+    const flagged = namingPreviewFlag(p);
     return `<tr>
       <td>${escapeHtml(p.scenario || '')}</td>
       <td><code>${escapeHtml(p.target_dir)}</code>${flagged}</td>
@@ -684,7 +700,7 @@ async function refreshNamingTemplateExamples(template) {
   const res = await fetch('/api/organizer/naming-template/example-preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ template }),
+    body: JSON.stringify({ template, initials_follow_author_scheme: initialsFollowAuthorScheme() }),
   }).catch(() => null);
   if (!res || !res.ok) {
     renderNamingTemplateExamples([]);
@@ -699,6 +715,7 @@ async function refreshNamingTemplatePreview() {
   const template = $('namingTemplate').value.trim();
   if (!template) {
     renderNamingTemplateStatus([]);
+    renderNamingTemplateWarnings([]);
     renderNamingTemplatePreview([]);
     renderNamingTemplateExamples([]);
     return;
@@ -709,6 +726,7 @@ async function refreshNamingTemplatePreview() {
     body: JSON.stringify({ template }),
   }).catch(() => null);
   const validateBody = validateRes && validateRes.ok ? await validateRes.json() : null;
+  renderNamingTemplateWarnings((validateBody && validateBody.warnings) || []);
   if (!validateBody || !validateBody.valid) {
     renderNamingTemplateStatus((validateBody && validateBody.problems) || ['Could not validate template.']);
     renderNamingTemplatePreview([]);
@@ -728,6 +746,7 @@ async function refreshNamingTemplatePreview() {
         template,
         root_path: $('rootPath').value.trim(),
         destination_root: $('destinationRoot').value.trim(),
+        initials_follow_author_scheme: initialsFollowAuthorScheme(),
       }),
     }).catch(() => null).then(async (previewRes) => {
       if (!previewRes || !previewRes.ok) {
@@ -754,6 +773,7 @@ function syncNamingSchemeToggle() {
   section.classList.toggle('using-default-scheme', useDefault);
   if (useDefault) {
     renderNamingTemplateStatus([]);
+    renderNamingTemplateWarnings([]);
     renderNamingTemplatePreview([]);
     renderNamingTemplateExamples([]);
   } else {
@@ -762,6 +782,7 @@ function syncNamingSchemeToggle() {
 }
 
 $('useDefaultScheme').addEventListener('change', syncNamingSchemeToggle);
+$('initialsFollowAuthorScheme')?.addEventListener('change', refreshNamingTemplatePreview);
 syncNamingSchemeToggle();
 
 (async () => {

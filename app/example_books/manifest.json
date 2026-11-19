@@ -4,5 +4,9 @@
   "forging-divinity": "Distinct title",
   "sanderson-mistborn-ga": "Special edition (GraphicAudio)",
   "speedrunning-multiverse": "Multi-file book",
-  "elements-of-style": "Has publisher"
+  "elements-of-style": "Has publisher",
+  "two-authors": "Two authors",
+  "three-authors-initials": "Three authors with initials",
+  "single-name-author": "Single-name author",
+  "five-authors": "Five authors (over the cap)"
 }

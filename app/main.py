@@ -1461,6 +1461,7 @@ class OrganizerRunRequest(BaseModel):
     acknowledge_no_sidecars: bool = False
     naming_template: str = ""
     use_default_scheme: bool = True
+    initials_follow_author_scheme: bool = False
     trust_abs_metadata: bool = False
 
 
@@ -1475,11 +1476,13 @@ class OrganizerNamingTemplatePreviewRequest(BaseModel):
     destination_root: str = Field(default="/audiobooks")
     script_name: str = Field(default_factory=default_organizer_script)
     limit: int = 3
+    initials_follow_author_scheme: bool = False
 
 
 class OrganizerNamingTemplateExamplePreviewRequest(BaseModel):
     template: str
     script_name: str = Field(default_factory=default_organizer_script)
+    initials_follow_author_scheme: bool = False
 
 
 class TitleNoiseCustomPattern(BaseModel):
@@ -4343,6 +4346,8 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         cmd.append("--use-default-scheme")
     elif req.naming_template.strip():
         cmd += ["--naming-template", req.naming_template]
+        if req.initials_follow_author_scheme:
+            cmd.append("--initials-follow-author-scheme")
     if req.trust_abs_metadata and _get_abs_api_key():
         cmd += ["--abs-url", _get_abs_url()]
         cmd += ["--abs-api-key", _get_abs_api_key()]
@@ -9464,7 +9469,7 @@ def start_organizer_run(req: OrganizerRunRequest) -> dict[str, Any]:
 def validate_organizer_naming_template(req: OrganizerNamingTemplateValidateRequest) -> dict[str, Any]:
     organizer = load_organizer_module(req.script_name)
     problems = organizer.validate_naming_template(req.template)
-    return {"valid": not problems, "problems": problems}
+    return {"valid": not problems, "problems": problems, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 @app.post("/api/organizer/naming-template/preview")
@@ -9475,8 +9480,11 @@ def preview_organizer_naming_template(req: OrganizerNamingTemplatePreviewRequest
         raise HTTPException(status_code=400, detail="; ".join(problems))
     root = validate_audiobook_path(req.root_path)
     destination_root = validate_audiobook_path(req.destination_root)
-    previews = organizer.preview_naming_template_for_root(root, destination_root, req.template, limit=req.limit)
-    return {"previews": previews}
+    previews = organizer.preview_naming_template_for_root(
+        root, destination_root, req.template, limit=req.limit,
+        follow_author_scheme=req.initials_follow_author_scheme,
+    )
+    return {"previews": previews, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 def _example_books_manifest() -> dict[str, str]:
@@ -9502,12 +9510,13 @@ def preview_organizer_naming_template_examples(req: OrganizerNamingTemplateExamp
         raise HTTPException(status_code=400, detail="; ".join(problems))
     manifest = _example_books_manifest()
     previews = organizer.preview_naming_template_for_root(
-        EXAMPLE_BOOKS_DIR, AUDIOBOOKS_ROOT, req.template, limit=len(manifest) or 10
+        EXAMPLE_BOOKS_DIR, AUDIOBOOKS_ROOT, req.template, limit=len(manifest) or 10,
+        follow_author_scheme=req.initials_follow_author_scheme,
     )
     for preview in previews:
         source_parts = Path(preview["source"]).parts
         preview["scenario"] = next((manifest[key] for key in manifest if key in source_parts), "")
-    return {"previews": previews}
+    return {"previews": previews, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 @app.get("/api/runs/draining")
