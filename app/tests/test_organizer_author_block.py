@@ -1,6 +1,8 @@
 """Folder Forge author block: multi-author folder names (made-up names only)."""
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app.tests.script_loader import load_script
 
@@ -92,7 +94,8 @@ class StripStrayControlTokensTests(unittest.TestCase):
     def test_tokens_inside_the_block_stay(self):
         template = "{+}{author}{&}/{title} {+}<and>"
         block = ORG.find_author_block(template)
-        self.assertEqual(ORG.strip_stray_control_tokens(template, block), "{+}{author}{&}/{title} ")
+        # {+} outside the block is dropped; <and> outside it stays text, as before.
+        self.assertEqual(ORG.strip_stray_control_tokens(template, block), "{+}{author}{&}/{title} <and>")
 
     def test_angle_text_that_is_not_a_separator_survives(self):
         template = "{author}/{title} <draft>"
@@ -173,7 +176,7 @@ class AuthorBlockWarningTests(unittest.TestCase):
                 self.assertEqual(ORG.naming_template_warnings(template), [self.WARNING])
 
     def test_full_names_or_later_folder_do_not_warn(self):
-        for template in ("{+}{lname}, {fname}{&}/{title}", "{author}/{title}", "{series}/{+}{lname}/{title}",
+        for template in ("{+}{lname}, {fname}{&}/{title}", "{author}/{title}", "{series} - {title}/{+}{lname}/{title}",
                          ORG.DEFAULT_NAMING_TEMPLATE):
             with self.subTest(template=template):
                 self.assertEqual(ORG.naming_template_warnings(template), [])
@@ -210,9 +213,10 @@ class SplitAuthorNameTests(unittest.TestCase):
 
     def test_caps_initials_kept_by_default_and_follow_scheme_when_asked(self):
         self.assertEqual(ORG.split_author_name("JK Varn", take_initials=True).initials, "JK")
-        self.assertEqual(
-            ORG.split_author_name("JK Varn", take_initials=True, follow_author_scheme=True).initials, "J.K."
-        )
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "universal"}):
+            self.assertEqual(
+                ORG.split_author_name("JK Varn", take_initials=True, follow_author_scheme=True).initials, "J.K."
+            )
 
     def test_full_name_is_kept_for_author_token(self):
         self.assertEqual(ORG.split_author_name("Mara J. Holt", take_initials=False).full, "Mara J. Holt")
@@ -336,7 +340,8 @@ class AuthorBlockRenderingTests(unittest.TestCase):
         book = _book("JK Varn & Ana Pell")
         template = "{+}{lname} {initials}{&}/{title}/"
         self.assertEqual(_folders(_render(template, book))[0], "Varn JK & Pell")
-        self.assertEqual(_folders(_render(template, book, follow_author_scheme=True))[0], "Varn J.K. & Pell")
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "universal"}):
+            self.assertEqual(_folders(_render(template, book, follow_author_scheme=True))[0], "Varn J.K. & Pell")
 
     def test_initials_option_does_not_change_existing_templates(self):
         book = _book("JK Varn & Ana Pell")
@@ -396,10 +401,11 @@ class CachedTargetCarriesBlockResultsTests(unittest.TestCase):
 
     def test_follow_author_scheme_reaches_the_render(self):
         cache = ORG.empty_structure_cache(DEST)
-        resolution = ORG.build_cached_target_dir(
-            DEST, _book("JK Varn & Ana Pell"), cache, naming_template="{+}{lname} {initials}{&}/{title}/",
-            filename_applies=False, follow_author_scheme=True,
-        )
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "universal"}):
+            resolution = ORG.build_cached_target_dir(
+                DEST, _book("JK Varn & Ana Pell"), cache, naming_template="{+}{lname} {initials}{&}/{title}/",
+                filename_applies=False, follow_author_scheme=True,
+            )
         self.assertEqual(resolution.target_dir.relative_to(DEST).parts[0], "Varn J.K. & Pell")
 
 
@@ -470,6 +476,65 @@ class AuthorFolderMoveCountTests(unittest.TestCase):
     def test_scan_root_equal_to_destination_still_counts(self):
         moves = [_move("/library/Ana Pell/X", "/library/Ana Pell & Ivo Sand/X")]
         self.assertEqual(ORG.count_author_folder_moves(moves, DEST, DEST), 1)
+
+
+class ReviewFixTests(unittest.TestCase):
+    """Fixes from the whole-branch review."""
+
+    def test_empty_name_part_falls_back_to_the_full_name(self):
+        # A block that renders empty would drop the author folder and put books
+        # in the library root.
+        for template, expected in (
+            ("{fname}/{title}", "Quillon"),
+            ("{+}{initials}{&}/{title}", "Quillon & Ana Pell"),
+            ("{+}{fname}{&}/{title}/{filename}", "Quillon & Ana"),
+        ):
+            with self.subTest(template=template):
+                self.assertEqual(_folders(_render(template, _book("Quillon & Ana Pell", title="Tidebound")))[0], expected)
+
+    def test_initials_option_follows_the_settings_scheme_only_when_it_is_on(self):
+        template = "{+}{lname} {initials}{&}/{title}/"
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "legacy"}):
+            self.assertEqual(_folders(_render(template, _book("JK Varn & Ana Pell"), follow_author_scheme=True))[0], "Varn JK & Pell")
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "universal"}):
+            self.assertEqual(_folders(_render(template, _book("JK Varn & Ana Pell"), follow_author_scheme=True))[0], "Varn J.K. & Pell")
+
+    def test_templates_valid_before_stay_valid(self):
+        for template in ("{title} <{narrator}>/{filename}", "<{narrator}>/{year}", "{author}<draft>/{title}", "/(<>{author}"):
+            with self.subTest(template=template):
+                self.assertEqual(ORG.validate_naming_template(template), [])
+
+    def test_angle_text_touching_a_plus_block_is_still_an_error(self):
+        self.assertIn("Last-author separator <draft> can't be used. Use <,> <;> <&> <and> <, &> or <, and>.",
+                      ORG.validate_naming_template("{+}{author}<draft>/{title}"))
+
+    def test_guard_runs_on_the_folder_that_ends_up_first(self):
+        result = _render("{series}/{+}{author}{,}/{title}", _book("Quillon, Ivo Sand"))
+        self.assertEqual(_folders(result)[0], "Quillon, Ivo Sand")
+        self.assertIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_partial_name_warning_when_earlier_folders_can_collapse(self):
+        self.assertEqual(len(ORG.naming_template_warnings("{series}/{+}{lname}{&}/{title}")), 1)
+        self.assertEqual(ORG.naming_template_warnings("{series} - {title}/{+}{lname}{&}/x"), [])
+
+    def test_last_separator_next_to_a_plain_author_renders_as_before(self):
+        book = _book("Ana Pell", title="Tidebound")
+        self.assertEqual(_folders(_render("{title}]<,>{author}/x", book))[0], "Tidebound] - , - Ana Pell")
+        self.assertEqual(_folders(_render("{author}<, &>/x", book))[0], "Ana Pell - , &")
+        self.assertEqual(ORG.validate_naming_template("{author}<and><draft>/{title}"), [])
+
+    def test_last_separator_text_outside_a_block_renders_as_before(self):
+        result = _render("{title} <and> {series}/", _book("Ana Pell", title="Tidebound", series="Lantern"))
+        self.assertEqual(_folders(result)[0], "Tidebound - and - Lantern")
+
+
+class MoveCountReachesThePageTests(unittest.TestCase):
+    def test_summary_line_is_parsed(self):
+        from app.main import RunState, initial_organizer_stats, parse_organizer_line
+        state = RunState("test")
+        state.stats = initial_organizer_stats()
+        parse_organizer_line(state, "Organized books moving to another author folder: 7")
+        self.assertEqual(state.stats["author_folder_moves"], 7)
 
 
 from app.tests.test_organizer_cli_end_to_end import CliFixture  # noqa: E402

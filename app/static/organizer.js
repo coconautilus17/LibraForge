@@ -310,6 +310,7 @@ function renderStats(stats) {
     stat('Skipped Conflicts', stats.skipped_conflicts, 'Moves blocked by target collisions or subtree issues.'),
     stats.possible_duplicates_flagged ? stat('Possible Duplicates', stats.possible_duplicates_flagged, 'Merged single files that sit next to their own chapter files. Each review warning lists the paths involved.') : '',
     stats.flagged_marketing_cleanup ? stat('Marketing Cleanup', stats.flagged_marketing_cleanup, 'Books whose series or title was trimmed or dropped as generic marketing text. Each has a review reason.') : '',
+    stats.author_folder_moves ? stat('Author Folder Moves', stats.author_folder_moves, 'Books already organized in the library that this run moves to a different author folder, for example when a new naming template names co-authors.') : '',
     stat('Planned Moves', stats.planned_moves, 'Move operations parsed from the current run output.'),
     stat('Review Items', reviewItems, 'Planned moves using inferred, conflicting, or incomplete identity data.'),
     stat('Mode', stats.mode || '-', 'Dry run or apply.'),

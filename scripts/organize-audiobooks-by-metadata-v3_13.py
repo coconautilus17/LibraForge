@@ -61,7 +61,7 @@ try:
     from app.enrichment import fetch_all_abs_book_items
     from app import media_probe
     from app import abs_names
-    from app.author_names import _initial_letters, format_person_name
+    from app.author_names import _initial_letters, output_author_credit
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app import media_probe
@@ -86,7 +86,7 @@ except ModuleNotFoundError:
     )
     from app.enrichment import fetch_all_abs_book_items
     from app import abs_names
-    from app.author_names import _initial_letters, format_person_name
+    from app.author_names import _initial_letters, output_author_credit
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
 # Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
@@ -4190,7 +4190,7 @@ AUTHOR_SEPARATOR_PAIRS = {
     "&": ("&", ", &"),
     ";": (";",),
 }
-_BLOCK_ITEM_RE = re.compile(r"\{[^{}]*\}|<[^<>]*>")
+_BLOCK_ITEM_RE = re.compile(r"\{[^{}]*\}|<[^<>{}]*>")
 _SEPARATOR_WORDS = {"and"}
 
 
@@ -4243,11 +4243,28 @@ def _template_items(template: str) -> list[tuple[str, str, int, int]]:
 
 
 _BLOCK_CONTROL_KINDS = {"multi", "between", "letters", "last"}
+# Outside a block, <?> was always plain text; only {+} and {?} are dropped.
+_STRAY_CONTROL_KINDS = {"multi", "between", "letters"}
 
 
 def _author_block_span(items: list[tuple[str, str, int, int]], start: int = 0) -> tuple[int, int] | None:
     """Item index range [first, last] of the first author block at or after
-    item `start`, or None."""
+    item `start`, or None. In a block without {+}, a <?> has nothing to
+    separate: it is relabelled plain text (in `items`, in place), as it was
+    before author blocks existed, and the span is found again."""
+    span = _raw_author_block_span(items, start)
+    if span is None or any(items[i][0] == "multi" for i in range(span[0], span[1] + 1)):
+        return span
+    lasts = [i for i in range(span[0], span[1] + 1) if items[i][0] == "last"]
+    if not lasts:
+        return span
+    for i in lasts:
+        _kind, content, item_start, item_end = items[i]
+        items[i] = ("text", f"<{content}>", item_start, item_end)
+    return _raw_author_block_span(items, start)
+
+
+def _raw_author_block_span(items: list[tuple[str, str, int, int]], start: int = 0) -> tuple[int, int] | None:
     first_name = next((i for i in range(start, len(items)) if items[i][0] == "name"), None)
     if first_name is None:
         return None
@@ -4318,12 +4335,13 @@ def find_author_block(template: str) -> AuthorBlock | None:
 
 
 def strip_stray_control_tokens(template: str, block: AuthorBlock | None) -> str:
-    """Remove {+}, {?} and allowed <?> tokens that sit outside the author
-    block: they only mean something inside it. Any other < > text is kept."""
+    """Remove {+} and {?} tokens that sit outside the author block: they only
+    mean something inside it. Text in < > outside the block, separators
+    included, stays plain text as it always has."""
     out: list[str] = []
     for kind, _content, start, end in _template_items(template):
         inside = block is not None and block.start <= start and end <= block.end
-        if not inside and kind in ("multi", "between", "letters", "last"):
+        if not inside and kind in _STRAY_CONTROL_KINDS:
             continue
         out.append(template[start:end])
     return "".join(out)
@@ -4342,9 +4360,11 @@ def _author_block_problems(template: str) -> list[str]:
     if span is None:
         return problems
     first, last = span
-    # An angle item touching the block is meant as its last-author separator.
+    # An angle item touching a block that has control tokens is meant as its
+    # last-author separator; next to a plain {author} it stays text, as before.
+    has_controls = any(items[i][0] in _BLOCK_CONTROL_KINDS for i in range(first, last + 1))
     for index in (first - 1, last + 1):
-        if 0 <= index < len(items) and items[index][0] == "angle":
+        if has_controls and 0 <= index < len(items) and items[index][0] == "angle":
             problems.append(
                 f"Last-author separator <{items[index][1]}> can't be used. "
                 "Use <,> <;> <&> <and> <, &> or <, and>."
@@ -4364,6 +4384,15 @@ def _author_block_problems(template: str) -> list[str]:
     return problems
 
 
+def _block_can_be_top_folder(template: str, block: AuthorBlock) -> bool:
+    """Whether the block's folder can end up as the top folder under the
+    library, the one Audiobookshelf reads as the author: it is the first
+    folder, or every folder before it can collapse (a single core token such
+    as {series}, which is dropped when empty)."""
+    earlier = template[:block.start].split("/")[:-1]
+    return all(len(_significant_tokens(set(NAMING_TEMPLATE_TOKEN_RE.findall(segment)))) <= 1 for segment in earlier)
+
+
 def naming_template_warnings(template: str) -> list[str]:
     """Non-blocking warnings about a naming template (problems from
     validate_naming_template() block a run; these do not)."""
@@ -4371,10 +4400,8 @@ def naming_template_warnings(template: str) -> list[str]:
     block = find_author_block(template)
     if block is None:
         return warnings
-    first_slash = template.find("/")
-    in_first_folder = first_slash == -1 or block.start < first_slash
     names = {content for kind, content in block.layout if kind == "token"}
-    if in_first_folder and "author" not in names and not {"fname", "lname"} <= names:
+    if _block_can_be_top_folder(template, block) and "author" not in names and not {"fname", "lname"} <= names:
         warnings.append(
             "The author folder uses only part of each name, so different authors can end up in one folder "
             "(for example two authors named Holt), and Audiobookshelf would read them as one author. "
@@ -4417,10 +4444,11 @@ def split_author_name(name: str, take_initials: bool, follow_author_scheme: bool
     suffix. A single word is the last name. With take_initials, initials
     already in the first part ("J.", "A.B.", "JK") move to `initials`; none
     are made from full names. With follow_author_scheme, the name is first
-    written the way the Settings author-name scheme writes tags."""
+    written the way the fixer writes it to tags (the Settings author-name
+    scheme, only when that scheme is switched on)."""
     name = clean_text(name)
     if follow_author_scheme:
-        name = format_person_name(name)
+        name = output_author_credit(name)
     name = canonical_author_name(name)
     parsed = abs_names.parse_full_name(name)
     first = " ".join(part for part in (parsed.first, parsed.middle) if part)
@@ -4498,6 +4526,8 @@ class _BlockRendering:
     block_authors: tuple[str, ...]
     readback_check: bool
     over_cap: bool
+    # Which "/"-separated part of the template holds the {+} block.
+    block_segment: int | None = None
 
 
 def _render_one_author(
@@ -4521,7 +4551,9 @@ def _render_one_author(
     if set(tokens) == {"author"} and (not multi or not follow_author_scheme):
         return render_author_layout(layout, NameParts(first="", last="", initials="", full=name))
     parts = split_author_name(name, take_initials="initials" in tokens, follow_author_scheme=follow_author_scheme)
-    return render_author_layout(layout, parts)
+    # A layout that leaves nothing for this name ({initials} for a name with
+    # none) falls back to the whole name, so the author level never vanishes.
+    return render_author_layout(layout, parts) or parts.full or name
 
 
 def _render_author_blocks(
@@ -4543,10 +4575,11 @@ def _render_author_blocks(
     block_authors: tuple[str, ...] = ()
     readback_check = False
     over_cap = False
+    block_segment: int | None = None
     pos_item = 0
     for index, span in enumerate(spans):
         for kind, _content, start, end in items[pos_item:span[0]]:
-            if kind not in _BLOCK_CONTROL_KINDS:
+            if kind not in _STRAY_CONTROL_KINDS:
                 out.append(template[start:end])
         block = _block_from_items(items, span)
         if index == 0 and block.multi:
@@ -4555,9 +4588,8 @@ def _render_author_blocks(
             value = join_authors(rendered, block.between, block.last)
             block_authors = tuple(names)
             over_cap = len(names) > AUTHOR_BLOCK_CAP
-            first_slash = template.find("/")
-            in_first_folder = first_slash == -1 or block.start < first_slash
-            readback_check = in_first_folder and not over_cap and names != [_UNKNOWN_AUTHOR]
+            block_segment = template[:block.start].count("/")
+            readback_check = not over_cap and names != [_UNKNOWN_AUTHOR]
         else:
             value = _render_one_author(block.layout, today, follow_author_scheme, multi=False)
         token = f"__author_block_{index}"
@@ -4565,9 +4597,9 @@ def _render_author_blocks(
         out.append("{" + token + "}")
         pos_item = span[1] + 1
     for kind, _content, start, end in items[pos_item:]:
-        if kind not in _BLOCK_CONTROL_KINDS:
+        if kind not in _STRAY_CONTROL_KINDS:
             out.append(template[start:end])
-    return _BlockRendering("".join(out), values, block_authors, readback_check, over_cap)
+    return _BlockRendering("".join(out), values, block_authors, readback_check, over_cap, block_segment)
 
 
 def _abs_readback_problem(rendered_folder: str, authors: tuple[str, ...]) -> list[str] | None:
@@ -5085,7 +5117,9 @@ def render_naming_template_full(
                 continue
             else:
                 folder_segments.append(_sanitize_naming_segment(rendered))
-            if position == 0:
+            if len(folder_segments) == 1 and position == blocks.block_segment:
+                # The block's folder is the top folder actually written
+                # (folders before it may have collapsed): the author folder.
                 first_folder_rendered = folder_segments[-1]
 
     if blocks.over_cap:

@@ -1,7 +1,9 @@
 """Endpoint tests for Folder Forge's naming-template validate/preview routes."""
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -188,7 +190,8 @@ class AuthorBlockEndpointTests(unittest.TestCase):
     def test_initials_option_changes_the_initials_example(self):
         template = "{+}{lname} {initials}{&}/{title}/"
         off, _ = self.previews(template)
-        on, _ = self.previews(template, initials_follow_author_scheme=True)
+        with mock.patch.dict(os.environ, {"LIBRAFORGE_AUTHOR_SCHEME": "universal"}):
+            on, _ = self.previews(template, initials_follow_author_scheme=True)
         self.assertEqual(self.top_folder(off["Three authors with initials"]), "Pell & Varn JK & Holt J")
         self.assertEqual(self.top_folder(on["Three authors with initials"]), "Pell & Varn J.K. & Holt J")
 
