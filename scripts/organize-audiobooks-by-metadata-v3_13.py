@@ -60,6 +60,8 @@ try:
     )
     from app.enrichment import fetch_all_abs_book_items
     from app import media_probe
+    from app import abs_names
+    from app.author_names import _initial_letters, format_person_name
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app import media_probe
@@ -83,6 +85,8 @@ except ModuleNotFoundError:
         normalize_abs_media_to_internal,
     )
     from app.enrichment import fetch_all_abs_book_items
+    from app import abs_names
+    from app.author_names import _initial_letters, format_person_name
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
 # Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
@@ -4361,6 +4365,108 @@ def naming_template_warnings(template: str) -> list[str]:
             "Use {fname} and {lname} together here, or move this block to a later folder."
         )
     return warnings
+
+
+AUTHOR_BLOCK_CAP = 4
+
+
+@dataclass(frozen=True)
+class NameParts:
+    first: str
+    last: str
+    initials: str
+    full: str = ""
+
+
+def _keep_written_case(original: str, parsed: str) -> str:
+    """Audiobookshelf's parser re-cases all-lower/all-upper names ("ana pell"
+    -> "Ana Pell"); a folder name keeps the case the name was written in."""
+    if not parsed:
+        return parsed
+    pool = original.split()
+    out: list[str] = []
+    for word in parsed.split(" "):
+        match = next((w for w in pool if w.lower() == word.lower()), None)
+        if match is not None:
+            pool.remove(match)
+            out.append(match)
+        else:
+            out.append(word)
+    return " ".join(out)
+
+
+def split_author_name(name: str, take_initials: bool, follow_author_scheme: bool = False) -> NameParts:
+    """Split one author name the way Audiobookshelf does (app.abs_names):
+    first = first + middle, last = last name (particles included) plus any
+    suffix. A single word is the last name. With take_initials, initials
+    already in the first part ("J.", "A.B.", "JK") move to `initials`; none
+    are made from full names. With follow_author_scheme, the name is first
+    written the way the Settings author-name scheme writes tags."""
+    name = clean_text(name)
+    if follow_author_scheme:
+        name = format_person_name(name)
+    name = canonical_author_name(name)
+    parsed = abs_names.parse_full_name(name)
+    first = " ".join(part for part in (parsed.first, parsed.middle) if part)
+    last = " ".join(part for part in (parsed.last, parsed.suffix) if part)
+    first = _keep_written_case(name, first)
+    last = _keep_written_case(name, last)
+    initials = ""
+    if take_initials and first:
+        words = first.split(" ")
+        last_index = len(name.split()) - 1
+        kept: list[str] = []
+        found: list[str] = []
+        for index, word in enumerate(words):
+            (found if _initial_letters(word, index, last_index) else kept).append(word)
+        first = " ".join(kept)
+        initials = " ".join(found)
+    return NameParts(first=first, last=last, initials=initials, full=name)
+
+
+def render_author_layout(layout: tuple[tuple[str, str], ...], parts: NameParts) -> str:
+    """One author through the block's layout. An empty name token is removed
+    together with the literal text right after it, or the text right before
+    it when it is the last name token, so "{lname}, {fname}" for a
+    single-name author gives "Quillon", not "Quillon, "."""
+    values = {"author": parts.full, "fname": parts.first, "lname": parts.last, "initials": parts.initials}
+    seq = [[kind, values.get(content, "") if kind == "token" else content] for kind, content in layout]
+    i = 0
+    while i < len(seq):
+        kind, value = seq[i]
+        has_later_token = any(k == "token" for k, _v in seq[i + 1:])
+        if kind == "token" and not value and has_later_token:
+            end = i + 2 if i + 1 < len(seq) and seq[i + 1][0] == "text" else i + 1
+            del seq[i:end]
+            continue
+        i += 1
+    while seq and seq[-1][0] == "token" and not seq[-1][1]:
+        seq.pop()
+        if seq and seq[-1][0] == "text":
+            seq.pop()
+    return "".join(value for _kind, value in seq)
+
+
+def _spaced_separator(separator: str) -> str:
+    """A space on both sides, except none before a leading "," or ";"."""
+    return (separator if separator[0] in ",;" else " " + separator) + " "
+
+
+def join_authors(rendered: list[str], between: str | None, last: str | None) -> str:
+    """Join rendered author names. No between separator means {,}; no last
+    separator means the between one. Two authors drop the Oxford comma
+    ("A & B" for <, &>). Past the cap, the first AUTHOR_BLOCK_CAP authors are
+    followed by the last separator and "et al"."""
+    names = [name for name in rendered if name]
+    if len(names) > AUTHOR_BLOCK_CAP:
+        names = names[:AUTHOR_BLOCK_CAP] + ["et al"]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    between = between or ","
+    last = last or between
+    if len(names) == 2 and last in (", &", ", and"):
+        last = last[2:]
+    return _spaced_separator(between).join(names[:-1]) + _spaced_separator(last) + names[-1]
 
 
 class UnknownNamingTokenError(ValueError):

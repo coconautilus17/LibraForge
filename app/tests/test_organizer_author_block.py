@@ -178,5 +178,99 @@ class AuthorBlockWarningTests(unittest.TestCase):
                 self.assertEqual(ORG.naming_template_warnings(template), [])
 
 
+class SplitAuthorNameTests(unittest.TestCase):
+    def test_middle_initial_stays_with_first_name(self):
+        parts = ORG.split_author_name("Mara J. Holt", take_initials=False)
+        self.assertEqual((parts.first, parts.last, parts.initials), ("Mara J.", "Holt", ""))
+
+    def test_initials_are_taken_out_of_the_first_part(self):
+        parts = ORG.split_author_name("Mara J. Holt", take_initials=True)
+        self.assertEqual((parts.first, parts.last, parts.initials), ("Mara", "Holt", "J."))
+
+    def test_particle_stays_with_last_name(self):
+        self.assertEqual(ORG.split_author_name("Jon Le Brun", take_initials=False).last, "Le Brun")
+        self.assertEqual(ORG.split_author_name("Mira van der Holt", take_initials=False).last, "van der Holt")
+
+    def test_suffix_stays_with_last_name(self):
+        parts = ORG.split_author_name("Tomas Reed Jr.", take_initials=False)
+        self.assertEqual((parts.first, parts.last), ("Tomas", "Reed Jr."))
+
+    def test_initials_only_first_part(self):
+        parts = ORG.split_author_name("A.B. Carver", take_initials=True)
+        self.assertEqual((parts.first, parts.last, parts.initials), ("", "Carver", "A.B."))
+
+    def test_single_word_is_the_last_name(self):
+        parts = ORG.split_author_name("Quillon", take_initials=True)
+        self.assertEqual((parts.first, parts.last, parts.initials), ("", "Quillon", ""))
+
+    def test_case_is_kept_as_written(self):
+        parts = ORG.split_author_name("ana pell", take_initials=False)
+        self.assertEqual((parts.first, parts.last), ("ana", "pell"))
+
+    def test_caps_initials_kept_by_default_and_follow_scheme_when_asked(self):
+        self.assertEqual(ORG.split_author_name("JK Varn", take_initials=True).initials, "JK")
+        self.assertEqual(
+            ORG.split_author_name("JK Varn", take_initials=True, follow_author_scheme=True).initials, "J.K."
+        )
+
+    def test_full_name_is_kept_for_author_token(self):
+        self.assertEqual(ORG.split_author_name("Mara J. Holt", take_initials=False).full, "Mara J. Holt")
+
+
+class RenderAuthorLayoutTests(unittest.TestCase):
+    LAYOUT = (("token", "lname"), ("text", ", "), ("token", "fname"), ("text", " "), ("token", "initials"))
+
+    def test_empty_first_name_drops_the_text_after_it(self):
+        parts = ORG.split_author_name("A.B. Carver", take_initials=True)
+        self.assertEqual(ORG.render_author_layout(self.LAYOUT, parts), "Carver, A.B.")
+
+    def test_single_word_name(self):
+        parts = ORG.split_author_name("Quillon", take_initials=True)
+        self.assertEqual(ORG.render_author_layout(self.LAYOUT, parts), "Quillon")
+
+    def test_all_parts_present(self):
+        parts = ORG.split_author_name("Mara J. Holt", take_initials=True)
+        self.assertEqual(ORG.render_author_layout(self.LAYOUT, parts), "Holt, Mara J.")
+
+    def test_author_token(self):
+        parts = ORG.split_author_name("Mara J. Holt", take_initials=False)
+        self.assertEqual(ORG.render_author_layout((("token", "author"),), parts), "Mara J. Holt")
+
+
+class JoinAuthorsTests(unittest.TestCase):
+    THREE = ["A", "B", "C"]
+
+    def test_three_names(self):
+        cases = [
+            ((",", ", &"), "A, B, & C"),
+            ((",", "and"), "A, B and C"),
+            ((";", None), "A; B; C"),
+            (("&", None), "A & B & C"),
+            ((None, None), "A, B, C"),
+            ((None, "&"), "A, B & C"),
+            ((",", ", and"), "A, B, and C"),
+        ]
+        for (between, last), expected in cases:
+            with self.subTest(between=between, last=last):
+                self.assertEqual(ORG.join_authors(self.THREE, between, last), expected)
+
+    def test_two_names_collapse_the_oxford_comma(self):
+        self.assertEqual(ORG.join_authors(["A", "B"], ",", ", &"), "A & B")
+        self.assertEqual(ORG.join_authors(["A", "B"], ",", ", and"), "A and B")
+        self.assertEqual(ORG.join_authors(["A", "B"], ",", None), "A, B")
+
+    def test_one_name(self):
+        self.assertEqual(ORG.join_authors(["A"], "&", "and"), "A")
+
+    def test_four_names_render_all(self):
+        self.assertEqual(ORG.join_authors(["A", "B", "C", "D"], ",", "and"), "A, B, C and D")
+
+    def test_over_the_cap_ends_with_et_al(self):
+        five = ["A", "B", "C", "D", "E"]
+        self.assertEqual(ORG.join_authors(five, ",", "and"), "A, B, C, D and et al")
+        self.assertEqual(ORG.join_authors(five, "&", None), "A & B & C & D & et al")
+        self.assertEqual(ORG.join_authors(five, ",", ", &"), "A, B, C, D, & et al")
+
+
 if __name__ == "__main__":
     unittest.main()
