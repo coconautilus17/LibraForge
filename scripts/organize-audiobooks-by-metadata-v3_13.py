@@ -4830,14 +4830,15 @@ def build_target_dir_for_template(
     order_details: tuple[tuple[str, str], ...] = ()
     block = find_author_block(naming_template) if author_orders is not None and len(authors) >= 2 else None
     if block is not None and block.multi:
-        # The same co-authors always share one folder: the first order seen
-        # in the run wins, later books in another order follow it.
+        # The same co-authors always share one folder: the first order and
+        # spelling seen in the run win; a later book in another order follows
+        # it and is flagged, one spelled differently just follows it.
         key = frozenset(normalize_for_compare(name) for name in authors)
         stored = author_orders.setdefault(key, tuple(authors))
         if [normalize_for_compare(n) for n in stored] != [normalize_for_compare(n) for n in authors]:
-            authors = list(stored)
             order_reasons = [AUTHOR_ORDER_REASON]
             order_details = (("Order used", "; ".join(stored)),)
+        authors = list(stored)
     rendered = render_naming_template_full(
         naming_template, tokens, redundant, filename_applies=filename_applies,
         source_file=source_file, destination_root=destination_root,

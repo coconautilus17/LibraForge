@@ -428,6 +428,14 @@ class AuthorOrderTests(unittest.TestCase):
         self.assertIn(ORG.AUTHOR_ORDER_REASON, second.review_reasons)
         self.assertIn(("Order used", "Ana Pell; Ivo Sand"), second.review_details)
 
+    def test_same_co_authors_spelled_differently_share_one_folder(self):
+        orders: dict = {}
+        template = "{+}{author}{&}/{title}/"
+        ORG.build_target_dir_for_template(DEST, _book("Ana Pell & IVO SAND"), template, filename_applies=False, author_orders=orders)
+        second = ORG.build_target_dir_for_template(DEST, _book("Ana Pell & Ivo Sand", title="Other"), template, filename_applies=False, author_orders=orders)
+        self.assertEqual(_folders(second)[0], "Ana Pell & IVO SAND")
+        self.assertNotIn(ORG.AUTHOR_ORDER_REASON, second.review_reasons)
+
     def test_no_order_tracking_without_a_plus_block(self):
         orders: dict = {}
         ORG.build_target_dir_for_template(DEST, _book("Ana Pell & Ivo Sand"), "{author}/{title}/", filename_applies=False, author_orders=orders)
