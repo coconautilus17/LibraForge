@@ -92,3 +92,4 @@ The Product reads audiobook and ebook metadata, creates planned move entries and
 - Case-insensitive skip patterns exclude matching source paths or inferred metadata from moves.
 - Unknown authors, ambiguous existing structures and occupied destinations are reported as skipped under the default policy.
 - Template filenames apply only to single-file books; multipart groups keep their chapter filenames.
+- Co-written books under an author block carry its review reasons, and the run reports how many already-organized books move to another author folder.
