@@ -58,3 +58,5 @@ The Product shows the resulting audiobook and ebook destination names without mo
 
 - An invalid or unknown token is reported before the custom scheme is used.
 - The built-in scheme ignores the custom template field.
+- An author block Audiobookshelf couldn't read back (a separator pair it can't split, `{author}` mixed with name parts, `{+}` outside the first author block) is reported before the custom scheme is used.
+- A top-folder author block that writes only part of each name shows a warning that doesn't block the run.
