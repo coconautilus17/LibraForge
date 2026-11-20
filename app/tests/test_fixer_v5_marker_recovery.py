@@ -119,6 +119,12 @@ class MarkerSkipIsCleanTests(unittest.TestCase):
             FIXER.marker_skip_is_clean(self.media, self._marker(), True, self.meta_target)
         )
 
+    def test_clean_without_metadata_json_when_audiobookshelf_knows_the_book(self):
+        # Synced through Audiobookshelf's API: no metadata.json of its own (#546).
+        self.assertTrue(
+            FIXER.marker_skip_is_clean(self.media, self._marker(), True, self.meta_target, abs_known=True)
+        )
+
     def test_not_clean_when_per_file_sidecar_still_present_and_alone(self):
         self.meta_target.write_text("{}", encoding="utf-8")
         (self.folder / f"Book.m4b{FIXER.LIBRAFORGE_SUFFIX}").write_text("{}", encoding="utf-8")

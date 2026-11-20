@@ -30,6 +30,10 @@ each written by the step that owns it:
   `restored_at`). The fixer uses it to skip already-applied books, except a
   `series_only` apply (matched only to another book of the series) and a
   `different_edition` apply with no real ASIN of its own: both are searched again.
+  An applied book is skipped as finished when its ASIN is recorded as written, its
+  metadata is in place (Audiobookshelf knows the book, or its `metadata.json` exists) and
+  its sidecar is in its final place; otherwise its stored match is applied again, with no
+  new search, to fill what is missing.
 - `backup`: the original tags (`format_tags`) captured before the first write, with
   `created_at`, `source_file` and `duration_minutes`. `--restore-metadata` reads this.
 - `sidecar`: the metadata plan for an M4B conversion (`book`, `audible`, source file list,
@@ -38,7 +42,8 @@ each written by the step that owns it:
 - `chapter_forge`: the chapter list Chapter Forge saved, with the settings that produced it.
 
 Older versions kept `marker` and `backup` in separate files; the fixer migrates those into the
-sidecar the first time it reads them.
+sidecar the first time a run that writes (Apply) reads them. A dry run reads them where they
+are and leaves them.
 
 ## In the reports folder (`REPORTS_DIR`, `/app/reports`)
 
