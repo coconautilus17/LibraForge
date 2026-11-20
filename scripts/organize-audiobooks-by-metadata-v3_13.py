@@ -5328,9 +5328,11 @@ def template_folders_name_author_and_series(naming_template: str) -> bool:
 
     Only then can a folder name stand in for a book's author or series. Under
     any other layout ("{author} - {series}/...", "{series}/...",
-    "{author}/{series} - {order} - {title}/") the Author/Series reading
-    puts the wrong text in those slots, so books are read from their own
-    metadata alone.
+    "{author}/{series} - {order} - {title}/", or an author level written
+    with {lname}/{fname}/{initials} such as "Sanderson, Brandon") the
+    Author/Series reading puts the wrong text in those slots, so books are
+    read from their own metadata alone. An author block ("{+}{author}<, &>")
+    is still an {author} level.
     """
     if naming_template == DEFAULT_SCHEME_KEY:
         return True

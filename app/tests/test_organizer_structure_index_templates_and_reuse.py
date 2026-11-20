@@ -44,11 +44,15 @@ def entries_by_series(cache: dict) -> dict:
 class TemplateShapeTests(unittest.TestCase):
     def test_author_then_series_folders_can_be_read_from_the_path(self):
         for template in (ORGANIZER.DEFAULT_SCHEME_KEY, ORGANIZER.DEFAULT_NAMING_TEMPLATE,
-                         "{author}/{series}/{number} - {title}/", "{author}/{series}/{order}/{filename}"):
+                         "{author}/{series}/{number} - {title}/", "{author}/{series}/{order}/{filename}",
+                         "{+}{author}<, &>/{series} [{edition}]/{order} - {title}/{filename}"):
             self.assertTrue(ORGANIZER.template_folders_name_author_and_series(template), template)
 
     def test_other_layouts_cannot(self):
-        for template in (AUTHOR_SERIES_LEVEL, SERIES_IN_BOOK, "{series}/{order} - {title}/", "{author}/{title}/"):
+        # "{lname}, {fname}" folders ("Sanderson, Brandon") are not read as an author by the
+        # Author/Series path reading, so books under them are read from their metadata.
+        for template in (AUTHOR_SERIES_LEVEL, SERIES_IN_BOOK, "{series}/{order} - {title}/", "{author}/{title}/",
+                         "{lname}, {fname}/{series}/{order} - {title}/"):
             self.assertFalse(ORGANIZER.template_folders_name_author_and_series(template), template)
 
 
