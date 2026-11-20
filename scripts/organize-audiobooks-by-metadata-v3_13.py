@@ -1008,6 +1008,33 @@ def primary_author(value: str) -> str:
     return sanitize_path_name(value, "Unknown Author")
 
 
+_ET_AL_RE = re.compile(r"\s*(?:,\s*)?(?:(?:and|&)\s+)?\b(?:et\.?\s+al\.?|others)\s*$", re.IGNORECASE)
+
+
+def _author_block_credit_people(credit: str) -> list[str]:
+    """split_people() for an author block, closer to how Audiobookshelf reads
+    a credit: ";" separates authors too, a trailing "et al" or "others" is
+    not an author, and a last-first list ("Holt, Mara" or "Pell, Ana & Sand,
+    Ivo", every part one word) is one author per pair."""
+    people: list[str] = []
+    for part in clean_text(credit).split(";"):
+        part = _ET_AL_RE.sub("", part).strip(" ,")
+        if not part:
+            continue
+        split = split_people(part, drop_roles=True)
+        if (
+            len(split) >= 2
+            and len(split) % 2 == 0
+            and all(len(person.split()) == 1 for person in split)
+            and not NON_AUTHOR_ROLE_RE.search(part)
+        ):
+            paired = abs_names.parse_name_string(part)
+            if len(paired) == len(split) // 2:
+                split = paired
+        people.extend(person for person in split if normalize_for_compare(person) not in {normalize_for_compare(p) for p in people})
+    return people
+
+
 def author_block_people(metadata: dict[str, Any]) -> list[str]:
     """The book's authors for a Folder Forge author block, in credit order:
     role credits (translator, foreword, ...) and generic credits ("Various")
@@ -1016,7 +1043,7 @@ def author_block_people(metadata: dict[str, Any]) -> list[str]:
     the first credited person), the corrected name takes the first place."""
     people = [
         canonical_author_name(person)
-        for person in split_people(metadata.get("author", ""), drop_roles=True)
+        for person in _author_block_credit_people(str(metadata.get("author") or ""))
         if normalize_for_compare(person) not in GENERIC_AUTHOR_KEYS
     ]
     if not people:
@@ -4347,9 +4374,19 @@ def strip_stray_control_tokens(template: str, block: AuthorBlock | None) -> str:
     return "".join(out)
 
 
+LATER_MULTI_BLOCK_PROBLEM = (
+    "{+} works only in the first author block. Move it there, or remove it: "
+    "a later block shows one author."
+)
+
+
 def _author_block_problems(template: str) -> list[str]:
     problems: list[str] = []
     items, span = _block_items(template)
+    for later in _all_author_block_spans(items)[1:]:
+        if any(items[i][0] == "multi" for i in range(later[0], later[1] + 1)):
+            problems.append(LATER_MULTI_BLOCK_PROBLEM)
+            break
     for kind, content, _start, _end in items:
         if kind == "between" and content not in AUTHOR_BETWEEN_SEPARATORS:
             problems.append(f"Author separator {{{content}}} can't be used. Between authors use {{,}} {{;}} or {{&}}.")
@@ -4393,6 +4430,13 @@ def _block_can_be_top_folder(template: str, block: AuthorBlock) -> bool:
     return all(len(_significant_tokens(set(NAMING_TEMPLATE_TOKEN_RE.findall(segment)))) <= 1 for segment in earlier)
 
 
+def _is_partial_name_layout(block: AuthorBlock) -> bool:
+    """A layout that writes only part of each name (no {author}, and not both
+    {fname} and {lname})."""
+    names = {content for kind, content in block.layout if kind == "token"}
+    return "author" not in names and not {"fname", "lname"} <= names
+
+
 def naming_template_warnings(template: str) -> list[str]:
     """Non-blocking warnings about a naming template (problems from
     validate_naming_template() block a run; these do not)."""
@@ -4400,8 +4444,7 @@ def naming_template_warnings(template: str) -> list[str]:
     block = find_author_block(template)
     if block is None:
         return warnings
-    names = {content for kind, content in block.layout if kind == "token"}
-    if _block_can_be_top_folder(template, block) and "author" not in names and not {"fname", "lname"} <= names:
+    if _block_can_be_top_folder(template, block) and _is_partial_name_layout(block):
         warnings.append(
             "The author folder uses only part of each name, so different authors can end up in one folder "
             "(for example two authors named Holt), and Audiobookshelf would read them as one author. "
@@ -4589,7 +4632,8 @@ def _render_author_blocks(
             block_authors = tuple(names)
             over_cap = len(names) > AUTHOR_BLOCK_CAP
             block_segment = template[:block.start].count("/")
-            readback_check = not over_cap and names != [_UNKNOWN_AUTHOR]
+            # A partial-name layout gets the template warning instead.
+            readback_check = not over_cap and names != [_UNKNOWN_AUTHOR] and not _is_partial_name_layout(block)
         else:
             value = _render_one_author(block.layout, today, follow_author_scheme, multi=False)
         token = f"__author_block_{index}"
@@ -4608,9 +4652,24 @@ def _abs_readback_problem(rendered_folder: str, authors: tuple[str, ...]) -> lis
     reading, so "Holt, Mara" and "Mara Holt" are the same author)."""
     parsed = abs_names.parse_name_string(rendered_folder)
     intended = [reading for name in authors for reading in (abs_names.parse_name_string(name) or [name])]
-    if [normalize_for_compare(n) for n in parsed] == [normalize_for_compare(n) for n in intended]:
+    if len(parsed) == len(intended) and all(
+        _same_abs_author(folder_name, tag_name) for folder_name, tag_name in zip(parsed, intended)
+    ):
         return None
     return parsed
+
+
+def _same_abs_author(folder_name: str, tag_name: str) -> bool:
+    """Same author in Audiobookshelf's two readings. Its tag reading drops a
+    suffix ("Tomas Reed Jr" reads as "Tomas Reed") that its last-first folder
+    reading keeps ("Reed Jr, Tomas" reads as "Tomas Reed Jr"), so a suffix
+    alone is not a different author."""
+    if normalize_for_compare(folder_name) == normalize_for_compare(tag_name):
+        return True
+    def without_suffix(name: str) -> str:
+        full = abs_names.parse_full_name(name)
+        return normalize_for_compare(" ".join(p for p in (full.first, full.middle, full.last) if p))
+    return without_suffix(folder_name) == without_suffix(tag_name)
 
 
 class UnknownNamingTokenError(ValueError):

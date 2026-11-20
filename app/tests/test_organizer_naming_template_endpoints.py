@@ -153,9 +153,6 @@ class ExamplePreviewEndpointTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class AuthorBlockEndpointTests(unittest.TestCase):
     """The four multi-author example books (made-up names) and the author
@@ -204,9 +201,31 @@ class AuthorBlockEndpointTests(unittest.TestCase):
         self.assertEqual(len(resp.json()["warnings"]), 1)
 
     def test_existing_scenarios_unchanged_for_the_default_template(self):
+        # Targets and filenames as main rendered them before author blocks.
+        expected = {
+            "No series": ("C.B. Titus/Armor", "Armor.m4b"),
+            "Title matches series": ("Andries Louws/Dao of Magic/Book 5", "The Dao of Magic V.m4b"),
+            "Has publisher": ("William Strunk Jr/The Elements of Style", "The Elements of Style.m4b"),
+            "Distinct title": (
+                "Andrew Rowe/The War of Broken Mirrors/Book 1 - Forging Divinity", "Book 1 - Forging Divinity.m4b",
+            ),
+            "Special edition (GraphicAudio)": (
+                "Brandon Sanderson/Mistborn [GraphicAudio]/Book 1 - The Final Empire", "Book 1 - The Final Empire.m4b",
+            ),
+            # Its filename depends on ffprobe grouping (see above), so only the target.
+            "Multi-file book": ("adastra339/Speedrunning the Multiverse/Book 1", None),
+        }
         by_scenario, body = self.previews(main_module.load_organizer_module(main_module.default_organizer_script()).DEFAULT_NAMING_TEMPLATE)
         self.assertEqual(body["warnings"], [])
-        self.assertEqual(self.top_folder(by_scenario["No series"]), "C.B. Titus")
+        for scenario, (target, filename) in expected.items():
+            with self.subTest(scenario=scenario):
+                preview = by_scenario[scenario]
+                self.assertEqual(
+                    Path(preview["target_dir"]).relative_to(main_module.AUDIOBOOKS_ROOT).as_posix(), target
+                )
+                if filename is not None:
+                    self.assertEqual(preview["filename"], filename)
+                self.assertEqual(preview["review_reasons"], [])
 
 
 class AuthorBlockCommandTests(unittest.TestCase):
@@ -222,3 +241,7 @@ class AuthorBlockCommandTests(unittest.TestCase):
         req = main_module.OrganizerRunRequest(root_path="/audiobooks/_unorganized", use_default_scheme=True,
                                               initials_follow_author_scheme=True)
         self.assertNotIn("--initials-follow-author-scheme", main_module.build_organizer_command(req))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -545,6 +545,50 @@ class MoveCountReachesThePageTests(unittest.TestCase):
         self.assertEqual(state.stats["author_folder_moves"], 7)
 
 
+class DeferredFixTests(unittest.TestCase):
+    """Fixes for the minors deferred by the whole-branch review."""
+
+    def test_partial_name_layout_is_not_flagged_per_book(self):
+        # The template warning already covers partial-name layouts.
+        for author in ("Mara Holt", "Mara Holt & Jon Le Brun"):
+            with self.subTest(author=author):
+                result = _render("{+}{lname}{&}/{title}/", _book(author))
+                self.assertNotIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_suffix_author_last_first_is_not_flagged(self):
+        result = _render("{+}{lname}, {fname}{&}/{title}/", _book("Tomas Reed Jr. & Ivo Sand"))
+        self.assertEqual(_folders(result)[0], "Reed Jr, Tomas & Sand, Ivo")
+        self.assertNotIn(ORG.ABS_READBACK_REASON, result.review_reasons)
+
+    def test_semicolon_credit_is_split(self):
+        self.assertEqual(_people("Ana Pell; Ivo Sand"), ["Ana Pell", "Ivo Sand"])
+
+    def test_et_al_and_others_are_not_authors(self):
+        for author, expected in (
+            ("Ana Pell et al", ["Ana Pell"]),
+            ("Ana Pell et al.", ["Ana Pell"]),
+            ("Ana Pell, Ivo Sand, et al.", ["Ana Pell", "Ivo Sand"]),
+            ("Ana Pell & others", ["Ana Pell"]),
+            ("Ana Pell, Ivo Sand, and others", ["Ana Pell", "Ivo Sand"]),
+        ):
+            with self.subTest(author=author):
+                self.assertEqual(_people(author), expected)
+
+    def test_last_first_credit_is_one_author_each(self):
+        self.assertEqual(_people("Holt, Mara"), ["Mara Holt"])
+        self.assertEqual(_people("Pell, Ana & Sand, Ivo"), ["Ana Pell", "Ivo Sand"])
+
+    def test_single_word_author_in_a_list_stays_two_authors(self):
+        self.assertEqual(_people("Quillon, Ivo Sand"), ["Quillon", "Ivo Sand"])
+
+    def test_later_multi_block_is_an_error(self):
+        problems = ORG.validate_naming_template("{author}/{+}{author}{&}/{title}")
+        self.assertIn(ORG.LATER_MULTI_BLOCK_PROBLEM, problems)
+
+    def test_first_multi_block_is_fine(self):
+        self.assertEqual(ORG.validate_naming_template("{+}{author}{&}/{author}/{title}"), [])
+
+
 from app.tests.test_organizer_cli_end_to_end import CliFixture  # noqa: E402
 
 
