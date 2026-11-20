@@ -7,6 +7,7 @@ fields False for them, which is the documented graceful fallback.
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -209,6 +210,11 @@ class ScanStalenessTests(unittest.TestCase):
     def test_second_call_with_nothing_changed_reports_from_cache(self):
         self._touch("Author/Book1/Book1.m4b")
         client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        # The cache is answered from the shared index, which a scan only kicks
+        # in the background: wait for that walk, as a real second scan seconds
+        # later would. On a slow runner it was often still running (flaky CI).
+        with library_index._lock:
+            pass
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertTrue(second.json()["from_cache"])
 
@@ -220,6 +226,30 @@ class ScanStalenessTests(unittest.TestCase):
         client.post("/api/scan", json={"path": str(self.root / "Author"), "ignored_folders": []})
         after = sorted(p.relative_to(self.root) for p in (self.root / "Author").rglob("*"))
         self.assertEqual(after, before)
+
+    def test_a_change_after_the_category_is_read_is_not_cached_as_current(self):
+        # #238: a folder that changes between the category read and the save
+        # must not be stored under the post-change signature, or the next scan
+        # serves the pre-change category as current.
+        book = self._touch("Author/Book1/Book1.m4b")
+        folder = book.parent
+
+        def state_now():
+            return library_index.LibraryIndexState(
+                status="ready", signatures={str(folder): library_index.folder_listing_signature(folder)}
+            )
+
+        def read_then_change(audio, book_dir, scan_root):
+            (folder / "cover.jpg").write_bytes(b"new")  # lands just after the read
+            return "stale-category"
+
+        with mock.patch.object(main_module, "_categorise_book_unit", side_effect=read_then_change), \
+                mock.patch.object(library_index, "get_state", side_effect=state_now):
+            main_module._categorized_book_units(self.root, [], state_now())
+        with mock.patch.object(main_module, "_categorise_book_unit", return_value="current-category"):
+            results, from_cache = main_module._categorized_book_units(self.root, [], state_now())
+        self.assertFalse(from_cache)
+        self.assertEqual([category for _ref, _dir, category in results], ["current-category"])
 
     def test_cache_persists_to_disk(self):
         self._touch("Author/Book1/Book1.m4b")
