@@ -178,6 +178,12 @@ preview and structured review reasons. **Index library and exit** rebuilds the
 destination-structure cache on its own. Shares the same Suspicion Report widget as
 Metadata Forge (shown above the planned moves) to flag moves worth a second look.
 
+- **Follows your existing series:** the structure cache knows every book folder in the
+  destination library, single-file books included, so a new book joins the author and
+  series folders already there. It also takes the series' existing wording: when the
+  books already on disk agree on `Vol.` (or `Volume`, `Book`, ...), a new book is named
+  `Vol. 11 - Title` to match, even if its metadata says "Book 11". A series override's
+  own label still wins.
 - **Skip patterns:** one pattern per line, matched case-insensitively against the source
   path or inferred metadata; matching books are excluded from the plan entirely.
 - **Per-move failure isolation:** a blocked path, permission error, or vanished source no

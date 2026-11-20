@@ -4652,8 +4652,49 @@ def register_structure_entry(cache: dict[str, Any], entry: dict[str, Any]) -> No
                 values.update(entry.get(key, []))
                 existing[key] = sorted(values)
             existing["book_count"] = int(existing.get("book_count", 0)) + int(entry.get("book_count", 0))
+            labels = Counter(existing.get("sequence_labels", {}))
+            labels.update(entry.get("sequence_labels", {}))
+            existing["sequence_labels"] = dict(sorted(labels.items()))
             return
     cache["entries"].append(entry)
+
+
+def structure_index_items(items: list[BookItem], destination_root: Path) -> list[BookItem]:
+    """The book items the structure cache indexes.
+
+    A recognized multi-file group is already a "folder" item. A finished
+    library is mostly single-file books, each alone in its own book folder
+    (Author/Series/Vol. 1 - Title/Title.m4b); build_book_items() gives those
+    as "loose_file" items, so each is indexed here as its book folder (#549).
+
+    A file with no book folder of its own stays out: loose in the library
+    root or an author folder, sharing its folder with other audio, or sitting
+    beside other books' folders. Reading such a folder as a book folder would
+    put the author in the series slot.
+    """
+    def own_folder(item: BookItem) -> Path:
+        return item.source_path if item.kind == "folder" else item.source_path.parent
+
+    audio_per_folder = Counter(own_folder(item) for item in items)
+    has_nested_books = {parent for item in items for parent in own_folder(item).parents}
+    selected: list[BookItem] = []
+    for item in items:
+        if item.kind == "folder":
+            selected.append(item)
+            continue
+        folder = item.source_path.parent
+        try:
+            depth = len(folder.relative_to(destination_root).parts)
+        except ValueError:
+            continue
+        if (
+            item.media_type == "audiobook"
+            and depth >= 2
+            and audio_per_folder[folder] == 1
+            and folder not in has_nested_books
+        ):
+            selected.append(BookItem("folder", folder, list(item.audio_files), item.representative))
+    return selected
 
 
 def build_structure_cache(
@@ -4663,7 +4704,7 @@ def build_structure_cache(
     naming_template: str = DEFAULT_NAMING_TEMPLATE,
 ) -> dict[str, Any]:
     items = build_book_items(destination_root, destination_root)
-    book_items = [item for item in items if item.kind == "folder"]
+    book_items = structure_index_items(items, destination_root)
     raw_records: list[dict[str, Any]] = []
     total = len(book_items)
 
@@ -4689,7 +4730,11 @@ def build_structure_cache(
         if not primary or primary == "Unknown Author":
             continue
 
-        aliases = {series, item.source_path.parent.name}
+        aliases = {series}
+        # The folder above the book is a series folder only in an
+        # Author/Series/Book layout; in Author/Book it is the author's folder.
+        if len(item.source_path.relative_to(destination_root).parts) >= 3:
+            aliases.add(item.source_path.parent.name)
         if path_meta and path_meta.get("series"):
             aliases.add(path_meta["series"])
 
@@ -4701,6 +4746,12 @@ def build_structure_cache(
             "author_keys": people_keys(metadata.get("author", "")),
             "series_aliases": sorted(alias for alias in aliases if alias),
             "source_path": str(item.source_path),
+            # The Vol./Book wording this book's folder already uses on disk
+            # ("" when the folder name has no numbered label).
+            "sequence_label": (
+                normalize_sequence_label(path_meta.get("sequence_label", ""))
+                if path_meta and path_meta.get("book_number") else ""
+            ),
         })
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -4724,6 +4775,7 @@ def build_structure_cache(
         author_keys_set: set[str] = set()
         series_aliases_set: set[str] = set()
         source_paths = []
+        sequence_labels: Counter = Counter(record["sequence_label"] for record in records if record.get("sequence_label"))
         for record in records:
             author_keys_set.update(record.get("author_keys", []))
             author_keys_set.update(people_keys(record.get("primary_author", "")))
@@ -4740,6 +4792,7 @@ def build_structure_cache(
             "series_aliases": sorted(series_aliases_set),
             "book_count": len(records),
             "source_paths": sorted(source_paths),
+            "sequence_labels": dict(sorted(sequence_labels.items())),
         }
         register_structure_entry(cache, entry)
 
@@ -4849,7 +4902,38 @@ def apply_cache_to_metadata(metadata: dict[str, Any], cache_entry: dict[str, Any
             metadata["author"] = canonical_author
     if cache_entry.get("series"):
         metadata["series"] = clean_series_name(cache_entry["series"])
+    series_label = series_sequence_label(cache_entry)
+    own_label = normalize_sequence_label(metadata.get("sequence_label", "")) or "Book"
+    if series_label and metadata.get("book_number") and own_label in INTERCHANGEABLE_SEQUENCE_LABELS:
+        metadata["sequence_label"] = series_label
     return metadata
+
+
+# Different words for the same main numbering. "Side Story" and "Novel" are
+# separate numbering tracks inside a series, never swapped for these.
+INTERCHANGEABLE_SEQUENCE_LABELS = ("Book", "Vol.", "Volume")
+
+
+def series_sequence_label(cache_entry: dict[str, Any]) -> str:
+    """The Vol./Book wording a series' existing book folders agree on, or "".
+
+    A new book follows the series it joins: Vol. 1 ... Vol. 10 on disk make
+    the 11th "Vol. 11" even when its metadata says "Book 11". Needs at least
+    two labelled books and a strict majority, so one stray folder or an
+    evenly split series leaves the book's own label alone. Only Book, Vol.
+    and Volume folders count.
+    """
+    labels: Counter = Counter()
+    for label, count in (cache_entry.get("sequence_labels") or {}).items():
+        label = normalize_sequence_label(str(label))
+        if label in INTERCHANGEABLE_SEQUENCE_LABELS:
+            labels[label] += int(count)
+    if not labels:
+        return ""
+    label, count = labels.most_common(1)[0]
+    if count >= 2 and count * 2 > sum(labels.values()):
+        return label
+    return ""
 
 
 def build_cached_target_dir(
@@ -5156,6 +5240,10 @@ def apply_overrides_to_cache(cache: dict[str, Any], overrides: dict[str, Any]) -
                 entry["series"] = sanitize_path_name(str(override["series"]), entry.get("series", ""))
             if override.get("canonical_author"):
                 entry["canonical_author"] = sanitize_path_name(str(override["canonical_author"]), entry.get("canonical_author", ""))
+            if override.get("sequence_label"):
+                # The override's own label (applied to the book's metadata) wins
+                # over whatever the series' folders use on disk.
+                entry.pop("sequence_labels", None)
             if entry.get("canonical_author") and entry.get("series"):
                 entry["path"] = str(
                     Path(cache.get("destination_root", "")) /
