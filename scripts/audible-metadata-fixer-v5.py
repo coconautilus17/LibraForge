@@ -2844,11 +2844,29 @@ def build_search_clues_from_file(file_path: Path, tags: dict | None = None) -> d
     author_is_series = bool(clues.get("author")) and normalize_for_match(clues["author"]) in {
         normalize_for_match(clues.get(key, "")) for key in ("series", "album")
     } - {""}
-    if not clues.get("author") or author_is_series:
-        folder_author = clean_author_value(library_author_folder(file_path.parent, LIBRARY_ROOTS))
-        if folder_author and normalize_for_match(folder_author) not in GENERIC_TITLE_RECOVERY_FOLDER_NAMES:
-            clues["author"] = folder_author
-            clues["author_source"] = "folder"
+    # "read by X" as the whole author credit names the reader (#489).
+    reader_credit = re.fullmatch(r"\s*read\s+by\s+(.+?)\s*", clues.get("author", ""), flags=re.IGNORECASE)
+    if reader_credit:
+        if not clues.get("narrator"):
+            clues["narrator"] = reader_credit.group(1)
+        clues["author"] = ""
+    folder_author = clean_author_value(library_author_folder(file_path.parent, LIBRARY_ROOTS))
+    if folder_author and normalize_for_match(folder_author) in GENERIC_TITLE_RECOVERY_FOLDER_NAMES:
+        folder_author = ""
+    # An author tag that is the brand the title starts with ("Hal Grend's Deep
+    # Water", written by someone else) gives way to an Author/ folder naming a
+    # different person (#489).
+    author_norm = normalize_for_match(clues.get("author", ""))
+    author_is_brand = bool(
+        author_norm
+        and folder_author
+        and looks_like_person_name(folder_author)
+        and normalize_for_match(folder_author) != author_norm
+        and normalize_for_match(clues.get("title", "")).startswith(author_norm)
+    )
+    if (not clues.get("author") or author_is_series or author_is_brand) and folder_author:
+        clues["author"] = folder_author
+        clues["author_source"] = "folder"
 
     descriptive_path_meta = parse_descriptive_book_from_path(
         file_path, known_author=clues.get("author", "")
