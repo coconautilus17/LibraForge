@@ -6,6 +6,36 @@ onward is tracked here going forward.
 
 ---
 
+## v0.3.1 (2026-11-20)
+
+- Folder Forge: a `{+}` author block names every author of a co-written book in
+  one folder, the way Audiobookshelf reads a folder back as authors, with name
+  parts (`{fname}`, `{lname}`, `{initials}`), up to 4 authors then "et al", and
+  review flags for folders Audiobookshelf would read differently.
+- Folder Forge: the structure index reuses unchanged folders (a rebuild with
+  nothing changed: 15 min to 25 s on a network share), reads any naming template,
+  and indexes single-file books, so new books land in their existing series with
+  its Book/Vol. wording. The first run rebuilds the cache.
+- Metadata Forge: Apply writes the last dry run's matches for unchanged books;
+  dry runs and Start Here scans write nothing into the library; original metadata
+  is backed up by default; a book Audible couldn't answer for is marked Audible
+  unavailable instead of treated as having no listing.
+- Metadata Forge: matching fixes for books of the same series one number apart,
+  sequels, books in several series (the same series every run), "Author; Series;
+  Book NN; Title" folders, ISBN-10-shaped ASINs, exact titles against collections,
+  brand and "read by" author tags, and noisy or "+"-joined titles and their box
+  sets. Applied books Audiobookshelf already holds are no longer re-applied.
+- Speed: each media file is read once and shared (MP4s in-process, other audio
+  through PyAV), a parallel library walk, cheaper matching with 8 search workers,
+  4 write workers, spare tag room so later covers don't rewrite the audio, the
+  Audible public catalog over one connection with batched ASIN lookups, and the
+  Audiobook Guild catalog shipped in the image.
+- Images: FFmpeg 9.0.2 in both; the default image now keeps cue sheet chapters
+  when building an M4B.
+- Fixes: Start Here's cache no longer keeps a stale category; match report
+  runtimes in whole minutes.
+- Docs: README rewritten with demo screenshots; Product Model updates.
+
 ## v0.3.0 (2026-11-04)
 
 - Metadata Forge: an **Audible public catalog (no login)** provider with a
