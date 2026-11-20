@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -144,7 +145,7 @@ GENERIC_STRUCTURE_KEYS = {
 }
 
 DEFAULT_STRUCTURE_CACHE = Path("/app/reports/organizer-structure-cache.json")
-STRUCTURE_CACHE_SCHEMA_VERSION = 11
+STRUCTURE_CACHE_SCHEMA_VERSION = 12
 
 COMPANION_SUFFIXES = (
     ".libraforge.json",
@@ -5255,25 +5256,41 @@ def empty_structure_cache(
     }
 
 
-def load_structure_cache(
-    cache_path: Path, destination_root: Path, naming_template: str = DEFAULT_NAMING_TEMPLATE
-) -> dict[str, Any]:
+def _read_usable_structure_cache(
+    cache_path: Path, destination_root: Path, naming_template: str
+) -> dict[str, Any] | None:
+    """The cache at `cache_path` when it was built for this destination,
+    naming template and schema; None otherwise (missing, unreadable, stale)."""
     if not cache_path.is_file():
-        return empty_structure_cache(destination_root, naming_template)
+        return None
     try:
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return empty_structure_cache(destination_root, naming_template)
-    if cache.get("schema_version") != STRUCTURE_CACHE_SCHEMA_VERSION:
-        return empty_structure_cache(destination_root, naming_template)
+        return None
+    if not isinstance(cache, dict) or cache.get("schema_version") != STRUCTURE_CACHE_SCHEMA_VERSION:
+        return None
     if cache.get("destination_root") != str(destination_root):
-        return empty_structure_cache(destination_root, naming_template)
+        return None
     # A cache written before this feature existed has no naming_template key
     # at all -- treat that as "built under the built-in ABS scheme" (its
     # DEFAULT_SCHEME_KEY) rather than an automatic mismatch, so a user who
     # upgrades and keeps the default scheme doesn't have their cache
     # invalidated the moment they update.
     if cache.get("naming_template", DEFAULT_SCHEME_KEY) != naming_template:
+        return None
+    return cache
+
+
+def structure_cache_usable(cache_path: Path, destination_root: Path, naming_template: str = DEFAULT_NAMING_TEMPLATE) -> bool:
+    """Whether load_structure_cache() would return the stored cache rather than an empty one."""
+    return _read_usable_structure_cache(cache_path, destination_root, naming_template) is not None
+
+
+def load_structure_cache(
+    cache_path: Path, destination_root: Path, naming_template: str = DEFAULT_NAMING_TEMPLATE
+) -> dict[str, Any]:
+    cache = _read_usable_structure_cache(cache_path, destination_root, naming_template)
+    if cache is None:
         return empty_structure_cache(destination_root, naming_template)
     cache.setdefault("entries", [])
     return cache
@@ -5299,42 +5316,140 @@ def register_structure_entry(cache: dict[str, Any], entry: dict[str, Any]) -> No
     cache["entries"].append(entry)
 
 
-def structure_index_items(items: list[BookItem], destination_root: Path) -> list[BookItem]:
-    """The book items the structure cache indexes.
+# Book folders read at the same time while indexing: each read is a few
+# round trips on a network share, so they are overlapped like the walk.
+STRUCTURE_INDEX_WORKERS = library_index.LISTING_WORKERS
 
-    A recognized multi-file group is already a "folder" item. A finished
-    library is mostly single-file books, each alone in its own book folder
-    (Author/Series/Vol. 1 - Title/Title.m4b); build_book_items() gives those
-    as "loose_file" items, so each is indexed here as its book folder (#549).
 
-    A file with no book folder of its own stays out: loose in the library
-    root or an author folder, sharing its folder with other audio, or sitting
-    beside other books' folders. Reading such a folder as a book folder would
-    put the author in the series slot.
+def template_folders_name_author_and_series(naming_template: str) -> bool:
+    """True when the library's folders read Author/Series/...: the built-in
+    scheme, or a template whose first folder level holds only {author} and
+    second only {series} (decoration such as " [{edition}]" aside).
+
+    Only then can a folder name stand in for a book's author or series. Under
+    any other layout ("{author} - {series}/...", "{series}/...",
+    "{author}/{series} - {order} - {title}/") the Author/Series reading
+    puts the wrong text in those slots, so books are read from their own
+    metadata alone.
     """
-    def own_folder(item: BookItem) -> Path:
-        return item.source_path if item.kind == "folder" else item.source_path.parent
+    if naming_template == DEFAULT_SCHEME_KEY:
+        return True
+    folder_template = naming_template.rpartition("/")[0]
+    levels = [_significant_tokens(set(NAMING_TEMPLATE_TOKEN_RE.findall(level))) for level in folder_template.split("/")]
+    return len(levels) >= 2 and levels[0] == {"author"} and levels[1] == {"series"}
 
-    audio_per_folder = Counter(own_folder(item) for item in items)
-    has_nested_books = {parent for item in items for parent in own_folder(item).parents}
-    selected: list[BookItem] = []
-    for item in items:
-        if item.kind == "folder":
-            selected.append(item)
-            continue
-        folder = item.source_path.parent
-        try:
-            depth = len(folder.relative_to(destination_root).parts)
-        except ValueError:
-            continue
-        if (
-            item.media_type == "audiobook"
-            and depth >= 2
-            and audio_per_folder[folder] == 1
-            and folder not in has_nested_books
-        ):
-            selected.append(BookItem("folder", folder, list(item.audio_files), item.representative))
-    return selected
+
+def on_disk_sequence_label(item: BookItem, metadata: dict[str, Any], destination_root: Path, naming_template: str) -> str:
+    """The Book/Vol./Volume/... wording an indexed book's own name uses on disk.
+
+    Renders the book under the active template once per label and keeps the
+    one label whose rendering matches the book's current folder name (or file
+    name, for a book stored as a file), compared the way
+    is_likely_existing_book_folder() compares. "" when the book has no number,
+    when no rendering matches (it was named under another scheme), or when
+    several do (the template doesn't put the label in that name).
+    """
+    if not metadata.get("book_number"):
+        return ""
+    use_default_scheme = naming_template == DEFAULT_SCHEME_KEY
+    template = DEFAULT_NAMING_TEMPLATE if use_default_scheme else naming_template
+    as_file = item.kind == "loose_file"
+    current_name = item.source_path.stem if as_file else item.source_path.name
+    own_label = normalize_sequence_label(metadata.get("sequence_label", ""))
+    matching = []
+    for label in dict.fromkeys(label for label in (*INTERCHANGEABLE_SEQUENCE_LABELS, own_label) if label):
+        rendered = build_target_dir_for_template(
+            destination_root, dict(metadata, sequence_label=label), template,
+            filename_applies=as_file, source_file=item.representative, use_default_scheme=use_default_scheme,
+        )
+        name = (rendered.filename or "") if as_file else rendered.target_dir.name
+        if name and folder_name_matches_naming_template(current_name, name):
+            matching.append(label)
+    return matching[0] if len(matching) == 1 else ""
+
+
+def structure_index_items(book_folder: Path, members: list[tuple[Path, list[Path], bool]], destination_root: Path) -> list[BookItem]:
+    """The books one book folder holds, as the structure index reads them.
+
+    `members` are scan_audio_folders() entries that library_index.book_folder_for()
+    puts in this book folder. A book split into disc/part subfolders is one
+    book read from its book folder. A single file alone in its own book folder
+    (the usual finished-library shape, #549) is read as that folder. Anything
+    else is what book_items_in_folder() makes of the folder: a multi-file
+    group, or loose files that share it (books stored as files in a series
+    folder, a stray file beside book folders), each read on its own.
+    """
+    if len(members) > 1 or members[0][0] != book_folder:
+        audio_files = sorted((f for _folder, files, _loose in members for f in files),
+                             key=lambda f: (str(f.parent), natural_audio_sort_key(f)))
+        return [BookItem("folder", book_folder, audio_files, audio_files[0])]
+    folder, audio_files, force_loose = members[0]
+    items = book_items_in_folder(folder, audio_files, force_loose)
+    if (
+        len(items) == 1
+        and items[0].kind == "loose_file"
+        and not force_loose
+        and len(folder.relative_to(destination_root).parts) >= 2
+    ):
+        return [BookItem("folder", folder, list(items[0].audio_files), items[0].representative)]
+    return items
+
+
+def structure_record(item: BookItem, destination_root: Path, naming_template: str, read_path: bool) -> dict[str, Any] | None:
+    """One book's structure-index record, or None when it names no series and author.
+
+    `read_path` (template_folders_name_author_and_series()) lets the folders
+    stand in for author and series, as the Author/Series layout allows. A
+    book that shares its folder with other books is read from its own
+    metadata and left out when only the path names its series.
+    """
+    shares_folder = item.kind == "loose_file"
+    path_meta = infer_metadata_from_library_path(item, destination_root) if read_path else None
+    meta = infer_metadata(item, destination_root, prefer_path_structure=read_path and not shares_folder)
+    if not read_path or shares_folder:
+        # Here the folders don't name this book's series or author, so a
+        # value guessed from them would index the book under the wrong one.
+        guessed = {"series inferred from path"} if read_path else {"series inferred from path", "author inferred from path"}
+        if guessed & set(meta.get("review_reasons", [])):
+            return None
+
+    # Prefer tag/sidecar metadata for series/author, but retain path aliases.
+    metadata = meta
+    if metadata.get("author") == "Unknown Author" and path_meta:
+        metadata = path_meta
+    if not metadata.get("series") and path_meta and path_meta.get("series"):
+        metadata["series"] = path_meta["series"]
+
+    series = metadata.get("series", "")
+    primary = primary_author(metadata.get("author", ""))
+    if not series or not primary or primary == "Unknown Author":
+        return None
+
+    aliases = {series}
+    # The folder above the book is a series folder only in an
+    # Author/Series/Book layout; in Author/Book it is the author's folder.
+    if read_path and len(item.source_path.relative_to(destination_root).parts) >= 3:
+        aliases.add(item.source_path.parent.name)
+    if path_meta and path_meta.get("series"):
+        aliases.add(path_meta["series"])
+
+    # The wording this book's own name uses on disk: from rendering it under the
+    # active template, else (a folder named under an older scheme) from reading
+    # the folder name, where the layout allows that.
+    label = on_disk_sequence_label(item, meta, destination_root, naming_template)
+    if not label and path_meta and path_meta.get("book_number"):
+        label = normalize_sequence_label(path_meta.get("sequence_label", ""))
+
+    return {
+        "series": series,
+        "series_key": normalize_series_key(series),
+        "author": metadata.get("author", ""),
+        "primary_author": primary,
+        "author_keys": people_keys(metadata.get("author", "")),
+        "series_aliases": sorted(alias for alias in aliases if alias),
+        "source_path": str(item.source_path),
+        "sequence_label": label,
+    }
 
 
 def build_structure_cache(
@@ -5343,57 +5458,50 @@ def build_structure_cache(
     progress_every: int = 100,
     naming_template: str = DEFAULT_NAMING_TEMPLATE,
 ) -> dict[str, Any]:
-    items = build_book_items(destination_root, destination_root)
-    book_items = structure_index_items(items, destination_root)
-    raw_records: list[dict[str, Any]] = []
-    total = len(book_items)
+    """Index the destination library's series structure and save it to `cache_path`.
 
-    for index, item in enumerate(book_items, start=1):
-        if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total):
-            print(f"Indexing structure {index}/{total}: {item.source_path}", file=sys.stderr)
+    Each book folder's records are kept with the folder's listing signature
+    (library_index.listing_signature). A rebuild reuses the records of every
+    folder whose signature is unchanged since the cache at `cache_path` was
+    built under the same template, and reads only new or changed folders,
+    several at a time (#550).
+    """
+    listings, folders = scan_audio_folders(destination_root, destination_root)
+    members_by_book: dict[Path, list[tuple[Path, list[Path], bool]]] = defaultdict(list)
+    for folder, audio_files, force_loose in folders:
+        if folder == destination_root:
+            continue  # files loose in the library root have no folder to place them by
+        members_by_book[library_index.book_folder_for(folder, destination_root, listings)].append((folder, audio_files, force_loose))
 
-        path_meta = infer_metadata_from_library_path(item, destination_root)
-        meta = infer_metadata(item, destination_root, prefer_path_structure=True)
+    previous_books = load_structure_cache(cache_path, destination_root, naming_template).get("books", {})
+    read_path = template_folders_name_author_and_series(naming_template)
+    books: dict[str, dict[str, Any]] = {}
+    changed: list[tuple[Path, str]] = []
+    for book_folder in sorted(members_by_book, key=str):
+        signature = library_index.listing_signature(str(book_folder), listings)
+        previous = previous_books.get(str(book_folder))
+        if previous and signature and previous.get("signature") == signature:
+            books[str(book_folder)] = previous
+        else:
+            changed.append((book_folder, signature))
 
-        # Prefer tag/sidecar metadata for series/author, but retain path aliases.
-        metadata = meta
-        if metadata.get("author") == "Unknown Author" and path_meta:
-            metadata = path_meta
-        if not metadata.get("series") and path_meta and path_meta.get("series"):
-            metadata["series"] = path_meta["series"]
+    def read_book_folder(job: tuple[Path, str]) -> dict[str, Any]:
+        book_folder, signature = job
+        records = [
+            record for item in structure_index_items(book_folder, members_by_book[book_folder], destination_root)
+            if (record := structure_record(item, destination_root, naming_template, read_path))
+        ]
+        return {"signature": signature, "records": records}
 
-        series = metadata.get("series", "")
-        if not series:
-            continue
+    total = len(changed)
+    with ThreadPoolExecutor(STRUCTURE_INDEX_WORKERS) as pool:
+        for index, ((book_folder, _signature), book) in enumerate(zip(changed, pool.map(read_book_folder, changed)), start=1):
+            if progress_every > 0 and (index == 1 or index % progress_every == 0 or index == total):
+                print(f"Indexing structure {index}/{total}: {book_folder}", file=sys.stderr)
+            books[str(book_folder)] = book
+    print(f"Structure index: {len(books) - total} unchanged book folders reused, {total} read", file=sys.stderr)
 
-        primary = primary_author(metadata.get("author", ""))
-        if not primary or primary == "Unknown Author":
-            continue
-
-        aliases = {series}
-        # The folder above the book is a series folder only in an
-        # Author/Series/Book layout; in Author/Book it is the author's folder.
-        if len(item.source_path.relative_to(destination_root).parts) >= 3:
-            aliases.add(item.source_path.parent.name)
-        if path_meta and path_meta.get("series"):
-            aliases.add(path_meta["series"])
-
-        raw_records.append({
-            "series": series,
-            "series_key": normalize_series_key(series),
-            "author": metadata.get("author", ""),
-            "primary_author": primary,
-            "author_keys": people_keys(metadata.get("author", "")),
-            "series_aliases": sorted(alias for alias in aliases if alias),
-            "source_path": str(item.source_path),
-            # The Vol./Book wording this book's folder already uses on disk
-            # ("" when the folder name has no numbered label).
-            "sequence_label": (
-                normalize_sequence_label(path_meta.get("sequence_label", ""))
-                if path_meta and path_meta.get("book_number") else ""
-            ),
-        })
-
+    raw_records = [record for book in books.values() for record in book["records"]]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in raw_records:
         if record["series_key"]:
@@ -5437,6 +5545,7 @@ def build_structure_cache(
         register_structure_entry(cache, entry)
 
     cache["entries"].sort(key=lambda entry: (entry.get("series_key", ""), -int(entry.get("book_count", 0)), entry.get("path", "")))
+    cache["books"] = dict(sorted(books.items()))
     save_structure_cache(cache_path, cache)
     return cache
 
@@ -6896,7 +7005,10 @@ def main() -> None:
     overrides = load_overrides(Path(args.override_file).resolve() if args.override_file else None)
     if args.no_structure_cache:
         cache = empty_structure_cache(destination_root, scheme_cache_key)
-    elif args.rebuild_structure_cache or args.index_only or not cache_path.is_file():
+    elif args.rebuild_structure_cache or args.index_only or not structure_cache_usable(cache_path, destination_root, scheme_cache_key):
+        # A missing cache, or one built for another template or an older
+        # schema, is rebuilt rather than planned against as if empty: an
+        # empty index would place every book as a brand-new series.
         cache = build_structure_cache(destination_root, cache_path, args.progress_every, scheme_cache_key)
     else:
         cache = load_structure_cache(cache_path, destination_root, scheme_cache_key)

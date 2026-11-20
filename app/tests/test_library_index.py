@@ -142,6 +142,16 @@ class BuildLibraryIndexTests(unittest.TestCase):
         self.assertEqual(entries, [(self.root / "Author" / "Book", False)])
         self.assertIn(str(self.root / "Author" / "Book"), signatures)
 
+    def test_a_volume_folder_with_its_own_sidecar_is_its_own_book(self):
+        # "Volume 6" matches the disc-folder name pattern, but a book folder named only by
+        # its number (a title-less light novel volume) carries its own libraforge.json.
+        for n in (6, 7):
+            self._touch(f"Author/Series/Volume {n}/Series Volume {n}.m4b")
+            self._touch(f"Author/Series/Volume {n}/libraforge.json")
+        entries, _signatures = build_library_index(self.root)
+        self.assertEqual(entries, [(self.root / "Author" / "Series" / "Volume 6", False),
+                                   (self.root / "Author" / "Series" / "Volume 7", False)])
+
     def test_disc_subfolder_signature_changes_when_a_file_inside_is_rewritten(self):
         p = self._touch("Author/Book/Disc 1/part1.m4b")
         p.write_bytes(b"x")

@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.sidecar_ownership import is_libraforge_sidecar_name
+
 FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
 DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 # Folders listed, and book folders signed, at the same time: on a network share
@@ -242,13 +244,26 @@ def listing_signature(path: str, listings: dict[str, list[os.DirEntry]]) -> str:
     return _signature_of_listing(listing, lambda sub: listing_signature(sub, listings))
 
 
-def book_folder_for(folder: Path, root: Path) -> Path:
+def book_folder_for(folder: Path, root: Path, listings: dict[str, list[os.DirEntry]] | None = None) -> Path:
     """The book folder an audio folder belongs to: a disc/part subfolder
     (DISC_RE, e.g. "Disc 2") is part of its parent book; any other folder is
-    its own book folder."""
-    if DISC_RE.match(folder.name) and folder.parent != root:
-        return folder.parent
-    return folder
+    its own book folder.
+
+    A folder named like a disc that holds its own LibraForge sidecar is a
+    book named only by its number ("Volume 6" of a light novel series), not
+    a disc. `listings` (walk_listings() output) answers that without another
+    listing; a folder missing from it is listed now.
+    """
+    if not DISC_RE.match(folder.name) or folder.parent == root:
+        return folder
+    listing = (listings or {}).get(str(folder))
+    try:
+        names = [entry.name for entry in listing] if listing is not None else os.listdir(folder)
+    except OSError:
+        names = []
+    if any(is_libraforge_sidecar_name(name) for name in names):
+        return folder
+    return folder.parent
 
 
 def build_library_index(
@@ -286,7 +301,7 @@ def build_library_index(
         elif any(is_audio_file(directory / f) for f in names):
             audio_folders.add(directory)
 
-    book_folders = {book_folder_for(folder, root) for folder in audio_folders}
+    book_folders = {book_folder_for(folder, root, listings) for folder in audio_folders}
 
     with ThreadPoolExecutor(LISTING_WORKERS) as pool:
         folders = [str(folder) for folder in book_folders]

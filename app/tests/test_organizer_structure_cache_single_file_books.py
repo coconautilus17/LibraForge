@@ -48,12 +48,6 @@ class SingleFileBookIndexingTests(unittest.TestCase):
         self.assertEqual(entries[0]["book_count"], 3)
         self.assertEqual(entries[0]["source_paths"], sorted(str(p) for p in self.series_dir.iterdir()))
 
-    def test_files_loose_in_a_series_folder_are_not_indexed(self):
-        loose = self.root / "Jane Doe" / "Loose Series"
-        for n, name in ((1, "Alpha"), (2, "Beta")):
-            add_book(loose, f"{name}.m4b", title=name, author="Jane Doe", series="Loose Series", sequence=str(n))
-        self.assertEqual(series_entries(self.build(), ORGANIZER.normalize_series_key("Loose Series")), [])
-
     def test_a_file_beside_book_folders_is_not_read_as_its_own_book_folder(self):
         # "Other Series" holds one stray m4b next to a proper book folder. The stray file's
         # parent is the series folder, so it must not be indexed with the author as its series.

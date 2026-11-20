@@ -184,6 +184,13 @@ Metadata Forge (shown above the planned moves) to flag moves worth a second look
   books already on disk agree on `Vol.` (or `Volume`, `Book`, ...), a new book is named
   `Vol. 11 - Title` to match, even if its metadata says "Book 11". A series override's
   own label still wins.
+  - It reads the library under whichever naming template is active. Folder names stand
+    in for author and series only when the template's folders are `{author}` then
+    `{series}`; under any other layout each book is read from its own metadata. Books
+    stored as files inside a series folder, books split into `Disc N` folders, and
+    title-less `Volume N` folders are all recognized.
+  - Rebuilding is incremental: books whose folders haven't changed since the last
+    index are reused, and only new or changed folders are read, several at a time.
 - **Skip patterns:** one pattern per line, matched case-insensitively against the source
   path or inferred metadata; matching books are excluded from the plan entirely.
 - **Per-move failure isolation:** a blocked path, permission error, or vanished source no

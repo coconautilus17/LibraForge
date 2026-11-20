@@ -9,6 +9,15 @@ so both apply the same rule.
 import json
 from pathlib import Path
 
+FOLDER_SIDECAR_NAME = "libraforge.json"
+FILE_SIDECAR_SUFFIX = ".libraforge.json"
+
+
+def is_libraforge_sidecar_name(name: str) -> bool:
+    """True for a LibraForge sidecar's file name: the folder-level libraforge.json
+    or a per-file "<audio file>.libraforge.json"."""
+    return name == FOLDER_SIDECAR_NAME or name.endswith(FILE_SIDECAR_SUFFIX)
+
 
 def folder_sidecar_belongs_to(payload: dict, source: Path) -> bool:
     """True when a folder-level libraforge.json's recorded data covers `source`.

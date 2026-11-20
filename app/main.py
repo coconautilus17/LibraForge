@@ -45,6 +45,7 @@ from app.conversion_cache import (
 )
 from app.conversion_discovery import conversion_candidate, summarize_audio_probes
 from app.book_tag_cache import BookTagCache
+from app.sidecar_ownership import is_libraforge_sidecar_name
 from app.fixer import plan as match_plan
 from app.folder_scan_cache import (
     load_scan_cache_file,
@@ -7940,7 +7941,7 @@ def _owned_asins_under_subtree(start: Path) -> tuple[set[str], list[tuple[Path, 
                 if hit:
                     owned.add(hit.group(1).upper())
                     dir_found = True
-                elif sidecar_name is None and (f == "libraforge.json" or f.endswith(".libraforge.json")):
+                elif sidecar_name is None and is_libraforge_sidecar_name(f):
                     sidecar_name = f
                 if first_audio is None and is_audio_file(Path(dirpath) / f):
                     first_audio = Path(dirpath) / f
