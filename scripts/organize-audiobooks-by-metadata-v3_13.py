@@ -59,12 +59,12 @@ try:
         normalize_abs_media_to_internal,
     )
     from app.enrichment import fetch_all_abs_book_items
-    from app import media_probe
+    from app import library_index, media_probe
     from app import abs_names
     from app.author_names import _initial_letters, output_author_credit
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app import media_probe
+    from app import library_index, media_probe
     from app.epub_metadata import extract_epub_metadata
     from app.fixer.parsing import GENERIC_AUTHORS, remove_parenthetical, series_from_subtitle
     from app.title_noise_policy import (
@@ -2528,16 +2528,6 @@ def should_ignore_path(path: Path, root: Path) -> bool:
     return bool({part.lower() for part in relative_parts} & ignored)
 
 
-def contains_nested_supported_audio(directory: Path) -> bool:
-    for child in directory.iterdir():
-        if not child.is_dir():
-            continue
-        for candidate in child.rglob("*"):
-            if candidate.is_file() and is_supported_audio(candidate):
-                return True
-    return False
-
-
 def is_multi_part_audio_candidate(source: Path) -> bool:
     return source.suffix.lower() in MULTI_PART_AUDIO_EXTENSIONS
 
@@ -2593,63 +2583,80 @@ def build_multi_part_group_map(files: list[Path]) -> dict[Path, list[Path]]:
     return accepted
 
 
-def build_book_items(root: Path, destination_root: Path, limit: int | None = None) -> list[BookItem]:
-    """Scan `root` for book items.
+def scan_audio_folders(root: Path, destination_root: Path) -> tuple[dict[str, list], list[tuple[Path, list[Path], bool]]]:
+    """Walk `root` once with the shared parallel library walk.
 
-    `limit` stops the walk early once at least that many items have been
-    collected -- for a real run this should stay None (every item must be
-    seen), but a caller that only wants a handful of representative samples
-    (e.g. a live naming-template preview) can avoid the full per-item
-    multi-file-group detection cost across the whole tree. The result is
-    still sorted by source path, but since the walk itself may stop before
-    covering every folder, a limited call isn't guaranteed to return the
-    same items a full scan's first N (sorted) would be.
+    Returns (listings, folders): the walk's listings (for listing
+    signatures) and, for every folder holding supported audio, sorted by
+    path, (folder, its audio files in part order, force_loose). force_loose
+    is True for the scan root itself and for a folder with audio further
+    down (an author/series folder with a stray file next to book folders),
+    whose files are never grouped as one book.
+
+    IGNORED_DIR_NAMES (and the staging folder, when the whole library is
+    scanned) are neither listed nor descended into.
     """
-    items: list[BookItem] = []
     ignored_dir_names = {name.lower() for name in IGNORED_DIR_NAMES}
-
     # When scanning the full library, do not organize the staging folder as part
     # of library consolidation. If the root itself is _unorganized, scan it.
     if root == destination_root:
         ignored_dir_names |= {name.lower() for name in STAGING_DIR_NAMES}
+    listings = library_index.walk_listings(root, skip_prefixes=(), skip_dir=lambda path: path.name.lower() in ignored_dir_names)
+    audio_by_folder: dict[Path, list[Path]] = {}
+    for directory, listing in listings.items():
+        folder = Path(directory)
+        if should_ignore_path(folder, root):
+            continue
+        audio_files = [
+            folder / entry.name for entry in listing
+            if not library_index.entry_is_dir(entry) and is_supported_audio(folder / entry.name)
+        ]
+        if audio_files:
+            audio_by_folder[folder] = sorted(audio_files, key=natural_audio_sort_key)
+    holds_nested_audio = {parent for folder in audio_by_folder for parent in folder.parents}
+    folders = [
+        (folder, audio_files, folder == root or folder in holds_nested_audio)
+        for folder, audio_files in sorted(audio_by_folder.items(), key=lambda pair: str(pair[0]))
+    ]
+    return listings, folders
 
-    for current_dir, dirnames, filenames in os.walk(root):
+
+def book_items_in_folder(current_path: Path, audio_files: list[Path], force_loose: bool) -> list[BookItem]:
+    """The book items one folder's audio files make (see scan_audio_folders for force_loose)."""
+    group_files = None if force_loose else build_multi_part_group_map(audio_files).get(current_path)
+    if group_files:
+        # Mirrors the fixer's build_processing_items: the recognized group
+        # collapses to one representative item; anything else physically
+        # in this same folder (e.g. a separately merged single-file edition
+        # of the same book) is left as its own individual item instead of
+        # being silently swept in or silently dropped.
+        leftover_files = tuple(f for f in audio_files if f not in group_files)
+        items = [BookItem(
+            "folder", current_path, group_files, group_files[0],
+            partial_group=bool(leftover_files), leftover_files=leftover_files,
+        )]
+        items.extend(BookItem("loose_file", audio_file, [audio_file], audio_file) for audio_file in leftover_files)
+        return items
+    return [BookItem("loose_file", audio_file, [audio_file], audio_file) for audio_file in audio_files]
+
+
+def build_book_items(root: Path, destination_root: Path, limit: int | None = None) -> list[BookItem]:
+    """Scan `root` for book items.
+
+    `limit` stops once at least that many items have been collected -- for
+    a real run this should stay None (every item must be seen), but a caller
+    that only wants a handful of representative samples (e.g. a live
+    naming-template preview) can skip the per-item multi-file-group
+    detection cost across the whole tree. The result is still sorted by
+    source path, but a limited call isn't guaranteed to return the same
+    items a full scan's first N (sorted) would be.
+    """
+    items: list[BookItem] = []
+    _listings, folders = scan_audio_folders(root, destination_root)
+    for folder, audio_files, force_loose in folders:
         if limit is not None and len(items) >= limit:
             break
-        dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in ignored_dir_names]
-        current_path = Path(current_dir)
-        if should_ignore_path(current_path, root):
-            continue
-
-        audio_files = [
-            current_path / filename
-            for filename in filenames
-            if is_supported_audio(current_path / filename)
-        ]
-        audio_files.sort(key=natural_audio_sort_key)
-        if not audio_files:
-            continue
-
-        force_loose = current_path == root or contains_nested_supported_audio(current_path)
-        group_files = None if force_loose else build_multi_part_group_map(audio_files).get(current_path)
-        if group_files:
-            # Mirrors the fixer's build_processing_items: the recognized group
-            # collapses to one representative item; anything else physically
-            # in this same folder (e.g. a separately merged single-file
-            # edition of the same book) is left as its own individual item
-            # instead of being silently swept in or silently dropped.
-            leftover_files = tuple(f for f in audio_files if f not in group_files)
-            items.append(BookItem(
-                "folder", current_path, group_files, group_files[0],
-                partial_group=bool(leftover_files), leftover_files=leftover_files,
-            ))
-            for audio_file in leftover_files:
-                items.append(BookItem("loose_file", audio_file, [audio_file], audio_file))
-            continue
-
-        for audio_file in audio_files:
-            items.append(BookItem("loose_file", audio_file, [audio_file], audio_file))
-
+        items.extend(book_items_in_folder(folder, audio_files, force_loose))
     return sorted(items, key=lambda item: str(item.source_path))
 
 
