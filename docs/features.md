@@ -39,6 +39,14 @@ Searches Audible (or another provider) and writes matched metadata to your files
 - **Structured search:** Audible and ABS searches start with the book's title and first
   author as separate fields, which finds listings a keyword search misses, then fall
   back to keyword queries.
+- **Author from the folder:** when the author tag is the brand the title starts with
+  ("Hal Grend's Deep Water", written by someone else) or a "read by" credit, the
+  book's Author/ folder names the author instead (a "read by" name becomes the narrator).
+- **Noisy titles:** a title with leading series initials and a number ("QLS [03] Quiet
+  Lanterns") is also searched without them, and one joining several
+  books ("Kestrel - Book 001+002 - Into the Deep + Glass Orchard")
+  by its first title and by the series name, under which a box set of those books is
+  listed. Such a box set is a full match when its runtime matches.
 - **Placeholder titles:** when a file's title tag only names the series and number
   ("The Riyria Revelations 03"), the title in its file name ("Nyphron Rising 01.m4b") is
   searched instead, without author or narrator names or a part number. A file name that
