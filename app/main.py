@@ -5828,12 +5828,23 @@ def _categorized_book_units(
             cached_units = cached_folder.get("units", {})
             if unit_key in cached_units:
                 return folder_key, unit_key, cached_units[unit_key], True, round((time.monotonic() - started) * 1000)
+        # The folder as it was just before this read (#238): saved with the
+        # category, so a change landing after the read is a mismatch next time.
+        try:
+            # Loose files at the library root are never signed (see below).
+            read_signatures[folder_key] = (
+                "" if Path(folder_key) == AUDIOBOOKS_ROOT else library_index.folder_listing_signature(Path(folder_key))
+            )
+        except OSError:
+            read_signatures[folder_key] = ""
         try:
             category = _categorise_book_unit(audio, book_dir, p)
         except PermissionError:
             category = "skip"
         return folder_key, unit_key, category, False, round((time.monotonic() - started) * 1000)
 
+    # Per folder read live this scan: its signature taken just before a read.
+    read_signatures: dict[str, str] = {}
     resolved: list[tuple[str, str, str, bool, int]] = []
     with ThreadPoolExecutor(max_workers=10) as pool:
         if progress:
@@ -5871,18 +5882,12 @@ def _categorized_book_units(
     # finish, so this later read is the freshest available signature data
     # to persist. Mirrors the identical fix in discover_m4b_candidates.
     #
-    # Deliberately NOT replaced with a direct, synchronous
-    # folder_listing_signature() call at persist time (see #238): that reads
-    # real disk state at a different moment than the async shared index's
-    # own next walk will, so anything that changes a folder during this
-    # request (a run writing beside the books) can be captured by one and
-    # not the other, permanently desyncing the persisted signature from what
-    # the read-side check compares against, so from_cache never goes true
-    # again for that folder. Keeping both the
-    # read side (shared.signatures, above) and the write side (fresh_shared,
-    # here) sourced from the same get_state() avoids that: they can lag
-    # real disk state by one background-walk cycle, but they lag it
-    # together, so a cache hit is still reachable once that walk catches up.
+    # A folder read live this scan is saved under the signature taken just
+    # before its read instead (read_signatures, #238): a change landing after
+    # the read then mismatches on the next scan rather than being stored as
+    # if the read had seen it. A direct signature used to desync from the
+    # shared index because categorizing wrote a scan sidecar into the folder;
+    # scans write nothing into the library now (#530), so both agree.
     fresh_shared = library_index.get_state()
 
     # Start from the previous cache contents, but for every folder touched by
@@ -5900,6 +5905,11 @@ def _categorized_book_units(
     touched_folder_keys = {folder_key for folder_key, _, _, _, _ in resolved}
     for folder_key in touched_folder_keys:
         fresh_signature = fresh_shared.signatures.get(folder_key, "")
+        if folder_key in read_signatures:
+            # A folder read live is saved under its signature from before the
+            # read, never a later one that may already include a change the
+            # read didn't see.
+            fresh_signature = read_signatures[folder_key]
         existing = updated_folders.get(folder_key)
         stale = existing is None or fresh_signature == "" or existing.get("signature") != fresh_signature
         if stale:
