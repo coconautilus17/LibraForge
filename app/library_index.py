@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.sidecar_ownership import is_libraforge_sidecar_name
+
 FS_SKIP_PREFIXES = (".", "#", "@")  # skip hidden dirs and NAS system dirs
 DISC_RE = re.compile(r"^(disc|disk|cd|part|vol|volume)\s*\d+$", re.IGNORECASE)
 # Folders listed, and book folders signed, at the same time: on a network share
@@ -148,11 +150,120 @@ def _signature_of_listing(entries, disc_signature) -> str:
     return hashlib.sha256("|".join(sorted(parts)).encode("utf-8")).hexdigest()
 
 
-def _is_dir(entry: os.DirEntry) -> bool:
+def entry_is_dir(entry: os.DirEntry) -> bool:
+    """os.walk's dir test for one listing entry: a folder (or a symlink to one); unreadable counts as a file."""
     try:
         return entry.is_dir()
     except OSError:
         return False
+
+
+def walk_listings(
+    root: Path,
+    skip_prefixes: tuple[str, ...] = FS_SKIP_PREFIXES,
+    skip_dir=None,
+) -> dict[str, list[os.DirEntry]]:
+    """List every folder under `root` (root included) once, in parallel.
+
+    Returns {str(folder): its sorted os.DirEntry listing}. A folder whose name
+    starts with one of `skip_prefixes`, or for which `skip_dir(path)` is True,
+    is neither listed nor descended into; a symlinked folder is listed by name
+    in its parent but not descended into; a folder that can't be listed is
+    skipped, like os.walk does.
+
+    The entries of a folder holding audio are stat'ed while it is listed, so
+    listing_signature() can sign it from the listing without a second round
+    trip (a network share forgets the attributes within a second).
+    """
+    listings: dict[str, list[os.DirEntry]] = {}
+
+    def list_folder(directory: Path) -> list[os.DirEntry] | None:
+        try:
+            listing = sorted(os.scandir(directory), key=lambda e: e.name)
+        except OSError:
+            return None
+        if any(is_audio_file(Path(e.name)) for e in listing if not entry_is_dir(e)):
+            for entry in listing:
+                try:
+                    entry.stat()
+                except OSError:
+                    pass  # stat'ed again, and handled, by the signature
+        return listing
+
+    def subfolders(listing: list[os.DirEntry]) -> list[Path]:
+        return [
+            Path(entry.path) for entry in listing
+            if entry_is_dir(entry)
+            and not entry.is_symlink()
+            and not any(entry.name.startswith(s) for s in skip_prefixes)
+            and not (skip_dir is not None and skip_dir(Path(entry.path)))
+        ]
+
+    # Each listed folder queues its own subfolders; the walk ends when no
+    # folder is left in the queue or being listed.
+    lock = threading.Lock()
+    outstanding = [0]
+    finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def visit(directory: Path) -> None:
+        try:
+            listing = list_folder(directory)
+            if listing is not None:
+                with lock:
+                    listings[str(directory)] = listing
+                for sub in subfolders(listing):
+                    queue(sub)
+        except BaseException as exc:  # surfaced below, as the serial walk would
+            errors.append(exc)
+        finally:
+            with lock:
+                outstanding[0] -= 1
+                if outstanding[0] == 0:
+                    finished.set()
+
+    with ThreadPoolExecutor(LISTING_WORKERS) as pool:
+        def queue(directory: Path) -> None:
+            with lock:
+                outstanding[0] += 1
+            pool.submit(visit, directory)
+
+        queue(root)
+        finished.wait()
+    if errors:
+        raise errors[0]
+    return listings
+
+
+def listing_signature(path: str, listings: dict[str, list[os.DirEntry]]) -> str:
+    """folder_listing_signature() of `path`, from walk_listings() output when
+    the folder was walked (no second listing), else by listing it now."""
+    listing = listings.get(path)
+    if listing is None:  # not walked (a skipped name): list it as before
+        return folder_listing_signature(Path(path))
+    return _signature_of_listing(listing, lambda sub: listing_signature(sub, listings))
+
+
+def book_folder_for(folder: Path, root: Path, listings: dict[str, list[os.DirEntry]] | None = None) -> Path:
+    """The book folder an audio folder belongs to: a disc/part subfolder
+    (DISC_RE, e.g. "Disc 2") is part of its parent book; any other folder is
+    its own book folder.
+
+    A folder named like a disc that holds its own LibraForge sidecar is a
+    book named only by its number ("Volume 6" of a light novel series), not
+    a disc. `listings` (walk_listings() output) answers that without another
+    listing; a folder missing from it is listed now.
+    """
+    if not DISC_RE.match(folder.name) or folder.parent == root:
+        return folder
+    listing = (listings or {}).get(str(folder))
+    try:
+        names = [entry.name for entry in listing] if listing is not None else os.listdir(folder)
+    except OSError:
+        names = []
+    if any(is_libraforge_sidecar_name(name) for name in names):
+        return folder
+    return folder.parent
 
 
 def build_library_index(
@@ -176,97 +287,25 @@ def build_library_index(
         (name, size, mtime_ns) is already covered by each consumer's
         existing per-file probe cache.
     """
-    audio_folders: set[Path] = set()
-    loose_root_files: list[Path] = []
     # Each directory is listed once: the walk keeps its listings, and the
     # signatures below are computed from them instead of listing every book
     # folder (and its disc subfolders) a second time.
-    listings: dict[str, list[os.DirEntry]] = {}
-
-    def list_folder(directory: Path) -> tuple[Path, list[os.DirEntry] | None]:
-        # Like os.walk: a folder that can't be listed is skipped, not fatal.
-        try:
-            listing = sorted(os.scandir(directory), key=lambda e: e.name)
-        except OSError:
-            return directory, None
-        if any(is_audio_file(Path(e.name)) for e in listing if not _is_dir(e)):
-            # A folder with audio is signed below. Its entries are stat'ed now,
-            # while the share still holds their attributes from the listing
-            # (a network share forgets them within a second); each DirEntry
-            # keeps its stat for the signature.
-            for entry in listing:
-                try:
-                    entry.stat()
-                except OSError:
-                    pass  # stat'ed again, and handled, by the signature
-        return directory, listing
-
-    def take(directory: Path, listing: list[os.DirEntry]) -> list[Path]:
-        """Record a folder's listing; returns the subfolders to walk (a
-        symlinked folder is listed by name but not descended into)."""
-        listings[str(directory)] = listing
-        names = [e.name for e in listing if not _is_dir(e)]
+    listings = walk_listings(root, skip_prefixes)
+    audio_folders: set[Path] = set()
+    loose_root_files: list[Path] = []
+    for directory, listing in listings.items():
+        directory = Path(directory)
+        names = [e.name for e in listing if not entry_is_dir(e)]
         if directory == root:
             loose_root_files.extend(directory / f for f in names if is_audio_file(directory / f))
         elif any(is_audio_file(directory / f) for f in names):
             audio_folders.add(directory)
-        return [
-            Path(entry.path) for entry in listing
-            if _is_dir(entry)
-            and not entry.is_symlink()
-            and not any(entry.name.startswith(s) for s in skip_prefixes)
-        ]
 
-    # Each listed folder queues its own subfolders; the walk ends when no
-    # folder is left in the queue or being listed.
-    lock = threading.Lock()
-    outstanding = [0]
-    finished = threading.Event()
-    errors: list[BaseException] = []
-
-    def visit(directory: Path) -> None:
-        try:
-            directory, listing = list_folder(directory)
-            if listing is not None:
-                with lock:
-                    subfolders = take(directory, listing)
-                for sub in subfolders:
-                    queue(sub)
-        except BaseException as exc:  # surfaced below, as the serial walk would
-            errors.append(exc)
-        finally:
-            with lock:
-                outstanding[0] -= 1
-                if outstanding[0] == 0:
-                    finished.set()
-
-    with ThreadPoolExecutor(LISTING_WORKERS) as pool:
-        def queue(directory: Path) -> None:
-            with lock:
-                outstanding[0] += 1
-            pool.submit(visit, directory)
-
-        queue(root)
-        finished.wait()
-    if errors:
-        raise errors[0]
-
-    book_folders: set[Path] = set()
-    for folder in audio_folders:
-        if DISC_RE.match(folder.name) and folder.parent != root:
-            book_folders.add(folder.parent)
-        else:
-            book_folders.add(folder)
-
-    def signature(path: str) -> str:
-        listing = listings.get(path)
-        if listing is None:  # not walked (a skipped name): list it as before
-            return folder_listing_signature(Path(path))
-        return _signature_of_listing(listing, signature)
+    book_folders = {book_folder_for(folder, root, listings) for folder in audio_folders}
 
     with ThreadPoolExecutor(LISTING_WORKERS) as pool:
         folders = [str(folder) for folder in book_folders]
-        signatures = dict(zip(folders, pool.map(signature, folders)))
+        signatures = dict(zip(folders, pool.map(lambda f: listing_signature(f, listings), folders)))
     entries = [(folder, False) for folder in sorted(book_folders)]
     entries.extend((f, True) for f in sorted(loose_root_files))
     return entries, signatures
