@@ -17,6 +17,16 @@ RUN apk upgrade --no-cache \
     && python3 -m venv /opt/venv
 COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /usr/local/bin/
 
+# The same m4b-tool 0.5.2 fixes as Dockerfile.unified's m4btool-patch stage:
+# without them, a cue sheet's chapters are silently dropped on merge (#541).
+# The patch exits non-zero, failing the build, if m4b-tool's code ever changes.
+COPY scripts/patch-m4b-tool-cuesheet.php /tmp/patch-m4b-tool-cuesheet.php
+RUN cp /usr/local/bin/m4b-tool /usr/local/bin/m4b-tool.phar \
+    && php -d phar.readonly=0 /tmp/patch-m4b-tool-cuesheet.php /usr/local/bin/m4b-tool.phar \
+    && rm /tmp/patch-m4b-tool-cuesheet.php \
+    && printf '#!/bin/sh\nexec php /usr/local/bin/m4b-tool.phar "$@"\n' > /usr/local/bin/m4b-tool \
+    && chmod +x /usr/local/bin/m4b-tool
+
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
