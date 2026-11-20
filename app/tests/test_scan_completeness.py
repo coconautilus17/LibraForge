@@ -210,6 +210,11 @@ class ScanStalenessTests(unittest.TestCase):
     def test_second_call_with_nothing_changed_reports_from_cache(self):
         self._touch("Author/Book1/Book1.m4b")
         client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
+        # The cache is answered from the shared index, which a scan only kicks
+        # in the background: wait for that walk, as a real second scan seconds
+        # later would. On a slow runner it was often still running (flaky CI).
+        with library_index._lock:
+            pass
         second = client.post("/api/scan", json={"path": str(self.root), "ignored_folders": []})
         self.assertTrue(second.json()["from_cache"])
 
