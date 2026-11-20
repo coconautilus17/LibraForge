@@ -60,3 +60,5 @@ jobs:
         run: docker build -t libraforge:ci .
       - name: Smoke import
         run: docker run --rm -e SCRIPTS_DIR=/app/scripts -e REPORTS_DIR=/tmp/reports libraforge:ci python -c "import app.main; print('ok')"
+      - name: m4b-tool imports cue sheet chapters
+        run: docker run --rm --entrypoint sh libraforge:ci /app/tools/check-m4b-cuesheet.sh
