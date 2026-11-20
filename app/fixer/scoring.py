@@ -539,7 +539,9 @@ def is_omnibus_product(product: dict) -> bool:
     subtitle = str(product.get("subtitle", "") or "").lower()
     _, sequence = get_primary_series(product)
     sequence = str(sequence or "").strip()
-    book_range = r"\bbooks?\s+\d+\s*(?:[-\u2013\u2014&]|to|through)\s*\d+\b"
+    # "Books 1-3", "Books 1 & 2", and the comma list Audible's search uses for a
+    # pack ("Mage Errant, Book 1, 2").
+    book_range = r"\bbooks?\s+\d+\s*(?:[-\u2013\u2014&,]|to|through)\s*\d+\b"
 
     if re.search(book_range, title):
         return True
@@ -1979,7 +1981,7 @@ def determine_edit_mode(
         )
         local_omnibus = bool(
             re.search(
-                r"\b(?:omnibus|complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&)\s*\d+)\b",
+                r"\b(?:omnibus|complete collection|definitive collection|complete series|complete trilogy|complete duology|complete saga|trilogy|duology|box set|books?\s+\d+\s*(?:-|to|through|&|\+)\s*\d+)\b",
                 local_omnibus_text,
                 flags=re.IGNORECASE,
             )
@@ -1989,6 +1991,17 @@ def determine_edit_mode(
         if title_score >= 0.80 and (
             duration_status == "perfect"
             or (local_omnibus and duration_status == "strong")
+        ):
+            return "full"
+        # A local title naming several books ("Kestrel - Book 001+002 - A + B")
+        # is the set listed under its name ("Kestrel: Publisher's Pack") when the
+        # runtime is the set's, whatever else the long local title says (#489).
+        set_name = normalize_for_match(str(product.get("title", "") or "").split(":", 1)[0])
+        if (
+            local_omnibus
+            and duration_status == "perfect"
+            and set_name
+            and set_name in normalize_for_match(local_omnibus_text)
         ):
             return "full"
         return safe_series_only()

@@ -106,5 +106,68 @@ class FolderAuthorClueTests(unittest.TestCase):
         self.assertGreater(score_product_for_metadata(clues, product, 1309.0), 0.0)
 
 
+
+class BrandAndReaderAuthorTests(unittest.TestCase):
+    """#489: a tag author that is the title's brand, or the reader, gives way
+    to the Author/ folder (made-up names)."""
+
+    def setUp(self):
+        self._saved = list(FIXER.LIBRARY_ROOTS)
+        FIXER.LIBRARY_ROOTS[:] = [ROOT]
+
+    def tearDown(self):
+        FIXER.LIBRARY_ROOTS[:] = self._saved
+
+    def test_brand_in_the_title_gives_way_to_the_folder_author(self):
+        for title in ("Hal Grend Deep Water", "Hal Grend's Deep Water"):
+            with self.subTest(title=title):
+                clues = clues_for(f"Ivo Sand/A Kestrel Novel/Book 3 - {title}/{title}.m4b",
+                                  {"title": title, "artist": "Hal Grend"})
+                self.assertEqual(clues["author"], "Ivo Sand")
+
+    def test_own_name_in_the_title_keeps_the_tag_author(self):
+        clues = clues_for("Hal Grend/Hal Grend's Deep Water/Hal Grend's Deep Water.m4b",
+                          {"title": "Hal Grend's Deep Water", "artist": "Hal Grend"})
+        self.assertEqual(clues["author"], "Hal Grend")
+
+    def test_brand_rule_needs_the_name_to_start_the_title(self):
+        clues = clues_for("Ivo Sand/Deep Water/Deep Water.m4b", {"title": "Deep Water", "artist": "Hal Grend"})
+        self.assertEqual(clues["author"], "Hal Grend")
+
+    def test_read_by_credit_is_the_narrator_not_the_author(self):
+        clues = clues_for("Mara Holt/Quiet Lanterns/Quiet Lanterns.m4b",
+                          {"title": "Quiet Lanterns", "album_artist": "read by Ana Pell"})
+        self.assertEqual(clues["author"], "Mara Holt")
+        self.assertEqual(clues.get("narrator"), "Ana Pell")
+
+
+class NoisyTitleQueryTests(unittest.TestCase):
+    """#489: queries without leading series initials, and with only the first
+    of several "+"-joined titles (made-up names)."""
+
+    @staticmethod
+    def queries(title, author="Ivo Sand"):
+        from app.fixer.clues import build_search_queries_from_clues
+        return build_search_queries_from_clues(
+            {"author": author, "title": title, "raw_title": title, "series": "", "book_number": ""}
+        )
+
+    def test_leading_series_initials_are_left_out(self):
+        self.assertIn("Quiet Lanterns Ivo Sand", self.queries("QLS [03] Quiet Lanterns"))
+
+    def test_first_of_several_joined_titles(self):
+        self.assertIn(
+            "Into the Deep Ivo Sand",
+            self.queries("Kestrel - Book 001+002 - Into the Deep + Glass Orchard"),
+        )
+
+    def test_series_of_several_joined_titles(self):
+        # A pack of several books is listed under the series' name.
+        self.assertIn("Kestrel Ivo Sand", self.queries("Kestrel - Book 001+002 - Into the Deep + Glass Orchard"))
+
+    def test_a_plain_title_gets_no_extra_queries(self):
+        self.assertEqual(self.queries("Quiet Lanterns"), ["Quiet Lanterns Ivo Sand", "Quiet Lanterns"])
+
+
 if __name__ == "__main__":
     unittest.main()

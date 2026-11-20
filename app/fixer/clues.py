@@ -287,6 +287,34 @@ def capture_publisher_clue(clues: dict, tags: dict) -> dict:
     return clues
 
 
+_LEADING_INITIALS_NUMBER_RE = re.compile(r"^[A-Z]{2,}\s*\[\d+(?:\.\d+)?\]\s+(?=\S)")
+
+
+def _title_cores(title: str) -> list[str]:
+    """Shorter forms of a title whose library naming hides the book from a
+    search: without leading series initials and number ("QLS [03] Quiet
+    Lanterns" -> "Quiet Lanterns"), and only the first of several "+"-joined
+    titles, after the last " - " before it ("Kestrel - Book 001+002 - Into the
+    Deep + Glass Orchard" -> "Into the Deep"), plus the series before the first
+    " - " ("Kestrel"), under which a pack of several books is listed."""
+    cores: list[str] = []
+    stripped = _LEADING_INITIALS_NUMBER_RE.sub("", title or "")
+    if stripped != title:
+        cores.append(stripped)
+    if " + " in stripped:
+        before_plus = stripped.split(" + ", 1)[0]
+        first = before_plus.rsplit(" - ", 1)[-1].strip()
+        if first:
+            cores.append(first)
+        # A pack of several books is listed under the series' name, the part
+        # before the first " - " ("Kestrel").
+        if " - " in before_plus:
+            series = before_plus.split(" - ", 1)[0].strip()
+            if series and series != first:
+                cores.append(series)
+    return cores
+
+
 # Leading filler phrases some libraries prepend to title tags.
 @trace(CHOOSE, capture=[])
 def build_search_queries_from_clues(clues: dict) -> list[str]:
@@ -330,6 +358,12 @@ def build_search_queries_from_clues(clues: dict) -> list[str]:
             if author
             else sequence_free_raw_title
         )
+
+    # Library naming noise that keeps every query above from finding the book
+    # (#489): leading series initials and numbering ("QLS [03] Title"), and
+    # several "+"-joined titles after a "Series - Book 001+002 - " prefix.
+    for core in _title_cores(title):
+        queries.append(f"{core} {author}" if author else core)
 
     # Broad series search only after title search fails to produce a strong match.
     if series and author:

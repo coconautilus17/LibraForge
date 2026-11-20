@@ -294,6 +294,47 @@ class OmnibusRangeTests(unittest.TestCase):
             "full",
         )
 
+    def test_joined_local_titles_full_match_their_publishers_pack(self):
+        # #489: "Series - Book 001+002 - A + B" names two books; the pack
+        # listed under the series' name, with the same runtime, is that file.
+        clues = {
+            "title": "Kestrel - Book 001+002 - Into the Deep + Glass Orchard",
+            "raw_title": "Kestrel - Book 001+002 - Into the Deep + Glass Orchard",
+            "series": "", "author": "Ivo Sand", "narrator": "Ana Pell",
+            "book_number": "1", "book_number_source": "title",
+        }
+        pack = product(
+            asin="B0KESTREL", title="Kestrel: Publisher's Pack", subtitle="Books 1-2",
+            series="Kestrel", sequence="1-2", authors=("Ivo Sand",), narrators=("Ana Pell",), minutes=978,
+        )
+        duration = FIXER.compare_duration(978.9, pack["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, pack, 978.9)
+        self.assertEqual(FIXER.determine_edit_mode(pack, clues, score, duration), "full")
+
+    def test_a_comma_listed_book_range_is_a_box_set(self):
+        # Audible's search lists a pack's books as "Kestrel, Book 1, 2".
+        pack = product(asin="B0KESTREL", title="Kestrel: Publisher's Pack", subtitle="Kestrel, Book 1, 2",
+                       series="Other Saga", sequence="", authors=("Ivo Sand",), narrators=("Ana Pell",), minutes=978)
+        self.assertTrue(FIXER.is_omnibus_product(pack))
+        single = product(asin="B0ONE", title="Into the Deep", subtitle="Kestrel, Book 1",
+                         series="Kestrel", sequence="1", authors=("Ivo Sand",), narrators=("Ana Pell",), minutes=500)
+        self.assertFalse(FIXER.is_omnibus_product(single))
+
+    def test_a_pack_named_otherwise_is_not_taken_for_joined_titles(self):
+        clues = {
+            "title": "Kestrel - Book 001+002 - Into the Deep + Glass Orchard",
+            "raw_title": "Kestrel - Book 001+002 - Into the Deep + Glass Orchard",
+            "series": "", "author": "Ivo Sand", "narrator": "Ana Pell",
+            "book_number": "1", "book_number_source": "title",
+        }
+        pack = product(
+            asin="B0OTHER", title="Harbor Lights: Publisher's Pack", subtitle="Books 1-2",
+            series="Harbor Lights", sequence="1-2", authors=("Ivo Sand",), narrators=("Ana Pell",), minutes=978,
+        )
+        duration = FIXER.compare_duration(978.9, pack["runtime_length_min"])
+        score = FIXER.score_product_for_metadata(clues, pack, 978.9)
+        self.assertNotEqual(FIXER.determine_edit_mode(pack, clues, score, duration), "full")
+
     def test_perfect_runtime_box_set_is_full_whatever_the_local_title(self):
         # "The Vesik Series" (#461): no box-set wording locally, but a runtime
         # within 3% of the whole set is the set.
