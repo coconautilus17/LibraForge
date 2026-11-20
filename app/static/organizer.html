@@ -170,6 +170,7 @@
             <li>Letters inside <code>{ }</code>: write words in <code>&lt; &gt;</code>, like <code>&lt;and&gt;</code> (lowercase only).</li>
             <li>The characters <code>&lt; &gt; : " \ | ? *</code> in plain text: they can't be in folder names and are replaced.</li>
             <li><code>{author}</code> together with <code>{fname}</code>, <code>{lname}</code> or <code>{initials}</code> in one block.</li>
+            <li><code>{+}</code> in any block but the first: a later block shows one author.</li>
           </ul>
           <p>Text in <code>&lt; &gt;</code> that isn't one of the separators above, and isn't right next to the block, stays plain text: <code>{author}/{title} &lt;draft&gt;</code> keeps "draft" in the folder name (the angle brackets themselves can't be in a folder name, so they are replaced).</p>
         </details>
