@@ -583,7 +583,7 @@ SECTION_END_RE = re.compile(
     r"^(Summary:|Mode breakdown:|MANUAL REVIEW REPORT:|DURATION REVIEW REPORT|"
     r"ASIN VERIFICATION|Checking the library)"
 )
-ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Possible duplicates flagged|Flagged by generic marketing cleanup|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Planned moves|Moves succeeded|Moves failed):\s+(\d+)\s*$")
+ORGANIZER_SUMMARY_RE = re.compile(r"^(Found book items|Ignored MP3 files|Skipped likely existing book folders|Skipped unknown author|Skipped by pattern|Skipped already in target folder|Skipped conflicts|Possible duplicates flagged|Flagged by generic marketing cleanup|Structure cache entries|Matched existing structure|Ambiguous structure matches|Skipped ambiguous structure|Organized books moving to another author folder|Planned moves|Moves succeeded|Moves failed):\s+(\d+)\s*$")
 ORGANIZER_MODE_RE = re.compile(r"^Mode:\s+(APPLY|DRY RUN|INDEX ONLY)\s*$")
 ORGANIZER_FIELD_RE = re.compile(r"^\s+(Kind|Title|Author|Files|Metadata Source|Review Reasons|Series|Number|Structure|Error):\s+(.+)$")
 ORGANIZER_PROGRESS_RE = re.compile(r"^Scanning\s+(\d+)/(\d+):\s+(.+)$")
@@ -1462,6 +1462,7 @@ class OrganizerRunRequest(BaseModel):
     acknowledge_no_sidecars: bool = False
     naming_template: str = ""
     use_default_scheme: bool = True
+    initials_follow_author_scheme: bool = False
     trust_abs_metadata: bool = False
 
 
@@ -1476,11 +1477,13 @@ class OrganizerNamingTemplatePreviewRequest(BaseModel):
     destination_root: str = Field(default="/audiobooks")
     script_name: str = Field(default_factory=default_organizer_script)
     limit: int = 3
+    initials_follow_author_scheme: bool = False
 
 
 class OrganizerNamingTemplateExamplePreviewRequest(BaseModel):
     template: str
     script_name: str = Field(default_factory=default_organizer_script)
+    initials_follow_author_scheme: bool = False
 
 
 class TitleNoiseCustomPattern(BaseModel):
@@ -4133,6 +4136,7 @@ def initial_organizer_stats() -> dict[str, Any]:
         "ignored_mp3_files": 0,
         "skipped_existing_book_folders": 0,
         "possible_duplicates_flagged": 0,
+        "author_folder_moves": 0,
         "flagged_marketing_cleanup": 0,
         "structure_cache_entries": 0,
         "matched_existing_structure": 0,
@@ -4205,6 +4209,7 @@ def parse_organizer_line(state: RunState, line: str) -> None:
             "Matched existing structure": "matched_existing_structure",
             "Ambiguous structure matches": "ambiguous_structure_matches",
             "Skipped ambiguous structure": "skipped_ambiguous_structure",
+            "Organized books moving to another author folder": "author_folder_moves",
             "Planned moves": "planned_moves",
             "Moves succeeded": "moves_succeeded",
             "Moves failed": "moves_failed",
@@ -4344,6 +4349,8 @@ def build_organizer_command(req: OrganizerRunRequest) -> list[str]:
         cmd.append("--use-default-scheme")
     elif req.naming_template.strip():
         cmd += ["--naming-template", req.naming_template]
+        if req.initials_follow_author_scheme:
+            cmd.append("--initials-follow-author-scheme")
     if req.trust_abs_metadata and _get_abs_api_key():
         cmd += ["--abs-url", _get_abs_url()]
         cmd += ["--abs-api-key", _get_abs_api_key()]
@@ -9543,7 +9550,7 @@ def start_organizer_run(req: OrganizerRunRequest) -> dict[str, Any]:
 def validate_organizer_naming_template(req: OrganizerNamingTemplateValidateRequest) -> dict[str, Any]:
     organizer = load_organizer_module(req.script_name)
     problems = organizer.validate_naming_template(req.template)
-    return {"valid": not problems, "problems": problems}
+    return {"valid": not problems, "problems": problems, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 @app.post("/api/organizer/naming-template/preview")
@@ -9554,8 +9561,11 @@ def preview_organizer_naming_template(req: OrganizerNamingTemplatePreviewRequest
         raise HTTPException(status_code=400, detail="; ".join(problems))
     root = validate_audiobook_path(req.root_path)
     destination_root = validate_audiobook_path(req.destination_root)
-    previews = organizer.preview_naming_template_for_root(root, destination_root, req.template, limit=req.limit)
-    return {"previews": previews}
+    previews = organizer.preview_naming_template_for_root(
+        root, destination_root, req.template, limit=req.limit,
+        follow_author_scheme=req.initials_follow_author_scheme,
+    )
+    return {"previews": previews, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 def _example_books_manifest() -> dict[str, str]:
@@ -9581,12 +9591,13 @@ def preview_organizer_naming_template_examples(req: OrganizerNamingTemplateExamp
         raise HTTPException(status_code=400, detail="; ".join(problems))
     manifest = _example_books_manifest()
     previews = organizer.preview_naming_template_for_root(
-        EXAMPLE_BOOKS_DIR, AUDIOBOOKS_ROOT, req.template, limit=len(manifest) or 10
+        EXAMPLE_BOOKS_DIR, AUDIOBOOKS_ROOT, req.template, limit=len(manifest) or 10,
+        follow_author_scheme=req.initials_follow_author_scheme,
     )
     for preview in previews:
         source_parts = Path(preview["source"]).parts
         preview["scenario"] = next((manifest[key] for key in manifest if key in source_parts), "")
-    return {"previews": previews}
+    return {"previews": previews, "warnings": organizer.naming_template_warnings(req.template)}
 
 
 @app.get("/api/runs/draining")

@@ -1927,6 +1927,26 @@ summary:focus-visible {
   color: var(--danger);
 }
 
+.naming-template-status-warning {
+  color: var(--warning);
+}
+
+.naming-template-initials-toggle {
+  display: block;
+  margin-top: 8px;
+}
+
+.naming-template-section.using-default-scheme .naming-template-initials-toggle,
+.naming-template-section.using-default-scheme .naming-template-authors {
+  display: none;
+}
+
+.naming-template-separator-table td,
+.naming-template-separator-table th {
+  padding: 4px 10px 4px 0;
+  text-align: left;
+}
+
 .naming-template-tokens {
   margin-top: 10px;
 }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LibraForge - Folder Forge</title>
   <script src="/static/ui-preferences.js?v=20260922-1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20261001-1" />
+  <link rel="stylesheet" href="/static/style.css?v=20261119-1" />
   <link rel="icon" type="image/png" sizes="64x64" href="/static/favicon-64.png?v=20260613-3" />
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180.png?v=20260613-3" />
 </head>
@@ -92,11 +92,19 @@
         </div>
         <input id="namingTemplate" value="{author}/{series} [{edition}]/{order} - {title}/{filename}" spellcheck="false" autocomplete="off" />
         <p id="namingTemplateStatus" class="note naming-template-status" hidden></p>
+        <p id="namingTemplateWarnings" class="note naming-template-status naming-template-status-warning" hidden></p>
+        <label class="naming-template-initials-toggle"><input id="initialsFollowAuthorScheme" type="checkbox" /> Initials follow the author-name scheme <span class="info-tip" data-tooltip="Off: folder names write initials the way Folder Forge always has (&quot;J.R.R.&quot;). On: names are first written the way your tags are written (using your Settings author-name scheme, when it is switched on), so folder names match your tags and one author never ends up in two folders because their initials are written differently. Applies to {+} author blocks and to {fname}/{lname}/{initials}; a plain {author} on its own is never changed."></span></label>
         <details class="naming-template-tokens explanation-disclosure">
           <summary>Available tokens</summary>
           <dl class="naming-template-token-list">
             <dt><code>{author}</code></dt>
-            <dd>The book's author. Defaults to "Unknown Author" when missing, so this token never leaves its folder level empty. Example: <code>Brandon Sanderson</code></dd>
+            <dd>The book's author. Defaults to "Unknown Author" when missing, so this token never leaves its folder level empty. On its own it always names one author, exactly as before; add <code>{+}</code> to name every author (see "Multiple authors" below). Example: <code>Brandon Sanderson</code></dd>
+            <dt><code>{fname}</code></dt>
+            <dd>The author's first name, plus any middle names, split the way Audiobookshelf splits names. Empty for a single-word name. Can't be used together with <code>{author}</code> in one author block. Example: <code>Mara J.</code> for "Mara J. Holt"</dd>
+            <dt><code>{lname}</code></dt>
+            <dd>The author's last name, with particles and suffixes ("van der Holt", "Reed Jr"). A single-word name is a last name. Example: <code>Holt</code></dd>
+            <dt><code>{initials}</code></dt>
+            <dd>Initials already in the name ("J.", "A.B.", "JK"), taken out of <code>{fname}</code>; never made up from full names. Empty when the name has none. The live preview follows the "Initials follow the author-name scheme" option, so it shows what a run would write. Example: <code>J.</code> for "Mara J. Holt"</dd>
             <dt><code>{narrator}</code></dt>
             <dd>The audiobook narrator, when known. Example: <code>Michael Kramer</code></dd>
             <dt><code>{series}</code></dt>
@@ -125,6 +133,46 @@
           <p>Use <code>/</code> to mark a folder level; everything after the last <code>/</code> is the filename, which only applies to true single-file books. A folder level made of exactly one <em>core</em> token (<code>author</code>, <code>series</code>, <code>title</code>, <code>order</code>, <code>number</code>) is dropped entirely when that token is empty. A level combining two or more core tokens is flagged for review only if <em>all</em> of them are empty; otherwise it renders with whatever is there. <code>narrator</code>, <code>publisher</code>, <code>year</code>, <code>asin</code>, <code>edition</code>, <code>subtitle</code>, <code>filename</code>, and <code>original</code> are decoration, not core: they never count toward that 2-or-more check, so e.g. <code>{series} [{edition}]</code> with no edition behaves exactly like a bare <code>{series}</code> (collapses silently, brackets and all, rather than flagging or leaving a stray "[]").</p>
           <p><strong>Filename cleanup, worked example.</strong> Say a loose single-file book (title "The Great Book") has the messy source <code>The Great Book - Some Author {Jane Narrator} [64].m4b</code> and you want to stamp the ASIN onto it without retyping the name. A filename part of <code>{filename} [{asin}]</code> sees the release junk, falls back to the clean title, and appends the identifier, producing <code>The Great Book [B002UZZDDU].m4b</code>. (If the source name had been tidy to begin with, it would be kept verbatim instead of swapped for the title.) If the source path <em>already</em> contained <code>B002UZZDDU</code>, it is not duplicated; if it contained a <em>different</em> ASIN/ISBN, the book is flagged for review but still moved. Want zero cleanup? Swap in <code>{original}</code>: <code>{original} [{asin}]</code> leaves every character of the source name untouched and only appends the tag, giving <code>The Great Book - Some Author {Jane Narrator} [64] [B002UZZDDU].m4b</code>. You cannot use <code>{filename}</code> and <code>{original}</code> together, so pick one.</p>
           <p>Example: <code>{author}/{series} [{edition}]/{order} - {title}/{filename}</code> (the custom default shown above) renames the file, since its last part is a filename token rather than an empty trailing <code>/</code>.</p>
+        </details>
+        <details class="naming-template-authors explanation-disclosure">
+          <summary>Multiple authors (author block)</summary>
+          <p>An <strong>author block</strong> names a book's authors in one place. Write the name tokens (<code>{author}</code>, or any of <code>{fname}</code> <code>{lname}</code> <code>{initials}</code>) in the order you want, with plain text between them, and put the control tokens right next to them with no space: <code>{+}</code> names every author instead of just the first, <code>{?}</code> sets the separator between authors and <code>&lt;?&gt;</code> the one before the last author. The control tokens can go in any order. Only the first block in the template counts: <code>{+}</code> and <code>{?}</code> anywhere else are ignored, and <code>&lt; &gt;</code> anywhere else is plain text.</p>
+          <p>Examples with the authors Ana Pell, Ivo Sand and Lee Doan:</p>
+          <ul>
+            <li><code>{+}{author}{,}&lt;, &amp;&gt;</code> gives <code>Ana Pell, Ivo Sand, &amp; Lee Doan</code></li>
+            <li><code>{+}{author}&lt;and&gt;</code> gives <code>Ana Pell, Ivo Sand and Lee Doan</code></li>
+            <li><code>{+}{lname}, {fname}{&amp;}</code> gives <code>Pell, Ana &amp; Sand, Ivo &amp; Doan, Lee</code></li>
+            <li><code>{+}{author}{;}</code> gives <code>Ana Pell; Ivo Sand; Lee Doan</code></li>
+          </ul>
+          <table class="naming-template-separator-table">
+            <thead><tr><th>Between authors <code>{?}</code></th><th>Before the last author <code>&lt;?&gt;</code></th></tr></thead>
+            <tbody>
+              <tr><td><code>{,}</code></td><td><code>&lt;,&gt;</code> <code>&lt;&amp;&gt;</code> <code>&lt;and&gt;</code> <code>&lt;, &amp;&gt;</code> <code>&lt;, and&gt;</code></td></tr>
+              <tr><td><code>{&amp;}</code></td><td><code>&lt;&amp;&gt;</code> <code>&lt;, &amp;&gt;</code></td></tr>
+              <tr><td><code>{;}</code></td><td><code>&lt;;&gt;</code></td></tr>
+            </tbody>
+          </table>
+          <p>These are the pairs Audiobookshelf can read back as the same authors: it splits an author folder on only one kind of separator, so other pairs are refused. Separators get a space on both sides, except no space before a leading <code>,</code> or <code>;</code>. Without <code>{?}</code> authors are separated by <code>{,}</code>; without <code>&lt;?&gt;</code> the last author is joined like the others. With exactly two authors, <code>&lt;, &amp;&gt;</code> and <code>&lt;, and&gt;</code> drop the comma: <code>Ana Pell &amp; Ivo Sand</code>.</p>
+          <p>When a name part is empty (a single-word name has no <code>{fname}</code>), it is removed together with the text right after it, or the text right before it when it is the last name token: <code>{lname}, {fname}</code> for "Quillon" gives <code>Quillon</code>, not <code>Quillon,</code>. When a layout leaves nothing at all for a name (<code>{initials}</code> for a name without initials), the whole name is used instead, so the author folder never disappears. Translators, foreword writers and credits such as "Various" are left out of a <code>{+}</code> block.</p>
+          <p><strong>Up to 4 authors.</strong> A book with more authors shows the first 4, then the last separator and <code>et al</code>: <code>Ana Pell, Ivo Sand, Lee Doan, Mara Holt, &amp; et al</code>.</p>
+          <p><strong>Review flags</strong> (the book still moves):</p>
+          <ul>
+            <li><em>Audiobookshelf would read this author folder as different authors</em>: when the block is the first folder, Folder Forge reads the folder name the way Audiobookshelf does and shows what Audiobookshelf would see. A comma list with a single-word name is the usual cause ("Quillon, Ivo Sand" reads as one author); <code>{&amp;}</code> avoids it.</li>
+            <li><em>more than 4 authors</em>: the folder ends in "et al". If Audiobookshelf ever takes authors from that folder name, it reads "et al" as an extra author; a book's own author tags always win over the folder name.</li>
+            <li><em>author order differs from another book in this run</em>: the same co-authors always share one folder, in the order the first of their books used.</li>
+            <li><em>co-written book lands in a different author folder than the rest of its series</em>: the book is filed under its co-authors while the rest of its series is under one author. You decide where it belongs.</li>
+          </ul>
+          <p>The run summary also counts <em>Organized books moving to another author folder</em>, so you can see how much of the existing library a new scheme would move.</p>
+          <p><strong>Partial names in the first folder.</strong> A first folder (or a later one whose earlier folders can drop out, like an empty <code>{series}</code>) that uses only <code>{lname}</code>, only <code>{fname}</code> or only <code>{initials}</code> can put different authors in one folder (two authors named Holt), and Audiobookshelf would read them as one author. Folder Forge warns about this under the template; use <code>{fname}</code> and <code>{lname}</code> together there, or use partial names only in a later folder.</p>
+          <p><strong>Can't be used:</strong></p>
+          <ul>
+            <li>Separators other than the ones in the table, including <code>.</code> <code>/</code> and <code>-</code>, and words Audiobookshelf doesn't split on, such as "with".</li>
+            <li>Letters inside <code>{ }</code>: write words in <code>&lt; &gt;</code>, like <code>&lt;and&gt;</code> (lowercase only).</li>
+            <li>The characters <code>&lt; &gt; : " \ | ? *</code> in plain text: they can't be in folder names and are replaced.</li>
+            <li><code>{author}</code> together with <code>{fname}</code>, <code>{lname}</code> or <code>{initials}</code> in one block.</li>
+            <li><code>{+}</code> in any block but the first: a later block shows one author.</li>
+          </ul>
+          <p>Text in <code>&lt; &gt;</code> that isn't one of the separators above, and isn't right next to the block, stays plain text: <code>{author}/{title} &lt;draft&gt;</code> keeps "draft" in the folder name (the angle brackets themselves can't be in a folder name, so they are replaced).</p>
         </details>
         <details class="naming-template-examples explanation-disclosure" open>
           <summary>Example scenarios</summary>
@@ -257,6 +305,6 @@
     </section>
   </main>
   <script src="/static/ui-common.js?v=20261001-1"></script>
-  <script src="/static/organizer.js?v=20261008-1"></script>
+  <script src="/static/organizer.js?v=20261119-1"></script>
 </body>
 </html>

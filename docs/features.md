@@ -193,10 +193,20 @@ Metadata Forge (shown above the planned moves) to flag moves worth a second look
   "Fixer was not applied - Continue anyway?" before planning, since move quality for
   multi-file books leans on fixer-written sidecar metadata.
 - **Naming template:** the destination path is built from a configurable token template
-  (13 tokens: `{author}`, `{narrator}`, `{series}`, `{title}`, `{subtitle}`, `{order}`,
-  `{number}`, `{publisher}`, `{year}`, `{asin}`, `{edition}`, `{original}` and `{filename}`;
-  with an ASIN-detect flag and restatement cleanup) instead of a fixed
-  scheme, so the folder layout can be adapted to match how you already organise books.
+  (16 tokens: `{author}`, `{fname}`, `{lname}`, `{initials}`, `{narrator}`, `{series}`,
+  `{title}`, `{subtitle}`, `{order}`, `{number}`, `{publisher}`, `{year}`, `{asin}`,
+  `{edition}`, `{original}` and `{filename}`; with an ASIN-detect flag and restatement
+  cleanup) instead of a fixed scheme, so the folder layout can be adapted to match how
+  you already organise books.
+- **Multiple authors:** an author block such as `{+}{author}{,}<, &>` or
+  `{+}{lname}, {fname}{&}` names up to 4 authors (more become "et al"), with only the
+  separator pairs Audiobookshelf reads back as the same authors. Name splitting follows
+  Audiobookshelf's own parser (ported in `app/abs_names.py`). Books are flagged when
+  Audiobookshelf would read the author folder differently, when co-authors appear in
+  another order, or when a co-written book lands apart from the rest of its series; the
+  run summary counts organized books moving to another author folder. A first folder
+  that uses only part of each name gets a warning, and an option makes initials follow
+  the Settings author-name scheme.
 
 ## Enrichment Forge (`/enrichment-forge`)
 Finds a series (or a standalone book) already indexed in your Audiobookshelf library,

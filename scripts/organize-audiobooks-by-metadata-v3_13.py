@@ -60,6 +60,8 @@ try:
     )
     from app.enrichment import fetch_all_abs_book_items
     from app import media_probe
+    from app import abs_names
+    from app.author_names import _initial_letters, output_author_credit
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from app import media_probe
@@ -83,6 +85,8 @@ except ModuleNotFoundError:
         normalize_abs_media_to_internal,
     )
     from app.enrichment import fetch_all_abs_book_items
+    from app import abs_names
+    from app.author_names import _initial_letters, output_author_credit
 
 AUDIO_EXTENSIONS = {".m4b", ".m4a", ".mp4", ".flac", ".ogg", ".opus", ".aac", ".mp3"}
 # Keep in sync with the fixer's MULTI_PART_AUDIO_EXTENSIONS so a book the fixer
@@ -242,6 +246,8 @@ class NamingRenderResult:
     target_dir: Path
     filename: str | None
     review_reasons: list[str]
+    review_details: tuple[tuple[str, str], ...] = ()
+    block_authors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -844,14 +850,20 @@ def clean_author_credit(value: str) -> str:
     return sanitize_path_name(value, "")
 
 
-def split_people(value: str) -> list[str]:
+def split_people(value: str, drop_roles: bool = False) -> list[str]:
+    """People in an author credit, role labels stripped. With drop_roles, a
+    credit that carries a role label (" - translator", " - foreword", ...)
+    is left out entirely instead of kept as a person."""
     value = clean_text(value)
     if not value:
         return []
 
     # Do not split author names on ampersands aggressively unless they are clear separators.
     value = re.sub(r"\s+(?:and|&)\s+", ", ", value, flags=re.IGNORECASE)
-    parts = [clean_author_credit(part) for part in value.split(",")]
+    raw_parts = value.split(",")
+    if drop_roles:
+        raw_parts = [part for part in raw_parts if not NON_AUTHOR_ROLE_RE.search(clean_text(part))]
+    parts = [clean_author_credit(part) for part in raw_parts]
     people: list[str] = []
     seen = set()
     for person in parts:
@@ -994,6 +1006,56 @@ def primary_author(value: str) -> str:
                 return person
         return people[0]
     return sanitize_path_name(value, "Unknown Author")
+
+
+_ET_AL_RE = re.compile(r"\s*(?:,\s*)?(?:(?:and|&)\s+)?\b(?:et\.?\s+al\.?|others)\s*$", re.IGNORECASE)
+
+
+def _author_block_credit_people(credit: str) -> list[str]:
+    """split_people() for an author block, closer to how Audiobookshelf reads
+    a credit: ";" separates authors too, a trailing "et al" or "others" is
+    not an author, and a last-first list ("Holt, Mara" or "Pell, Ana & Sand,
+    Ivo", every part one word) is one author per pair."""
+    people: list[str] = []
+    for part in clean_text(credit).split(";"):
+        part = _ET_AL_RE.sub("", part).strip(" ,")
+        if not part:
+            continue
+        split = split_people(part, drop_roles=True)
+        if (
+            len(split) >= 2
+            and len(split) % 2 == 0
+            and all(len(person.split()) == 1 for person in split)
+            and not NON_AUTHOR_ROLE_RE.search(part)
+        ):
+            paired = abs_names.parse_name_string(part)
+            if len(paired) == len(split) // 2:
+                split = paired
+        people.extend(person for person in split if normalize_for_compare(person) not in {normalize_for_compare(p) for p in people})
+    return people
+
+
+def author_block_people(metadata: dict[str, Any]) -> list[str]:
+    """The book's authors for a Folder Forge author block, in credit order:
+    role credits (translator, foreword, ...) and generic credits ("Various")
+    left out, each name canonicalized. When the first author was corrected
+    from the existing library structure (author_primary no longer matches
+    the first credited person), the corrected name takes the first place."""
+    people = [
+        canonical_author_name(person)
+        for person in _author_block_credit_people(str(metadata.get("author") or ""))
+        if normalize_for_compare(person) not in GENERIC_AUTHOR_KEYS
+    ]
+    if not people:
+        return []
+    primary = canonical_author_name(str(metadata.get("author_primary") or ""))
+    # author_primary equal to the credit's own first-author pick is not a
+    # correction, even when that pick is a role credit the block leaves out.
+    credit_pick = canonical_author_name(primary_author(metadata.get("author", "")))
+    corrected = normalize_for_compare(primary) != normalize_for_compare(credit_pick)
+    if corrected and primary and primary != "Unknown Author" and normalize_for_compare(primary) != normalize_for_compare(people[0]):
+        people = [primary] + [person for person in people[1:] if normalize_for_compare(person) != normalize_for_compare(primary)]
+    return people
 
 
 _SINGLE_INITIAL_RE = re.compile(r"[A-Za-z]\.?$")
@@ -4134,6 +4196,482 @@ NAMING_TEMPLATE_TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _EMPTY_BRACKET_RE = re.compile(r"[\(\[]\s*[\)\]]")
 
 
+# ------------------------------------------------------------------ author block
+#
+# An author block names a book's authors in one place of the template:
+#   {+}{lname}, {fname}{,}<, &>   ->  "Holt, Mara, Sand, Ivo, & Doan, Lee"
+# Name tokens ({author} or {fname}/{lname}/{initials}) render in the order
+# written, with literal text allowed only between two name tokens. Control
+# tokens touch the name tokens or each other, in any order: {+} names every
+# author (up to the cap), {?} is the separator between authors and <?> the one
+# before the last author. Only the first block in the template counts; control
+# tokens anywhere else are ignored.
+AUTHOR_NAME_TOKENS = ("author", "fname", "lname", "initials")
+AUTHOR_BETWEEN_SEPARATORS = (",", ";", "&")
+AUTHOR_LAST_SEPARATORS = (",", ";", "&", "and", ", &", ", and")
+# Which last-author separators Audiobookshelf can read with each between-author
+# separator: it splits on & first, then " and ", then ";", then commas, so the
+# two must not mix kinds it would split differently.
+AUTHOR_SEPARATOR_PAIRS = {
+    ",": (",", "&", "and", ", &", ", and"),
+    "&": ("&", ", &"),
+    ";": (";",),
+}
+_BLOCK_ITEM_RE = re.compile(r"\{[^{}]*\}|<[^<>{}]*>")
+_SEPARATOR_WORDS = {"and"}
+
+
+@dataclass(frozen=True)
+class AuthorBlock:
+    start: int
+    end: int
+    layout: tuple[tuple[str, str], ...]
+    multi: bool
+    between: str | None
+    last: str | None
+
+
+def _brace_kind(content: str) -> str:
+    """Classify the inside of a { } item: a token name, the {+} marker, a
+    separator, a separator written with letters, or anything else."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", content):
+        return "letters" if content.lower() in _SEPARATOR_WORDS else "name"
+    if content == "+":
+        return "multi"
+    if content and not re.search(r"[A-Za-z0-9_]", content):
+        return "between"
+    if re.search(r"[A-Za-z]", content) and content.strip():
+        return "letters"
+    return "other"
+
+
+def _template_items(template: str) -> list[tuple[str, str, int, int]]:
+    """Split a template into (kind, content, start, end) items. Kinds: "name"
+    (an author name token), "token" (any other {token}), "multi", "between",
+    "letters", "last" (an allowed <?>), "angle" (any other < >), "text"."""
+    items: list[tuple[str, str, int, int]] = []
+    pos = 0
+    for match in _BLOCK_ITEM_RE.finditer(template):
+        if match.start() > pos:
+            items.append(("text", template[pos:match.start()], pos, match.start()))
+        raw = match.group(0)
+        content = raw[1:-1]
+        if raw[0] == "{":
+            kind = _brace_kind(content)
+            if kind == "name":
+                kind = "name" if content in AUTHOR_NAME_TOKENS else "token"
+        else:
+            kind = "last" if content in AUTHOR_LAST_SEPARATORS else "angle"
+        items.append((kind, content, match.start(), match.end()))
+        pos = match.end()
+    if pos < len(template):
+        items.append(("text", template[pos:], pos, len(template)))
+    return items
+
+
+_BLOCK_CONTROL_KINDS = {"multi", "between", "letters", "last"}
+# Outside a block, <?> was always plain text; only {+} and {?} are dropped.
+_STRAY_CONTROL_KINDS = {"multi", "between", "letters"}
+
+
+def _author_block_span(items: list[tuple[str, str, int, int]], start: int = 0) -> tuple[int, int] | None:
+    """Item index range [first, last] of the first author block at or after
+    item `start`, or None. In a block without {+}, a <?> has nothing to
+    separate: it is relabelled plain text (in `items`, in place), as it was
+    before author blocks existed, and the span is found again."""
+    span = _raw_author_block_span(items, start)
+    if span is None or any(items[i][0] == "multi" for i in range(span[0], span[1] + 1)):
+        return span
+    lasts = [i for i in range(span[0], span[1] + 1) if items[i][0] == "last"]
+    if not lasts:
+        return span
+    for i in lasts:
+        _kind, content, item_start, item_end = items[i]
+        items[i] = ("text", f"<{content}>", item_start, item_end)
+    return _raw_author_block_span(items, start)
+
+
+def _raw_author_block_span(items: list[tuple[str, str, int, int]], start: int = 0) -> tuple[int, int] | None:
+    first_name = next((i for i in range(start, len(items)) if items[i][0] == "name"), None)
+    if first_name is None:
+        return None
+    first = first_name
+    while first > start and items[first - 1][0] in _BLOCK_CONTROL_KINDS:
+        first -= 1
+    last = first_name
+    j = first_name + 1
+    while j < len(items):
+        kind, content = items[j][0], items[j][1]
+        if kind in _BLOCK_CONTROL_KINDS or kind == "name":
+            last = j
+            j += 1
+            continue
+        if (
+            kind == "text"
+            and "/" not in content
+            and items[j - 1][0] == "name"
+            and j + 1 < len(items)
+            and items[j + 1][0] == "name"
+        ):
+            j += 1
+            continue
+        break
+    return first, last
+
+
+def _all_author_block_spans(items: list[tuple[str, str, int, int]]) -> list[tuple[int, int]]:
+    """Item index ranges of every run of name tokens: the author block first,
+    then any later runs (rendered as one name each)."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while (span := _author_block_span(items, start)) is not None:
+        spans.append(span)
+        start = span[1] + 1
+    return spans
+
+
+def _block_from_items(items: list[tuple[str, str, int, int]], span: tuple[int, int]) -> AuthorBlock:
+    first, last = span
+    block_items = items[first:last + 1]
+    layout = tuple(
+        ("token", content) if kind == "name" else ("text", content)
+        for kind, content, _start, _end in block_items
+        if kind in ("name", "text")
+    )
+    return AuthorBlock(
+        start=items[first][2],
+        end=items[last][3],
+        layout=layout,
+        multi=any(kind == "multi" for kind, _c, _s, _e in block_items),
+        between=next((content for kind, content, _s, _e in block_items if kind == "between"), None),
+        last=next((content for kind, content, _s, _e in block_items if kind == "last"), None),
+    )
+
+
+def _block_items(template: str) -> tuple[list[tuple[str, str, int, int]], tuple[int, int] | None]:
+    items = _template_items(template)
+    return items, _author_block_span(items)
+
+
+def find_author_block(template: str) -> AuthorBlock | None:
+    """The first author block in the template, or None when it has none."""
+    items, span = _block_items(template)
+    if span is None:
+        return None
+    return _block_from_items(items, span)
+
+
+def strip_stray_control_tokens(template: str, block: AuthorBlock | None) -> str:
+    """Remove {+} and {?} tokens that sit outside the author block: they only
+    mean something inside it. Text in < > outside the block, separators
+    included, stays plain text as it always has."""
+    out: list[str] = []
+    for kind, _content, start, end in _template_items(template):
+        inside = block is not None and block.start <= start and end <= block.end
+        if not inside and kind in _STRAY_CONTROL_KINDS:
+            continue
+        out.append(template[start:end])
+    return "".join(out)
+
+
+LATER_MULTI_BLOCK_PROBLEM = (
+    "{+} works only in the first author block. Move it there, or remove it: "
+    "a later block shows one author."
+)
+
+
+def _author_block_problems(template: str) -> list[str]:
+    problems: list[str] = []
+    items, span = _block_items(template)
+    for later in _all_author_block_spans(items)[1:]:
+        if any(items[i][0] == "multi" for i in range(later[0], later[1] + 1)):
+            problems.append(LATER_MULTI_BLOCK_PROBLEM)
+            break
+    for kind, content, _start, _end in items:
+        if kind == "between" and content not in AUTHOR_BETWEEN_SEPARATORS:
+            problems.append(f"Author separator {{{content}}} can't be used. Between authors use {{,}} {{;}} or {{&}}.")
+        elif kind == "letters":
+            message = "Separators can't contain letters inside { }. Put words in < >, like <and>."
+            if message not in problems:
+                problems.append(message)
+    if span is None:
+        return problems
+    first, last = span
+    # An angle item touching a block that has control tokens is meant as its
+    # last-author separator; next to a plain {author} it stays text, as before.
+    has_controls = any(items[i][0] in _BLOCK_CONTROL_KINDS for i in range(first, last + 1))
+    for index in (first - 1, last + 1):
+        if has_controls and 0 <= index < len(items) and items[index][0] == "angle":
+            problems.append(
+                f"Last-author separator <{items[index][1]}> can't be used. "
+                "Use <,> <;> <&> <and> <, &> or <, and>."
+            )
+    block = find_author_block(template)
+    names = {content for kind, content in block.layout if kind == "token"}
+    if "author" in names and names & {"fname", "lname", "initials"}:
+        problems.append("Use either {author} or {fname}/{lname}/{initials} in the author block, not both.")
+    between = block.between if block.between in AUTHOR_BETWEEN_SEPARATORS else None
+    if block.between is None or between is not None:
+        effective = between or ","
+        if block.last is not None and block.last not in AUTHOR_SEPARATOR_PAIRS[effective]:
+            problems.append(
+                f"Audiobookshelf can't read {{{effective}}} together with <{block.last}>: "
+                "it splits on only one kind of separator."
+            )
+    return problems
+
+
+def _block_can_be_top_folder(template: str, block: AuthorBlock) -> bool:
+    """Whether the block's folder can end up as the top folder under the
+    library, the one Audiobookshelf reads as the author: it is the first
+    folder, or every folder before it can collapse (a single core token such
+    as {series}, which is dropped when empty)."""
+    earlier = template[:block.start].split("/")[:-1]
+    return all(len(_significant_tokens(set(NAMING_TEMPLATE_TOKEN_RE.findall(segment)))) <= 1 for segment in earlier)
+
+
+def _is_partial_name_layout(block: AuthorBlock) -> bool:
+    """A layout that writes only part of each name (no {author}, and not both
+    {fname} and {lname})."""
+    names = {content for kind, content in block.layout if kind == "token"}
+    return "author" not in names and not {"fname", "lname"} <= names
+
+
+def naming_template_warnings(template: str) -> list[str]:
+    """Non-blocking warnings about a naming template (problems from
+    validate_naming_template() block a run; these do not)."""
+    warnings: list[str] = []
+    block = find_author_block(template)
+    if block is None:
+        return warnings
+    if _block_can_be_top_folder(template, block) and _is_partial_name_layout(block):
+        warnings.append(
+            "The author folder uses only part of each name, so different authors can end up in one folder "
+            "(for example two authors named Holt), and Audiobookshelf would read them as one author. "
+            "Use {fname} and {lname} together here, or move this block to a later folder."
+        )
+    return warnings
+
+
+AUTHOR_BLOCK_CAP = 4
+
+
+@dataclass(frozen=True)
+class NameParts:
+    first: str
+    last: str
+    initials: str
+    full: str = ""
+
+
+def _keep_written_case(original: str, parsed: str) -> str:
+    """Audiobookshelf's parser re-cases all-lower/all-upper names ("ana pell"
+    -> "Ana Pell"); a folder name keeps the case the name was written in."""
+    if not parsed:
+        return parsed
+    pool = original.split()
+    out: list[str] = []
+    for word in parsed.split(" "):
+        match = next((w for w in pool if w.lower() == word.lower()), None)
+        if match is not None:
+            pool.remove(match)
+            out.append(match)
+        else:
+            out.append(word)
+    return " ".join(out)
+
+
+def split_author_name(name: str, take_initials: bool, follow_author_scheme: bool = False) -> NameParts:
+    """Split one author name the way Audiobookshelf does (app.abs_names):
+    first = first + middle, last = last name (particles included) plus any
+    suffix. A single word is the last name. With take_initials, initials
+    already in the first part ("J.", "A.B.", "JK") move to `initials`; none
+    are made from full names. With follow_author_scheme, the name is first
+    written the way the fixer writes it to tags (the Settings author-name
+    scheme, only when that scheme is switched on)."""
+    name = clean_text(name)
+    if follow_author_scheme:
+        name = output_author_credit(name)
+    name = canonical_author_name(name)
+    parsed = abs_names.parse_full_name(name)
+    first = " ".join(part for part in (parsed.first, parsed.middle) if part)
+    last = " ".join(part for part in (parsed.last, parsed.suffix) if part)
+    first = _keep_written_case(name, first)
+    last = _keep_written_case(name, last)
+    initials = ""
+    if take_initials and first:
+        words = first.split(" ")
+        last_index = len(name.split()) - 1
+        kept: list[str] = []
+        found: list[str] = []
+        for index, word in enumerate(words):
+            (found if _initial_letters(word, index, last_index) else kept).append(word)
+        first = " ".join(kept)
+        initials = " ".join(found)
+    return NameParts(first=first, last=last, initials=initials, full=name)
+
+
+def render_author_layout(layout: tuple[tuple[str, str], ...], parts: NameParts) -> str:
+    """One author through the block's layout. An empty name token is removed
+    together with the literal text right after it, or the text right before
+    it when it is the last name token, so "{lname}, {fname}" for a
+    single-name author gives "Quillon", not "Quillon, "."""
+    values = {"author": parts.full, "fname": parts.first, "lname": parts.last, "initials": parts.initials}
+    seq = [[kind, values.get(content, "") if kind == "token" else content] for kind, content in layout]
+    i = 0
+    while i < len(seq):
+        kind, value = seq[i]
+        has_later_token = any(k == "token" for k, _v in seq[i + 1:])
+        if kind == "token" and not value and has_later_token:
+            end = i + 2 if i + 1 < len(seq) and seq[i + 1][0] == "text" else i + 1
+            del seq[i:end]
+            continue
+        i += 1
+    while seq and seq[-1][0] == "token" and not seq[-1][1]:
+        seq.pop()
+        if seq and seq[-1][0] == "text":
+            seq.pop()
+    return "".join(value for _kind, value in seq)
+
+
+def _spaced_separator(separator: str) -> str:
+    """A space on both sides, except none before a leading "," or ";"."""
+    return (separator if separator[0] in ",;" else " " + separator) + " "
+
+
+def join_authors(rendered: list[str], between: str | None, last: str | None) -> str:
+    """Join rendered author names. No between separator means {,}; no last
+    separator means the between one. Two authors drop the Oxford comma
+    ("A & B" for <, &>). Past the cap, the first AUTHOR_BLOCK_CAP authors are
+    followed by the last separator and "et al"."""
+    names = [name for name in rendered if name]
+    if len(names) > AUTHOR_BLOCK_CAP:
+        names = names[:AUTHOR_BLOCK_CAP] + ["et al"]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    between = between or ","
+    last = last or between
+    if len(names) == 2 and last in (", &", ", and"):
+        last = last[2:]
+    return _spaced_separator(between).join(names[:-1]) + _spaced_separator(last) + names[-1]
+
+
+ABS_READBACK_REASON = "Audiobookshelf would read this author folder as different authors"
+AUTHOR_ORDER_REASON = "author order differs from another book in this run"
+OVER_AUTHOR_CAP_REASON = "more than 4 authors"
+_UNKNOWN_AUTHOR = "Unknown Author"
+
+
+@dataclass(frozen=True)
+class _BlockRendering:
+    template: str
+    token_values: dict[str, str]
+    block_authors: tuple[str, ...]
+    readback_check: bool
+    over_cap: bool
+    # Which "/"-separated part of the template holds the {+} block.
+    block_segment: int | None = None
+
+
+def _render_one_author(
+    layout: tuple[tuple[str, str], ...], name: str, follow_author_scheme: bool, multi: bool = True
+) -> str:
+    """One author through a block layout. A lone {author} outside a {+}
+    block is today's value exactly, whatever the initials option says, so
+    templates written before author blocks existed never change."""
+    tokens = [content for kind, content in layout if kind == "token"]
+    if name == _UNKNOWN_AUTHOR:
+        # The placeholder is not a name: the first name token carries it
+        # whole and the others are empty, so their text drops with them.
+        first = tokens[0] if tokens else "author"
+        parts = NameParts(
+            first=name if first == "fname" else "",
+            last=name if first == "lname" else "",
+            initials=name if first == "initials" else "",
+            full=name,
+        )
+        return render_author_layout(layout, parts)
+    if set(tokens) == {"author"} and (not multi or not follow_author_scheme):
+        return render_author_layout(layout, NameParts(first="", last="", initials="", full=name))
+    parts = split_author_name(name, take_initials="initials" in tokens, follow_author_scheme=follow_author_scheme)
+    # A layout that leaves nothing for this name ({initials} for a name with
+    # none) falls back to the whole name, so the author level never vanishes.
+    return render_author_layout(layout, parts) or parts.full or name
+
+
+def _render_author_blocks(
+    template: str,
+    token_values: dict[str, str],
+    authors: list[str] | None,
+    follow_author_scheme: bool,
+) -> _BlockRendering:
+    """Replace every run of name tokens with one rendered value. The first
+    block renders every author when it has {+}; it and every later run
+    otherwise render today's author value (token_values["author"]), so
+    templates written before author blocks existed render unchanged. Control
+    tokens outside the runs are dropped."""
+    items = _template_items(template)
+    spans = _all_author_block_spans(items)
+    today = token_values.get("author") or _UNKNOWN_AUTHOR
+    values = dict(token_values)
+    out: list[str] = []
+    block_authors: tuple[str, ...] = ()
+    readback_check = False
+    over_cap = False
+    block_segment: int | None = None
+    pos_item = 0
+    for index, span in enumerate(spans):
+        for kind, _content, start, end in items[pos_item:span[0]]:
+            if kind not in _STRAY_CONTROL_KINDS:
+                out.append(template[start:end])
+        block = _block_from_items(items, span)
+        if index == 0 and block.multi:
+            names = [name for name in (authors or []) if name] or [today]
+            rendered = [_render_one_author(block.layout, name, follow_author_scheme) for name in names]
+            value = join_authors(rendered, block.between, block.last)
+            block_authors = tuple(names)
+            over_cap = len(names) > AUTHOR_BLOCK_CAP
+            block_segment = template[:block.start].count("/")
+            # A partial-name layout gets the template warning instead.
+            readback_check = not over_cap and names != [_UNKNOWN_AUTHOR] and not _is_partial_name_layout(block)
+        else:
+            value = _render_one_author(block.layout, today, follow_author_scheme, multi=False)
+        token = f"__author_block_{index}"
+        values[token] = value
+        out.append("{" + token + "}")
+        pos_item = span[1] + 1
+    for kind, _content, start, end in items[pos_item:]:
+        if kind not in _STRAY_CONTROL_KINDS:
+            out.append(template[start:end])
+    return _BlockRendering("".join(out), values, block_authors, readback_check, over_cap, block_segment)
+
+
+def _abs_readback_problem(rendered_folder: str, authors: tuple[str, ...]) -> list[str] | None:
+    """How Audiobookshelf would read the rendered first folder, when that is
+    not the intended authors (each compared in its own Audiobookshelf
+    reading, so "Holt, Mara" and "Mara Holt" are the same author)."""
+    parsed = abs_names.parse_name_string(rendered_folder)
+    intended = [reading for name in authors for reading in (abs_names.parse_name_string(name) or [name])]
+    if len(parsed) == len(intended) and all(
+        _same_abs_author(folder_name, tag_name) for folder_name, tag_name in zip(parsed, intended)
+    ):
+        return None
+    return parsed
+
+
+def _same_abs_author(folder_name: str, tag_name: str) -> bool:
+    """Same author in Audiobookshelf's two readings. Its tag reading drops a
+    suffix ("Tomas Reed Jr" reads as "Tomas Reed") that its last-first folder
+    reading keeps ("Reed Jr, Tomas" reads as "Tomas Reed Jr"), so a suffix
+    alone is not a different author."""
+    if normalize_for_compare(folder_name) == normalize_for_compare(tag_name):
+        return True
+    def without_suffix(name: str) -> str:
+        full = abs_names.parse_full_name(name)
+        return normalize_for_compare(" ".join(p for p in (full.first, full.middle, full.last) if p))
+    return without_suffix(folder_name) == without_suffix(tag_name)
+
+
 class UnknownNamingTokenError(ValueError):
     """A naming template referenced a token with no known value source."""
 
@@ -4200,6 +4738,9 @@ NAMING_TOKEN_NAMES = frozenset(
         "original",
         "filename",
         "subtitle",
+        "fname",
+        "lname",
+        "initials",
     }
 )
 
@@ -4213,13 +4754,21 @@ def validate_naming_template(template: str) -> list[str]:
         # for "use the default".
         problems.append("Template is empty -- enter a template, or turn on the default scheme.")
         return problems
-    stripped = NAMING_TEMPLATE_TOKEN_RE.sub("", template)
+    # Author-block control tokens ({+}, {,}, {&}, ...) are well-formed braces.
+    stripped = "".join(
+        template[start:end] if kind in ("text", "angle", "other") else ""
+        for kind, _content, start, end in _template_items(template)
+    )
     if "{" in stripped or "}" in stripped:
         problems.append("Unbalanced or malformed curly brace in template.")
-    tokens = NAMING_TEMPLATE_TOKEN_RE.findall(template)
+    tokens = [
+        token for token in NAMING_TEMPLATE_TOKEN_RE.findall(template)
+        if token.lower() not in _SEPARATOR_WORDS
+    ]
     for token in tokens:
         if token not in NAMING_TOKEN_NAMES:
             problems.append(f"Unknown token: {{{token}}}")
+    problems.extend(_author_block_problems(template))
     if "original" in tokens and "filename" in tokens:
         problems.append(
             "Use either {original} or {filename}, not both -- they are two "
@@ -4231,7 +4780,7 @@ def validate_naming_template(template: str) -> list[str]:
 
 
 def preview_naming_template_for_root(
-    root: Path, destination_root: Path, naming_template: str, limit: int = 3
+    root: Path, destination_root: Path, naming_template: str, limit: int = 3, follow_author_scheme: bool = False
 ) -> list[dict[str, Any]]:
     """Render a naming template against a few real sample books for a live preview.
 
@@ -4247,6 +4796,7 @@ def preview_naming_template_for_root(
         result = build_target_dir_for_template(
             destination_root, metadata, naming_template,
             filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
+            follow_author_scheme=follow_author_scheme,
         )
         filename = naming_template_filename_for_item(item, result.filename)
         previews.append(
@@ -4255,6 +4805,7 @@ def preview_naming_template_for_root(
                 "target_dir": str(result.target_dir),
                 "filename": filename,
                 "review_reasons": result.review_reasons,
+                "review_details": [{"label": label, "value": value} for label, value in result.review_details],
             }
         )
     return previews
@@ -4311,6 +4862,8 @@ def build_target_dir_for_template(
     filename_applies: bool = True,
     source_file: Path | None = None,
     use_default_scheme: bool = False,
+    follow_author_scheme: bool = False,
+    author_orders: dict[frozenset[str], tuple[str, ...]] | None = None,
 ) -> NamingRenderResult:
     """Render a naming template into a destination folder path and filename.
 
@@ -4331,11 +4884,29 @@ def build_target_dir_for_template(
 
     tokens = resolve_naming_tokens(metadata)
     redundant = title_redundant_with_order(metadata)
-    folder_segments, filename, reasons = render_naming_template(
+    authors = author_block_people(metadata)
+    order_reasons: list[str] = []
+    order_details: tuple[tuple[str, str], ...] = ()
+    block = find_author_block(naming_template) if author_orders is not None and len(authors) >= 2 else None
+    if block is not None and block.multi:
+        # The same co-authors always share one folder: the first order and
+        # spelling seen in the run win; a later book in another order follows
+        # it and is flagged, one spelled differently just follows it.
+        key = frozenset(normalize_for_compare(name) for name in authors)
+        stored = author_orders.setdefault(key, tuple(authors))
+        if [normalize_for_compare(n) for n in stored] != [normalize_for_compare(n) for n in authors]:
+            order_reasons = [AUTHOR_ORDER_REASON]
+            order_details = (("Order used", "; ".join(stored)),)
+        authors = list(stored)
+    rendered = render_naming_template_full(
         naming_template, tokens, redundant, filename_applies=filename_applies,
         source_file=source_file, destination_root=destination_root,
+        authors=authors, follow_author_scheme=follow_author_scheme,
     )
-    return NamingRenderResult(destination_root.joinpath(*folder_segments), filename, reasons)
+    return NamingRenderResult(
+        destination_root.joinpath(*rendered.folder_segments), rendered.filename,
+        rendered.review_reasons + order_reasons, rendered.review_details + order_details, rendered.block_authors,
+    )
 
 
 def title_redundant_with_order(metadata: dict[str, Any]) -> bool:
@@ -4501,6 +5072,15 @@ def _metadata_filename_base(
     return Path(clean_loose_audio_filename(source_file, target_dir)).stem
 
 
+@dataclass(frozen=True)
+class NamingTemplateRender:
+    folder_segments: list[str]
+    filename: str | None
+    review_reasons: list[str]
+    review_details: tuple[tuple[str, str], ...] = ()
+    block_authors: tuple[str, ...] = ()
+
+
 def render_naming_template(
     template: str,
     token_values: dict[str, str],
@@ -4508,8 +5088,35 @@ def render_naming_template(
     filename_applies: bool = True,
     source_file: Path | None = None,
     destination_root: Path | None = None,
+    authors: list[str] | None = None,
+    follow_author_scheme: bool = False,
 ) -> tuple[list[str], str | None, list[str]]:
+    """render_naming_template_full() as (folder_segments, filename, review_reasons)."""
+    result = render_naming_template_full(
+        template, token_values, title_redundant_with_order, filename_applies=filename_applies,
+        source_file=source_file, destination_root=destination_root,
+        authors=authors, follow_author_scheme=follow_author_scheme,
+    )
+    return result.folder_segments, result.filename, result.review_reasons
+
+
+def render_naming_template_full(
+    template: str,
+    token_values: dict[str, str],
+    title_redundant_with_order: bool = False,
+    filename_applies: bool = True,
+    source_file: Path | None = None,
+    destination_root: Path | None = None,
+    authors: list[str] | None = None,
+    follow_author_scheme: bool = False,
+) -> NamingTemplateRender:
     """Render a user-defined naming template against resolved token values.
+
+    Author blocks are rendered first (see _render_author_blocks()): `authors`
+    fills a {+} block, every other run of name tokens gets today's author
+    value. A {+} block in the first folder is read back the way
+    Audiobookshelf reads author folders, and flagged when that gives
+    different authors.
 
     Splits `template` on its final "/" into a folder-path part and a
     filename part. Each "/"-delimited folder segment collapses (is
@@ -4538,26 +5145,50 @@ def render_naming_template(
 
     Returns (folder_segments, filename_or_None, review_reasons).
     """
-    if "/" in template:
-        folder_template, _, filename_template = template.rpartition("/")
-    else:
-        folder_template, filename_template = "", template
+    def split_template(value: str) -> tuple[str, str]:
+        if "/" in value:
+            folder, _, name = value.rpartition("/")
+            return folder, name
+        return "", value
+
+    blocks = _render_author_blocks(template, token_values, authors, follow_author_scheme)
+    token_values = blocks.token_values
+    written_folder, written_filename = split_template(template)
+    folder_template, filename_template = split_template(blocks.template)
+    written_segments = written_folder.split("/") if written_folder else []
 
     review_reasons: list[str] = []
+    review_details: list[tuple[str, str]] = []
     folder_segments: list[str] = []
+    first_folder_rendered: str | None = None
     if folder_template:
-        for raw_segment in folder_template.split("/"):
+        segments = folder_template.split("/")
+        if len(written_segments) != len(segments):
+            written_segments = segments
+        for position, (raw_segment, written_segment) in enumerate(zip(segments, written_segments)):
             distinct_tokens = set(NAMING_TEMPLATE_TOKEN_RE.findall(raw_segment))
             significant = _significant_tokens(distinct_tokens)
             segment_values = _token_values_for_segment(raw_segment, token_values, distinct_tokens, title_redundant_with_order)
             rendered, needs_review = _render_naming_segment(raw_segment, segment_values)
             if needs_review:
-                review_reasons.append(f"not enough data to build path segment '{raw_segment}'")
+                review_reasons.append(f"not enough data to build path segment '{written_segment}'")
                 folder_segments.append(_sanitize_naming_segment(rendered))
             elif len(significant) <= 1 and _naming_segment_is_effectively_empty(rendered):
                 continue
             else:
                 folder_segments.append(_sanitize_naming_segment(rendered))
+            if len(folder_segments) == 1 and position == blocks.block_segment:
+                # The block's folder is the top folder actually written
+                # (folders before it may have collapsed): the author folder.
+                first_folder_rendered = folder_segments[-1]
+
+    if blocks.over_cap:
+        review_reasons.append(OVER_AUTHOR_CAP_REASON)
+    if blocks.readback_check and first_folder_rendered:
+        parsed = _abs_readback_problem(first_folder_rendered, blocks.block_authors)
+        if parsed is not None:
+            review_reasons.append(ABS_READBACK_REASON)
+            review_details.append(("Audiobookshelf reads", "; ".join(parsed)))
 
     filename: str | None = None
     if filename_template and filename_applies:
@@ -4596,11 +5227,13 @@ def render_naming_template(
                     )
         rendered, needs_review = _render_naming_segment(filename_template, segment_values)
         if needs_review:
-            review_reasons.append(f"not enough data to build filename '{filename_template}'")
+            review_reasons.append(f"not enough data to build filename '{written_filename}'")
         elif not _naming_segment_is_effectively_empty(rendered):
             filename = _sanitize_naming_segment(rendered)
 
-    return folder_segments, filename, review_reasons
+    return NamingTemplateRender(
+        folder_segments, filename, review_reasons, tuple(review_details), blocks.block_authors
+    )
 
 
 def empty_structure_cache(
@@ -4944,6 +5577,8 @@ def build_cached_target_dir(
     filename_applies: bool = True,
     source_file: Path | None = None,
     use_default_scheme: bool = False,
+    follow_author_scheme: bool = False,
+    author_orders: dict[frozenset[str], tuple[str, ...]] | None = None,
 ) -> TargetResolution:
     # Dramatized adaptations never merge into an existing straight-reading
     # series folder; they always route to their own "Series [Imprint]" bucket.
@@ -4951,10 +5586,10 @@ def build_cached_target_dir(
         result = build_target_dir_for_template(
             destination_root, metadata, naming_template,
             filename_applies=filename_applies, source_file=source_file,
-            use_default_scheme=use_default_scheme,
+            use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
+            author_orders=author_orders,
         )
-        if result.review_reasons:
-            metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
+        metadata = _with_naming_result(metadata, result)
         return TargetResolution(result.target_dir, result.filename, "new", metadata)
 
     # resolve_series_directory's Path return is used only to decide whether a
@@ -4972,13 +5607,23 @@ def build_cached_target_dir(
     result = build_target_dir_for_template(
         destination_root, effective_metadata, naming_template,
         filename_applies=filename_applies, source_file=source_file,
-        use_default_scheme=use_default_scheme,
+        use_default_scheme=use_default_scheme, follow_author_scheme=follow_author_scheme,
+        author_orders=author_orders,
     )
-    if result.review_reasons:
-        effective_metadata = dict(
-            effective_metadata, review_reasons=_merged_review_reasons(effective_metadata, result.review_reasons)
-        )
+    effective_metadata = _with_naming_result(effective_metadata, result)
     return TargetResolution(result.target_dir, result.filename, status, effective_metadata)
+
+
+def _with_naming_result(metadata: dict[str, Any], result: NamingRenderResult) -> dict[str, Any]:
+    """Carry a naming render's review reasons and details, and the authors
+    its author block named, forward on the book's metadata."""
+    if result.review_reasons:
+        metadata = dict(metadata, review_reasons=_merged_review_reasons(metadata, result.review_reasons))
+    for label, value in result.review_details:
+        metadata = add_metadata_review_detail(metadata, label, value)
+    if result.block_authors:
+        metadata = dict(metadata, author_block_authors=list(result.block_authors))
+    return metadata
 
 
 def _merged_review_reasons(metadata: dict[str, Any], reasons: list[str]) -> list[str]:
@@ -5823,9 +6468,84 @@ AUTHOR_VARIANT_REASON = "author name varies across books in this run"
 LABEL_VARIANT_REASON = "sequence label differs from the rest of this series in this run"
 DUPLICATE_ASIN_REASON = "possible duplicate: same ASIN as another book in this run"
 NUMBER_WITHOUT_SERIES_REASON = "has a book number but no series"
+CO_WRITTEN_SPLIT_REASON = "co-written book lands in a different author folder than the rest of its series"
 
 
-def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
+def _top_folder(path: Path, destination_root: Path) -> str | None:
+    try:
+        parts = Path(path).relative_to(destination_root).parts
+    except ValueError:
+        return None
+    return parts[0] if parts else None
+
+
+def _co_written_split_details(
+    planned_moves: list[dict[str, Any]], destination_root: Path, cache: dict[str, Any] | None
+) -> list[tuple[dict[str, Any], str]]:
+    """Co-written books (2+ authors in a {+} block) whose author folder differs
+    from where the rest of their series is, in this run or already in the
+    library. A book with no series is compared with the first author's own
+    books in this run. Returns (move, other folder) pairs."""
+    target_by_source = {str(m["source"]): Path(str(m["target"])) for m in planned_moves}
+    folders_by_series: dict[str, list[str]] = defaultdict(list)
+    for move in planned_moves:
+        key = normalize_series_key(str(move["metadata"].get("series") or ""))
+        top = _top_folder(Path(str(move["target"])), destination_root)
+        if key and top:
+            folders_by_series[key].append(top)
+    for entry in (cache or {}).get("entries", []):
+        key = str(entry.get("series_key") or normalize_series_key(str(entry.get("series") or "")))
+        for source in entry.get("source_paths", []):
+            # A library book moved by this run counts where it is going.
+            top = _top_folder(target_by_source.get(str(source), Path(str(source))), destination_root)
+            if key and top:
+                folders_by_series[key].append(top)
+    solo_folders: dict[str, list[str]] = defaultdict(list)
+    for move in planned_moves:
+        authors = move["metadata"].get("author_block_authors") or []
+        top = _top_folder(Path(str(move["target"])), destination_root)
+        if len(authors) == 1 and top:
+            solo_folders[normalize_for_compare(authors[0])].append(top)
+
+    found: list[tuple[dict[str, Any], str]] = []
+    for move in planned_moves:
+        authors = move["metadata"].get("author_block_authors") or []
+        own = _top_folder(Path(str(move["target"])), destination_root)
+        if len(authors) < 2 or not own:
+            continue
+        key = normalize_series_key(str(move["metadata"].get("series") or ""))
+        candidates = folders_by_series.get(key, []) if key else solo_folders.get(normalize_for_compare(authors[0]), [])
+        others = Counter(folder for folder in candidates if folder != own)
+        if others:
+            found.append((move, others.most_common(1)[0][0]))
+    return found
+
+
+def count_author_folder_moves(planned_moves: list[dict[str, Any]], destination_root: Path, scan_root: Path) -> int:
+    """Books already organized in the library (under destination_root) that
+    this run moves to a different author folder. Books coming from a scan
+    root inside the library (such as _unorganized) are new arrivals, not
+    organized books, so they don't count."""
+    destination_root = Path(destination_root)
+    scan_root = Path(scan_root)
+    arrivals_root = scan_root if scan_root != destination_root and scan_root.is_relative_to(destination_root) else None
+    count = 0
+    for move in planned_moves:
+        source = Path(str(move["source"]))
+        if arrivals_root is not None and source.is_relative_to(arrivals_root):
+            continue
+        before = _top_folder(source, destination_root)
+        after = _top_folder(Path(str(move["target"])), destination_root)
+        if before and after and before != after:
+            count += 1
+    return count
+
+
+def annotate_run_consistency(
+    planned_moves: list[dict[str, Any]],
+    destination_root: Path | None = None,
+    cache: dict[str, Any] | None = None,
+) -> int:
     """Flag planned moves whose result looks wrong when compared with the rest
     of the same run. None of these block a move; they put a concrete reason
     and the values behind it on the book's review card. Returns how many
@@ -5933,6 +6653,11 @@ def annotate_run_consistency(planned_moves: list[dict[str, Any]]) -> int:
             for move in moves:
                 others = "; ".join(str(m["source"]) for m in moves if m is not move)
                 flag(move, DUPLICATE_ASIN_REASON, [("ASIN", asin), ("Same ASIN as", others)])
+
+    # A co-written book filed apart from the rest of its series.
+    if destination_root is not None:
+        for move, other_folder in _co_written_split_details(planned_moves, Path(destination_root), cache):
+            flag(move, CO_WRITTEN_SPLIT_REASON, [("Other books are in", other_folder)])
 
     return len(flagged)
 
@@ -6090,6 +6815,14 @@ def main() -> None:
         help="Use the built-in ABS structure scheme (author/series/title) and ignore --naming-template.",
     )
     parser.add_argument(
+        "--initials-follow-author-scheme",
+        action="store_true",
+        help=(
+            "Write the names in a naming template's author block the way the Settings author-name "
+            "scheme writes tags, so folder names match the tags. A plain {author} is never changed."
+        ),
+    )
+    parser.add_argument(
         "--abs-url",
         default=os.environ.get("ABS_URL", "http://audiobookshelf"),
         dest="abs_url",
@@ -6184,6 +6917,8 @@ def main() -> None:
         return
 
     planned_moves: list[dict[str, Any]] = []
+    # First author order seen per set of co-authors, so they share one folder.
+    author_orders: dict[frozenset[str], tuple[str, ...]] = {}
     skipped_reviews: list[dict[str, Any]] = []
     reserved_targets: set[Path] = set()
     # Tracks destination directories claimed by any book item this run (folder
@@ -6237,7 +6972,7 @@ def main() -> None:
         )
         if skip_due_to_pattern:
             skipped_pattern_match += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme, follow_author_scheme=args.initials_follow_author_scheme).target_dir
             reason = f"skipped: matched skip pattern: {skip_pattern}"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -6251,7 +6986,7 @@ def main() -> None:
 
         if metadata["author"] == "Unknown Author" and not args.allow_unknown_author:
             skipped_unknown_author += 1
-            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme).target_dir
+            target_dir = build_target_dir_for_template(destination_root, metadata, args.naming_template, use_default_scheme=args.use_default_scheme, follow_author_scheme=args.initials_follow_author_scheme).target_dir
             reason = "skipped unknown author"
             skipped_reviews.append(make_skipped_review_move(
                 item=item,
@@ -6267,6 +7002,8 @@ def main() -> None:
             destination_root, metadata, cache, naming_template=args.naming_template,
             filename_applies=(len(item.audio_files) == 1), source_file=item.representative,
             use_default_scheme=args.use_default_scheme,
+            follow_author_scheme=args.initials_follow_author_scheme,
+            author_orders=author_orders,
         )
         target_dir = resolution.target_dir
         structure_status = resolution.status
@@ -6430,10 +7167,11 @@ def main() -> None:
     print(f"Skipped by pattern: {skipped_pattern_match}")
     print(f"Skipped already in target folder: {skipped_already_target}")
     possible_duplicates = annotate_possible_duplicates(planned_moves, skipped_reviews)
-    run_consistency_flags = annotate_run_consistency(planned_moves)
+    run_consistency_flags = annotate_run_consistency(planned_moves, destination_root=destination_root, cache=cache)
     print(f"Skipped conflicts: {skipped_conflicts}")
     print(f"Possible duplicates flagged: {possible_duplicates}")
     print(f"Flagged by run consistency checks: {run_consistency_flags}")
+    print(f"Organized books moving to another author folder: {count_author_folder_moves(planned_moves, destination_root, root)}")
     print(f"Flagged by generic marketing cleanup: {flagged_marketing_cleanup}")
     print(f"Structure cache entries: {len(cache.get('entries', []))}")
     print(f"Matched existing structure: {matched_existing_structure}")
